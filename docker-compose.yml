@@ -1,0 +1,29 @@
+﻿services:
+  db:
+    image: postgres:16-alpine
+    container_name: trialbalance-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: trialbalance
+      POSTGRES_PASSWORD: localdev123
+      POSTGRES_DB: trialbalance_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: trialbalance-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_LISTEN_PORT: 5050
+    ports:
+      - "5050:5050"
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
