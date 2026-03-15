@@ -4,6 +4,9 @@ import cors from 'cors';
 import authRoutes from './routes/auth';
 import clientRoutes from './routes/clients';
 import { coaCollectionRouter, coaItemRouter } from './routes/chartOfAccounts';
+import { periodCollectionRouter, periodItemRouter } from './routes/periods';
+import { tbPeriodRouter } from './routes/trialBalance';
+import { jeCollectionRouter, jeItemRouter } from './routes/journalEntries';
 import { db } from './db';
 
 const app = express();
@@ -29,6 +32,11 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/clients', clientRoutes);
 app.use('/api/v1/clients/:clientId/chart-of-accounts', coaCollectionRouter);
 app.use('/api/v1/chart-of-accounts', coaItemRouter);
+app.use('/api/v1/clients/:clientId/periods', periodCollectionRouter);
+app.use('/api/v1/periods', periodItemRouter);
+app.use('/api/v1/periods/:periodId/trial-balance', tbPeriodRouter);
+app.use('/api/v1/journal-entries', jeItemRouter);
+app.use('/api/v1/periods/:periodId/journal-entries', jeCollectionRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
