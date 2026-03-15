@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
-import { db } from '../app';
+import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 
 // Mounted at /api/v1/clients/:clientId/chart-of-accounts

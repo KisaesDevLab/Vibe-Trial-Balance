@@ -1,19 +1,16 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import knex from 'knex';
-import config from '../knexfile';
 import authRoutes from './routes/auth';
 import clientRoutes from './routes/clients';
 import { coaCollectionRouter, coaItemRouter } from './routes/chartOfAccounts';
+import { db } from './db';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
-
-export const db = knex(config['development']);
 
 app.get('/api/v1/health', async (_req, res) => {
   try {
@@ -38,4 +35,4 @@ app.listen(PORT, () => {
   console.log(`Health check: http://localhost:${PORT}/api/v1/health`);
 });
 
-export { app };
+export { app, db };
