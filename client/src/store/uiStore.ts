@@ -30,9 +30,13 @@ export const useAuthStore = create<AuthStore>()(
 interface UIStore {
   selectedClientId: number | null;
   setSelectedClientId: (id: number | null) => void;
+  selectedPeriodId: number | null;
+  setSelectedPeriodId: (id: number | null) => void;
 }
 
 export const useUIStore = create<UIStore>((set) => ({
   selectedClientId: null,
-  setSelectedClientId: (id) => set({ selectedClientId: id }),
+  setSelectedClientId: (id) => set({ selectedClientId: id, selectedPeriodId: null }),
+  selectedPeriodId: null,
+  setSelectedPeriodId: (id) => set({ selectedPeriodId: id }),
 }));

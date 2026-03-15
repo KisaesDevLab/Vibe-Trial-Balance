@@ -21,15 +21,24 @@ export async function apiFetch<T>(
 ): Promise<ApiResult<T>> {
   const token = getToken();
 
-  const response = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers as Record<string, string>),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${BASE_URL}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers as Record<string, string>),
+      },
+    });
+  } catch {
+    return { data: null, error: { code: 'NETWORK_ERROR', message: 'Cannot reach server. Is it running?' } };
+  }
 
-  const json = (await response.json()) as ApiResult<T>;
-  return json;
+  try {
+    const json = (await response.json()) as ApiResult<T>;
+    return json;
+  } catch {
+    return { data: null, error: { code: 'PARSE_ERROR', message: `Server returned status ${response.status}` } };
+  }
 }

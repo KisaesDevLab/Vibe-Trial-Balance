@@ -1,27 +1,31 @@
 import { NavLink } from 'react-router-dom';
 import { ClientSelector } from './ClientSelector';
-import { useAuthStore } from '../store/uiStore';
+import { PeriodSelector } from './PeriodSelector';
+import { useAuthStore, useUIStore } from '../store/uiStore';
 
 const NAV_ITEMS = [
+  { to: '/clients', label: 'Clients' },
   { to: '/chart-of-accounts', label: 'Chart of Accounts' },
+  { to: '/periods', label: 'Periods' },
+  { to: '/trial-balance', label: 'Trial Balance' },
+  { to: '/journal-entries', label: 'Journal Entries' },
 ];
 
 export function Sidebar() {
   const { user, clearAuth } = useAuthStore();
+  const { selectedClientId } = useUIStore();
 
   return (
     <aside className="w-60 bg-gray-900 text-white flex flex-col shrink-0">
-      {/* Logo */}
       <div className="px-4 py-4 border-b border-gray-700">
         <h1 className="text-base font-semibold tracking-tight">Trial Balance</h1>
       </div>
 
-      {/* Client selector */}
-      <div className="px-4 py-3 border-b border-gray-700">
+      <div className="px-4 py-3 border-b border-gray-700 space-y-3">
         <ClientSelector />
+        {selectedClientId && <PeriodSelector />}
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 px-2 py-3 space-y-0.5">
         {NAV_ITEMS.map((item) => (
           <NavLink
@@ -40,7 +44,6 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* User footer */}
       <div className="px-4 py-3 border-t border-gray-700">
         <div className="text-sm text-gray-300 font-medium truncate">{user?.displayName}</div>
         <div className="text-xs text-gray-500 mb-2 capitalize">{user?.role}</div>
