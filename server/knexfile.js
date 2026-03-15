@@ -17,6 +17,7 @@ module.exports = {
     },
     seeds: {
       directory: path.resolve(__dirname, 'seeds'),
+      loadExtensions: ['.js'],
     },
   },
 };
