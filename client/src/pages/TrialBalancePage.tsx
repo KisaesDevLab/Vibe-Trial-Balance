@@ -245,15 +245,14 @@ export function TrialBalancePage() {
           {data && <p className="text-xs text-gray-500">{data.length} accounts</p>}
         </div>
         <div className="flex gap-2">
-          {data?.length === 0 && (
-            <button
-              onClick={() => initMutation.mutate()}
-              disabled={initMutation.isPending}
-              className="px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50"
-            >
-              {initMutation.isPending ? 'Initializing...' : 'Initialize from COA'}
-            </button>
-          )}
+          <button
+            onClick={() => initMutation.mutate()}
+            disabled={initMutation.isPending}
+            className="px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50"
+            title="Add any COA accounts not yet in this period's trial balance"
+          >
+            {initMutation.isPending ? 'Syncing...' : data?.length === 0 ? 'Initialize from COA' : 'Sync new accounts'}
+          </button>
         </div>
       </div>
 
