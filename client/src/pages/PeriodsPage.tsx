@@ -194,8 +194,8 @@ export function PeriodsPage() {
                 periods.map((p) => (
                   <tr key={p.id} className="hover:bg-gray-50">
                     <td className="px-4 py-2.5 font-medium text-gray-900">{p.period_name}</td>
-                    <td className="px-4 py-2.5 text-gray-600">{p.start_date ?? '—'}</td>
-                    <td className="px-4 py-2.5 text-gray-600">{p.end_date ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-gray-600">{p.start_date?.slice(0, 10) ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-gray-600">{p.end_date?.slice(0, 10) ?? '—'}</td>
                     <td className="px-4 py-2.5">
                       {p.is_current ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">Current</span>
@@ -252,8 +252,8 @@ export function PeriodsPage() {
           <PeriodForm
             initial={{
               periodName: editPeriod.period_name,
-              startDate: editPeriod.start_date ?? '',
-              endDate: editPeriod.end_date ?? '',
+              startDate: editPeriod.start_date?.slice(0, 10) ?? '',
+              endDate: editPeriod.end_date?.slice(0, 10) ?? '',
               isCurrent: editPeriod.is_current,
             }}
             onSave={(input) => updateMutation.mutate({ id: editPeriod.id, input })}
