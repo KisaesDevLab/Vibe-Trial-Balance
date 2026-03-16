@@ -102,6 +102,7 @@ export function TrialBalancePage() {
   const qc = useQueryClient();
   const [sorting, setSorting] = useState<SortingState>([]);
   const [lastSyncMsg, setLastSyncMsg] = useState<string | null>(null);
+  const [syncedUpToDate, setSyncedUpToDate] = useState(false);
 
   // Excel-like cell selection
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -119,6 +120,7 @@ export function TrialBalancePage() {
     setActiveCell(null);
     setEditing(false);
     setLastSyncMsg(null);
+    setSyncedUpToDate(false);
   }, [selectedPeriodId]);
 
   useEffect(() => {
@@ -152,7 +154,9 @@ export function TrialBalancePage() {
       const parts: string[] = [];
       if (initialized > 0) parts.push(`${initialized} added`);
       if (removed > 0) parts.push(`${removed} removed`);
-      setLastSyncMsg(parts.length > 0 ? parts.join(', ') : 'Already up to date');
+      const msg = parts.length > 0 ? parts.join(', ') : 'Already up to date';
+      setLastSyncMsg(msg);
+      setSyncedUpToDate(initialized === 0 && removed === 0);
       qc.invalidateQueries({ queryKey });
     },
   });
@@ -369,7 +373,7 @@ export function TrialBalancePage() {
     const isActive = activeCell?.row === rowIndex && activeCell?.col === col;
     const isNumber = col === 'unadjusted_debit' || col === 'unadjusted_credit';
     const isSelect = col === 'category';
-    const isMono = col === 'account_number';
+    const isMono = false; // no monospace — keeps font consistent across all columns
     const alignClass = isNumber ? 'text-right' : 'text-left';
     const cellId = `${col}|${rowIndex}`;
 
@@ -426,7 +430,7 @@ export function TrialBalancePage() {
         </span>
       );
     } else if (col === 'account_number') {
-      display = <span className="font-mono">{rawDisplay}</span>;
+      display = rawDisplay || <span className="text-gray-300 italic text-xs">—</span>;
     } else {
       display = rawDisplay || <span className="text-gray-300 italic text-xs">—</span>;
     }
@@ -562,6 +566,7 @@ export function TrialBalancePage() {
   }
 
   const isEmpty = !data || data.length === 0;
+  const showSyncButton = isEmpty || !syncedUpToDate;
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -587,13 +592,15 @@ export function TrialBalancePage() {
           {lastSyncMsg && (
             <span className="text-xs text-gray-500">{lastSyncMsg}</span>
           )}
-          <button
-            onClick={() => initMutation.mutate()}
-            disabled={initMutation.isPending}
-            className="px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50"
-          >
-            {initMutation.isPending ? 'Syncing...' : isEmpty ? 'Initialize from COA' : 'Sync with COA'}
-          </button>
+          {showSyncButton && (
+            <button
+              onClick={() => initMutation.mutate()}
+              disabled={initMutation.isPending}
+              className="px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50"
+            >
+              {initMutation.isPending ? 'Syncing...' : isEmpty ? 'Initialize from COA' : 'Sync with COA'}
+            </button>
+          )}
         </div>
       </div>
 
