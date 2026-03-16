@@ -97,6 +97,18 @@ export const classifyTransaction = (
 export const deleteBankTransaction = (clientId: number, id: number) =>
   apiFetch<{ deleted: number }>(`/clients/${clientId}/bank-transactions/${id}`, { method: 'DELETE' });
 
+export const batchDeleteTransactions = (clientId: number, ids: number[]) =>
+  apiFetch<{ deleted: number }>(`/clients/${clientId}/bank-transactions/batch-delete`, {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+
+export const batchClassifyTransactions = (clientId: number, ids: number[], accountId: number) =>
+  apiFetch<{ updated: number }>(`/clients/${clientId}/bank-transactions/batch-classify`, {
+    method: 'POST',
+    body: JSON.stringify({ ids, accountId }),
+  });
+
 export const aiClassifyTransactions = (clientId: number, ids: number[]) =>
   apiFetch<{ classified: number; results: Array<{ id: number; accountId: number; confidence: number; reasoning: string }> }>(
     `/clients/${clientId}/bank-transactions/ai-classify`,

@@ -277,6 +277,85 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
   }
 });
 
+// POST /api/v1/clients/:clientId/bank-transactions/batch-delete
+const batchIdsSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(500),
+});
+
+btCollectionRouter.post('/batch-delete', async (req: AuthRequest, res: Response): Promise<void> => {
+  const clientId = Number(req.params.clientId);
+  if (isNaN(clientId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } });
+    return;
+  }
+  const result = batchIdsSchema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  try {
+    const deleted = await db('bank_transactions')
+      .where({ client_id: clientId })
+      .whereIn('id', result.data.ids)
+      .delete();
+    res.json({ data: { deleted }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
+// POST /api/v1/clients/:clientId/bank-transactions/batch-classify
+const batchClassifySchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(500),
+  accountId: z.number().int().positive(),
+});
+
+btCollectionRouter.post('/batch-classify', async (req: AuthRequest, res: Response): Promise<void> => {
+  const clientId = Number(req.params.clientId);
+  if (isNaN(clientId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } });
+    return;
+  }
+  const result = batchClassifySchema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  const { ids, accountId } = result.data;
+  try {
+    const updated = await db('bank_transactions')
+      .where({ client_id: clientId })
+      .whereIn('id', ids)
+      .update({
+        account_id: accountId,
+        classification_status: 'manual',
+        classified_by: req.user!.userId,
+      });
+
+    // Upsert classification rules for transactions that have a description
+    const txs = await db('bank_transactions')
+      .where({ client_id: clientId })
+      .whereIn('id', ids)
+      .whereNotNull('description')
+      .select('description');
+
+    for (const tx of txs) {
+      const pattern = (tx.description as string).trim();
+      if (!pattern) continue;
+      await db('classification_rules')
+        .insert({ client_id: clientId, payee_pattern: pattern, account_id: accountId, times_confirmed: 1 })
+        .onConflict(['client_id', 'payee_pattern'])
+        .merge({ account_id: accountId, times_confirmed: db.raw('classification_rules.times_confirmed + 1'), updated_at: db.fn.now() });
+    }
+
+    res.json({ data: { updated }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
 // POST /api/v1/clients/:clientId/bank-transactions/ai-classify
 const aiClassifySchema = z.object({
   ids: z.array(z.number().int().positive()).min(1).max(100),

@@ -5,6 +5,8 @@ import {
   importBankTransactions,
   classifyTransaction,
   deleteBankTransaction,
+  batchDeleteTransactions,
+  batchClassifyTransactions,
   aiClassifyTransactions,
   listClassificationRules,
   deleteClassificationRule,
@@ -54,6 +56,7 @@ export function BankTransactionsPage() {
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterPeriod, setFilterPeriod] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [batchAccountId, setBatchAccountId] = useState<string>('');
   const [showImport, setShowImport] = useState(false);
   const [importStep, setImportStep] = useState<'file' | 'mapping'>('file');
   const [showRules, setShowRules] = useState(false);
@@ -179,7 +182,18 @@ export function BankTransactionsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteBankTransaction(clientId!, id),
-    onSuccess: () => { invalidate(); setSelected((prev) => { const next = new Set(prev); return next; }); },
+    onSuccess: () => invalidate(),
+  });
+
+  const batchDeleteMutation = useMutation({
+    mutationFn: (ids: number[]) => batchDeleteTransactions(clientId!, ids),
+    onSuccess: () => { invalidate(); setSelected(new Set()); },
+  });
+
+  const batchClassifyMutation = useMutation({
+    mutationFn: ({ ids, accountId }: { ids: number[]; accountId: number }) =>
+      batchClassifyTransactions(clientId!, ids, accountId),
+    onSuccess: () => { invalidate(); setSelected(new Set()); setBatchAccountId(''); },
   });
 
   const aiMutation = useMutation({
@@ -245,13 +259,42 @@ export function BankTransactionsPage() {
             Import Transactions
           </button>
           {selected.size > 0 && (
-            <button
-              onClick={() => aiMutation.mutate([...selected])}
-              disabled={aiMutation.isPending}
-              className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
-            >
-              {aiMutation.isPending ? 'Classifying…' : `AI Classify (${selected.size})`}
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500">{selected.size} selected</span>
+              <button
+                onClick={() => { if (confirm(`Delete ${selected.size} transaction(s)?`)) batchDeleteMutation.mutate([...selected]); }}
+                disabled={batchDeleteMutation.isPending}
+                className="px-3 py-1.5 text-sm bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
+              >
+                {batchDeleteMutation.isPending ? 'Deleting…' : 'Delete'}
+              </button>
+              <select
+                value={batchAccountId}
+                onChange={(e) => setBatchAccountId(e.target.value)}
+                className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Categorize as…</option>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.account_number} – {a.account_name}</option>
+                ))}
+              </select>
+              {batchAccountId && (
+                <button
+                  onClick={() => batchClassifyMutation.mutate({ ids: [...selected], accountId: Number(batchAccountId) })}
+                  disabled={batchClassifyMutation.isPending}
+                  className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {batchClassifyMutation.isPending ? 'Applying…' : 'Apply'}
+                </button>
+              )}
+              <button
+                onClick={() => aiMutation.mutate([...selected])}
+                disabled={aiMutation.isPending}
+                className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+              >
+                {aiMutation.isPending ? 'Classifying…' : 'AI Classify'}
+              </button>
+            </div>
           )}
         </div>
       </div>
