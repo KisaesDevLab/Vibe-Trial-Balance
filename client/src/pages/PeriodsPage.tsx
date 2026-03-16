@@ -7,8 +7,10 @@ import {
   deletePeriod,
   lockPeriod,
   unlockPeriod,
+  rollForwardPeriod,
   type Period,
   type PeriodInput,
+  type RollForwardInput,
 } from '../api/periods';
 import { useUIStore } from '../store/uiStore';
 
@@ -98,12 +100,100 @@ function PeriodForm({ initial, onSave, onCancel, saving, error }: PeriodFormProp
   );
 }
 
+function RollForwardModal({ source, onClose, onSuccess }: { source: Period; onClose: () => void; onSuccess: () => void }) {
+  const [form, setForm] = useState<RollForwardInput>({
+    periodName: `${source.period_name} (copy)`,
+    startDate: '',
+    endDate: '',
+    isCurrent: false,
+    copyRecurringJEs: true,
+  });
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ tbCount: number; jeCopied: number } | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: (input: RollForwardInput) => rollForwardPeriod(source.id, input),
+    onSuccess: (res) => {
+      if (res.error) { setError(res.error.message); return; }
+      setResult({ tbCount: res.data!.tbCount, jeCopied: res.data!.jeCopied });
+      onSuccess();
+    },
+  });
+
+  const set = <K extends keyof RollForwardInput>(k: K, v: RollForwardInput[K]) =>
+    setForm((p) => ({ ...p, [k]: v }));
+
+  return (
+    <Modal title={`Roll Forward — ${source.period_name}`} onClose={onClose}>
+      {result ? (
+        <div className="space-y-4">
+          <div className="bg-green-50 border border-green-200 rounded px-4 py-3 text-sm text-green-800">
+            New period created. <strong>{result.tbCount}</strong> TB accounts rolled forward
+            {result.jeCopied > 0 && <>, <strong>{result.jeCopied}</strong> recurring JE{result.jeCopied !== 1 ? 's' : ''} copied</>}.
+          </div>
+          <div className="flex justify-end">
+            <button onClick={onClose} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={(e) => { e.preventDefault(); mutation.mutate(form); }} className="space-y-4">
+          {error && <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{error}</div>}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">New Period Name</label>
+            <input
+              value={form.periodName}
+              onChange={(e) => set('periodName', e.target.value)}
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required autoFocus
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
+              <input type="date" value={form.startDate ?? ''} onChange={(e) => set('startDate', e.target.value)}
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
+              <input type="date" value={form.endDate ?? ''} onChange={(e) => set('endDate', e.target.value)}
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input type="checkbox" checked={form.copyRecurringJEs ?? true} onChange={(e) => set('copyRecurringJEs', e.target.checked)}
+                className="rounded border-gray-300 text-blue-600" />
+              Copy recurring journal entries to new period
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input type="checkbox" checked={form.isCurrent ?? false} onChange={(e) => set('isCurrent', e.target.checked)}
+                className="rounded border-gray-300 text-blue-600" />
+              Mark new period as current
+            </label>
+          </div>
+          <p className="text-xs text-gray-500">
+            Book-adjusted balances from <strong>{source.period_name}</strong> will become the opening unadjusted balances in the new period.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+            <button type="submit" disabled={mutation.isPending}
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+              {mutation.isPending ? 'Creating…' : 'Create New Period'}
+            </button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
 export function PeriodsPage() {
   const { selectedClientId, setSelectedPeriodId } = useUIStore();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [editPeriod, setEditPeriod] = useState<Period | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [rollForwardSource, setRollForwardSource] = useState<Period | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['periods', selectedClientId],
@@ -241,12 +331,18 @@ export function PeriodsPage() {
                         </button>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-right">
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
                       <button
                         onClick={() => { setSelectedPeriodId(p.id); }}
                         className="text-xs text-green-600 hover:text-green-800 mr-3"
                       >
                         Select
+                      </button>
+                      <button
+                        onClick={() => setRollForwardSource(p)}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 mr-3"
+                      >
+                        Roll Forward
                       </button>
                       <button
                         onClick={() => { setEditPeriod(p); setFormError(null); }}
@@ -280,6 +376,14 @@ export function PeriodsPage() {
             error={formError}
           />
         </Modal>
+      )}
+
+      {rollForwardSource && (
+        <RollForwardModal
+          source={rollForwardSource}
+          onClose={() => setRollForwardSource(null)}
+          onSuccess={() => { invalidate(); setRollForwardSource(null); }}
+        />
       )}
 
       {editPeriod && (

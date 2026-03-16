@@ -15,7 +15,7 @@
 - API routes return: { data, error, meta }
 
 ## Current Phase
-Phase 5: Period Controls, Audit Trail & Dashboard
+Phase 6: Workflow & Collaboration
 
 ## Completed
 - Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods
@@ -24,3 +24,5 @@ Phase 5: Period Controls, Audit Trail & Dashboard
   classification rules, batch ops, source accounts, trans JEs, Settings page)
 - Phase 4: Reports — Financial Statements, TB Report, General Ledger, Tax Code Report,
   Workpaper Index, AJE Listing (all with CSV export and print)
+- Phase 5: Period Controls, Audit Trail & Dashboard — period locking, audit_log table,
+  Dashboard page with stats + activity feed

@@ -40,3 +40,23 @@ export const lockPeriod = (id: number) =>
 
 export const unlockPeriod = (id: number) =>
   apiFetch<Period>(`/periods/${id}/unlock`, { method: 'POST' });
+
+export interface RollForwardInput {
+  periodName: string;
+  startDate?: string;
+  endDate?: string;
+  isCurrent?: boolean;
+  copyRecurringJEs?: boolean;
+}
+
+export interface RollForwardResult {
+  period: Period;
+  tbCount: number;
+  jeCopied: number;
+}
+
+export const rollForwardPeriod = (id: number, input: RollForwardInput) =>
+  apiFetch<RollForwardResult>(`/periods/${id}/roll-forward`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });

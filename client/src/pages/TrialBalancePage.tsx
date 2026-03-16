@@ -116,6 +116,7 @@ export function TrialBalancePage() {
   const [lastSyncMsg, setLastSyncMsg] = useState<string | null>(null);
   const [syncedUpToDate, setSyncedUpToDate] = useState(false);
   const [showTax, setShowTax] = useState(true);
+  const [notesRow, setNotesRow] = useState<TBRow | null>(null);
 
   // Excel-like cell selection
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -553,6 +554,25 @@ export function TrialBalancePage() {
       header: 'W/P Ref',
       cell: (i) => renderCell(i.row.index, 'workpaper_ref', i.row.original),
     }),
+    columnHelper.display({
+      id: 'notes',
+      header: 'Notes',
+      cell: ({ row }) => {
+        const hasNotes = !!(row.original.preparer_notes || row.original.reviewer_notes);
+        return (
+          <button
+            onClick={() => setNotesRow(row.original)}
+            title={hasNotes ? 'View/edit notes' : 'Add notes'}
+            className={`w-6 h-6 flex items-center justify-center rounded hover:bg-gray-200 transition-colors ${hasNotes ? 'text-amber-600' : 'text-gray-300 hover:text-gray-500'}`}
+          >
+            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z"/>
+              <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd"/>
+            </svg>
+          </button>
+        );
+      },
+    }),
   ];
 
   const columnVisibility: VisibilityState = {
@@ -683,7 +703,8 @@ export function TrialBalancePage() {
                 {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-purple-600 font-semibold border-r border-gray-300">Tax Adj.</th>}
                 {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 font-semibold bg-purple-50 border-r border-gray-300">Tax Adjusted</th>}
                 <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold border-r border-gray-300">Tax Code</th>
-                <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold">W/P</th>
+                <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold border-r border-gray-300">W/P</th>
+                <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold"></th>
               </tr>
               {/* Column headers */}
               {tableInstance.getHeaderGroups().map((hg) => (
@@ -765,6 +786,73 @@ export function TrialBalancePage() {
           </table>
         </div>
       )}
+
+      {/* Notes modal */}
+      {notesRow && (
+        <NotesModal
+          row={notesRow}
+          onClose={() => setNotesRow(null)}
+          onSave={(accountId, preparerNotes, reviewerNotes) => {
+            accountMutation.mutate({ accountId, updates: { preparerNotes, reviewerNotes } });
+            setNotesRow(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function NotesModal({ row, onClose, onSave }: {
+  row: TBRow;
+  onClose: () => void;
+  onSave: (accountId: number, preparerNotes: string, reviewerNotes: string) => void;
+}) {
+  const [preparer, setPreparer] = useState(row.preparer_notes ?? '');
+  const [reviewer, setReviewer] = useState(row.reviewer_notes ?? '');
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <div>
+            <h2 className="text-base font-semibold">{row.account_number} — {row.account_name}</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Workpaper Notes</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        <div className="px-5 py-4 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1">Preparer Notes</label>
+            <textarea
+              value={preparer}
+              onChange={(e) => setPreparer(e.target.value)}
+              rows={4}
+              autoFocus
+              placeholder="Enter preparer notes, tick marks, or references…"
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1">Reviewer Notes</label>
+            <textarea
+              value={reviewer}
+              onChange={(e) => setReviewer(e.target.value)}
+              rows={3}
+              placeholder="Enter reviewer comments or sign-off…"
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+            <button
+              onClick={() => onSave(row.account_id, preparer, reviewer)}
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              Save Notes
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -11,6 +11,8 @@ export interface TBRow {
   workpaper_ref: string | null;
   sort_order: number;
   is_active: boolean;
+  preparer_notes: string | null;
+  reviewer_notes: string | null;
   unadjusted_debit: number;
   unadjusted_credit: number;
   book_adj_debit: number;

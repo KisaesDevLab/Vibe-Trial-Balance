@@ -23,6 +23,7 @@ const NAV_ITEMS = [
 export function Sidebar() {
   const { user, clearAuth } = useAuthStore();
   const { selectedClientId, fontSize, increaseFontSize, decreaseFontSize } = useUIStore();
+  const isAdmin = user?.role === 'admin';
 
   return (
     <aside className="w-60 bg-gray-900 text-white flex flex-col shrink-0">
@@ -51,6 +52,20 @@ export function Sidebar() {
             {item.label}
           </NavLink>
         ))}
+        {isAdmin && (
+          <NavLink
+            to="/users"
+            className={({ isActive }) =>
+              `block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                isActive
+                  ? 'bg-gray-700 text-white'
+                  : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+              }`
+            }
+          >
+            Users
+          </NavLink>
+        )}
       </nav>
 
       <div className="px-4 py-3 border-t border-gray-700">

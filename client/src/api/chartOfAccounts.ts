@@ -27,6 +27,7 @@ export interface AccountInput {
   taxLine?: string;
   workpaperRef?: string;
   preparerNotes?: string;
+  reviewerNotes?: string;
   sortOrder?: number;
 }
 

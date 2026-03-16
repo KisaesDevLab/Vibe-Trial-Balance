@@ -15,6 +15,7 @@ import { GeneralLedgerPage } from './pages/GeneralLedgerPage';
 import { TaxCodeReportPage } from './pages/TaxCodeReportPage';
 import { WorkpaperIndexPage } from './pages/WorkpaperIndexPage';
 import { AJEListingPage } from './pages/AJEListingPage';
+import { UsersPage } from './pages/UsersPage';
 import { useAuthStore } from './store/uiStore';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -50,6 +51,7 @@ export default function App() {
           <Route path="tax-code-report" element={<TaxCodeReportPage />} />
           <Route path="workpaper-index" element={<WorkpaperIndexPage />} />
           <Route path="aje-listing" element={<AJEListingPage />} />
+          <Route path="users" element={<UsersPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
