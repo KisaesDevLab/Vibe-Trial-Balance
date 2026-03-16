@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   listJournalEntries,
   createJournalEntry,
+  updateJournalEntry,
   deleteJournalEntry,
   type JournalEntry,
   type JEInput,
@@ -18,6 +19,10 @@ function fmt(cents: number): string {
 function parseCents(val: string): number {
   const n = parseFloat(val.replace(/[^0-9.-]/g, ''));
   return isNaN(n) ? 0 : Math.round(n * 100);
+}
+
+function fmtDate(dateStr: string): string {
+  return dateStr.slice(0, 10);
 }
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
@@ -47,6 +52,10 @@ function JEForm({
   onCancel,
   saving,
   error,
+  initialType,
+  initialDate,
+  initialDescription,
+  initialLines,
 }: {
   periodId: number;
   clientId: number;
@@ -54,14 +63,20 @@ function JEForm({
   onCancel: () => void;
   saving: boolean;
   error: string | null;
+  initialType?: 'book' | 'tax';
+  initialDate?: string;
+  initialDescription?: string;
+  initialLines?: JEFormLine[];
 }) {
-  const [entryType, setEntryType] = useState<'book' | 'tax'>('book');
-  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
-  const [description, setDescription] = useState('');
-  const [lines, setLines] = useState<JEFormLine[]>([
-    { accountId: '', debit: '', credit: '' },
-    { accountId: '', debit: '', credit: '' },
-  ]);
+  const [entryType, setEntryType] = useState<'book' | 'tax'>(initialType ?? 'book');
+  const [entryDate, setEntryDate] = useState(initialDate ?? new Date().toISOString().slice(0, 10));
+  const [description, setDescription] = useState(initialDescription ?? '');
+  const [lines, setLines] = useState<JEFormLine[]>(
+    initialLines ?? [
+      { accountId: '', debit: '', credit: '' },
+      { accountId: '', debit: '', credit: '' },
+    ],
+  );
 
   const { data: accountsData } = useQuery({
     queryKey: ['chart-of-accounts', clientId],
@@ -137,7 +152,6 @@ function JEForm({
         </div>
       </div>
 
-      {/* Lines table */}
       <div>
         <table className="w-full text-sm">
           <thead>
@@ -230,7 +244,7 @@ function JEDetail({ entry }: { entry: JournalEntry }) {
   const totalCredit = entry.lines.reduce((s, l) => s + l.credit, 0);
   return (
     <div className="mt-2 border-t border-gray-100 pt-2">
-      <table className="w-full text-xs">
+      <table className="w-full text-sm">
         <thead>
           <tr className="text-gray-500">
             <th className="text-left pb-1 font-medium">Account</th>
@@ -263,7 +277,9 @@ export function JournalEntriesPage() {
   const { selectedPeriodId, selectedClientId } = useUIStore();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const [editEntry, setEditEntry] = useState<JournalEntry | null>(null);
+  // collapsed tracks which entries are folded; default = all expanded
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [formError, setFormError] = useState<string | null>(null);
 
   const queryKey = ['journal-entries', selectedPeriodId];
@@ -279,24 +295,43 @@ export function JournalEntriesPage() {
     enabled: selectedPeriodId !== null,
   });
 
+  const invalidateBoth = () => {
+    qc.invalidateQueries({ queryKey });
+    qc.invalidateQueries({ queryKey: ['trial-balance', selectedPeriodId] });
+  };
+
   const createMutation = useMutation({
     mutationFn: createJournalEntry,
     onSuccess: (res) => {
       if (res.error) { setFormError(res.error.message); return; }
-      qc.invalidateQueries({ queryKey });
-      qc.invalidateQueries({ queryKey: ['trial-balance', selectedPeriodId] });
+      invalidateBoth();
       setShowAdd(false);
+      setFormError(null);
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof updateJournalEntry>[1] }) =>
+      updateJournalEntry(id, data),
+    onSuccess: (res) => {
+      if (res.error) { setFormError(res.error.message); return; }
+      invalidateBoth();
+      setEditEntry(null);
       setFormError(null);
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: deleteJournalEntry,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey });
-      qc.invalidateQueries({ queryKey: ['trial-balance', selectedPeriodId] });
-    },
+    onSuccess: () => invalidateBoth(),
   });
+
+  const toggleCollapsed = (id: number) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
 
   if (!selectedPeriodId) {
     return (
@@ -344,19 +379,25 @@ export function JournalEntriesPage() {
         <div className="space-y-3">
           {entries.map((entry) => {
             const totalDebit = entry.lines.reduce((s, l) => s + l.debit, 0);
-            const isExpanded = expanded === entry.id;
+            const isExpanded = !collapsed.has(entry.id);
             return (
               <div key={entry.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                 <div
                   className="flex items-center px-4 py-3 cursor-pointer hover:bg-gray-50"
-                  onClick={() => setExpanded(isExpanded ? null : entry.id)}
+                  onClick={() => toggleCollapsed(entry.id)}
                 >
                   <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold mr-3 ${entry.entry_type === 'book' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
                     {entry.entry_type === 'book' ? 'BOOK' : 'TAX'} #{entry.entry_number}
                   </span>
                   <span className="text-sm font-medium text-gray-700 flex-1">{entry.description ?? '(no description)'}</span>
-                  <span className="text-xs text-gray-400 mr-4">{entry.entry_date}</span>
+                  <span className="text-sm text-gray-400 mr-4">{fmtDate(entry.entry_date)}</span>
                   <span className="text-sm font-semibold text-gray-700 mr-4">{fmt(totalDebit)}</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setEditEntry(entry); setFormError(null); }}
+                    className="text-xs text-blue-500 hover:text-blue-700 mr-3"
+                  >
+                    Edit
+                  </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); if (confirm('Delete this entry?')) deleteMutation.mutate(entry.id); }}
                     className="text-xs text-red-400 hover:text-red-600 mr-2"
@@ -384,6 +425,37 @@ export function JournalEntriesPage() {
             onSave={(input) => createMutation.mutate(input)}
             onCancel={() => setShowAdd(false)}
             saving={createMutation.isPending}
+            error={formError}
+          />
+        </Modal>
+      )}
+
+      {editEntry && selectedClientId && (
+        <Modal title="Edit Journal Entry" onClose={() => { setEditEntry(null); setFormError(null); }}>
+          <JEForm
+            periodId={selectedPeriodId}
+            clientId={selectedClientId}
+            initialType={editEntry.entry_type}
+            initialDate={fmtDate(editEntry.entry_date)}
+            initialDescription={editEntry.description ?? ''}
+            initialLines={editEntry.lines.map((l) => ({
+              accountId: l.account_id,
+              debit: l.debit > 0 ? (l.debit / 100).toFixed(2) : '',
+              credit: l.credit > 0 ? (l.credit / 100).toFixed(2) : '',
+            }))}
+            onSave={(input) =>
+              updateMutation.mutate({
+                id: editEntry.id,
+                data: {
+                  entryType: input.entryType,
+                  entryDate: input.entryDate,
+                  description: input.description ?? null,
+                  lines: input.lines,
+                },
+              })
+            }
+            onCancel={() => { setEditEntry(null); setFormError(null); }}
+            saving={updateMutation.isPending}
             error={formError}
           />
         </Modal>

@@ -15,18 +15,22 @@ import {
   updateBalance,
   type TBRow,
 } from '../api/trialBalance';
-import { updateAccount } from '../api/chartOfAccounts';
+import { updateAccount, type AccountInput } from '../api/chartOfAccounts';
 import { useUIStore } from '../store/uiStore';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type EditableColKey = 'account_name' | 'unadjusted_debit' | 'unadjusted_credit' | 'workpaper_ref';
+type EditableColKey = 'account_name' | 'unadjusted_debit' | 'unadjusted_credit' | 'category' | 'tax_line' | 'workpaper_ref';
 const EDITABLE_COLS: EditableColKey[] = [
   'account_name',
   'unadjusted_debit',
   'unadjusted_credit',
+  'category',
+  'tax_line',
   'workpaper_ref',
 ];
+
+const ACCOUNT_CATEGORIES: TBRow['category'][] = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'];
 
 interface ActiveCell { row: number; col: EditableColKey }
 
@@ -34,6 +38,10 @@ interface ActiveCell { row: number; col: EditableColKey }
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
+  return (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtTotal(cents: number): string {
   return (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
@@ -51,6 +59,8 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 // Column index → CSS classes for group borders/backgrounds
+// Columns: 0=acct#, 1=name, 2=cat, 3=unaj_dr, 4=unaj_cr, 5=bk_adj_dr, 6=bk_adj_cr,
+//          7=bk_dr, 8=bk_cr, 9=tx_adj_dr, 10=tx_adj_cr, 11=tx_dr, 12=tx_cr, 13=tax_line, 14=wp_ref
 function colGroupClass(idx: number, isHeader = false): string {
   const b = isHeader ? 'border-gray-300' : 'border-gray-200';
   if (idx === 2)  return `border-r ${b}`;
@@ -65,10 +75,12 @@ function colGroupClass(idx: number, isHeader = false): string {
 
 function getCellDisplayValue(rowData: TBRow, col: EditableColKey): string {
   switch (col) {
-    case 'account_name':    return rowData.account_name;
+    case 'account_name':     return rowData.account_name;
     case 'unadjusted_debit':  return rowData.unadjusted_debit === 0 ? '' : (rowData.unadjusted_debit / 100).toFixed(2);
     case 'unadjusted_credit': return rowData.unadjusted_credit === 0 ? '' : (rowData.unadjusted_credit / 100).toFixed(2);
-    case 'workpaper_ref':   return rowData.workpaper_ref ?? '';
+    case 'category':          return rowData.category;
+    case 'tax_line':          return rowData.tax_line ?? '';
+    case 'workpaper_ref':     return rowData.workpaper_ref ?? '';
   }
 }
 
@@ -97,7 +109,7 @@ export function TrialBalancePage() {
     setLastSyncCount(null);
   }, [selectedPeriodId]);
 
-  // Re-focus the container whenever we leave editing mode so arrow keys work
+  // Re-focus container after leaving editing mode so arrow keys work
   useEffect(() => {
     if (!editing && activeCell) containerRef.current?.focus();
   }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -159,17 +171,22 @@ export function TrialBalancePage() {
   });
 
   const accountMutation = useMutation({
-    mutationFn: ({ accountId, field, value }: { accountId: number; field: 'accountName' | 'workpaperRef'; value: string }) =>
-      updateAccount(accountId, { [field]: value || undefined }),
-    onMutate: async ({ accountId, field, value }) => {
+    mutationFn: ({ accountId, updates }: { accountId: number; updates: Partial<AccountInput> }) =>
+      updateAccount(accountId, updates),
+    onMutate: async ({ accountId, updates }) => {
       await qc.cancelQueries({ queryKey });
       const prev = qc.getQueryData<TBRow[]>(queryKey);
       qc.setQueryData<TBRow[]>(queryKey, (old) =>
-        old?.map((r) =>
-          r.account_id === accountId
-            ? { ...r, ...(field === 'accountName' ? { account_name: value } : { workpaper_ref: value || null }) }
-            : r,
-        ),
+        old?.map((r) => {
+          if (r.account_id !== accountId) return r;
+          return {
+            ...r,
+            ...(updates.accountName !== undefined ? { account_name: updates.accountName } : {}),
+            ...(updates.category !== undefined ? { category: updates.category } : {}),
+            ...(updates.taxLine !== undefined ? { tax_line: updates.taxLine || null } : {}),
+            ...(updates.workpaperRef !== undefined ? { workpaper_ref: updates.workpaperRef || null } : {}),
+          };
+        }),
       );
       return { prev };
     },
@@ -188,11 +205,11 @@ export function TrialBalancePage() {
     [balanceMutation],
   );
 
-  // ── Table ──────────────────────────────────────────────────────────────────
+  // ── Table (placeholder, used for row count in navigation) ──────────────────
 
   const table = useReactTable({
     data: data ?? [],
-    columns: [], // placeholder; real columns below (needs table ref)
+    columns: [],
     state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
@@ -200,7 +217,7 @@ export function TrialBalancePage() {
     getGroupedRowModel: getGroupedRowModel(),
   });
 
-  // ── Navigation & edit helpers (use table after it's defined) ──────────────
+  // ── Navigation & edit helpers ──────────────────────────────────────────────
 
   function commitEdit(rowData: TBRow, col: EditableColKey, text: string) {
     const trimmed = text.trim();
@@ -213,10 +230,18 @@ export function TrialBalancePage() {
         break;
       case 'account_name':
         if (trimmed && trimmed !== rowData.account_name)
-          accountMutation.mutate({ accountId: rowData.account_id, field: 'accountName', value: trimmed });
+          accountMutation.mutate({ accountId: rowData.account_id, updates: { accountName: trimmed } });
+        break;
+      case 'category':
+        if (ACCOUNT_CATEGORIES.includes(trimmed as TBRow['category']) && trimmed !== rowData.category)
+          accountMutation.mutate({ accountId: rowData.account_id, updates: { category: trimmed as TBRow['category'] } });
+        break;
+      case 'tax_line':
+        if (trimmed !== (rowData.tax_line ?? ''))
+          accountMutation.mutate({ accountId: rowData.account_id, updates: { taxLine: trimmed || undefined } });
         break;
       case 'workpaper_ref':
-        accountMutation.mutate({ accountId: rowData.account_id, field: 'workpaperRef', value: trimmed });
+        accountMutation.mutate({ accountId: rowData.account_id, updates: { workpaperRef: trimmed || undefined } });
         break;
     }
   }
@@ -252,7 +277,6 @@ export function TrialBalancePage() {
     setActiveCell({ row: newRow, col: EDITABLE_COLS[newColIdx] });
   }
 
-  // Container keydown — fires when grid has focus and a cell is selected (not editing)
   function handleContainerKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     if (!activeCell || editing) return;
     const rows = table.getRowModel().rows;
@@ -288,8 +312,7 @@ export function TrialBalancePage() {
     }
   }
 
-  // Input keydown — fires inside an active editing cell
-  function handleInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>, ac: ActiveCell, rowData: TBRow) {
+  function handleInputKeyDown(e: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>, ac: ActiveCell, rowData: TBRow) {
     switch (e.key) {
       case 'Enter':
         e.preventDefault();
@@ -320,11 +343,28 @@ export function TrialBalancePage() {
   function renderCell(rowIndex: number, col: EditableColKey, rowData: TBRow) {
     const isActive = activeCell?.row === rowIndex && activeCell?.col === col;
     const isNumber = col === 'unadjusted_debit' || col === 'unadjusted_credit';
+    const isSelect = col === 'category';
     const alignClass = isNumber ? 'text-right' : 'text-left';
     const cellId = `${col}|${rowIndex}`;
 
-    // Editing — render input in place
+    // Editing
     if (isActive && editing) {
+      if (isSelect) {
+        return (
+          <select
+            autoFocus
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onKeyDown={(e) => handleInputKeyDown(e, { row: rowIndex, col }, rowData)}
+            onBlur={() => handleInputBlur({ row: rowIndex, col }, rowData)}
+            className="w-full text-sm bg-white outline-none px-1 py-0 border-0 capitalize"
+          >
+            {ACCOUNT_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        );
+      }
       return (
         <input
           autoFocus
@@ -338,12 +378,24 @@ export function TrialBalancePage() {
       );
     }
 
+    // Display value
     const rawDisplay = getCellDisplayValue(rowData, col);
-    const display = isNumber
-      ? (rawDisplay ? fmt(parseCents(rawDisplay) || 0) : <span className="text-gray-300">—</span>)
-      : (rawDisplay || <span className="text-gray-300 italic text-xs">—</span>);
+    let display: React.ReactNode;
+    if (isNumber) {
+      display = rawDisplay
+        ? fmt(parseCents(rawDisplay) || 0)
+        : <span className="text-gray-300">—</span>;
+    } else if (col === 'category') {
+      display = (
+        <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium capitalize ${CATEGORY_COLORS[rawDisplay]}`}>
+          {rawDisplay.slice(0, 3)}
+        </span>
+      );
+    } else {
+      display = rawDisplay || <span className="text-gray-300 italic text-xs">—</span>;
+    }
 
-    // Selected but not editing — blue ring
+    // Selected but not editing
     if (isActive) {
       return (
         <div
@@ -377,7 +429,7 @@ export function TrialBalancePage() {
   const columns = [
     columnHelper.accessor('account_number', {
       header: 'Acct #',
-      cell: (i) => <span className="font-mono text-xs">{i.getValue()}</span>,
+      cell: (i) => <span className="font-mono text-sm">{i.getValue()}</span>,
     }),
     columnHelper.accessor('account_name', {
       header: 'Account Name',
@@ -385,11 +437,7 @@ export function TrialBalancePage() {
     }),
     columnHelper.accessor('category', {
       header: 'Cat.',
-      cell: (i) => (
-        <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium capitalize ${CATEGORY_COLORS[i.getValue()]}`}>
-          {i.getValue().slice(0, 3)}
-        </span>
-      ),
+      cell: (i) => renderCell(i.row.index, 'category', i.row.original),
     }),
     columnHelper.accessor('unadjusted_debit', {
       header: 'Unaj. Dr',
@@ -431,13 +479,17 @@ export function TrialBalancePage() {
       header: 'Tx Cr',
       cell: (i) => <span className="text-right block text-sm font-semibold">{fmt(i.getValue())}</span>,
     }),
+    columnHelper.accessor('tax_line', {
+      header: 'Tax Code',
+      cell: (i) => renderCell(i.row.index, 'tax_line', i.row.original),
+    }),
     columnHelper.accessor('workpaper_ref', {
       header: 'W/P Ref',
       cell: (i) => renderCell(i.row.index, 'workpaper_ref', i.row.original),
     }),
   ];
 
-  // Re-create table with real columns (TanStack Table accepts updated column defs each render)
+  // Re-create table with real columns
   const tableInstance = useReactTable({
     data: data ?? [],
     columns,
@@ -447,6 +499,31 @@ export function TrialBalancePage() {
     getSortedRowModel: getSortedRowModel(),
     getGroupedRowModel: getGroupedRowModel(),
   });
+
+  // ── Footer calculations ────────────────────────────────────────────────────
+
+  const rows = data ?? [];
+  const colSum = (key: keyof TBRow) => rows.reduce((s, r) => s + (r[key] as number), 0);
+  const calcNetIncome = (dk: keyof TBRow, ck: keyof TBRow) => {
+    const revNet = rows
+      .filter((r) => r.category === 'revenue')
+      .reduce((s, r) => s + (r[ck] as number) - (r[dk] as number), 0);
+    const expNet = rows
+      .filter((r) => r.category === 'expenses')
+      .reduce((s, r) => s + (r[dk] as number) - (r[ck] as number), 0);
+    return revNet - expNet; // positive = income, negative = loss
+  };
+
+  const unajNetIncome = calcNetIncome('unadjusted_debit', 'unadjusted_credit');
+  const bkNetIncome = calcNetIncome('book_adjusted_debit', 'book_adjusted_credit');
+  const txNetIncome = calcNetIncome('tax_adjusted_debit', 'tax_adjusted_credit');
+
+  function fmtNet(n: number) {
+    if (n === 0) return '—';
+    return n > 0
+      ? <span className="text-green-700">{fmtTotal(n)}</span>
+      : <span className="text-red-600">({fmtTotal(Math.abs(n))})</span>;
+  }
 
   const isEmpty = !data || data.length === 0;
   const showSyncButton = isEmpty || lastSyncCount === null || lastSyncCount > 0;
@@ -497,7 +574,6 @@ export function TrialBalancePage() {
           onKeyDown={handleContainerKeyDown}
           className="flex-1 overflow-auto outline-none"
           onClick={(e) => {
-            // Clicking the grid background (not a cell) deselects
             if (e.target === e.currentTarget) setActiveCell(null);
           }}
         >
@@ -510,6 +586,7 @@ export function TrialBalancePage() {
                 <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 font-semibold bg-blue-50 border-r border-gray-300">Book Adjusted</th>
                 <th colSpan={2} className="px-2 py-1 text-xs text-center text-purple-600 font-semibold border-r border-gray-300">Tax Adj.</th>
                 <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 font-semibold bg-purple-50 border-r border-gray-300">Tax Adjusted</th>
+                <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold border-r border-gray-300">Tax Code</th>
                 <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold">W/P</th>
               </tr>
               {tableInstance.getHeaderGroups().map((hg) => (
@@ -531,7 +608,7 @@ export function TrialBalancePage() {
             <tbody className="divide-y divide-gray-100">
               {tableInstance.getRowModel().rows.length === 0 ? (
                 <tr>
-                  <td colSpan={14} className="px-4 py-10 text-center text-gray-400">
+                  <td colSpan={15} className="px-4 py-10 text-center text-gray-400">
                     No trial balance data. Click &ldquo;Initialize from COA&rdquo; to populate from the chart of accounts.
                   </td>
                 </tr>
@@ -547,6 +624,45 @@ export function TrialBalancePage() {
                 ))
               )}
             </tbody>
+            {rows.length > 0 && (
+              <tfoot className="sticky bottom-0 z-10">
+                {/* Column totals */}
+                <tr className="border-t-2 border-gray-400 bg-gray-100 font-semibold">
+                  <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-r border-gray-300">
+                    Totals
+                  </td>
+                  <td className="px-2 py-1.5 text-right text-sm border-r border-gray-200">{fmtTotal(colSum('unadjusted_debit'))}</td>
+                  <td className="px-2 py-1.5 text-right text-sm border-r border-gray-200">{fmtTotal(colSum('unadjusted_credit'))}</td>
+                  <td className="px-2 py-1.5 text-right text-sm text-blue-700">{fmtTotal(colSum('book_adj_debit'))}</td>
+                  <td className="px-2 py-1.5 text-right text-sm text-blue-700 border-r border-gray-200">{fmtTotal(colSum('book_adj_credit'))}</td>
+                  <td className="px-2 py-1.5 text-right text-sm font-semibold bg-blue-50/80">{fmtTotal(colSum('book_adjusted_debit'))}</td>
+                  <td className="px-2 py-1.5 text-right text-sm font-semibold bg-blue-50/80 border-r border-gray-200">{fmtTotal(colSum('book_adjusted_credit'))}</td>
+                  <td className="px-2 py-1.5 text-right text-sm text-purple-700">{fmtTotal(colSum('tax_adj_debit'))}</td>
+                  <td className="px-2 py-1.5 text-right text-sm text-purple-700 border-r border-gray-200">{fmtTotal(colSum('tax_adj_credit'))}</td>
+                  <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80">{fmtTotal(colSum('tax_adjusted_debit'))}</td>
+                  <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">{fmtTotal(colSum('tax_adjusted_credit'))}</td>
+                  <td colSpan={2}></td>
+                </tr>
+                {/* Net income / (loss) */}
+                <tr className="border-t border-gray-300 bg-gray-50">
+                  <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-r border-gray-300">
+                    Net Income/(Loss)
+                  </td>
+                  <td colSpan={2} className="px-2 py-1 text-right text-sm font-semibold border-r border-gray-200">
+                    {fmtNet(unajNetIncome)}
+                  </td>
+                  <td colSpan={2} className="border-r border-gray-200"></td>
+                  <td colSpan={2} className="px-2 py-1 text-right text-sm font-semibold bg-blue-50/80 border-r border-gray-200">
+                    {fmtNet(bkNetIncome)}
+                  </td>
+                  <td colSpan={2} className="border-r border-gray-200"></td>
+                  <td colSpan={2} className="px-2 py-1 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">
+                    {fmtNet(txNetIncome)}
+                  </td>
+                  <td colSpan={2}></td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       )}

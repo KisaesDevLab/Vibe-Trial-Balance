@@ -199,6 +199,67 @@ jeItemRouter.put('/:id/lines', async (req: AuthRequest, res: Response): Promise<
   }
 });
 
+// PATCH /api/v1/journal-entries/:id  (update header fields + optionally replace lines)
+jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = Number(req.params.id);
+  if (isNaN(id)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid ID' } });
+    return;
+  }
+  const patchSchema = z.object({
+    entryType: z.enum(['book', 'tax']).optional(),
+    entryDate: z.string().optional(),
+    description: z.string().nullable().optional(),
+    lines: z.array(lineSchema).min(2).optional(),
+  });
+  const result = patchSchema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  const { entryType, entryDate, description, lines } = result.data;
+
+  if (lines) {
+    const totalDebit = lines.reduce((s, l) => s + l.debit, 0);
+    const totalCredit = lines.reduce((s, l) => s + l.credit, 0);
+    if (totalDebit !== totalCredit) {
+      res.status(400).json({
+        data: null,
+        error: { code: 'UNBALANCED', message: `Journal entry must balance. Debit: ${totalDebit}, Credit: ${totalCredit}` },
+      });
+      return;
+    }
+  }
+
+  try {
+    const updatedEntry = await db.transaction(async (trx) => {
+      const headerUpdates: Record<string, unknown> = { updated_at: trx.fn.now() };
+      if (entryType !== undefined) headerUpdates.entry_type = entryType;
+      if (entryDate !== undefined) headerUpdates.entry_date = entryDate;
+      if (description !== undefined) headerUpdates.description = description;
+
+      const [entry] = await trx('journal_entries').where({ id }).update(headerUpdates).returning('*');
+      if (!entry) throw new Error('NOT_FOUND');
+
+      if (lines) {
+        await trx('journal_entry_lines').where({ journal_entry_id: id }).delete();
+        await trx('journal_entry_lines').insert(
+          lines.map((l) => ({ journal_entry_id: id, account_id: l.accountId, debit: l.debit, credit: l.credit })),
+        );
+      }
+      return entry;
+    });
+    res.json({ data: updatedEntry, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    if (message === 'NOT_FOUND') {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
+    } else {
+      res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    }
+  }
+});
+
 // DELETE /api/v1/journal-entries/:id
 jeItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   const id = Number(req.params.id);

@@ -13,7 +13,7 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const { user, clearAuth } = useAuthStore();
-  const { selectedClientId } = useUIStore();
+  const { selectedClientId, fontSize, increaseFontSize, decreaseFontSize } = useUIStore();
 
   return (
     <aside className="w-60 bg-gray-900 text-white flex flex-col shrink-0">
@@ -45,6 +45,20 @@ export function Sidebar() {
       </nav>
 
       <div className="px-4 py-3 border-t border-gray-700">
+        <div className="flex items-center gap-1.5 mb-3">
+          <span className="text-xs text-gray-500">Text</span>
+          <button
+            onClick={decreaseFontSize}
+            title="Decrease font size"
+            className="text-xs text-gray-400 hover:text-white w-6 h-6 flex items-center justify-center rounded hover:bg-gray-700"
+          >A-</button>
+          <span className="text-xs text-gray-400 w-6 text-center">{fontSize}</span>
+          <button
+            onClick={increaseFontSize}
+            title="Increase font size"
+            className="text-xs text-gray-400 hover:text-white w-6 h-6 flex items-center justify-center rounded hover:bg-gray-700"
+          >A+</button>
+        </div>
         <div className="text-sm text-gray-300 font-medium truncate">{user?.displayName}</div>
         <div className="text-xs text-gray-500 mb-2 capitalize">{user?.role}</div>
         <button
