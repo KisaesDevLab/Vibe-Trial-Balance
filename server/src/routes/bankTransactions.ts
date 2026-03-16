@@ -4,8 +4,61 @@ import multer from 'multer';
 import { parse } from 'fast-csv';
 import { Readable } from 'stream';
 import Anthropic from '@anthropic-ai/sdk';
+import type { Knex } from 'knex';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+
+// ---- Journal entry sync helper ----
+// Creates, replaces, or deletes the auto-generated book JE for a bank transaction.
+// A JE is created when the transaction has account_id + source_account_id + period_id.
+// Sign convention: amount > 0 → DR source, CR classification
+//                  amount < 0 → DR classification, CR source (abs amount)
+async function syncTxJE(
+  trx: Knex.Transaction,
+  txId: number,
+  clientId: number,
+  userId: number,
+): Promise<void> {
+  const tx = await trx('bank_transactions').where({ id: txId, client_id: clientId }).first();
+  if (!tx) return;
+
+  // Delete any existing auto-generated JE
+  if (tx.journal_entry_id) {
+    await trx('journal_entry_lines').where({ journal_entry_id: tx.journal_entry_id }).delete();
+    await trx('journal_entries').where({ id: tx.journal_entry_id }).delete();
+    await trx('bank_transactions').where({ id: txId }).update({ journal_entry_id: null });
+  }
+
+  // Need all three fields to create a JE
+  if (!tx.account_id || !tx.source_account_id || !tx.period_id || tx.amount === 0) return;
+
+  const absAmount = Math.abs(Number(tx.amount));
+  const debitAccountId  = tx.amount > 0 ? tx.source_account_id : tx.account_id;
+  const creditAccountId = tx.amount > 0 ? tx.account_id : tx.source_account_id;
+
+  const lastEntry = await trx('journal_entries')
+    .where({ period_id: tx.period_id, entry_type: 'book' })
+    .max('entry_number as max')
+    .first();
+  const entryNumber = ((lastEntry?.max as number) ?? 0) + 1;
+
+  const [je] = await trx('journal_entries').insert({
+    period_id: tx.period_id,
+    entry_number: entryNumber,
+    entry_type: 'book',
+    entry_date: tx.transaction_date,
+    description: tx.description ?? `Bank transaction ${tx.transaction_date}`,
+    is_recurring: false,
+    created_by: userId,
+  }).returning('*');
+
+  await trx('journal_entry_lines').insert([
+    { journal_entry_id: je.id, account_id: debitAccountId,  debit: absAmount, credit: 0 },
+    { journal_entry_id: je.id, account_id: creditAccountId, debit: 0, credit: absAmount },
+  ]);
+
+  await trx('bank_transactions').where({ id: txId }).update({ journal_entry_id: je.id });
+}
 
 export const btCollectionRouter = Router({ mergeParams: true });
 export const btRulesRouter = Router({ mergeParams: true });
@@ -347,11 +400,20 @@ btCollectionRouter.post('/batch-delete', async (req: AuthRequest, res: Response)
     return;
   }
   try {
-    const deleted = await db('bank_transactions')
-      .where({ client_id: clientId })
-      .whereIn('id', result.data.ids)
-      .delete();
-    res.json({ data: { deleted }, error: null });
+    await db.transaction(async (trx) => {
+      const txs = await trx('bank_transactions')
+        .where({ client_id: clientId })
+        .whereIn('id', result.data.ids)
+        .select('id', 'journal_entry_id');
+
+      const jeIds = txs.map((t: { journal_entry_id: number | null }) => t.journal_entry_id).filter(Boolean) as number[];
+      if (jeIds.length > 0) {
+        await trx('journal_entry_lines').whereIn('journal_entry_id', jeIds).delete();
+        await trx('journal_entries').whereIn('id', jeIds).delete();
+      }
+      await trx('bank_transactions').where({ client_id: clientId }).whereIn('id', result.data.ids).delete();
+    });
+    res.json({ data: { deleted: result.data.ids.length }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
@@ -377,32 +439,32 @@ btCollectionRouter.post('/batch-classify', async (req: AuthRequest, res: Respons
   }
   const { ids, accountId } = result.data;
   try {
-    const updated = await db('bank_transactions')
-      .where({ client_id: clientId })
-      .whereIn('id', ids)
-      .update({
-        account_id: accountId,
-        classification_status: 'manual',
-        classified_by: req.user!.userId,
-      });
+    await db.transaction(async (trx) => {
+      await trx('bank_transactions')
+        .where({ client_id: clientId })
+        .whereIn('id', ids)
+        .update({ account_id: accountId, classification_status: 'manual', classified_by: req.user!.userId });
 
-    // Upsert classification rules for transactions that have a description
-    const txs = await db('bank_transactions')
-      .where({ client_id: clientId })
-      .whereIn('id', ids)
-      .whereNotNull('description')
-      .select('description');
+      // Upsert classification rules for transactions that have a description
+      const txs = await trx('bank_transactions')
+        .where({ client_id: clientId })
+        .whereIn('id', ids)
+        .whereNotNull('description')
+        .select('id', 'description');
 
-    for (const tx of txs) {
-      const pattern = (tx.description as string).trim();
-      if (!pattern) continue;
-      await db('classification_rules')
-        .insert({ client_id: clientId, payee_pattern: pattern, account_id: accountId, times_confirmed: 1 })
-        .onConflict(['client_id', 'payee_pattern'])
-        .merge({ account_id: accountId, times_confirmed: db.raw('classification_rules.times_confirmed + 1'), updated_at: db.fn.now() });
-    }
+      for (const tx of txs) {
+        const pattern = (tx.description as string).trim();
+        if (!pattern) continue;
+        await trx('classification_rules')
+          .insert({ client_id: clientId, payee_pattern: pattern, account_id: accountId, times_confirmed: 1 })
+          .onConflict(['client_id', 'payee_pattern'])
+          .merge({ account_id: accountId, times_confirmed: db.raw('classification_rules.times_confirmed + 1'), updated_at: db.fn.now() });
+        // Sync JE for each transaction
+        await syncTxJE(trx, tx.id as number, clientId, req.user!.userId);
+      }
+    });
 
-    res.json({ data: { updated }, error: null });
+    res.json({ data: { updated: ids.length }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
@@ -428,11 +490,24 @@ btCollectionRouter.post('/batch-update-source', async (req: AuthRequest, res: Re
   }
   const { ids, sourceAccountId } = result.data;
   try {
-    const updated = await db('bank_transactions')
-      .where({ client_id: clientId })
-      .whereIn('id', ids)
-      .update({ source_account_id: sourceAccountId });
-    res.json({ data: { updated }, error: null });
+    await db.transaction(async (trx) => {
+      await trx('bank_transactions')
+        .where({ client_id: clientId })
+        .whereIn('id', ids)
+        .update({ source_account_id: sourceAccountId });
+
+      // Re-sync JEs for any transactions that already have a classification
+      const classified = await trx('bank_transactions')
+        .where({ client_id: clientId })
+        .whereIn('id', ids)
+        .whereNotNull('account_id')
+        .select('id');
+
+      for (const tx of classified) {
+        await syncTxJE(trx, tx.id as number, clientId, req.user!.userId);
+      }
+    });
+    res.json({ data: { updated: ids.length }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
@@ -577,36 +652,48 @@ btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promis
   }
 
   try {
-    const updated = await db('bank_transactions')
-      .where({ id, client_id: clientId })
-      .update(updates)
-      .returning('*');
+    let finalRow: Record<string, unknown>;
 
-    if (updated.length === 0) {
+    await db.transaction(async (trx) => {
+      const updated = await trx('bank_transactions')
+        .where({ id, client_id: clientId })
+        .update(updates)
+        .returning('*');
+
+      if (updated.length === 0) throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
+
+      finalRow = updated[0];
+
+      // Upsert classification rule when manually confirming
+      const status = updates.classification_status as string | undefined;
+      if ((status === 'confirmed' || status === 'manual') && updates.account_id && finalRow.description) {
+        await trx('classification_rules')
+          .insert({
+            client_id: clientId,
+            payee_pattern: (finalRow.description as string).trim(),
+            account_id: updates.account_id,
+            times_confirmed: 1,
+          })
+          .onConflict(['client_id', 'payee_pattern'])
+          .merge({
+            account_id: updates.account_id,
+            times_confirmed: db.raw('classification_rules.times_confirmed + 1'),
+            updated_at: db.fn.now(),
+          });
+      }
+
+      // Sync the auto-generated journal entry
+      await syncTxJE(trx, id, clientId, req.user!.userId);
+      // Re-fetch after JE sync so journal_entry_id is current
+      finalRow = await trx('bank_transactions').where({ id }).first();
+    });
+
+    res.json({ data: finalRow!, error: null });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message === 'NOT_FOUND') {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Transaction not found' } });
       return;
     }
-
-    // Upsert classification rule when manually confirming
-    const status = updates.classification_status as string | undefined;
-    if ((status === 'confirmed' || status === 'manual') && updates.account_id && updated[0].description) {
-      await db('classification_rules')
-        .insert({
-          client_id: clientId,
-          payee_pattern: (updated[0].description as string).trim(),
-          account_id: updates.account_id,
-          times_confirmed: 1,
-        })
-        .onConflict(['client_id', 'payee_pattern'])
-        .merge({
-          account_id: updates.account_id,
-          times_confirmed: db.raw('classification_rules.times_confirmed + 1'),
-          updated_at: db.fn.now(),
-        });
-    }
-
-    res.json({ data: updated[0], error: null });
-  } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
   }
@@ -621,13 +708,21 @@ btCollectionRouter.delete('/:id', async (req: AuthRequest, res: Response): Promi
     return;
   }
   try {
-    const deleted = await db('bank_transactions').where({ id, client_id: clientId }).delete();
-    if (deleted === 0) {
+    await db.transaction(async (trx) => {
+      const tx = await trx('bank_transactions').where({ id, client_id: clientId }).first('journal_entry_id');
+      if (!tx) throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
+      if (tx.journal_entry_id) {
+        await trx('journal_entry_lines').where({ journal_entry_id: tx.journal_entry_id }).delete();
+        await trx('journal_entries').where({ id: tx.journal_entry_id }).delete();
+      }
+      await trx('bank_transactions').where({ id, client_id: clientId }).delete();
+    });
+    res.json({ data: { deleted: 1 }, error: null });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message === 'NOT_FOUND') {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Transaction not found' } });
       return;
     }
-    res.json({ data: { deleted }, error: null });
-  } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
   }
