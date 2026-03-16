@@ -97,17 +97,36 @@ export const classifyTransaction = (
 export const deleteBankTransaction = (clientId: number, id: number) =>
   apiFetch<{ deleted: number }>(`/clients/${clientId}/bank-transactions/${id}`, { method: 'DELETE' });
 
+const CHUNK = 250;
+
+async function chunked<T extends { data: { deleted?: number; updated?: number } | null; error: { code: string; message: string } | null }>(
+  ids: number[],
+  fn: (chunk: number[]) => Promise<T>,
+): Promise<{ data: { deleted?: number; updated?: number }; error: null }> {
+  let total = 0;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const res = await fn(ids.slice(i, i + CHUNK));
+    if (res.error) throw new Error(res.error.message);
+    total += (res.data?.deleted ?? res.data?.updated ?? 0);
+  }
+  return { data: { deleted: total, updated: total }, error: null };
+}
+
 export const batchDeleteTransactions = (clientId: number, ids: number[]) =>
-  apiFetch<{ deleted: number }>(`/clients/${clientId}/bank-transactions/batch-delete`, {
-    method: 'POST',
-    body: JSON.stringify({ ids }),
-  });
+  chunked(ids, (chunk) =>
+    apiFetch<{ deleted: number }>(`/clients/${clientId}/bank-transactions/batch-delete`, {
+      method: 'POST',
+      body: JSON.stringify({ ids: chunk }),
+    }),
+  );
 
 export const batchClassifyTransactions = (clientId: number, ids: number[], accountId: number) =>
-  apiFetch<{ updated: number }>(`/clients/${clientId}/bank-transactions/batch-classify`, {
-    method: 'POST',
-    body: JSON.stringify({ ids, accountId }),
-  });
+  chunked(ids, (chunk) =>
+    apiFetch<{ updated: number }>(`/clients/${clientId}/bank-transactions/batch-classify`, {
+      method: 'POST',
+      body: JSON.stringify({ ids: chunk, accountId }),
+    }),
+  );
 
 export const aiClassifyTransactions = (clientId: number, ids: number[]) =>
   apiFetch<{ classified: number; results: Array<{ id: number; accountId: number; confidence: number; reasoning: string }> }>(

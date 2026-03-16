@@ -279,7 +279,7 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
 
 // POST /api/v1/clients/:clientId/bank-transactions/batch-delete
 const batchIdsSchema = z.object({
-  ids: z.array(z.number().int().positive()).min(1).max(500),
+  ids: z.array(z.number().int().positive()).min(1),
 });
 
 btCollectionRouter.post('/batch-delete', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -307,7 +307,7 @@ btCollectionRouter.post('/batch-delete', async (req: AuthRequest, res: Response)
 
 // POST /api/v1/clients/:clientId/bank-transactions/batch-classify
 const batchClassifySchema = z.object({
-  ids: z.array(z.number().int().positive()).min(1).max(500),
+  ids: z.array(z.number().int().positive()).min(1),
   accountId: z.number().int().positive(),
 });
 
