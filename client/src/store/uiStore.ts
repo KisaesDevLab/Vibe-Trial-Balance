@@ -48,7 +48,7 @@ export const useUIStore = create<UIStore>()(
       setSelectedClientId: (id) => set({ selectedClientId: id, selectedPeriodId: null }),
       selectedPeriodId: null,
       setSelectedPeriodId: (id) => set({ selectedPeriodId: id }),
-      fontSize: 14,
+      fontSize: 16,
       increaseFontSize: () => set((s) => ({ fontSize: Math.min(MAX_FONT, s.fontSize + 1) })),
       decreaseFontSize: () => set((s) => ({ fontSize: Math.max(MIN_FONT, s.fontSize - 1) })),
     }),

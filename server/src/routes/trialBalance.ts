@@ -33,7 +33,7 @@ tbPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
   }
   try {
     const rows = await db('v_adjusted_trial_balance')
-      .where({ period_id: periodId })
+      .where({ period_id: periodId, is_active: true })
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'account_number', order: 'asc' }]);
     res.json({ data: rows.map(parseBigInts), error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
@@ -84,7 +84,20 @@ tbPeriodRouter.post('/initialize', async (req: AuthRequest, res: Response): Prom
       await db('trial_balance').insert(toInsert);
     }
 
-    res.json({ data: { initialized: toInsert.length }, error: null });
+    // Remove zero-balance rows for accounts now inactive in COA
+    const inactiveIds = await db('chart_of_accounts')
+      .where({ client_id: period.client_id, is_active: false })
+      .pluck('id');
+    let removed = 0;
+    if (inactiveIds.length > 0) {
+      removed = await db('trial_balance')
+        .where({ period_id: periodId })
+        .whereIn('account_id', inactiveIds.map(Number))
+        .where({ unadjusted_debit: 0, unadjusted_credit: 0 })
+        .delete();
+    }
+
+    res.json({ data: { initialized: toInsert.length, removed }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });

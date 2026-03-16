@@ -20,8 +20,17 @@ import { useUIStore } from '../store/uiStore';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type EditableColKey = 'account_name' | 'unadjusted_debit' | 'unadjusted_credit' | 'category' | 'tax_line' | 'workpaper_ref';
+type EditableColKey =
+  | 'account_number'
+  | 'account_name'
+  | 'unadjusted_debit'
+  | 'unadjusted_credit'
+  | 'category'
+  | 'tax_line'
+  | 'workpaper_ref';
+
 const EDITABLE_COLS: EditableColKey[] = [
+  'account_number',
   'account_name',
   'unadjusted_debit',
   'unadjusted_credit',
@@ -58,7 +67,6 @@ const CATEGORY_COLORS: Record<string, string> = {
   expenses: 'bg-red-50 text-red-700',
 };
 
-// Column index → CSS classes for group borders/backgrounds
 // Columns: 0=acct#, 1=name, 2=cat, 3=unaj_dr, 4=unaj_cr, 5=bk_adj_dr, 6=bk_adj_cr,
 //          7=bk_dr, 8=bk_cr, 9=tx_adj_dr, 10=tx_adj_cr, 11=tx_dr, 12=tx_cr, 13=tax_line, 14=wp_ref
 function colGroupClass(idx: number, isHeader = false): string {
@@ -75,7 +83,8 @@ function colGroupClass(idx: number, isHeader = false): string {
 
 function getCellDisplayValue(rowData: TBRow, col: EditableColKey): string {
   switch (col) {
-    case 'account_name':     return rowData.account_name;
+    case 'account_number':    return rowData.account_number;
+    case 'account_name':      return rowData.account_name;
     case 'unadjusted_debit':  return rowData.unadjusted_debit === 0 ? '' : (rowData.unadjusted_debit / 100).toFixed(2);
     case 'unadjusted_credit': return rowData.unadjusted_credit === 0 ? '' : (rowData.unadjusted_credit / 100).toFixed(2);
     case 'category':          return rowData.category;
@@ -92,7 +101,7 @@ export function TrialBalancePage() {
   const { selectedPeriodId } = useUIStore();
   const qc = useQueryClient();
   const [sorting, setSorting] = useState<SortingState>([]);
-  const [lastSyncCount, setLastSyncCount] = useState<number | null>(null);
+  const [lastSyncMsg, setLastSyncMsg] = useState<string | null>(null);
 
   // Excel-like cell selection
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -100,21 +109,22 @@ export function TrialBalancePage() {
   const [editText, setEditText] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const ignoreBlur = useRef(false);
+  // Track whether editing was started by typing a character (vs F2/Enter/double-click)
+  // Used to decide whether to select-all (replace) or place cursor at end (append)
+  const editStartedByChar = useRef(false);
 
   const queryKey = ['trial-balance', selectedPeriodId];
 
   useEffect(() => {
     setActiveCell(null);
     setEditing(false);
-    setLastSyncCount(null);
+    setLastSyncMsg(null);
   }, [selectedPeriodId]);
 
-  // Re-focus container after leaving editing mode so arrow keys work
   useEffect(() => {
     if (!editing && activeCell) containerRef.current?.focus();
   }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Scroll active cell into view
   useEffect(() => {
     if (activeCell) {
       document
@@ -138,7 +148,11 @@ export function TrialBalancePage() {
     mutationFn: () => initializeTrialBalance(selectedPeriodId!),
     onSuccess: (res) => {
       if (res.error) return;
-      setLastSyncCount(res.data.initialized);
+      const { initialized, removed } = res.data;
+      const parts: string[] = [];
+      if (initialized > 0) parts.push(`${initialized} added`);
+      if (removed > 0) parts.push(`${removed} removed`);
+      setLastSyncMsg(parts.length > 0 ? parts.join(', ') : 'Already up to date');
       qc.invalidateQueries({ queryKey });
     },
   });
@@ -181,6 +195,7 @@ export function TrialBalancePage() {
           if (r.account_id !== accountId) return r;
           return {
             ...r,
+            ...(updates.accountNumber !== undefined ? { account_number: updates.accountNumber } : {}),
             ...(updates.accountName !== undefined ? { account_name: updates.accountName } : {}),
             ...(updates.category !== undefined ? { category: updates.category } : {}),
             ...(updates.taxLine !== undefined ? { tax_line: updates.taxLine || null } : {}),
@@ -205,7 +220,7 @@ export function TrialBalancePage() {
     [balanceMutation],
   );
 
-  // ── Table (placeholder, used for row count in navigation) ──────────────────
+  // ── Table (placeholder for navigation row count) ───────────────────────────
 
   const table = useReactTable({
     data: data ?? [],
@@ -227,6 +242,10 @@ export function TrialBalancePage() {
         break;
       case 'unadjusted_credit':
         handleBalanceEdit(rowData, 'unadjusted_credit', parseCents(text));
+        break;
+      case 'account_number':
+        if (trimmed && trimmed !== rowData.account_number)
+          accountMutation.mutate({ accountId: rowData.account_id, updates: { accountNumber: trimmed } });
         break;
       case 'account_name':
         if (trimmed && trimmed !== rowData.account_name)
@@ -291,11 +310,16 @@ export function TrialBalancePage() {
       case 'Enter':
       case 'F2':
         e.preventDefault();
-        if (rowData) { setEditText(getCellDisplayValue(rowData, activeCell.col)); setEditing(true); }
+        if (rowData) {
+          editStartedByChar.current = false;
+          setEditText(getCellDisplayValue(rowData, activeCell.col));
+          setEditing(true);
+        }
         break;
       case 'Delete':
       case 'Backspace':
         e.preventDefault();
+        editStartedByChar.current = false;
         setEditText('');
         setEditing(true);
         break;
@@ -306,6 +330,7 @@ export function TrialBalancePage() {
       default:
         if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
           e.preventDefault();
+          editStartedByChar.current = true;
           setEditText(e.key);
           setEditing(true);
         }
@@ -344,6 +369,7 @@ export function TrialBalancePage() {
     const isActive = activeCell?.row === rowIndex && activeCell?.col === col;
     const isNumber = col === 'unadjusted_debit' || col === 'unadjusted_credit';
     const isSelect = col === 'category';
+    const isMono = col === 'account_number';
     const alignClass = isNumber ? 'text-right' : 'text-left';
     const cellId = `${col}|${rowIndex}`;
 
@@ -372,8 +398,16 @@ export function TrialBalancePage() {
           onChange={(e) => setEditText(e.target.value)}
           onKeyDown={(e) => handleInputKeyDown(e, { row: rowIndex, col }, rowData)}
           onBlur={() => handleInputBlur({ row: rowIndex, col }, rowData)}
-          onFocus={(e) => e.target.select()}
-          className={`w-full text-sm bg-white outline-none px-1 py-0 border-0 ${alignClass}`}
+          onFocus={(e) => {
+            if (editStartedByChar.current) {
+              // Cursor at end so the typed char is preserved; subsequent typing appends
+              const len = e.target.value.length;
+              e.target.setSelectionRange(len, len);
+            } else {
+              e.target.select();
+            }
+          }}
+          className={`w-full text-sm bg-white outline-none px-1 py-0 border-0 ${alignClass} ${isMono ? 'font-mono' : ''}`}
         />
       );
     }
@@ -391,6 +425,8 @@ export function TrialBalancePage() {
           {rawDisplay.slice(0, 3)}
         </span>
       );
+    } else if (col === 'account_number') {
+      display = <span className="font-mono">{rawDisplay}</span>;
     } else {
       display = rawDisplay || <span className="text-gray-300 italic text-xs">—</span>;
     }
@@ -413,6 +449,7 @@ export function TrialBalancePage() {
         data-cell={cellId}
         onClick={() => { setActiveCell({ row: rowIndex, col }); setEditing(false); containerRef.current?.focus(); }}
         onDoubleClick={() => {
+          editStartedByChar.current = false;
           setActiveCell({ row: rowIndex, col });
           setEditText(getCellDisplayValue(rowData, col));
           setEditing(true);
@@ -429,7 +466,7 @@ export function TrialBalancePage() {
   const columns = [
     columnHelper.accessor('account_number', {
       header: 'Acct #',
-      cell: (i) => <span className="font-mono text-sm">{i.getValue()}</span>,
+      cell: (i) => renderCell(i.row.index, 'account_number', i.row.original),
     }),
     columnHelper.accessor('account_name', {
       header: 'Account Name',
@@ -489,7 +526,6 @@ export function TrialBalancePage() {
     }),
   ];
 
-  // Re-create table with real columns
   const tableInstance = useReactTable({
     data: data ?? [],
     columns,
@@ -511,22 +547,21 @@ export function TrialBalancePage() {
     const expNet = rows
       .filter((r) => r.category === 'expenses')
       .reduce((s, r) => s + (r[dk] as number) - (r[ck] as number), 0);
-    return revNet - expNet; // positive = income, negative = loss
+    return revNet - expNet;
   };
 
   const unajNetIncome = calcNetIncome('unadjusted_debit', 'unadjusted_credit');
-  const bkNetIncome = calcNetIncome('book_adjusted_debit', 'book_adjusted_credit');
-  const txNetIncome = calcNetIncome('tax_adjusted_debit', 'tax_adjusted_credit');
+  const bkNetIncome   = calcNetIncome('book_adjusted_debit', 'book_adjusted_credit');
+  const txNetIncome   = calcNetIncome('tax_adjusted_debit', 'tax_adjusted_credit');
 
   function fmtNet(n: number) {
-    if (n === 0) return '—';
+    if (n === 0) return <span className="text-gray-400">—</span>;
     return n > 0
       ? <span className="text-green-700">{fmtTotal(n)}</span>
       : <span className="text-red-600">({fmtTotal(Math.abs(n))})</span>;
   }
 
   const isEmpty = !data || data.length === 0;
-  const showSyncButton = isEmpty || lastSyncCount === null || lastSyncCount > 0;
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -548,15 +583,18 @@ export function TrialBalancePage() {
           <h2 className="text-lg font-semibold text-gray-900">Trial Balance</h2>
           {data && <p className="text-xs text-gray-500">{data.length} accounts · click to select · double-click or F2 to edit · Tab/Enter/arrows to navigate</p>}
         </div>
-        {showSyncButton && (
+        <div className="flex items-center gap-3">
+          {lastSyncMsg && (
+            <span className="text-xs text-gray-500">{lastSyncMsg}</span>
+          )}
           <button
             onClick={() => initMutation.mutate()}
             disabled={initMutation.isPending}
             className="px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50"
           >
-            {initMutation.isPending ? 'Syncing...' : isEmpty ? 'Initialize from COA' : 'Sync new accounts'}
+            {initMutation.isPending ? 'Syncing...' : isEmpty ? 'Initialize from COA' : 'Sync with COA'}
           </button>
-        )}
+        </div>
       </div>
 
       {error && (
@@ -626,7 +664,6 @@ export function TrialBalancePage() {
             </tbody>
             {rows.length > 0 && (
               <tfoot className="sticky bottom-0 z-10">
-                {/* Column totals */}
                 <tr className="border-t-2 border-gray-400 bg-gray-100 font-semibold">
                   <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-r border-gray-300">
                     Totals
@@ -643,7 +680,6 @@ export function TrialBalancePage() {
                   <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">{fmtTotal(colSum('tax_adjusted_credit'))}</td>
                   <td colSpan={2}></td>
                 </tr>
-                {/* Net income / (loss) */}
                 <tr className="border-t border-gray-300 bg-gray-50">
                   <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-r border-gray-300">
                     Net Income/(Loss)

@@ -27,7 +27,7 @@ export const getTrialBalance = (periodId: number) =>
   apiFetch<TBRow[]>(`/periods/${periodId}/trial-balance`);
 
 export const initializeTrialBalance = (periodId: number) =>
-  apiFetch<{ initialized: number }>(`/periods/${periodId}/trial-balance/initialize`, {
+  apiFetch<{ initialized: number; removed: number }>(`/periods/${periodId}/trial-balance/initialize`, {
     method: 'POST',
   });
 
