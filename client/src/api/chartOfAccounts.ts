@@ -47,3 +47,15 @@ export const updateAccount = (id: number, input: Partial<AccountInput>) =>
 
 export const deleteAccount = (id: number) =>
   apiFetch<{ id: number }>(`/chart-of-accounts/${id}`, { method: 'DELETE' });
+
+export const importAccounts = (clientId: number, rows: AccountInput[]) =>
+  apiFetch<{ inserted: number; updated: number; total: number }>(
+    `/clients/${clientId}/chart-of-accounts/import`,
+    { method: 'POST', body: JSON.stringify({ rows }) },
+  );
+
+export const copyAccountsFromClient = (clientId: number, sourceClientId: number, overwrite: boolean) =>
+  apiFetch<{ inserted: number; updated: number; skipped: number; total: number }>(
+    `/clients/${clientId}/chart-of-accounts/copy-from/${sourceClientId}?overwrite=${overwrite}`,
+    { method: 'POST' },
+  );

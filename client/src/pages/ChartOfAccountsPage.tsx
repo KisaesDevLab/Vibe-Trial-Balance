@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   useReactTable,
@@ -13,9 +13,12 @@ import {
   createAccount,
   updateAccount,
   deleteAccount,
+  importAccounts,
+  copyAccountsFromClient,
   type Account,
   type AccountInput,
 } from '../api/chartOfAccounts';
+import { listClients, type Client } from '../api/clients';
 import { useUIStore } from '../store/uiStore';
 
 const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'] as const;
@@ -189,6 +192,349 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
   );
 }
 
+// --- CSV helpers ---
+const REQUIRED_COLS = ['account_number', 'account_name', 'category', 'normal_balance'] as const;
+// Optional columns are documented in the UI but not validated here
+const _OPTIONAL_COLS = ['subcategory', 'tax_line', 'workpaper_ref', 'sort_order'] as const;
+void _OPTIONAL_COLS;
+const VALID_CATEGORIES = new Set(['assets', 'liabilities', 'equity', 'revenue', 'expenses']);
+const VALID_BALANCES   = new Set(['debit', 'credit']);
+
+interface ParsedRow {
+  accountNumber: string;
+  accountName: string;
+  category: string;
+  normalBalance: string;
+  subcategory?: string;
+  taxLine?: string;
+  workpaperRef?: string;
+  sortOrder?: number;
+  _errors: string[];
+}
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuote = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuote) {
+      if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') inQuote = false;
+      else cell += ch;
+    } else {
+      if (ch === '"') { inQuote = true; }
+      else if (ch === ',') { row.push(cell); cell = ''; }
+      else if (ch === '\n' || (ch === '\r' && text[i + 1] === '\n')) {
+        if (ch === '\r') i++;
+        row.push(cell); cell = '';
+        if (row.some((c) => c !== '')) rows.push(row);
+        row = [];
+      } else { cell += ch; }
+    }
+  }
+  row.push(cell);
+  if (row.some((c) => c !== '')) rows.push(row);
+  return rows;
+}
+
+function parseCsvAccounts(text: string): { rows: ParsedRow[]; headerError: string | null } {
+  const raw = parseCsv(text.trim());
+  if (raw.length < 2) return { rows: [], headerError: 'File must have a header row and at least one data row.' };
+
+  const headers = raw[0].map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  const missing = REQUIRED_COLS.filter((c) => !headers.includes(c));
+  if (missing.length > 0) return { rows: [], headerError: `Missing required columns: ${missing.join(', ')}` };
+
+  const idx = (col: string) => headers.indexOf(col);
+  const rows: ParsedRow[] = [];
+
+  for (let i = 1; i < raw.length; i++) {
+    const r = raw[i];
+    const get = (col: string) => (r[idx(col)] ?? '').trim();
+    const errors: string[] = [];
+    const accountNumber = get('account_number');
+    const accountName   = get('account_name');
+    const category      = get('category').toLowerCase();
+    const normalBalance = get('normal_balance').toLowerCase();
+    const sortRaw       = get('sort_order');
+
+    if (!accountNumber) errors.push('account_number required');
+    if (!accountName)   errors.push('account_name required');
+    if (!VALID_CATEGORIES.has(category)) errors.push(`invalid category "${category}"`);
+    if (!VALID_BALANCES.has(normalBalance)) errors.push(`invalid normal_balance "${normalBalance}"`);
+    const sortOrder = sortRaw ? Number(sortRaw) : undefined;
+    if (sortRaw && isNaN(sortOrder!)) errors.push('sort_order must be a number');
+
+    rows.push({
+      accountNumber,
+      accountName,
+      category,
+      normalBalance,
+      subcategory:  get('subcategory')   || undefined,
+      taxLine:      get('tax_line')      || undefined,
+      workpaperRef: get('workpaper_ref') || undefined,
+      sortOrder:    sortOrder,
+      _errors: errors,
+    });
+  }
+  return { rows, headerError: null };
+}
+
+// --- Import CSV Modal ---
+interface ImportModalProps {
+  clientId: number;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
+  const [rows, setRows] = useState<ParsedRow[]>([]);
+  const [headerError, setHeaderError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const importMutation = useMutation({
+    mutationFn: (validRows: AccountInput[]) => importAccounts(clientId, validRows),
+    onSuccess: (res) => {
+      if (res.error) return;
+      onSuccess();
+    },
+  });
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const { rows: parsed, headerError: hErr } = parseCsvAccounts(text);
+      setHeaderError(hErr);
+      setRows(parsed);
+    };
+    reader.readAsText(file);
+  };
+
+  const validRows = rows.filter((r) => r._errors.length === 0);
+  const errorCount = rows.filter((r) => r._errors.length > 0).length;
+
+  const handleImport = () => {
+    importMutation.mutate(validRows.map((r) => ({
+      accountNumber: r.accountNumber,
+      accountName:   r.accountName,
+      category:      r.category as AccountInput['category'],
+      normalBalance: r.normalBalance as AccountInput['normalBalance'],
+      subcategory:   r.subcategory,
+      taxLine:       r.taxLine,
+      workpaperRef:  r.workpaperRef,
+      sortOrder:     r.sortOrder,
+    })));
+  };
+
+  const result = importMutation.data;
+
+  return (
+    <Modal title="Import Chart of Accounts from CSV" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600">
+          <p className="font-semibold mb-1">Required columns:</p>
+          <code className="text-gray-700">account_number, account_name, category, normal_balance</code>
+          <p className="font-semibold mt-2 mb-1">Optional columns:</p>
+          <code className="text-gray-700">subcategory, tax_line, workpaper_ref, sort_order</code>
+          <p className="mt-2">Valid categories: <code>assets, liabilities, equity, revenue, expenses</code></p>
+          <p>Valid normal_balance: <code>debit, credit</code></p>
+          <p className="mt-2">Existing accounts with the same account number will be updated. New accounts will be inserted.</p>
+        </div>
+
+        {result?.data ? (
+          <div className="bg-green-50 border border-green-200 rounded px-4 py-3 text-sm text-green-800">
+            Import complete: <strong>{result.data.inserted}</strong> inserted, <strong>{result.data.updated}</strong> updated.
+          </div>
+        ) : (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Select CSV file</label>
+              <input ref={fileRef} type="file" accept=".csv,.txt" onChange={handleFile} className="text-sm text-gray-700" />
+            </div>
+
+            {headerError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{headerError}</div>
+            )}
+
+            {importMutation.data?.error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{importMutation.data.error.message}</div>
+            )}
+
+            {rows.length > 0 && !headerError && (
+              <div>
+                <div className="flex items-center gap-4 mb-2 text-sm">
+                  <span className="text-gray-700">{rows.length} rows in file</span>
+                  <span className="text-green-700 font-medium">{validRows.length} valid</span>
+                  {errorCount > 0 && <span className="text-red-600 font-medium">{errorCount} with errors</span>}
+                </div>
+                <div className="border border-gray-200 rounded overflow-auto max-h-52">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600 w-6">#</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Acct #</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Name</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Category</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Bal</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Issues</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {rows.map((r, i) => (
+                        <tr key={i} className={r._errors.length > 0 ? 'bg-red-50' : ''}>
+                          <td className="px-2 py-1 text-gray-400">{i + 1}</td>
+                          <td className="px-2 py-1 font-mono">{r.accountNumber}</td>
+                          <td className="px-2 py-1 max-w-32 truncate">{r.accountName}</td>
+                          <td className="px-2 py-1">{r.category}</td>
+                          <td className="px-2 py-1">{r.normalBalance}</td>
+                          <td className="px-2 py-1 text-red-600">{r._errors.join('; ') || ''}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+              <button
+                onClick={handleImport}
+                disabled={validRows.length === 0 || importMutation.isPending}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
+              >
+                {importMutation.isPending ? 'Importing…' : `Import ${validRows.length} Account${validRows.length !== 1 ? 's' : ''}`}
+              </button>
+            </div>
+          </>
+        )}
+
+        {result?.data && (
+          <div className="flex justify-end">
+            <button onClick={onClose} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// --- Copy from Client Modal ---
+interface CopyModalProps {
+  clientId: number;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+function CopyFromClientModal({ clientId, onClose, onSuccess }: CopyModalProps) {
+  const [sourceId, setSourceId] = useState<number | null>(null);
+  const [overwrite, setOverwrite] = useState(false);
+
+  const { data: clientsData } = useQuery({
+    queryKey: ['clients'],
+    queryFn: async () => {
+      const res = await listClients();
+      return res.data ?? [];
+    },
+  });
+
+  const otherClients = (clientsData ?? []).filter((c: Client) => c.id !== clientId && c.is_active);
+
+  const { data: sourceCoaData } = useQuery({
+    queryKey: ['chart-of-accounts', sourceId],
+    queryFn: async () => {
+      if (!sourceId) return [];
+      const res = await listAccounts(sourceId);
+      return res.data ?? [];
+    },
+    enabled: sourceId !== null,
+  });
+
+  const copyMutation = useMutation({
+    mutationFn: () => copyAccountsFromClient(clientId, sourceId!, overwrite),
+    onSuccess: (res) => {
+      if (res.error) return;
+      onSuccess();
+    },
+  });
+
+  const result = copyMutation.data;
+
+  return (
+    <Modal title="Copy Chart of Accounts from Another Client" onClose={onClose}>
+      <div className="space-y-4">
+        {result?.data ? (
+          <>
+            <div className="bg-green-50 border border-green-200 rounded px-4 py-3 text-sm text-green-800">
+              Copy complete: <strong>{result.data.inserted}</strong> inserted,{' '}
+              <strong>{result.data.updated}</strong> updated,{' '}
+              <strong>{result.data.skipped}</strong> skipped.
+            </div>
+            <div className="flex justify-end">
+              <button onClick={onClose} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Source Client</label>
+              <select
+                value={sourceId ?? ''}
+                onChange={(e) => setSourceId(e.target.value ? Number(e.target.value) : null)}
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">— Select a client —</option>
+                {otherClients.map((c: Client) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {sourceId && sourceCoaData !== undefined && (
+              <p className="text-sm text-gray-600">
+                Source has <strong>{sourceCoaData.length}</strong> active account{sourceCoaData.length !== 1 ? 's' : ''}.
+              </p>
+            )}
+
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={overwrite}
+                onChange={(e) => setOverwrite(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600"
+              />
+              Overwrite existing accounts with the same account number
+            </label>
+            <p className="text-xs text-gray-500 -mt-2">
+              When unchecked, accounts that already exist in the destination are skipped.
+            </p>
+
+            {copyMutation.data?.error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{copyMutation.data.error.message}</div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+              <button
+                onClick={() => copyMutation.mutate()}
+                disabled={!sourceId || copyMutation.isPending}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
+              >
+                {copyMutation.isPending ? 'Copying…' : 'Copy Accounts'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // --- Main page ---
 export function ChartOfAccountsPage() {
   const { selectedClientId } = useUIStore();
@@ -197,6 +543,8 @@ export function ChartOfAccountsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [editAccount, setEditAccount] = useState<Account | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState(false);
+  const [showCopy, setShowCopy] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['chart-of-accounts', selectedClientId],
@@ -325,12 +673,26 @@ export function ChartOfAccountsPage() {
             {data ? `${data.length} account${data.length !== 1 ? 's' : ''}` : ''}
           </p>
         </div>
-        <button
-          onClick={() => { setShowAdd(true); setFormError(null); }}
-          className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
-        >
-          + Add Account
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowImport(true)}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
+          >
+            Import CSV
+          </button>
+          <button
+            onClick={() => setShowCopy(true)}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
+          >
+            Copy from Client
+          </button>
+          <button
+            onClick={() => { setShowAdd(true); setFormError(null); }}
+            className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
+          >
+            + Add Account
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -422,6 +784,28 @@ export function ChartOfAccountsPage() {
             error={formError}
           />
         </Modal>
+      )}
+
+      {showImport && (
+        <ImportModal
+          clientId={selectedClientId}
+          onClose={() => setShowImport(false)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['chart-of-accounts', selectedClientId] });
+            setShowImport(false);
+          }}
+        />
+      )}
+
+      {showCopy && (
+        <CopyFromClientModal
+          clientId={selectedClientId}
+          onClose={() => setShowCopy(false)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['chart-of-accounts', selectedClientId] });
+            setShowCopy(false);
+          }}
+        />
       )}
     </div>
   );

@@ -111,6 +111,145 @@ coaCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<v
   }
 });
 
+// POST /api/v1/clients/:clientId/chart-of-accounts/import
+coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Promise<void> => {
+  const clientId = Number(req.params.clientId);
+  if (isNaN(clientId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } });
+    return;
+  }
+
+  const rowSchema = accountSchema.extend({ sortOrder: z.number().int().optional().default(0) });
+  const bodySchema = z.object({ rows: z.array(rowSchema).min(1).max(2000) });
+  const parsed = bodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    return;
+  }
+
+  const { rows } = parsed.data;
+  let inserted = 0;
+  let updated = 0;
+
+  try {
+    await db.transaction(async (trx) => {
+      for (const r of rows) {
+        const existing = await trx('chart_of_accounts')
+          .where({ client_id: clientId, account_number: r.accountNumber })
+          .first('id');
+
+        if (existing) {
+          await trx('chart_of_accounts').where({ id: existing.id }).update({
+            account_name: r.accountName,
+            category: r.category,
+            subcategory: r.subcategory ?? null,
+            normal_balance: r.normalBalance,
+            tax_line: r.taxLine ?? null,
+            workpaper_ref: r.workpaperRef ?? null,
+            sort_order: r.sortOrder ?? 0,
+            is_active: true,
+            updated_at: trx.fn.now(),
+          });
+          updated++;
+        } else {
+          await trx('chart_of_accounts').insert({
+            client_id: clientId,
+            account_number: r.accountNumber,
+            account_name: r.accountName,
+            category: r.category,
+            subcategory: r.subcategory ?? null,
+            normal_balance: r.normalBalance,
+            tax_line: r.taxLine ?? null,
+            workpaper_ref: r.workpaperRef ?? null,
+            sort_order: r.sortOrder ?? 0,
+            is_active: true,
+          });
+          inserted++;
+        }
+      }
+    });
+    res.json({ data: { inserted, updated, total: rows.length }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
+// POST /api/v1/clients/:clientId/chart-of-accounts/copy-from/:sourceClientId
+coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, res: Response): Promise<void> => {
+  const clientId = Number(req.params.clientId);
+  const sourceClientId = Number(req.params.sourceClientId);
+  if (isNaN(clientId) || isNaN(sourceClientId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } });
+    return;
+  }
+  if (clientId === sourceClientId) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_INPUT', message: 'Source and destination cannot be the same client.' } });
+    return;
+  }
+
+  const overwrite = req.query.overwrite === 'true';
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  try {
+    const sourceAccounts = await db('chart_of_accounts')
+      .where({ client_id: sourceClientId, is_active: true });
+
+    if (sourceAccounts.length === 0) {
+      res.json({ data: { inserted: 0, updated: 0, skipped: 0, total: 0 }, error: null });
+      return;
+    }
+
+    await db.transaction(async (trx) => {
+      for (const acct of sourceAccounts) {
+        const existing = await trx('chart_of_accounts')
+          .where({ client_id: clientId, account_number: acct.account_number })
+          .first('id');
+
+        if (existing) {
+          if (overwrite) {
+            await trx('chart_of_accounts').where({ id: existing.id }).update({
+              account_name: acct.account_name,
+              category: acct.category,
+              subcategory: acct.subcategory,
+              normal_balance: acct.normal_balance,
+              tax_line: acct.tax_line,
+              workpaper_ref: acct.workpaper_ref,
+              sort_order: acct.sort_order,
+              is_active: true,
+              updated_at: trx.fn.now(),
+            });
+            updated++;
+          } else {
+            skipped++;
+          }
+        } else {
+          await trx('chart_of_accounts').insert({
+            client_id: clientId,
+            account_number: acct.account_number,
+            account_name: acct.account_name,
+            category: acct.category,
+            subcategory: acct.subcategory,
+            normal_balance: acct.normal_balance,
+            tax_line: acct.tax_line,
+            workpaper_ref: acct.workpaper_ref,
+            sort_order: acct.sort_order,
+            is_active: true,
+          });
+          inserted++;
+        }
+      }
+    });
+
+    res.json({ data: { inserted, updated, skipped, total: sourceAccounts.length }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
 // GET /api/v1/chart-of-accounts/:id
 coaItemRouter.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   const id = Number(req.params.id);
