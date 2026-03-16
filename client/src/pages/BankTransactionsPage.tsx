@@ -55,8 +55,10 @@ export function BankTransactionsPage() {
 
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterPeriod, setFilterPeriod] = useState(false);
+  const [filterSourceAccount, setFilterSourceAccount] = useState<string>('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batchAccountId, setBatchAccountId] = useState<string>('');
+  const [importSourceAccountId, setImportSourceAccountId] = useState<string>('');
   const [showImport, setShowImport] = useState(false);
   const [importStep, setImportStep] = useState<'file' | 'mapping'>('file');
   const [showRules, setShowRules] = useState(false);
@@ -70,7 +72,7 @@ export function BankTransactionsPage() {
   const [importError, setImportError] = useState<string | null>(null);
 
   const clientId = selectedClientId;
-  const txQueryKey = ['bank-transactions', clientId, filterStatus, filterPeriod ? selectedPeriodId : null];
+  const txQueryKey = ['bank-transactions', clientId, filterStatus, filterPeriod ? selectedPeriodId : null, filterSourceAccount];
 
   const { data: txData, isLoading } = useQuery({
     queryKey: txQueryKey,
@@ -79,6 +81,7 @@ export function BankTransactionsPage() {
       const res = await listBankTransactions(clientId, {
         status: filterStatus || undefined,
         periodId: filterPeriod && selectedPeriodId ? selectedPeriodId : undefined,
+        sourceAccountId: filterSourceAccount ? Number(filterSourceAccount) : undefined,
       });
       if (res.error) throw new Error(res.error.message);
       return res.data ?? [];
@@ -112,7 +115,11 @@ export function BankTransactionsPage() {
 
   const importMutation = useMutation({
     mutationFn: ({ file, mapping }: { file: File; mapping?: CsvMapping }) =>
-      importBankTransactions(clientId!, file, { periodId: selectedPeriodId ?? undefined, mapping }),
+      importBankTransactions(clientId!, file, {
+        periodId: selectedPeriodId ?? undefined,
+        sourceAccountId: importSourceAccountId ? Number(importSourceAccountId) : undefined,
+        mapping,
+      }),
     onSuccess: (res) => {
       if (res.error) { setImportError(res.error.message); return; }
       invalidate();
@@ -126,6 +133,7 @@ export function BankTransactionsPage() {
     setImportFile(null);
     setImportHeaders([]);
     setImportMapping({ dateCol: '', descCol: '', amountMode: 'single', amountCol: '', debitCol: '', creditCol: '', checkCol: '' });
+    setImportSourceAccountId('');
     setImportError(null);
   };
 
@@ -308,7 +316,17 @@ export function BankTransactionsPage() {
       )}
 
       {/* Filters */}
-      <div className="flex items-center gap-3 mb-3">
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <select
+          value={filterSourceAccount}
+          onChange={(e) => setFilterSourceAccount(e.target.value)}
+          className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">All accounts</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>{a.account_number} – {a.account_name}</option>
+          ))}
+        </select>
         <select
           value={filterStatus}
           onChange={(e) => setFilterStatus(e.target.value)}
@@ -391,7 +409,8 @@ export function BankTransactionsPage() {
                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Description</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 w-28">Amount</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-20">Check #</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Account</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-36">Source Account</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Category</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-28">Status</th>
                 <th className="px-3 py-2 w-20"></th>
               </tr>
@@ -415,6 +434,9 @@ export function BankTransactionsPage() {
                     {fmt(tx.amount)}
                   </td>
                   <td className="px-3 py-2 text-gray-500">{tx.check_number ?? ''}</td>
+                  <td className="px-3 py-2 text-xs text-gray-600">
+                    {tx.source_account_number ? `${tx.source_account_number} – ${tx.source_account_name}` : <span className="text-gray-300">—</span>}
+                  </td>
                   <td className="px-3 py-2">
                     <AccountCell
                       tx={tx}
@@ -472,6 +494,19 @@ export function BankTransactionsPage() {
                   {importFile && (
                     <p className="text-xs text-gray-500">{importFile.name} ({(importFile.size / 1024).toFixed(1)} KB)</p>
                   )}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Source Account (bank / credit card)</label>
+                    <select
+                      value={importSourceAccountId}
+                      onChange={(e) => setImportSourceAccountId(e.target.value)}
+                      className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">— select account —</option>
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>{a.account_number} – {a.account_name}</option>
+                      ))}
+                    </select>
+                  </div>
                   <div className="flex justify-end gap-2 pt-2">
                     <button onClick={closeImport} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
                     {importFile && isOfxFile(importFile) && (
@@ -527,6 +562,20 @@ export function BankTransactionsPage() {
 
                   <ColMapRow label="Check #" headers={importHeaders} value={importMapping.checkCol}
                     onChange={(v) => setImportMapping((m) => ({ ...m, checkCol: v }))} optional />
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Source Account (bank / credit card)</label>
+                    <select
+                      value={importSourceAccountId}
+                      onChange={(e) => setImportSourceAccountId(e.target.value)}
+                      className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">— select account —</option>
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>{a.account_number} – {a.account_name}</option>
+                      ))}
+                    </select>
+                  </div>
 
                   <div className="flex justify-end gap-2 pt-2">
                     <button onClick={() => setImportStep('file')} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Back</button>

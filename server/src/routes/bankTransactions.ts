@@ -27,14 +27,21 @@ btCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
       .where('bt.client_id', clientId)
       .leftJoin('chart_of_accounts as coa', 'bt.account_id', 'coa.id')
       .leftJoin('chart_of_accounts as ai_coa', 'bt.ai_suggested_account_id', 'ai_coa.id')
+      .leftJoin('chart_of_accounts as src', 'bt.source_account_id', 'src.id')
       .select(
         'bt.*',
         'coa.account_name',
         'coa.account_number',
         db.raw('ai_coa.account_name as ai_suggested_account_name'),
         db.raw('ai_coa.account_number as ai_suggested_account_number'),
+        db.raw('src.account_name as source_account_name'),
+        db.raw('src.account_number as source_account_number'),
       )
       .orderBy([{ column: 'bt.transaction_date', order: 'desc' }, { column: 'bt.id', order: 'desc' }]);
+
+    if (req.query.sourceAccountId) {
+      query = query.where('bt.source_account_id', Number(req.query.sourceAccountId));
+    }
 
     if (req.query.periodId) {
       query = query.where('bt.period_id', Number(req.query.periodId));
@@ -58,6 +65,7 @@ const txSchema = z.object({
   amount: z.number().int(),
   checkNumber: z.string().max(20).optional(),
   periodId: z.number().int().positive().optional(),
+  sourceAccountId: z.number().int().positive().optional(),
 });
 
 btCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -71,11 +79,12 @@ btCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<vo
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
     return;
   }
-  const { transactionDate, description, amount, checkNumber, periodId } = result.data;
+  const { transactionDate, description, amount, checkNumber, periodId, sourceAccountId } = result.data;
   try {
     const [row] = await db('bank_transactions').insert({
       client_id: clientId,
       period_id: periodId ?? null,
+      source_account_id: sourceAccountId ?? null,
       transaction_date: transactionDate,
       description: description ?? null,
       amount,
@@ -179,6 +188,7 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
   }
 
   const periodId = req.body.periodId ? Number(req.body.periodId) : null;
+  const sourceAccountId = req.body.sourceAccountId ? Number(req.body.sourceAccountId) : null;
 
   interface TxRow {
     transaction_date: string;
@@ -187,6 +197,7 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
     check_number: string | null;
     client_id: number;
     period_id: number | null;
+    source_account_id: number | null;
     classification_status: string;
   }
 
@@ -199,7 +210,7 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
       const content = req.file.buffer.toString('utf8');
       const parsed = parseOfx(content);
       for (const p of parsed) {
-        rows.push({ client_id: clientId, period_id: periodId, classification_status: 'unclassified', ...p });
+        rows.push({ client_id: clientId, period_id: periodId, source_account_id: sourceAccountId, classification_status: 'unclassified', ...p });
       }
     } else {
       // Column mapping — explicit mapping from request body, or fall back to auto-detect
@@ -248,6 +259,7 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
             rows.push({
               client_id: clientId,
               period_id: periodId,
+              source_account_id: sourceAccountId,
               transaction_date,
               description: descRaw.trim() || null,
               amount: Math.round(amtDollars * 100),

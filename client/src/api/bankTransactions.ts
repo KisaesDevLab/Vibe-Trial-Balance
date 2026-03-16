@@ -6,6 +6,9 @@ export interface BankTransaction {
   id: number;
   client_id: number;
   period_id: number | null;
+  source_account_id: number | null;
+  source_account_name: string | null;
+  source_account_number: string | null;
   transaction_date: string;
   description: string | null;
   amount: number; // cents
@@ -32,10 +35,11 @@ export interface ClassificationRule {
   account_number: string;
 }
 
-export const listBankTransactions = (clientId: number, params?: { periodId?: number; status?: string }) => {
+export const listBankTransactions = (clientId: number, params?: { periodId?: number; status?: string; sourceAccountId?: number }) => {
   const qs = new URLSearchParams();
   if (params?.periodId) qs.set('periodId', String(params.periodId));
   if (params?.status) qs.set('status', params.status);
+  if (params?.sourceAccountId) qs.set('sourceAccountId', String(params.sourceAccountId));
   const q = qs.toString();
   return apiFetch<BankTransaction[]>(`/clients/${clientId}/bank-transactions${q ? `?${q}` : ''}`);
 };
@@ -53,11 +57,12 @@ export interface CsvMapping {
 export const importBankTransactions = (
   clientId: number,
   file: File,
-  options?: { periodId?: number; mapping?: CsvMapping },
+  options?: { periodId?: number; sourceAccountId?: number; mapping?: CsvMapping },
 ) => {
   const formData = new FormData();
   formData.append('file', file);
   if (options?.periodId) formData.append('periodId', String(options.periodId));
+  if (options?.sourceAccountId) formData.append('sourceAccountId', String(options.sourceAccountId));
   if (options?.mapping) {
     const m = options.mapping;
     if (m.dateCol) formData.append('dateCol', m.dateCol);
