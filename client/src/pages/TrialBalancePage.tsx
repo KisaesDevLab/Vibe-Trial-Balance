@@ -18,6 +18,20 @@ import {
 import { updateAccount } from '../api/chartOfAccounts';
 import { useUIStore } from '../store/uiStore';
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+type EditableColKey = 'account_name' | 'unadjusted_debit' | 'unadjusted_credit' | 'workpaper_ref';
+const EDITABLE_COLS: EditableColKey[] = [
+  'account_name',
+  'unadjusted_debit',
+  'unadjusted_credit',
+  'workpaper_ref',
+];
+
+interface ActiveCell { row: number; col: EditableColKey }
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
 function fmt(cents: number): string {
   if (cents === 0) return '—';
   return (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -36,168 +50,66 @@ const CATEGORY_COLORS: Record<string, string> = {
   expenses: 'bg-red-50 text-red-700',
 };
 
-// Unique attribute used to locate the next editable button in the grid.
-// cellId format: "{colKey}|{rowIndex}"
-function nextCell(cellId: string) {
-  const [col, rowStr] = cellId.split('|');
-  const next = `${col}|${Number(rowStr) + 1}`;
-  const el = document.querySelector<HTMLButtonElement>(`[data-cell="${next}"]`);
-  el?.click();
-}
-
-function EditableCell({
-  value,
-  onCommit,
-  cellId,
-}: {
-  value: number;
-  onCommit: (cents: number) => void;
-  cellId: string;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState('');
-  const ignoreBlur = useRef(false);
-
-  const commit = (raw: string) => {
-    setEditing(false);
-    onCommit(parseCents(raw));
-  };
-
-  if (editing) {
-    return (
-      <input
-        autoFocus
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => {
-          if (ignoreBlur.current) { ignoreBlur.current = false; return; }
-          commit(text);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            ignoreBlur.current = true;
-            commit(text);
-            nextCell(cellId);
-          }
-          if (e.key === 'Escape') {
-            ignoreBlur.current = true;
-            setEditing(false);
-          }
-        }}
-        className="w-full text-right text-sm border border-blue-400 rounded px-1 py-0.5 focus:outline-none"
-      />
-    );
-  }
-  return (
-    <button
-      data-cell={cellId}
-      onClick={() => { setText(value === 0 ? '' : (value / 100).toFixed(2)); setEditing(true); }}
-      className="w-full text-right text-sm text-gray-700 hover:bg-blue-50 px-1 py-0.5 rounded"
-    >
-      {fmt(value)}
-    </button>
-  );
-}
-
-function EditableTextCell({
-  value,
-  onCommit,
-  cellId,
-  placeholder = '—',
-  className = '',
-}: {
-  value: string | null;
-  onCommit: (val: string) => void;
-  cellId: string;
-  placeholder?: string;
-  className?: string;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState('');
-  const ignoreBlur = useRef(false);
-
-  const commit = (raw: string) => {
-    setEditing(false);
-    onCommit(raw.trim());
-  };
-
-  if (editing) {
-    return (
-      <input
-        autoFocus
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => {
-          if (ignoreBlur.current) { ignoreBlur.current = false; return; }
-          commit(text);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            ignoreBlur.current = true;
-            commit(text);
-            nextCell(cellId);
-          }
-          if (e.key === 'Escape') {
-            ignoreBlur.current = true;
-            setEditing(false);
-          }
-        }}
-        className={`w-full text-sm border border-blue-400 rounded px-1 py-0.5 focus:outline-none ${className}`}
-      />
-    );
-  }
-  return (
-    <button
-      data-cell={cellId}
-      onClick={() => { setText(value ?? ''); setEditing(true); }}
-      className={`w-full text-left text-sm text-gray-700 hover:bg-blue-50 px-1 py-0.5 rounded ${className}`}
-    >
-      {value || <span className="text-gray-300 italic text-xs">{placeholder}</span>}
-    </button>
-  );
-}
-
-// Column layout (index → group):
-// 0  account_number   } info (3 cols)
-// 1  account_name     }
-// 2  category         } → border-r after idx 2
-// 3  unadjusted_debit } Unadjusted (2 cols) → border-r after idx 4
-// 4  unadjusted_credit}
-// 5  book_adj_debit   } Book Adj. (2 cols) → border-r after idx 6
-// 6  book_adj_credit  }
-// 7  book_adj_dr(tot) } Book Adjusted (2 cols, blue bg) → border-r after idx 8
-// 8  book_adj_cr(tot) }
-// 9  tax_adj_debit    } Tax Adj. (2 cols) → border-r after idx 10
-// 10 tax_adj_credit   }
-// 11 tax_adj_dr(tot)  } Tax Adjusted (2 cols, purple bg) → border-r after idx 12
-// 12 tax_adj_cr(tot)  }
-// 13 workpaper_ref    } W/P Ref (1 col)
-
+// Column index → CSS classes for group borders/backgrounds
 function colGroupClass(idx: number, isHeader = false): string {
-  const border = isHeader ? 'border-gray-300' : 'border-gray-200';
-  if (idx === 2)  return `border-r ${border}`;
-  if (idx === 4)  return `border-r ${border}`;
-  if (idx === 6)  return `border-r ${border}`;
+  const b = isHeader ? 'border-gray-300' : 'border-gray-200';
+  if (idx === 2)  return `border-r ${b}`;
+  if (idx === 4)  return `border-r ${b}`;
+  if (idx === 6)  return `border-r ${b}`;
   if (idx === 7)  return `bg-blue-50${isHeader ? '' : '/50'}`;
-  if (idx === 8)  return `bg-blue-50${isHeader ? '' : '/50'} border-r ${border}`;
+  if (idx === 8)  return `bg-blue-50${isHeader ? '' : '/50'} border-r ${b}`;
   if (idx === 11) return `bg-purple-50${isHeader ? '' : '/50'}`;
-  if (idx === 12) return `bg-purple-50${isHeader ? '' : '/50'} border-r ${border}`;
+  if (idx === 12) return `bg-purple-50${isHeader ? '' : '/50'} border-r ${b}`;
   return '';
 }
 
+function getCellDisplayValue(rowData: TBRow, col: EditableColKey): string {
+  switch (col) {
+    case 'account_name':    return rowData.account_name;
+    case 'unadjusted_debit':  return rowData.unadjusted_debit === 0 ? '' : (rowData.unadjusted_debit / 100).toFixed(2);
+    case 'unadjusted_credit': return rowData.unadjusted_credit === 0 ? '' : (rowData.unadjusted_credit / 100).toFixed(2);
+    case 'workpaper_ref':   return rowData.workpaper_ref ?? '';
+  }
+}
+
 const columnHelper = createColumnHelper<TBRow>();
+
+// ─── Page component ───────────────────────────────────────────────────────────
 
 export function TrialBalancePage() {
   const { selectedPeriodId } = useUIStore();
   const qc = useQueryClient();
   const [sorting, setSorting] = useState<SortingState>([]);
-  // null = unknown (show button), 0 = up to date (hide), >0 = found new (show)
   const [lastSyncCount, setLastSyncCount] = useState<number | null>(null);
+
+  // Excel-like cell selection
+  const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const ignoreBlur = useRef(false);
 
   const queryKey = ['trial-balance', selectedPeriodId];
 
-  // Reset sync state whenever the period changes so the button reappears
-  useEffect(() => { setLastSyncCount(null); }, [selectedPeriodId]);
+  useEffect(() => {
+    setActiveCell(null);
+    setEditing(false);
+    setLastSyncCount(null);
+  }, [selectedPeriodId]);
+
+  // Re-focus the container whenever we leave editing mode so arrow keys work
+  useEffect(() => {
+    if (!editing && activeCell) containerRef.current?.focus();
+  }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll active cell into view
+  useEffect(() => {
+    if (activeCell) {
+      document
+        .querySelector(`[data-cell="${activeCell.col}|${activeCell.row}"]`)
+        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [activeCell]);
 
   const { data, isLoading, error } = useQuery({
     queryKey,
@@ -276,6 +188,192 @@ export function TrialBalancePage() {
     [balanceMutation],
   );
 
+  // ── Table ──────────────────────────────────────────────────────────────────
+
+  const table = useReactTable({
+    data: data ?? [],
+    columns: [], // placeholder; real columns below (needs table ref)
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getGroupedRowModel: getGroupedRowModel(),
+  });
+
+  // ── Navigation & edit helpers (use table after it's defined) ──────────────
+
+  function commitEdit(rowData: TBRow, col: EditableColKey, text: string) {
+    const trimmed = text.trim();
+    switch (col) {
+      case 'unadjusted_debit':
+        handleBalanceEdit(rowData, 'unadjusted_debit', parseCents(text));
+        break;
+      case 'unadjusted_credit':
+        handleBalanceEdit(rowData, 'unadjusted_credit', parseCents(text));
+        break;
+      case 'account_name':
+        if (trimmed && trimmed !== rowData.account_name)
+          accountMutation.mutate({ accountId: rowData.account_id, field: 'accountName', value: trimmed });
+        break;
+      case 'workpaper_ref':
+        accountMutation.mutate({ accountId: rowData.account_id, field: 'workpaperRef', value: trimmed });
+        break;
+    }
+  }
+
+  function navigate(
+    dir: 'up' | 'down' | 'left' | 'right' | 'tab' | 'shift-tab',
+    ac: ActiveCell,
+    saveText?: { rowData: TBRow; text: string },
+  ) {
+    if (saveText) commitEdit(saveText.rowData, ac.col, saveText.text);
+    setEditing(false);
+
+    const rows = table.getRowModel().rows;
+    const rowCount = rows.length;
+    const colIdx = EDITABLE_COLS.indexOf(ac.col);
+    let newRow = ac.row;
+    let newColIdx = colIdx;
+
+    switch (dir) {
+      case 'up':    newRow = Math.max(0, ac.row - 1); break;
+      case 'down':  newRow = Math.min(rowCount - 1, ac.row + 1); break;
+      case 'left':  newColIdx = Math.max(0, colIdx - 1); break;
+      case 'right': newColIdx = Math.min(EDITABLE_COLS.length - 1, colIdx + 1); break;
+      case 'tab':
+        if (colIdx < EDITABLE_COLS.length - 1) { newColIdx = colIdx + 1; }
+        else if (ac.row < rowCount - 1) { newColIdx = 0; newRow = ac.row + 1; }
+        break;
+      case 'shift-tab':
+        if (colIdx > 0) { newColIdx = colIdx - 1; }
+        else if (ac.row > 0) { newColIdx = EDITABLE_COLS.length - 1; newRow = ac.row - 1; }
+        break;
+    }
+    setActiveCell({ row: newRow, col: EDITABLE_COLS[newColIdx] });
+  }
+
+  // Container keydown — fires when grid has focus and a cell is selected (not editing)
+  function handleContainerKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (!activeCell || editing) return;
+    const rows = table.getRowModel().rows;
+    const rowData = rows[activeCell.row]?.original;
+
+    switch (e.key) {
+      case 'ArrowUp':    e.preventDefault(); navigate('up', activeCell); break;
+      case 'ArrowDown':  e.preventDefault(); navigate('down', activeCell); break;
+      case 'ArrowLeft':  e.preventDefault(); navigate('left', activeCell); break;
+      case 'ArrowRight': e.preventDefault(); navigate('right', activeCell); break;
+      case 'Tab':        e.preventDefault(); navigate(e.shiftKey ? 'shift-tab' : 'tab', activeCell); break;
+      case 'Enter':
+      case 'F2':
+        e.preventDefault();
+        if (rowData) { setEditText(getCellDisplayValue(rowData, activeCell.col)); setEditing(true); }
+        break;
+      case 'Delete':
+      case 'Backspace':
+        e.preventDefault();
+        setEditText('');
+        setEditing(true);
+        break;
+      case 'Escape':
+        e.preventDefault();
+        setActiveCell(null);
+        break;
+      default:
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          setEditText(e.key);
+          setEditing(true);
+        }
+    }
+  }
+
+  // Input keydown — fires inside an active editing cell
+  function handleInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>, ac: ActiveCell, rowData: TBRow) {
+    switch (e.key) {
+      case 'Enter':
+        e.preventDefault();
+        ignoreBlur.current = true;
+        navigate(e.shiftKey ? 'up' : 'down', ac, { rowData, text: editText });
+        break;
+      case 'Tab':
+        e.preventDefault();
+        ignoreBlur.current = true;
+        navigate(e.shiftKey ? 'shift-tab' : 'tab', ac, { rowData, text: editText });
+        break;
+      case 'Escape':
+        e.preventDefault();
+        ignoreBlur.current = true;
+        setEditing(false);
+        break;
+    }
+  }
+
+  function handleInputBlur(ac: ActiveCell, rowData: TBRow) {
+    if (ignoreBlur.current) { ignoreBlur.current = false; return; }
+    commitEdit(rowData, ac.col, editText);
+    setEditing(false);
+  }
+
+  // ── Cell renderer ──────────────────────────────────────────────────────────
+
+  function renderCell(rowIndex: number, col: EditableColKey, rowData: TBRow) {
+    const isActive = activeCell?.row === rowIndex && activeCell?.col === col;
+    const isNumber = col === 'unadjusted_debit' || col === 'unadjusted_credit';
+    const alignClass = isNumber ? 'text-right' : 'text-left';
+    const cellId = `${col}|${rowIndex}`;
+
+    // Editing — render input in place
+    if (isActive && editing) {
+      return (
+        <input
+          autoFocus
+          value={editText}
+          onChange={(e) => setEditText(e.target.value)}
+          onKeyDown={(e) => handleInputKeyDown(e, { row: rowIndex, col }, rowData)}
+          onBlur={() => handleInputBlur({ row: rowIndex, col }, rowData)}
+          onFocus={(e) => e.target.select()}
+          className={`w-full text-sm bg-white outline-none px-1 py-0 border-0 ${alignClass}`}
+        />
+      );
+    }
+
+    const rawDisplay = getCellDisplayValue(rowData, col);
+    const display = isNumber
+      ? (rawDisplay ? fmt(parseCents(rawDisplay) || 0) : <span className="text-gray-300">—</span>)
+      : (rawDisplay || <span className="text-gray-300 italic text-xs">—</span>);
+
+    // Selected but not editing — blue ring
+    if (isActive) {
+      return (
+        <div
+          data-cell={cellId}
+          className={`w-full px-1 py-0.5 text-sm select-none ring-2 ring-blue-500 ring-inset bg-blue-50/80 rounded-sm ${alignClass}`}
+        >
+          {display}
+        </div>
+      );
+    }
+
+    // Normal
+    return (
+      <div
+        data-cell={cellId}
+        onClick={() => { setActiveCell({ row: rowIndex, col }); setEditing(false); containerRef.current?.focus(); }}
+        onDoubleClick={() => {
+          setActiveCell({ row: rowIndex, col });
+          setEditText(getCellDisplayValue(rowData, col));
+          setEditing(true);
+        }}
+        className={`w-full px-1 py-0.5 text-sm cursor-default select-none hover:bg-gray-100 ${alignClass}`}
+      >
+        {display}
+      </div>
+    );
+  }
+
+  // ── Columns ────────────────────────────────────────────────────────────────
+
   const columns = [
     columnHelper.accessor('account_number', {
       header: 'Acct #',
@@ -283,14 +381,7 @@ export function TrialBalancePage() {
     }),
     columnHelper.accessor('account_name', {
       header: 'Account Name',
-      cell: (i) => (
-        <EditableTextCell
-          value={i.getValue()}
-          cellId={`account_name|${i.row.index}`}
-          onCommit={(v) => { if (v && v !== i.getValue()) accountMutation.mutate({ accountId: i.row.original.account_id, field: 'accountName', value: v }); }}
-          className="font-medium"
-        />
-      ),
+      cell: (i) => renderCell(i.row.index, 'account_name', i.row.original),
     }),
     columnHelper.accessor('category', {
       header: 'Cat.',
@@ -302,23 +393,11 @@ export function TrialBalancePage() {
     }),
     columnHelper.accessor('unadjusted_debit', {
       header: 'Unaj. Dr',
-      cell: (i) => (
-        <EditableCell
-          value={i.getValue()}
-          cellId={`unadjusted_debit|${i.row.index}`}
-          onCommit={(v) => handleBalanceEdit(i.row.original, 'unadjusted_debit', v)}
-        />
-      ),
+      cell: (i) => renderCell(i.row.index, 'unadjusted_debit', i.row.original),
     }),
     columnHelper.accessor('unadjusted_credit', {
       header: 'Unaj. Cr',
-      cell: (i) => (
-        <EditableCell
-          value={i.getValue()}
-          cellId={`unadjusted_credit|${i.row.index}`}
-          onCommit={(v) => handleBalanceEdit(i.row.original, 'unadjusted_credit', v)}
-        />
-      ),
+      cell: (i) => renderCell(i.row.index, 'unadjusted_credit', i.row.original),
     }),
     columnHelper.accessor('book_adj_debit', {
       header: 'Bk Adj Dr',
@@ -354,18 +433,12 @@ export function TrialBalancePage() {
     }),
     columnHelper.accessor('workpaper_ref', {
       header: 'W/P Ref',
-      cell: (i) => (
-        <EditableTextCell
-          value={i.getValue()}
-          cellId={`workpaper_ref|${i.row.index}`}
-          onCommit={(v) => accountMutation.mutate({ accountId: i.row.original.account_id, field: 'workpaperRef', value: v })}
-          placeholder="click to set"
-        />
-      ),
+      cell: (i) => renderCell(i.row.index, 'workpaper_ref', i.row.original),
     }),
   ];
 
-  const table = useReactTable({
+  // Re-create table with real columns (TanStack Table accepts updated column defs each render)
+  const tableInstance = useReactTable({
     data: data ?? [],
     columns,
     state: { sorting },
@@ -376,8 +449,9 @@ export function TrialBalancePage() {
   });
 
   const isEmpty = !data || data.length === 0;
-  // Show sync button if: no rows yet, OR last sync found new accounts, OR never synced for this period
   const showSyncButton = isEmpty || lastSyncCount === null || lastSyncCount > 0;
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   if (!selectedPeriodId) {
     return (
@@ -395,14 +469,13 @@ export function TrialBalancePage() {
       <div className="flex items-center justify-between px-4 py-3 border-b bg-white shrink-0">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Trial Balance</h2>
-          {data && <p className="text-xs text-gray-500">{data.length} accounts</p>}
+          {data && <p className="text-xs text-gray-500">{data.length} accounts · click to select · double-click or F2 to edit · Tab/Enter/arrows to navigate</p>}
         </div>
         {showSyncButton && (
           <button
             onClick={() => initMutation.mutate()}
             disabled={initMutation.isPending}
             className="px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50"
-            title="Add any COA accounts not yet in this period's trial balance"
           >
             {initMutation.isPending ? 'Syncing...' : isEmpty ? 'Initialize from COA' : 'Sync new accounts'}
           </button>
@@ -418,10 +491,18 @@ export function TrialBalancePage() {
       {isLoading ? (
         <div className="flex items-center justify-center flex-1 text-gray-400">Loading...</div>
       ) : (
-        <div className="flex-1 overflow-auto">
+        <div
+          ref={containerRef}
+          tabIndex={0}
+          onKeyDown={handleContainerKeyDown}
+          className="flex-1 overflow-auto outline-none"
+          onClick={(e) => {
+            // Clicking the grid background (not a cell) deselects
+            if (e.target === e.currentTarget) setActiveCell(null);
+          }}
+        >
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10">
-              {/* Group header row */}
               <tr className="bg-gray-100 border-b border-gray-300">
                 <th colSpan={3} className="px-2 py-1 text-xs text-gray-500 border-r border-gray-300"></th>
                 <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-600 font-semibold border-r border-gray-300">Unadjusted</th>
@@ -431,7 +512,7 @@ export function TrialBalancePage() {
                 <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 font-semibold bg-purple-50 border-r border-gray-300">Tax Adjusted</th>
                 <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold">W/P</th>
               </tr>
-              {table.getHeaderGroups().map((hg) => (
+              {tableInstance.getHeaderGroups().map((hg) => (
                 <tr key={hg.id} className="bg-gray-50 border-b border-gray-200">
                   {hg.headers.map((header, idx) => (
                     <th
@@ -448,17 +529,17 @@ export function TrialBalancePage() {
               ))}
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {table.getRowModel().rows.length === 0 ? (
+              {tableInstance.getRowModel().rows.length === 0 ? (
                 <tr>
                   <td colSpan={14} className="px-4 py-10 text-center text-gray-400">
                     No trial balance data. Click &ldquo;Initialize from COA&rdquo; to populate from the chart of accounts.
                   </td>
                 </tr>
               ) : (
-                table.getRowModel().rows.map((row, rowIdx) => (
+                tableInstance.getRowModel().rows.map((row, rowIdx) => (
                   <tr key={row.id} className={rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'}>
                     {row.getVisibleCells().map((cell, cellIdx) => (
-                      <td key={cell.id} className={`px-2 py-1.5 text-gray-700 ${colGroupClass(cellIdx)}`}>
+                      <td key={cell.id} className={`px-2 py-0.5 text-gray-700 ${colGroupClass(cellIdx)}`}>
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
