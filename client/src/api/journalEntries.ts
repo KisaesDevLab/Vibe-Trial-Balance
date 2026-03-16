@@ -14,7 +14,7 @@ export interface JournalEntry {
   id: number;
   period_id: number;
   entry_number: number;
-  entry_type: 'book' | 'tax';
+  entry_type: 'book' | 'tax' | 'trans';
   entry_date: string;
   description: string | null;
   is_recurring: boolean;
@@ -33,8 +33,10 @@ export interface JEInput {
   lines: { accountId: number; debit: number; credit: number }[];
 }
 
-export const listJournalEntries = (periodId: number) =>
-  apiFetch<JournalEntry[]>(`/periods/${periodId}/journal-entries`);
+export const listJournalEntries = (periodId: number, type?: 'book' | 'tax' | 'trans') => {
+  const qs = type ? `?type=${type}` : '';
+  return apiFetch<JournalEntry[]>(`/periods/${periodId}/journal-entries${qs}`);
+};
 
 export const createJournalEntry = (input: JEInput) =>
   apiFetch<JournalEntry>('/journal-entries', {

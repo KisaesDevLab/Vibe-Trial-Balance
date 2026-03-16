@@ -281,14 +281,15 @@ export function JournalEntriesPage() {
   // collapsed tracks which entries are folded; default = all expanded
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [formError, setFormError] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<'all' | 'book' | 'tax' | 'trans'>('all');
 
-  const queryKey = ['journal-entries', selectedPeriodId];
+  const queryKey = ['journal-entries', selectedPeriodId, typeFilter];
 
   const { data, isLoading, error } = useQuery({
     queryKey,
     queryFn: async () => {
       if (!selectedPeriodId) return [];
-      const res = await listJournalEntries(selectedPeriodId);
+      const res = await listJournalEntries(selectedPeriodId, typeFilter === 'all' ? undefined : typeFilter);
       if (res.error) throw new Error(res.error.message);
       return res.data;
     },
@@ -296,8 +297,9 @@ export function JournalEntriesPage() {
   });
 
   const invalidateBoth = () => {
-    qc.invalidateQueries({ queryKey });
+    qc.invalidateQueries({ queryKey: ['journal-entries', selectedPeriodId] });
     qc.invalidateQueries({ queryKey: ['trial-balance', selectedPeriodId] });
+    qc.invalidateQueries({ queryKey: ['bank-transactions'] });
   };
 
   const createMutation = useMutation({
@@ -345,8 +347,9 @@ export function JournalEntriesPage() {
   }
 
   const entries = data ?? [];
-  const bookEntries = entries.filter((e) => e.entry_type === 'book');
-  const taxEntries = entries.filter((e) => e.entry_type === 'tax');
+  const bookCount = entries.filter((e) => e.entry_type === 'book').length;
+  const taxCount = entries.filter((e) => e.entry_type === 'tax').length;
+  const transCount = entries.filter((e) => e.entry_type === 'trans').length;
 
   return (
     <div className="p-6">
@@ -354,15 +357,27 @@ export function JournalEntriesPage() {
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Journal Entries</h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            {bookEntries.length} book · {taxEntries.length} tax
+            {bookCount} book · {taxCount} tax · {transCount} trans
           </p>
         </div>
-        <button
-          onClick={() => { setShowAdd(true); setFormError(null); }}
-          className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
-        >
-          + New Entry
-        </button>
+        <div className="flex items-center gap-3">
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value as typeof typeFilter)}
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="all">All types</option>
+            <option value="book">Book AJE</option>
+            <option value="tax">Tax AJE</option>
+            <option value="trans">Trans</option>
+          </select>
+          <button
+            onClick={() => { setShowAdd(true); setFormError(null); }}
+            className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+          >
+            + New Entry
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -385,23 +400,31 @@ export function JournalEntriesPage() {
                   className="flex items-center px-4 py-3 cursor-pointer hover:bg-gray-50"
                   onClick={() => toggleCollapsed(entry.id)}
                 >
-                  <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold mr-3 ${entry.entry_type === 'book' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                    {entry.entry_type === 'book' ? 'BOOK' : 'TAX'} #{entry.entry_number}
+                  <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold mr-3 ${
+                    entry.entry_type === 'book' ? 'bg-blue-100 text-blue-700'
+                    : entry.entry_type === 'tax' ? 'bg-purple-100 text-purple-700'
+                    : 'bg-green-100 text-green-700'
+                  }`}>
+                    {entry.entry_type === 'book' ? 'BOOK' : entry.entry_type === 'tax' ? 'TAX' : 'TRANS'} #{entry.entry_number}
                   </span>
                   <span className="text-sm font-medium text-gray-700 flex-1">{entry.description ?? '(no description)'}</span>
                   <span className="text-sm text-gray-400 mr-4">{fmtDate(entry.entry_date)}</span>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setEditEntry(entry); setFormError(null); }}
-                    className="text-xs text-blue-500 hover:text-blue-700 mr-3"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); if (confirm('Delete this entry?')) deleteMutation.mutate(entry.id); }}
-                    className="text-xs text-red-400 hover:text-red-600 mr-2"
-                  >
-                    Delete
-                  </button>
+                  {entry.entry_type !== 'trans' && (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setEditEntry(entry); setFormError(null); }}
+                        className="text-xs text-blue-500 hover:text-blue-700 mr-3"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); if (confirm('Delete this entry?')) deleteMutation.mutate(entry.id); }}
+                        className="text-xs text-red-400 hover:text-red-600 mr-2"
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
                   <span className="text-gray-400 text-sm">{isExpanded ? '▲' : '▼'}</span>
                 </div>
                 {isExpanded && (
@@ -428,12 +451,12 @@ export function JournalEntriesPage() {
         </Modal>
       )}
 
-      {editEntry && selectedClientId && (
+      {editEntry && selectedClientId && editEntry.entry_type !== 'trans' && (
         <Modal title="Edit Journal Entry" onClose={() => { setEditEntry(null); setFormError(null); }}>
           <JEForm
             periodId={selectedPeriodId}
             clientId={selectedClientId}
-            initialType={editEntry.entry_type}
+            initialType={editEntry.entry_type as 'book' | 'tax'}
             initialDate={fmtDate(editEntry.entry_date)}
             initialDescription={editEntry.description ?? ''}
             initialLines={editEntry.lines.map((l) => ({

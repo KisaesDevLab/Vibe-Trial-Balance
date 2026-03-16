@@ -25,7 +25,9 @@ function fmt(cents: number): string {
 }
 
 function fmtDate(d: string): string {
-  return d.slice(0, 10);
+  const s = d.slice(0, 10);
+  const [y, m, day] = s.split('-');
+  return `${m}/${day}/${y}`;
 }
 
 const STATUS_LABEL: Record<ClassificationStatus, string> = {
@@ -57,6 +59,8 @@ export function BankTransactionsPage() {
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterPeriod, setFilterPeriod] = useState(false);
   const [filterSourceAccount, setFilterSourceAccount] = useState<string>('');
+  const [sortCol, setSortCol] = useState<string>('transaction_date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batchAccountId, setBatchAccountId] = useState<string>('');
   const [batchSourceAccountId, setBatchSourceAccountId] = useState<string>('');
@@ -72,6 +76,8 @@ export function BankTransactionsPage() {
     dateCol: '', descCol: '', amountMode: 'single', amountCol: '', debitCol: '', creditCol: '', checkCol: '',
   });
   const [importError, setImportError] = useState<string | null>(null);
+  const [editingDescId, setEditingDescId] = useState<number | null>(null);
+  const [editingDescValue, setEditingDescValue] = useState('');
 
   const clientId = selectedClientId;
   const txQueryKey = ['bank-transactions', clientId, filterStatus, filterPeriod ? selectedPeriodId : null, filterSourceAccount];
@@ -113,7 +119,12 @@ export function BankTransactionsPage() {
     enabled: clientId !== null && showRules,
   });
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['bank-transactions', clientId] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['bank-transactions', clientId] });
+    // Trans JEs are created/updated/deleted alongside bank transactions, so keep JE and trial-balance caches fresh
+    qc.invalidateQueries({ queryKey: ['journal-entries'] });
+    qc.invalidateQueries({ queryKey: ['trial-balance'] });
+  };
 
   const importMutation = useMutation({
     mutationFn: ({ file, mapping }: { file: File; mapping?: CsvMapping }) =>
@@ -215,12 +226,22 @@ export function BankTransactionsPage() {
   const aiMutation = useMutation({
     mutationFn: (ids: number[]) => aiClassifyTransactions(clientId!, ids),
     onMutate: () => setAiStatus('Running AI classification…'),
-    onSuccess: (res) => {
+    onSuccess: (res, ids) => {
       if (res.error) { setAiStatus(`Error: ${res.error.message}`); return; }
       invalidate();
-      setAiStatus(`AI classified ${res.data?.classified ?? 0} transaction(s).`);
+      const n = res.data?.classified ?? 0;
+      const attempted = res.data?.results?.length ?? n;
+      const skipped = ids.length - attempted;
+      const skipNote = skipped > 0 ? ` (${skipped} already confirmed/manual — skipped)` : '';
+      setAiStatus(`AI classified ${n} transaction(s).${skipNote}`);
       setSelected(new Set());
     },
+  });
+
+  const updateDescMutation = useMutation({
+    mutationFn: ({ id, description }: { id: number; description: string | null }) =>
+      classifyTransaction(clientId!, id, { description }),
+    onSuccess: () => { invalidate(); setEditingDescId(null); },
   });
 
   const deleteRuleMutation = useMutation({
@@ -229,7 +250,35 @@ export function BankTransactionsPage() {
   });
 
   const accounts: Account[] = accountsData ?? [];
-  const transactions: BankTransaction[] = txData ?? [];
+  const rawTransactions: BankTransaction[] = txData ?? [];
+
+  const handleSort = (col: string) => {
+    if (sortCol === col) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortCol(col);
+      setSortDir('asc');
+    }
+  };
+
+  const transactions = [...rawTransactions].sort((a, b) => {
+    let av: string | number | null = null;
+    let bv: string | number | null = null;
+    switch (sortCol) {
+      case 'transaction_date': av = a.transaction_date; bv = b.transaction_date; break;
+      case 'description': av = (a.description ?? '').toLowerCase(); bv = (b.description ?? '').toLowerCase(); break;
+      case 'amount': av = a.amount; bv = b.amount; break;
+      case 'check_number': av = (a.check_number ?? '').toLowerCase(); bv = (b.check_number ?? '').toLowerCase(); break;
+      case 'source_account': av = (a.source_account_name ?? '').toLowerCase(); bv = (b.source_account_name ?? '').toLowerCase(); break;
+      case 'category': av = (a.account_name ?? '').toLowerCase(); bv = (b.account_name ?? '').toLowerCase(); break;
+      case 'status': av = a.classification_status; bv = b.classification_status; break;
+    }
+    if (av === bv) return 0;
+    if (av === null || av === '') return 1;
+    if (bv === null || bv === '') return -1;
+    const cmp = av < bv ? -1 : 1;
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
 
   const allIds = transactions.map((t) => t.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
@@ -432,13 +481,26 @@ export function BankTransactionsPage() {
                 <th className="px-3 py-2 w-8">
                   <input type="checkbox" checked={allSelected} onChange={toggleAll} className="rounded border-gray-300" />
                 </th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-28">Date</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Description</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 w-28">Amount</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-20">Check #</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-36">Source Account</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Category</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-28">Status</th>
+                {([
+                  { col: 'transaction_date', label: 'Date', cls: 'w-28 text-left' },
+                  { col: 'description', label: 'Description', cls: 'text-left' },
+                  { col: 'amount', label: 'Amount', cls: 'w-28 text-right' },
+                  { col: 'check_number', label: 'Check #', cls: 'w-20 text-left' },
+                  { col: 'source_account', label: 'Source Account', cls: 'w-36 text-left' },
+                  { col: 'category', label: 'Category', cls: 'text-left' },
+                  { col: 'status', label: 'Status', cls: 'w-28 text-left' },
+                ] as { col: string; label: string; cls: string }[]).map(({ col, label, cls }) => (
+                  <th
+                    key={col}
+                    className={`px-3 py-2 text-xs font-semibold text-gray-600 cursor-pointer select-none hover:bg-gray-100 ${cls}`}
+                    onClick={() => handleSort(col)}
+                  >
+                    {label}
+                    {sortCol === col && (
+                      <span className="ml-1 text-gray-400">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </th>
+                ))}
                 <th className="px-3 py-2 w-20"></th>
               </tr>
             </thead>
@@ -454,14 +516,41 @@ export function BankTransactionsPage() {
                     />
                   </td>
                   <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{fmtDate(tx.transaction_date)}</td>
-                  <td className="px-3 py-2 text-gray-700 max-w-xs truncate" title={tx.description ?? ''}>
-                    {tx.description ?? <span className="text-gray-400 italic">—</span>}
+                  <td className="px-3 py-2 max-w-xs">
+                    {editingDescId === tx.id ? (
+                      <input
+                        autoFocus
+                        value={editingDescValue}
+                        onChange={(e) => setEditingDescValue(e.target.value)}
+                        onBlur={() => {
+                          const val = editingDescValue.trim() || null;
+                          if (val !== (tx.description ?? null)) {
+                            updateDescMutation.mutate({ id: tx.id, description: val });
+                          } else {
+                            setEditingDescId(null);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                          if (e.key === 'Escape') setEditingDescId(null);
+                        }}
+                        className="w-full border border-blue-400 rounded px-1.5 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    ) : (
+                      <span
+                        className="block truncate cursor-pointer text-gray-700 hover:text-blue-600"
+                        title={tx.description ?? 'Click to edit'}
+                        onClick={() => { setEditingDescId(tx.id); setEditingDescValue(tx.description ?? ''); }}
+                      >
+                        {tx.description ?? <span className="text-gray-300 italic">—</span>}
+                      </span>
+                    )}
                   </td>
                   <td className={`px-3 py-2 text-right font-mono whitespace-nowrap ${tx.amount < 0 ? 'text-red-600' : 'text-gray-700'}`}>
                     {fmt(tx.amount)}
                   </td>
-                  <td className="px-3 py-2 text-gray-500">{tx.check_number ?? ''}</td>
-                  <td className="px-3 py-2 text-xs text-gray-600">
+                  <td className="px-3 py-2 text-gray-600">{tx.check_number ?? ''}</td>
+                  <td className="px-3 py-2 text-gray-600">
                     {tx.source_account_number ? `${tx.source_account_number} – ${tx.source_account_name}` : <span className="text-gray-300">—</span>}
                   </td>
                   <td className="px-3 py-2">
@@ -670,7 +759,7 @@ function AccountCell({
   if (tx.classification_status === 'ai_suggested' && tx.ai_suggested_account_id && !editing) {
     return (
       <div className="flex items-center gap-1.5">
-        <span className="text-gray-700 text-xs">
+        <span className="text-gray-700 text-sm">
           {tx.ai_suggested_account_number} – {tx.ai_suggested_account_name}
           {tx.ai_confidence !== null && (
             <span className="text-purple-500 ml-1">({Math.round(tx.ai_confidence * 100)}%)</span>
@@ -691,7 +780,7 @@ function AccountCell({
   if ((tx.classification_status === 'confirmed' || tx.classification_status === 'manual') && tx.account_id && !editing) {
     return (
       <div className="flex items-center gap-1.5">
-        <span className="text-gray-700 text-xs">{tx.account_number} – {tx.account_name}</span>
+        <span className="text-gray-700 text-sm">{tx.account_number} – {tx.account_name}</span>
         <button onClick={() => setEditing(true)} className="text-xs text-blue-500 hover:text-blue-700">Edit</button>
       </div>
     );
@@ -707,7 +796,7 @@ function AccountCell({
         setEditing(false);
       }}
       onBlur={() => setEditing(false)}
-      className="w-full border border-gray-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+      className="w-full border border-gray-300 rounded px-1.5 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
     >
       <option value="">Select account…</option>
       {accounts.map((a) => (

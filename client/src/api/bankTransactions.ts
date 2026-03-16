@@ -92,7 +92,7 @@ export const createBankTransaction = (
 export const classifyTransaction = (
   clientId: number,
   id: number,
-  data: { accountId?: number | null; periodId?: number | null; classificationStatus?: ClassificationStatus },
+  data: { accountId?: number | null; periodId?: number | null; classificationStatus?: ClassificationStatus; description?: string | null },
 ) =>
   apiFetch<BankTransaction>(`/clients/${clientId}/bank-transactions/${id}`, {
     method: 'PATCH',

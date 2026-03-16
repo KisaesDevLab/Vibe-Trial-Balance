@@ -37,7 +37,7 @@ async function syncTxJE(
   const creditAccountId = tx.amount > 0 ? tx.account_id : tx.source_account_id;
 
   const lastEntry = await trx('journal_entries')
-    .where({ period_id: tx.period_id, entry_type: 'book' })
+    .where({ period_id: tx.period_id, entry_type: 'trans' })
     .max('entry_number as max')
     .first();
   const entryNumber = ((lastEntry?.max as number) ?? 0) + 1;
@@ -45,7 +45,7 @@ async function syncTxJE(
   const [je] = await trx('journal_entries').insert({
     period_id: tx.period_id,
     entry_number: entryNumber,
-    entry_type: 'book',
+    entry_type: 'trans',
     entry_date: tx.transaction_date,
     description: tx.description ?? `Bank transaction ${tx.transaction_date}`,
     is_recurring: false,
@@ -66,7 +66,13 @@ btCollectionRouter.use(authMiddleware);
 btRulesRouter.use(authMiddleware);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-const anthropic = new Anthropic();
+
+async function getAnthropicClient(): Promise<Anthropic> {
+  const setting = await db('settings').where({ key: 'claude_api_key' }).first('value');
+  const apiKey = (setting?.value as string | undefined) || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw Object.assign(new Error('Claude API key not configured. Add it in Settings.'), { code: 'NO_API_KEY' });
+  return new Anthropic({ apiKey });
+}
 
 // GET /api/v1/clients/:clientId/bank-transactions
 btCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -446,21 +452,24 @@ btCollectionRouter.post('/batch-classify', async (req: AuthRequest, res: Respons
         .update({ account_id: accountId, classification_status: 'manual', classified_by: req.user!.userId });
 
       // Upsert classification rules for transactions that have a description
-      const txs = await trx('bank_transactions')
+      const txsWithDesc = await trx('bank_transactions')
         .where({ client_id: clientId })
         .whereIn('id', ids)
         .whereNotNull('description')
         .select('id', 'description');
 
-      for (const tx of txs) {
+      for (const tx of txsWithDesc) {
         const pattern = (tx.description as string).trim();
         if (!pattern) continue;
         await trx('classification_rules')
           .insert({ client_id: clientId, payee_pattern: pattern, account_id: accountId, times_confirmed: 1 })
           .onConflict(['client_id', 'payee_pattern'])
           .merge({ account_id: accountId, times_confirmed: db.raw('classification_rules.times_confirmed + 1'), updated_at: db.fn.now() });
-        // Sync JE for each transaction
-        await syncTxJE(trx, tx.id as number, clientId, req.user!.userId);
+      }
+
+      // Sync JE for ALL classified transactions (not just those with descriptions)
+      for (const id of ids) {
+        await syncTxJE(trx, id, clientId, req.user!.userId);
       }
     });
 
@@ -531,9 +540,11 @@ btCollectionRouter.post('/ai-classify', async (req: AuthRequest, res: Response):
     return;
   }
   try {
+    // Skip transactions already confirmed or manually classified — don't overwrite human decisions
     const transactions = await db('bank_transactions')
       .where({ client_id: clientId })
       .whereIn('id', result.data.ids)
+      .whereNotIn('classification_status', ['confirmed', 'manual'])
       .select('id', 'description', 'amount', 'transaction_date');
 
     if (transactions.length === 0) {
@@ -565,38 +576,51 @@ btCollectionRouter.post('/ai-classify', async (req: AuthRequest, res: Response):
       ? (rules as RuleRow[]).map((r) => `"${r.payee_pattern}" → ${r.account_number} ${r.account_name}`).join('\n')
       : 'None yet';
 
-    const txList = (transactions as TxRow[]).map((t) =>
-      `ID:${t.id} | ${t.transaction_date} | ${t.description ?? '(no description)'} | $${(t.amount / 100).toFixed(2)}`
-    ).join('\n');
+    // Format amount with explicit debit/credit label so the model understands sign convention
+    const txList = (transactions as TxRow[]).map((t) => {
+      const cents = Number(t.amount);
+      const dollars = Math.abs(cents) / 100;
+      const flow = cents >= 0 ? 'CREDIT' : 'DEBIT';
+      return `ID:${t.id} | ${t.transaction_date} | ${t.description ?? '(no description)'} | ${flow} $${dollars.toFixed(2)}`;
+    }).join('\n');
 
-    const prompt = `You are an accounting assistant. Classify the following bank transactions to the most appropriate account.
+    const prompt = `You are an accounting assistant. Classify each bank transaction to the single most appropriate GL account.
+
+Sign convention: CREDIT = money into the bank account (positive amount), DEBIT = money out (negative amount).
 
 CHART OF ACCOUNTS:
 ${coaList}
 
-EXISTING CLASSIFICATION RULES:
+EXISTING CLASSIFICATION RULES (use these as strong hints):
 ${rulesList}
 
 TRANSACTIONS TO CLASSIFY:
 ${txList}
 
-Return a JSON array only. Each element: { "id": number, "accountId": number, "confidence": 0.0-1.0, "reasoning": string }`;
+Respond with a JSON array and nothing else. Each element: { "id": number, "accountId": number, "confidence": 0.0-1.0, "reasoning": string }`;
 
+    const anthropic = await getAnthropicClient();
     const aiMessage = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 2048,
+      max_tokens: 8192,
+      stop_sequences: ['\n\n\n'],
       messages: [{ role: 'user', content: prompt }],
     });
 
     const responseText = aiMessage.content[0].type === 'text' ? aiMessage.content[0].text : '';
-    // Strip any markdown code fences
-    const jsonText = responseText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+
+    // Extract the JSON array robustly — find the outermost [...] regardless of surrounding text
+    const arrayMatch = responseText.match(/\[[\s\S]*\]/);
+    if (!arrayMatch) {
+      res.status(500).json({ data: null, error: { code: 'AI_PARSE_ERROR', message: 'AI response did not contain a JSON array' } });
+      return;
+    }
 
     let suggestions: Array<{ id: number; accountId: number; confidence: number; reasoning: string }> = [];
     try {
-      suggestions = JSON.parse(jsonText);
+      suggestions = JSON.parse(arrayMatch[0]);
     } catch {
-      res.status(500).json({ data: null, error: { code: 'AI_PARSE_ERROR', message: 'Failed to parse AI response' } });
+      res.status(500).json({ data: null, error: { code: 'AI_PARSE_ERROR', message: 'Failed to parse AI response as JSON' } });
       return;
     }
 
@@ -608,7 +632,7 @@ Return a JSON array only. Each element: { "id": number, "accountId": number, "co
         .where({ id: s.id, client_id: clientId })
         .update({
           ai_suggested_account_id: s.accountId,
-          ai_confidence: s.confidence,
+          ai_confidence: Math.min(1, Math.max(0, Number(s.confidence))),
           classification_status: 'ai_suggested',
         });
       classified++;
@@ -617,7 +641,8 @@ Return a JSON array only. Each element: { "id": number, "accountId": number, "co
     res.json({ data: { classified, results: suggestions }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    const code = (err as { code?: string }).code === 'NO_API_KEY' ? 'NO_API_KEY' : 'SERVER_ERROR';
+    res.status(code === 'NO_API_KEY' ? 400 : 500).json({ data: null, error: { code, message } });
   }
 });
 
@@ -626,6 +651,7 @@ const classifySchema = z.object({
   accountId: z.number().int().positive().nullable().optional(),
   periodId: z.number().int().positive().nullable().optional(),
   classificationStatus: z.enum(['unclassified', 'ai_suggested', 'confirmed', 'manual']).optional(),
+  description: z.string().max(500).nullable().optional(),
 });
 
 btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -644,6 +670,7 @@ btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promis
   const updates: Record<string, unknown> = {};
   if (result.data.accountId !== undefined) updates.account_id = result.data.accountId;
   if (result.data.periodId !== undefined) updates.period_id = result.data.periodId;
+  if (result.data.description !== undefined) updates.description = result.data.description;
   if (result.data.classificationStatus !== undefined) {
     updates.classification_status = result.data.classificationStatus;
   } else if (result.data.accountId) {

@@ -38,10 +38,12 @@ jeCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
     return;
   }
+  const typeFilter = typeof req.query.type === 'string' ? req.query.type : null;
+
   try {
-    const entries = await db('journal_entries')
-      .where({ period_id: periodId })
-      .orderBy('entry_number');
+    let q = db('journal_entries').where({ period_id: periodId });
+    if (typeFilter) q = q.where({ entry_type: typeFilter });
+    const entries = await q.orderBy('entry_type').orderBy('entry_number');
 
     const entryIds = entries.map((e: { id: number }) => e.id);
     const lines = entryIds.length > 0
@@ -206,6 +208,21 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid ID' } });
     return;
   }
+  try {
+    const existing = await db('journal_entries').where({ id }).first('entry_type');
+    if (!existing) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
+      return;
+    }
+    if (existing.entry_type === 'trans') {
+      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Trans entries are managed via Bank Transactions and cannot be edited directly.' } });
+      return;
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    return;
+  }
   const patchSchema = z.object({
     entryType: z.enum(['book', 'tax']).optional(),
     entryDate: z.string().optional(),
@@ -268,6 +285,15 @@ jeItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<voi
     return;
   }
   try {
+    const existing = await db('journal_entries').where({ id }).first('entry_type');
+    if (!existing) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
+      return;
+    }
+    if (existing.entry_type === 'trans') {
+      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Trans entries are managed via Bank Transactions and cannot be deleted directly.' } });
+      return;
+    }
     const [deleted] = await db('journal_entries').where({ id }).delete().returning('id');
     if (!deleted) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });

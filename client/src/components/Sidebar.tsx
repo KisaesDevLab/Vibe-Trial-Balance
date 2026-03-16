@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { to: '/trial-balance', label: 'Trial Balance' },
   { to: '/journal-entries', label: 'Journal Entries' },
   { to: '/bank-transactions', label: 'Bank Transactions' },
+  { to: '/settings', label: 'Settings' },
 ];
 
 export function Sidebar() {
