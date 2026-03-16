@@ -7,6 +7,7 @@ import { coaCollectionRouter, coaItemRouter } from './routes/chartOfAccounts';
 import { periodCollectionRouter, periodItemRouter } from './routes/periods';
 import { tbPeriodRouter } from './routes/trialBalance';
 import { jeCollectionRouter, jeItemRouter } from './routes/journalEntries';
+import { btCollectionRouter, btRulesRouter } from './routes/bankTransactions';
 import { db } from './db';
 
 const app = express();
@@ -37,6 +38,8 @@ app.use('/api/v1/periods', periodItemRouter);
 app.use('/api/v1/periods/:periodId/trial-balance', tbPeriodRouter);
 app.use('/api/v1/journal-entries', jeItemRouter);
 app.use('/api/v1/periods/:periodId/journal-entries', jeCollectionRouter);
+app.use('/api/v1/clients/:clientId/bank-transactions', btCollectionRouter);
+app.use('/api/v1/clients/:clientId/classification-rules', btRulesRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

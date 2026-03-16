@@ -6,6 +6,7 @@ import { ChartOfAccountsPage } from './pages/ChartOfAccountsPage';
 import { PeriodsPage } from './pages/PeriodsPage';
 import { TrialBalancePage } from './pages/TrialBalancePage';
 import { JournalEntriesPage } from './pages/JournalEntriesPage';
+import { BankTransactionsPage } from './pages/BankTransactionsPage';
 import { useAuthStore } from './store/uiStore';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -33,6 +34,7 @@ export default function App() {
           <Route path="periods" element={<PeriodsPage />} />
           <Route path="trial-balance" element={<TrialBalancePage />} />
           <Route path="journal-entries" element={<JournalEntriesPage />} />
+          <Route path="bank-transactions" element={<BankTransactionsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

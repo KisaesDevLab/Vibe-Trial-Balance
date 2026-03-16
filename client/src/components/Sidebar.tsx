@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { to: '/periods', label: 'Periods' },
   { to: '/trial-balance', label: 'Trial Balance' },
   { to: '/journal-entries', label: 'Journal Entries' },
+  { to: '/bank-transactions', label: 'Bank Transactions' },
 ];
 
 export function Sidebar() {
