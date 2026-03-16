@@ -193,24 +193,8 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
 }
 
 // --- CSV helpers ---
-const REQUIRED_COLS = ['account_number', 'account_name', 'category', 'normal_balance'] as const;
-// Optional columns are documented in the UI but not validated here
-const _OPTIONAL_COLS = ['subcategory', 'tax_line', 'workpaper_ref', 'sort_order'] as const;
-void _OPTIONAL_COLS;
 const VALID_CATEGORIES = new Set(['assets', 'liabilities', 'equity', 'revenue', 'expenses']);
 const VALID_BALANCES   = new Set(['debit', 'credit']);
-
-interface ParsedRow {
-  accountNumber: string;
-  accountName: string;
-  category: string;
-  normalBalance: string;
-  subcategory?: string;
-  taxLine?: string;
-  workpaperRef?: string;
-  sortOrder?: number;
-  _errors: string[];
-}
 
 function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
@@ -239,47 +223,90 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
-function parseCsvAccounts(text: string): { rows: ParsedRow[]; headerError: string | null } {
-  const raw = parseCsv(text.trim());
-  if (raw.length < 2) return { rows: [], headerError: 'File must have a header row and at least one data row.' };
+interface CoaMapping {
+  accountNumberCol: string;
+  accountNameCol: string;
+  categoryCol: string;
+  normalBalanceCol: string;
+  subcategoryCol: string;
+  taxLineCol: string;
+  workpaperRefCol: string;
+  sortOrderCol: string;
+}
 
-  const headers = raw[0].map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
-  const missing = REQUIRED_COLS.filter((c) => !headers.includes(c));
-  if (missing.length > 0) return { rows: [], headerError: `Missing required columns: ${missing.join(', ')}` };
+interface MappedRow {
+  accountNumber: string;
+  accountName: string;
+  category: string;
+  normalBalance: string;
+  subcategory?: string;
+  taxLine?: string;
+  workpaperRef?: string;
+  sortOrder?: number;
+  _errors: string[];
+}
 
+function bestMatch(headers: string[], candidates: string[]): string {
+  return candidates.find((c) => headers.some((h) => h.toLowerCase() === c.toLowerCase())) ?? '';
+}
+
+function autoDetectMapping(headers: string[]): CoaMapping {
+  return {
+    accountNumberCol: bestMatch(headers, ['account_number', 'account #', 'acct #', 'acct_number', 'number']),
+    accountNameCol:   bestMatch(headers, ['account_name', 'account name', 'name', 'description']),
+    categoryCol:      bestMatch(headers, ['category', 'type', 'account_type', 'account type']),
+    normalBalanceCol: bestMatch(headers, ['normal_balance', 'normal balance', 'balance_type', 'balance type']),
+    subcategoryCol:   bestMatch(headers, ['subcategory', 'sub_category', 'sub category', 'sub']),
+    taxLineCol:       bestMatch(headers, ['tax_line', 'tax line', 'tax_code', 'tax code', 'tax']),
+    workpaperRefCol:  bestMatch(headers, ['workpaper_ref', 'workpaper ref', 'wp_ref', 'wp ref', 'workpaper']),
+    sortOrderCol:     bestMatch(headers, ['sort_order', 'sort order', 'order', 'sequence', 'sort']),
+  };
+}
+
+function applyMapping(dataRows: string[][], headers: string[], mapping: CoaMapping): MappedRow[] {
   const idx = (col: string) => headers.indexOf(col);
-  const rows: ParsedRow[] = [];
-
-  for (let i = 1; i < raw.length; i++) {
-    const r = raw[i];
-    const get = (col: string) => (r[idx(col)] ?? '').trim();
+  return dataRows.map((r) => {
+    const get = (col: string) => col ? (r[idx(col)] ?? '').trim() : '';
     const errors: string[] = [];
-    const accountNumber = get('account_number');
-    const accountName   = get('account_name');
-    const category      = get('category').toLowerCase();
-    const normalBalance = get('normal_balance').toLowerCase();
-    const sortRaw       = get('sort_order');
-
+    const accountNumber = get(mapping.accountNumberCol);
+    const accountName   = get(mapping.accountNameCol);
+    const category      = get(mapping.categoryCol).toLowerCase();
+    const normalBalance = get(mapping.normalBalanceCol).toLowerCase();
+    const sortRaw       = get(mapping.sortOrderCol);
     if (!accountNumber) errors.push('account_number required');
     if (!accountName)   errors.push('account_name required');
     if (!VALID_CATEGORIES.has(category)) errors.push(`invalid category "${category}"`);
     if (!VALID_BALANCES.has(normalBalance)) errors.push(`invalid normal_balance "${normalBalance}"`);
     const sortOrder = sortRaw ? Number(sortRaw) : undefined;
     if (sortRaw && isNaN(sortOrder!)) errors.push('sort_order must be a number');
-
-    rows.push({
-      accountNumber,
-      accountName,
-      category,
-      normalBalance,
-      subcategory:  get('subcategory')   || undefined,
-      taxLine:      get('tax_line')      || undefined,
-      workpaperRef: get('workpaper_ref') || undefined,
-      sortOrder:    sortOrder,
+    return {
+      accountNumber, accountName, category, normalBalance,
+      subcategory:  get(mapping.subcategoryCol)  || undefined,
+      taxLine:      get(mapping.taxLineCol)       || undefined,
+      workpaperRef: get(mapping.workpaperRefCol)  || undefined,
+      sortOrder,
       _errors: errors,
-    });
-  }
-  return { rows, headerError: null };
+    };
+  });
+}
+
+// --- ColMapRow ---
+function ColMapRow({ label, headers, value, onChange, optional }: {
+  label: string; headers: string[]; value: string; onChange: (v: string) => void; optional?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-xs font-medium text-gray-700 w-32 shrink-0">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+      >
+        <option value="">{optional ? '— skip —' : 'Select column…'}</option>
+        {headers.map((h) => <option key={h} value={h}>{h}</option>)}
+      </select>
+    </div>
+  );
 }
 
 // --- Import CSV Modal ---
@@ -290,33 +317,45 @@ interface ImportModalProps {
 }
 
 function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
-  const [rows, setRows] = useState<ParsedRow[]>([]);
-  const [headerError, setHeaderError] = useState<string | null>(null);
+  const [step, setStep] = useState<'file' | 'mapping'>('file');
+  const [rawRows, setRawRows] = useState<string[][]>([]);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [mapping, setMapping] = useState<CoaMapping>({
+    accountNumberCol: '', accountNameCol: '', categoryCol: '', normalBalanceCol: '',
+    subcategoryCol: '', taxLineCol: '', workpaperRefCol: '', sortOrderCol: '',
+  });
+  const [fileName, setFileName] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const importMutation = useMutation({
     mutationFn: (validRows: AccountInput[]) => importAccounts(clientId, validRows),
-    onSuccess: (res) => {
-      if (res.error) return;
-      onSuccess();
-    },
+    onSuccess: (res) => { if (!res.error) onSuccess(); },
   });
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      const { rows: parsed, headerError: hErr } = parseCsvAccounts(text);
-      setHeaderError(hErr);
-      setRows(parsed);
+      const all = parseCsv((ev.target?.result as string).trim());
+      if (all.length < 2) return;
+      const hdrs = all[0].map((h) => h.trim());
+      setHeaders(hdrs);
+      setRawRows(all.slice(1));
+      setMapping(autoDetectMapping(hdrs));
     };
     reader.readAsText(file);
   };
 
-  const validRows = rows.filter((r) => r._errors.length === 0);
-  const errorCount = rows.filter((r) => r._errors.length > 0).length;
+  const set = <K extends keyof CoaMapping>(k: K, v: string) =>
+    setMapping((m) => ({ ...m, [k]: v }));
+
+  const mappedRows = step === 'mapping' ? applyMapping(rawRows, headers, mapping) : [];
+  const validRows  = mappedRows.filter((r) => r._errors.length === 0);
+  const errorCount = mappedRows.filter((r) => r._errors.length > 0).length;
+  const canProceed = !!mapping.accountNumberCol && !!mapping.accountNameCol &&
+                     !!mapping.categoryCol && !!mapping.normalBalanceCol;
 
   const handleImport = () => {
     importMutation.mutate(validRows.map((r) => ({
@@ -333,91 +372,125 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
 
   const result = importMutation.data;
 
-  return (
-    <Modal title="Import Chart of Accounts from CSV" onClose={onClose}>
-      <div className="space-y-4">
-        <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600">
-          <p className="font-semibold mb-1">Required columns:</p>
-          <code className="text-gray-700">account_number, account_name, category, normal_balance</code>
-          <p className="font-semibold mt-2 mb-1">Optional columns:</p>
-          <code className="text-gray-700">subcategory, tax_line, workpaper_ref, sort_order</code>
-          <p className="mt-2">Valid categories: <code>assets, liabilities, equity, revenue, expenses</code></p>
-          <p>Valid normal_balance: <code>debit, credit</code></p>
-          <p className="mt-2">Existing accounts with the same account number will be updated. New accounts will be inserted.</p>
-        </div>
+  const title = step === 'mapping'
+    ? 'Import Chart of Accounts — Map Columns'
+    : 'Import Chart of Accounts from CSV';
 
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div className="space-y-4">
         {result?.data ? (
-          <div className="bg-green-50 border border-green-200 rounded px-4 py-3 text-sm text-green-800">
-            Import complete: <strong>{result.data.inserted}</strong> inserted, <strong>{result.data.updated}</strong> updated.
-          </div>
-        ) : (
           <>
+            <div className="bg-green-50 border border-green-200 rounded px-4 py-3 text-sm text-green-800">
+              Import complete: <strong>{result.data.inserted}</strong> inserted, <strong>{result.data.updated}</strong> updated.
+            </div>
+            <div className="flex justify-end">
+              <button onClick={onClose} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+            </div>
+          </>
+        ) : step === 'file' ? (
+          <>
+            <p className="text-sm text-gray-600">
+              Select any CSV file — you'll map which column maps to which field on the next step.
+              Existing accounts with the same account number will be updated; new ones will be inserted.
+            </p>
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Select CSV file</label>
               <input ref={fileRef} type="file" accept=".csv,.txt" onChange={handleFile} className="text-sm text-gray-700" />
+              {fileName && rawRows.length > 0 && (
+                <p className="text-xs text-gray-500 mt-1">{fileName} — {rawRows.length} data rows, {headers.length} columns detected</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+              <button
+                onClick={() => setStep('mapping')}
+                disabled={rawRows.length === 0}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
+              >
+                Next: Map Columns
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 -mt-1">
+              {fileName} — {rawRows.length} rows, {headers.length} columns. Unset optional fields to skip them.
+            </p>
+
+            {/* Required */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Required</p>
+              <ColMapRow label="Account Number *" headers={headers} value={mapping.accountNumberCol} onChange={(v) => set('accountNumberCol', v)} />
+              <ColMapRow label="Account Name *"   headers={headers} value={mapping.accountNameCol}   onChange={(v) => set('accountNameCol', v)} />
+              <ColMapRow label="Category *"        headers={headers} value={mapping.categoryCol}       onChange={(v) => set('categoryCol', v)} />
+              <ColMapRow label="Normal Balance *"  headers={headers} value={mapping.normalBalanceCol} onChange={(v) => set('normalBalanceCol', v)} />
             </div>
 
-            {headerError && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{headerError}</div>
-            )}
+            {/* Optional */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Optional</p>
+              <ColMapRow label="Subcategory"   headers={headers} value={mapping.subcategoryCol}  onChange={(v) => set('subcategoryCol', v)}  optional />
+              <ColMapRow label="Tax Line"      headers={headers} value={mapping.taxLineCol}       onChange={(v) => set('taxLineCol', v)}       optional />
+              <ColMapRow label="Workpaper Ref" headers={headers} value={mapping.workpaperRefCol}  onChange={(v) => set('workpaperRefCol', v)}  optional />
+              <ColMapRow label="Sort Order"    headers={headers} value={mapping.sortOrderCol}     onChange={(v) => set('sortOrderCol', v)}     optional />
+            </div>
 
-            {importMutation.data?.error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{importMutation.data.error.message}</div>
-            )}
-
-            {rows.length > 0 && !headerError && (
+            {/* Preview */}
+            {canProceed && mappedRows.length > 0 && (
               <div>
                 <div className="flex items-center gap-4 mb-2 text-sm">
-                  <span className="text-gray-700">{rows.length} rows in file</span>
+                  <span className="text-gray-700">{mappedRows.length} rows</span>
                   <span className="text-green-700 font-medium">{validRows.length} valid</span>
                   {errorCount > 0 && <span className="text-red-600 font-medium">{errorCount} with errors</span>}
                 </div>
-                <div className="border border-gray-200 rounded overflow-auto max-h-52">
+                <div className="border border-gray-200 rounded overflow-auto max-h-44">
                   <table className="w-full text-xs">
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600 w-6">#</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Acct #</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Name</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Category</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Bal</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Issues</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500 w-5">#</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Acct #</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Name</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Category</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Bal</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Issues</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {rows.map((r, i) => (
+                      {mappedRows.slice(0, 50).map((r, i) => (
                         <tr key={i} className={r._errors.length > 0 ? 'bg-red-50' : ''}>
                           <td className="px-2 py-1 text-gray-400">{i + 1}</td>
                           <td className="px-2 py-1 font-mono">{r.accountNumber}</td>
                           <td className="px-2 py-1 max-w-32 truncate">{r.accountName}</td>
                           <td className="px-2 py-1">{r.category}</td>
                           <td className="px-2 py-1">{r.normalBalance}</td>
-                          <td className="px-2 py-1 text-red-600">{r._errors.join('; ') || ''}</td>
+                          <td className="px-2 py-1 text-red-600">{r._errors.join('; ')}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                {mappedRows.length > 50 && (
+                  <p className="text-xs text-gray-400 mt-1">Showing first 50 of {mappedRows.length} rows.</p>
+                )}
               </div>
             )}
 
+            {importMutation.data?.error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{importMutation.data.error.message}</div>
+            )}
+
             <div className="flex justify-end gap-2 pt-2">
-              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+              <button onClick={() => setStep('file')} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Back</button>
               <button
                 onClick={handleImport}
-                disabled={validRows.length === 0 || importMutation.isPending}
+                disabled={!canProceed || validRows.length === 0 || importMutation.isPending}
                 className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
               >
                 {importMutation.isPending ? 'Importing…' : `Import ${validRows.length} Account${validRows.length !== 1 ? 's' : ''}`}
               </button>
             </div>
           </>
-        )}
-
-        {result?.data && (
-          <div className="flex justify-end">
-            <button onClick={onClose} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
-          </div>
         )}
       </div>
     </Modal>
