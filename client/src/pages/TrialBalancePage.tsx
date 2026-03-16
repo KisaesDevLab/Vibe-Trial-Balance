@@ -8,6 +8,7 @@ import {
   flexRender,
   createColumnHelper,
   type SortingState,
+  type VisibilityState,
 } from '@tanstack/react-table';
 import {
   getTrialBalance,
@@ -67,18 +68,21 @@ const CATEGORY_COLORS: Record<string, string> = {
   expenses: 'bg-red-50 text-red-700',
 };
 
-// Columns: 0=acct#, 1=name, 2=cat, 3=unaj_dr, 4=unaj_cr, 5=bk_adj_dr, 6=bk_adj_cr,
-//          7=bk_dr, 8=bk_cr, 9=tx_adj_dr, 10=tx_adj_cr, 11=tx_dr, 12=tx_cr, 13=tax_line, 14=wp_ref
-function colGroupClass(idx: number, isHeader = false): string {
-  const b = isHeader ? 'border-gray-300' : 'border-gray-200';
-  if (idx === 2)  return `border-r ${b}`;
-  if (idx === 4)  return `border-r ${b}`;
-  if (idx === 6)  return `border-r ${b}`;
-  if (idx === 7)  return `bg-blue-50${isHeader ? '' : '/50'}`;
-  if (idx === 8)  return `bg-blue-50${isHeader ? '' : '/50'} border-r ${b}`;
-  if (idx === 11) return `bg-purple-50${isHeader ? '' : '/50'}`;
-  if (idx === 12) return `bg-purple-50${isHeader ? '' : '/50'} border-r ${b}`;
-  return '';
+// Column group styles keyed by column ID — works correctly regardless of visibility
+function colClass(columnId: string, isHeader = false): string {
+  const b  = isHeader ? 'border-gray-300' : 'border-gray-200';
+  const br = `border-r ${b}`;
+  switch (columnId) {
+    case 'category':             return br;
+    case 'unadjusted_credit':    return br;
+    case 'book_adj_credit':      return br;
+    case 'book_adjusted_debit':  return `bg-blue-50${isHeader ? '' : '/50'}`;
+    case 'book_adjusted_credit': return `bg-blue-50${isHeader ? '' : '/50'} ${br}`;
+    case 'tax_adj_credit':       return br;
+    case 'tax_adjusted_debit':   return `bg-purple-50${isHeader ? '' : '/50'}`;
+    case 'tax_adjusted_credit':  return `bg-purple-50${isHeader ? '' : '/50'} ${br}`;
+    default:                     return '';
+  }
 }
 
 function getCellDisplayValue(rowData: TBRow, col: EditableColKey): string {
@@ -103,6 +107,7 @@ export function TrialBalancePage() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [lastSyncMsg, setLastSyncMsg] = useState<string | null>(null);
   const [syncedUpToDate, setSyncedUpToDate] = useState(false);
+  const [showTax, setShowTax] = useState(true);
 
   // Excel-like cell selection
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -110,8 +115,6 @@ export function TrialBalancePage() {
   const [editText, setEditText] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const ignoreBlur = useRef(false);
-  // Track whether editing was started by typing a character (vs F2/Enter/double-click)
-  // Used to decide whether to select-all (replace) or place cursor at end (append)
   const editStartedByChar = useRef(false);
 
   const queryKey = ['trial-balance', selectedPeriodId];
@@ -373,11 +376,9 @@ export function TrialBalancePage() {
     const isActive = activeCell?.row === rowIndex && activeCell?.col === col;
     const isNumber = col === 'unadjusted_debit' || col === 'unadjusted_credit';
     const isSelect = col === 'category';
-    const isMono = false; // no monospace — keeps font consistent across all columns
     const alignClass = isNumber ? 'text-right' : 'text-left';
     const cellId = `${col}|${rowIndex}`;
 
-    // Editing
     if (isActive && editing) {
       if (isSelect) {
         return (
@@ -404,19 +405,17 @@ export function TrialBalancePage() {
           onBlur={() => handleInputBlur({ row: rowIndex, col }, rowData)}
           onFocus={(e) => {
             if (editStartedByChar.current) {
-              // Cursor at end so the typed char is preserved; subsequent typing appends
               const len = e.target.value.length;
               e.target.setSelectionRange(len, len);
             } else {
               e.target.select();
             }
           }}
-          className={`w-full text-sm bg-white outline-none px-1 py-0 border-0 ${alignClass} ${isMono ? 'font-mono' : ''}`}
+          className={`w-full text-sm bg-white outline-none px-1 py-0 border-0 ${alignClass}`}
         />
       );
     }
 
-    // Display value
     const rawDisplay = getCellDisplayValue(rowData, col);
     let display: React.ReactNode;
     if (isNumber) {
@@ -429,13 +428,10 @@ export function TrialBalancePage() {
           {rawDisplay.slice(0, 3)}
         </span>
       );
-    } else if (col === 'account_number') {
-      display = rawDisplay || <span className="text-gray-300 italic text-xs">—</span>;
     } else {
       display = rawDisplay || <span className="text-gray-300 italic text-xs">—</span>;
     }
 
-    // Selected but not editing
     if (isActive) {
       return (
         <div
@@ -447,7 +443,6 @@ export function TrialBalancePage() {
       );
     }
 
-    // Normal
     return (
       <div
         data-cell={cellId}
@@ -530,10 +525,17 @@ export function TrialBalancePage() {
     }),
   ];
 
+  const columnVisibility: VisibilityState = {
+    tax_adj_debit:       showTax,
+    tax_adj_credit:      showTax,
+    tax_adjusted_debit:  showTax,
+    tax_adjusted_credit: showTax,
+  };
+
   const tableInstance = useReactTable({
     data: data ?? [],
     columns,
-    state: { sorting },
+    state: { sorting, columnVisibility },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -588,7 +590,18 @@ export function TrialBalancePage() {
           <h2 className="text-lg font-semibold text-gray-900">Trial Balance</h2>
           {data && <p className="text-xs text-gray-500">{data.length} accounts · click to select · double-click or F2 to edit · Tab/Enter/arrows to navigate</p>}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
+          {/* Tax column toggle */}
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showTax}
+              onChange={(e) => setShowTax(e.target.checked)}
+              className="rounded border-gray-300 text-purple-600"
+            />
+            <span className="text-sm text-gray-600">Tax</span>
+          </label>
+
           {lastSyncMsg && (
             <span className="text-xs text-gray-500">{lastSyncMsg}</span>
           )}
@@ -624,23 +637,25 @@ export function TrialBalancePage() {
         >
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10">
+              {/* Group header */}
               <tr className="bg-gray-100 border-b border-gray-300">
                 <th colSpan={3} className="px-2 py-1 text-xs text-gray-500 border-r border-gray-300"></th>
                 <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-600 font-semibold border-r border-gray-300">Unadjusted</th>
                 <th colSpan={2} className="px-2 py-1 text-xs text-center text-blue-600 font-semibold border-r border-gray-300">Book Adj.</th>
                 <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 font-semibold bg-blue-50 border-r border-gray-300">Book Adjusted</th>
-                <th colSpan={2} className="px-2 py-1 text-xs text-center text-purple-600 font-semibold border-r border-gray-300">Tax Adj.</th>
-                <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 font-semibold bg-purple-50 border-r border-gray-300">Tax Adjusted</th>
+                {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-purple-600 font-semibold border-r border-gray-300">Tax Adj.</th>}
+                {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 font-semibold bg-purple-50 border-r border-gray-300">Tax Adjusted</th>}
                 <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold border-r border-gray-300">Tax Code</th>
                 <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold">W/P</th>
               </tr>
+              {/* Column headers */}
               {tableInstance.getHeaderGroups().map((hg) => (
                 <tr key={hg.id} className="bg-gray-50 border-b border-gray-200">
-                  {hg.headers.map((header, idx) => (
+                  {hg.headers.map((header) => (
                     <th
                       key={header.id}
                       onClick={header.column.getToggleSortingHandler()}
-                      className={`px-2 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider cursor-pointer whitespace-nowrap select-none ${colGroupClass(idx, true)}`}
+                      className={`px-2 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider cursor-pointer whitespace-nowrap select-none ${colClass(header.column.id, true)}`}
                     >
                       {flexRender(header.column.columnDef.header, header.getContext())}
                       {header.column.getIsSorted() === 'asc' && ' ↑'}
@@ -653,15 +668,15 @@ export function TrialBalancePage() {
             <tbody className="divide-y divide-gray-100">
               {tableInstance.getRowModel().rows.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="px-4 py-10 text-center text-gray-400">
+                  <td colSpan={showTax ? 15 : 11} className="px-4 py-10 text-center text-gray-400">
                     No trial balance data. Click &ldquo;Initialize from COA&rdquo; to populate from the chart of accounts.
                   </td>
                 </tr>
               ) : (
                 tableInstance.getRowModel().rows.map((row, rowIdx) => (
                   <tr key={row.id} className={rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'}>
-                    {row.getVisibleCells().map((cell, cellIdx) => (
-                      <td key={cell.id} className={`px-2 py-0.5 text-gray-700 ${colGroupClass(cellIdx)}`}>
+                    {row.getVisibleCells().map((cell) => (
+                      <td key={cell.id} className={`px-2 py-0.5 text-gray-700 ${colClass(cell.column.id)}`}>
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
@@ -671,6 +686,7 @@ export function TrialBalancePage() {
             </tbody>
             {rows.length > 0 && (
               <tfoot className="sticky bottom-0 z-10">
+                {/* Column totals */}
                 <tr className="border-t-2 border-gray-400 bg-gray-100 font-semibold">
                   <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-r border-gray-300">
                     Totals
@@ -681,12 +697,13 @@ export function TrialBalancePage() {
                   <td className="px-2 py-1.5 text-right text-sm text-blue-700 border-r border-gray-200">{fmtTotal(colSum('book_adj_credit'))}</td>
                   <td className="px-2 py-1.5 text-right text-sm font-semibold bg-blue-50/80">{fmtTotal(colSum('book_adjusted_debit'))}</td>
                   <td className="px-2 py-1.5 text-right text-sm font-semibold bg-blue-50/80 border-r border-gray-200">{fmtTotal(colSum('book_adjusted_credit'))}</td>
-                  <td className="px-2 py-1.5 text-right text-sm text-purple-700">{fmtTotal(colSum('tax_adj_debit'))}</td>
-                  <td className="px-2 py-1.5 text-right text-sm text-purple-700 border-r border-gray-200">{fmtTotal(colSum('tax_adj_credit'))}</td>
-                  <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80">{fmtTotal(colSum('tax_adjusted_debit'))}</td>
-                  <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">{fmtTotal(colSum('tax_adjusted_credit'))}</td>
+                  {showTax && <td className="px-2 py-1.5 text-right text-sm text-purple-700">{fmtTotal(colSum('tax_adj_debit'))}</td>}
+                  {showTax && <td className="px-2 py-1.5 text-right text-sm text-purple-700 border-r border-gray-200">{fmtTotal(colSum('tax_adj_credit'))}</td>}
+                  {showTax && <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80">{fmtTotal(colSum('tax_adjusted_debit'))}</td>}
+                  {showTax && <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">{fmtTotal(colSum('tax_adjusted_credit'))}</td>}
                   <td colSpan={2}></td>
                 </tr>
+                {/* Net income / (loss) */}
                 <tr className="border-t border-gray-300 bg-gray-50">
                   <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-r border-gray-300">
                     Net Income/(Loss)
@@ -698,10 +715,12 @@ export function TrialBalancePage() {
                   <td colSpan={2} className="px-2 py-1 text-right text-sm font-semibold bg-blue-50/80 border-r border-gray-200">
                     {fmtNet(bkNetIncome)}
                   </td>
-                  <td colSpan={2} className="border-r border-gray-200"></td>
-                  <td colSpan={2} className="px-2 py-1 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">
-                    {fmtNet(txNetIncome)}
-                  </td>
+                  {showTax && <td colSpan={2} className="border-r border-gray-200"></td>}
+                  {showTax && (
+                    <td colSpan={2} className="px-2 py-1 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">
+                      {fmtNet(txNetIncome)}
+                    </td>
+                  )}
                   <td colSpan={2}></td>
                 </tr>
               </tfoot>
