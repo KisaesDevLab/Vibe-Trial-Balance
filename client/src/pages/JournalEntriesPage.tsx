@@ -378,7 +378,6 @@ export function JournalEntriesPage() {
       ) : (
         <div className="space-y-3">
           {entries.map((entry) => {
-            const totalDebit = entry.lines.reduce((s, l) => s + l.debit, 0);
             const isExpanded = !collapsed.has(entry.id);
             return (
               <div key={entry.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -391,7 +390,6 @@ export function JournalEntriesPage() {
                   </span>
                   <span className="text-sm font-medium text-gray-700 flex-1">{entry.description ?? '(no description)'}</span>
                   <span className="text-sm text-gray-400 mr-4">{fmtDate(entry.entry_date)}</span>
-                  <span className="text-sm font-semibold text-gray-700 mr-4">{fmt(totalDebit)}</span>
                   <button
                     onClick={(e) => { e.stopPropagation(); setEditEntry(entry); setFormError(null); }}
                     className="text-xs text-blue-500 hover:text-blue-700 mr-3"
