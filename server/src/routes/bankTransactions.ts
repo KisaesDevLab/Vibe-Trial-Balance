@@ -89,7 +89,70 @@ btCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<vo
   }
 });
 
-// POST /api/v1/clients/:clientId/bank-transactions/import (CSV)
+// ---- OFX/QFX/QBO parser (handles both SGML 1.x and XML 2.x) ----
+
+interface ParsedTx {
+  transaction_date: string;
+  description: string | null;
+  amount: number; // cents
+  check_number: string | null;
+}
+
+function ofxTagXml(block: string, tag: string): string | null {
+  const m = new RegExp(`<${tag}>([^<]*)</${tag}>`, 'i').exec(block);
+  return m ? m[1].trim() : null;
+}
+
+function ofxTagSgml(block: string, tag: string): string | null {
+  const m = new RegExp(`<${tag}>([^\r\n<]*)`, 'i').exec(block);
+  return m ? m[1].trim() : null;
+}
+
+function ofxDate(raw: string): string | null {
+  // Formats: YYYYMMDD, YYYYMMDDHHMMSS, YYYYMMDDHHMMSS.XXX[+NN:NN]
+  const d = raw.replace(/[.\[+\-\s].*$/, '').trim();
+  if (d.length >= 8) return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  return null;
+}
+
+function parseOfx(content: string): ParsedTx[] {
+  const results: ParsedTx[] = [];
+  const isXml = /<\/STMTTRN>/i.test(content);
+
+  if (isXml) {
+    const blockRe = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = blockRe.exec(content)) !== null) {
+      const b = m[1];
+      const date = ofxTagXml(b, 'DTPOSTED');
+      const amt = ofxTagXml(b, 'TRNAMT');
+      const name = ofxTagXml(b, 'NAME') ?? ofxTagXml(b, 'MEMO');
+      const check = ofxTagXml(b, 'CHECKNUM');
+      if (!date || !amt) continue;
+      const parsedDate = ofxDate(date);
+      const parsedAmt = parseFloat(amt);
+      if (!parsedDate || isNaN(parsedAmt)) continue;
+      results.push({ transaction_date: parsedDate, description: name || null, amount: Math.round(parsedAmt * 100), check_number: check || null });
+    }
+  } else {
+    const blocks = content.split(/<STMTTRN>/i).slice(1);
+    for (const block of blocks) {
+      const b = block.split(/<\/STMTTRNLIST>|<\/BANKTRANLIST>/i)[0];
+      const date = ofxTagSgml(b, 'DTPOSTED');
+      const amt = ofxTagSgml(b, 'TRNAMT');
+      const name = ofxTagSgml(b, 'NAME') ?? ofxTagSgml(b, 'MEMO');
+      const check = ofxTagSgml(b, 'CHECKNUM');
+      if (!date || !amt) continue;
+      const parsedDate = ofxDate(date);
+      const parsedAmt = parseFloat(amt);
+      if (!parsedDate || isNaN(parsedAmt)) continue;
+      results.push({ transaction_date: parsedDate, description: name || null, amount: Math.round(parsedAmt * 100), check_number: check || null });
+    }
+  }
+  return results;
+}
+
+// POST /api/v1/clients/:clientId/bank-transactions/import (CSV / OFX / QFX / QBO)
 btCollectionRouter.post('/import', upload.single('file'), async (req: AuthRequest, res: Response): Promise<void> => {
   const clientId = Number(req.params.clientId);
   if (isNaN(clientId)) {
@@ -115,36 +178,46 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
 
   try {
     const rows: TxRow[] = [];
+    const filename = (req.file.originalname ?? '').toLowerCase();
+    const isOfx = /\.(ofx|qfx|qbo)$/.test(filename);
 
-    await new Promise<void>((resolve, reject) => {
-      const stream = Readable.from(req.file!.buffer);
-      stream
-        .pipe(parse({ headers: true, trim: true, ignoreEmpty: true }))
-        .on('data', (row: Record<string, string>) => {
-          const dateVal = row['Date'] ?? row['date'] ?? row['Transaction Date'] ?? row['transaction_date'] ?? '';
-          const descVal = row['Description'] ?? row['description'] ?? row['Memo'] ?? row['memo'] ?? row['Payee'] ?? row['payee'] ?? '';
-          const amtVal = row['Amount'] ?? row['amount'] ?? row['Debit'] ?? row['debit'] ?? '';
-          const checkVal = row['Check'] ?? row['check'] ?? row['Check Number'] ?? row['check_number'] ?? '';
+    if (isOfx) {
+      const content = req.file.buffer.toString('utf8');
+      const parsed = parseOfx(content);
+      for (const p of parsed) {
+        rows.push({ client_id: clientId, period_id: periodId, classification_status: 'unclassified', ...p });
+      }
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        const stream = Readable.from(req.file!.buffer);
+        stream
+          .pipe(parse({ headers: true, trim: true, ignoreEmpty: true }))
+          .on('data', (row: Record<string, string>) => {
+            const dateVal = row['Date'] ?? row['date'] ?? row['Transaction Date'] ?? row['transaction_date'] ?? '';
+            const descVal = row['Description'] ?? row['description'] ?? row['Memo'] ?? row['memo'] ?? row['Payee'] ?? row['payee'] ?? '';
+            const amtVal = row['Amount'] ?? row['amount'] ?? row['Debit'] ?? row['debit'] ?? '';
+            const checkVal = row['Check'] ?? row['check'] ?? row['Check Number'] ?? row['check_number'] ?? '';
 
-          if (!dateVal || !amtVal) return;
+            if (!dateVal || !amtVal) return;
 
-          const amtStr = amtVal.replace(/[^0-9.\-]/g, '');
-          const amtDollars = parseFloat(amtStr);
-          if (isNaN(amtDollars)) return;
+            const amtStr = amtVal.replace(/[^0-9.\-]/g, '');
+            const amtDollars = parseFloat(amtStr);
+            if (isNaN(amtDollars)) return;
 
-          rows.push({
-            client_id: clientId,
-            period_id: periodId,
-            transaction_date: dateVal.trim(),
-            description: descVal.trim() || null,
-            amount: Math.round(amtDollars * 100),
-            check_number: checkVal.trim() || null,
-            classification_status: 'unclassified',
-          });
-        })
-        .on('end', resolve)
-        .on('error', reject);
-    });
+            rows.push({
+              client_id: clientId,
+              period_id: periodId,
+              transaction_date: dateVal.trim(),
+              description: descVal.trim() || null,
+              amount: Math.round(amtDollars * 100),
+              check_number: checkVal.trim() || null,
+              classification_status: 'unclassified',
+            });
+          })
+          .on('end', resolve)
+          .on('error', reject);
+      });
+    }
 
     if (rows.length === 0) {
       res.status(400).json({ data: null, error: { code: 'EMPTY_FILE', message: 'No valid rows found in CSV' } });

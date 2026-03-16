@@ -362,13 +362,13 @@ export function BankTransactionsPage() {
                 <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{importError}</div>
               )}
               <p className="text-sm text-gray-600">
-                Upload a CSV file with columns: <strong>Date</strong>, <strong>Description</strong>, <strong>Amount</strong>, and optionally <strong>Check Number</strong>.
+                Supported formats: <strong>OFX / QFX / QBO</strong> (bank export), or <strong>CSV</strong> with columns Date, Description, Amount, and optionally Check Number.
               </p>
               <div>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv,text/csv"
+                  accept=".csv,.ofx,.qfx,.qbo,text/csv"
                   onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
                   className="block w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
                 />
