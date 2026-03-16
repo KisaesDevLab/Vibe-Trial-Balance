@@ -101,6 +101,14 @@ const columnHelper = createColumnHelper<TBRow>();
 
 // ─── Page component ───────────────────────────────────────────────────────────
 
+function downloadCsv(filename: string, rows: string[][]): void {
+  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function TrialBalancePage() {
   const { selectedPeriodId } = useUIStore();
   const qc = useQueryClient();
@@ -148,6 +156,28 @@ export function TrialBalancePage() {
     },
     enabled: selectedPeriodId !== null,
   });
+
+  const handleExportCsv = () => {
+    const rows = data ?? [];
+    if (!rows.length) return;
+    const header = [
+      'Account Number', 'Account Name', 'Category', 'Tax Line', 'Workpaper Ref',
+      'Unadj Debit', 'Unadj Credit',
+      'Book Adj Debit', 'Book Adj Credit',
+      'Book Adjusted Debit', 'Book Adjusted Credit',
+      'Tax Adj Debit', 'Tax Adj Credit',
+      'Tax Adjusted Debit', 'Tax Adjusted Credit',
+    ];
+    const dataRows = rows.map((r) => [
+      r.account_number, r.account_name, r.category, r.tax_line ?? '', r.workpaper_ref ?? '',
+      String(r.unadjusted_debit / 100), String(r.unadjusted_credit / 100),
+      String(r.book_adj_debit / 100), String(r.book_adj_credit / 100),
+      String(r.book_adjusted_debit / 100), String(r.book_adjusted_credit / 100),
+      String(r.tax_adj_debit / 100), String(r.tax_adj_credit / 100),
+      String(r.tax_adjusted_debit / 100), String(r.tax_adjusted_credit / 100),
+    ]);
+    downloadCsv(`trial-balance-${selectedPeriodId}.csv`, [header, ...dataRows]);
+  };
 
   const initMutation = useMutation({
     mutationFn: () => initializeTrialBalance(selectedPeriodId!),
@@ -605,6 +635,13 @@ export function TrialBalancePage() {
           {lastSyncMsg && (
             <span className="text-xs text-gray-500">{lastSyncMsg}</span>
           )}
+          <button
+            onClick={handleExportCsv}
+            disabled={!data?.length}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40"
+          >
+            Export CSV
+          </button>
           {showSyncButton && (
             <button
               onClick={() => initMutation.mutate()}

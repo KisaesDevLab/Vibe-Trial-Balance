@@ -15,7 +15,10 @@
 - API routes return: { data, error, meta }
 
 ## Current Phase
-Phase 1: Foundation - Scaffold + Auth + Client + COA
+Phase 4: Reports + Export
 
 ## Completed
-(none yet)
+- Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods
+- Phase 2: Trial Balance + Journal Entries (book AJE, tax AJE, v_adjusted_trial_balance view)
+- Phase 3: Bank Transactions + AI Classification (CSV/OFX import, AI classify via Claude,
+  classification rules, batch ops, source accounts, trans JEs, Settings page)

@@ -18,6 +18,14 @@ import {
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { useUIStore } from '../store/uiStore';
 
+function downloadCsv(filename: string, rows: string[][]): void {
+  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 function fmt(cents: number): string {
   const abs = Math.abs(cents);
   const str = (abs / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -311,6 +319,26 @@ export function BankTransactionsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (!transactions.length) return;
+              const header = ['Date', 'Description', 'Amount', 'Check #', 'Source Account', 'Category', 'Status'];
+              const rows = transactions.map((t) => [
+                fmtDate(t.transaction_date),
+                t.description ?? '',
+                String(t.amount / 100),
+                t.check_number ?? '',
+                t.source_account_number ? `${t.source_account_number} – ${t.source_account_name}` : '',
+                t.account_number ? `${t.account_number} – ${t.account_name}` : '',
+                t.classification_status,
+              ]);
+              downloadCsv('bank-transactions.csv', [header, ...rows]);
+            }}
+            disabled={!transactions.length}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40"
+          >
+            Export CSV
+          </button>
           <button
             onClick={() => setShowRules(!showRules)}
             className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
