@@ -133,6 +133,14 @@ export const batchClassifyTransactions = (clientId: number, ids: number[], accou
     }),
   );
 
+export const batchUpdateSourceAccount = (clientId: number, ids: number[], sourceAccountId: number | null) =>
+  chunked(ids, (chunk) =>
+    apiFetch<{ updated: number }>(`/clients/${clientId}/bank-transactions/batch-update-source`, {
+      method: 'POST',
+      body: JSON.stringify({ ids: chunk, sourceAccountId }),
+    }),
+  );
+
 export const aiClassifyTransactions = (clientId: number, ids: number[]) =>
   apiFetch<{ classified: number; results: Array<{ id: number; accountId: number; confidence: number; reasoning: string }> }>(
     `/clients/${clientId}/bank-transactions/ai-classify`,

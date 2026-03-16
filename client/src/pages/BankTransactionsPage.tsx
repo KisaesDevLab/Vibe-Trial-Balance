@@ -7,6 +7,7 @@ import {
   deleteBankTransaction,
   batchDeleteTransactions,
   batchClassifyTransactions,
+  batchUpdateSourceAccount,
   aiClassifyTransactions,
   listClassificationRules,
   deleteClassificationRule,
@@ -58,6 +59,7 @@ export function BankTransactionsPage() {
   const [filterSourceAccount, setFilterSourceAccount] = useState<string>('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batchAccountId, setBatchAccountId] = useState<string>('');
+  const [batchSourceAccountId, setBatchSourceAccountId] = useState<string>('');
   const [importSourceAccountId, setImportSourceAccountId] = useState<string>('');
   const [showImport, setShowImport] = useState(false);
   const [importStep, setImportStep] = useState<'file' | 'mapping'>('file');
@@ -204,6 +206,12 @@ export function BankTransactionsPage() {
     onSuccess: () => { invalidate(); setSelected(new Set()); setBatchAccountId(''); },
   });
 
+  const batchSourceMutation = useMutation({
+    mutationFn: ({ ids, sourceAccountId }: { ids: number[]; sourceAccountId: number | null }) =>
+      batchUpdateSourceAccount(clientId!, ids, sourceAccountId),
+    onSuccess: () => { invalidate(); setSelected(new Set()); setBatchSourceAccountId(''); },
+  });
+
   const aiMutation = useMutation({
     mutationFn: (ids: number[]) => aiClassifyTransactions(clientId!, ids),
     onMutate: () => setAiStatus('Running AI classification…'),
@@ -293,6 +301,25 @@ export function BankTransactionsPage() {
                   className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
                 >
                   {batchClassifyMutation.isPending ? 'Applying…' : 'Apply'}
+                </button>
+              )}
+              <select
+                value={batchSourceAccountId}
+                onChange={(e) => setBatchSourceAccountId(e.target.value)}
+                className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Set source account…</option>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.account_number} – {a.account_name}</option>
+                ))}
+              </select>
+              {batchSourceAccountId && (
+                <button
+                  onClick={() => batchSourceMutation.mutate({ ids: [...selected], sourceAccountId: Number(batchSourceAccountId) })}
+                  disabled={batchSourceMutation.isPending}
+                  className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {batchSourceMutation.isPending ? 'Applying…' : 'Apply'}
                 </button>
               )}
               <button

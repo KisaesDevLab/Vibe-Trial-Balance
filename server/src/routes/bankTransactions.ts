@@ -409,6 +409,36 @@ btCollectionRouter.post('/batch-classify', async (req: AuthRequest, res: Respons
   }
 });
 
+// POST /api/v1/clients/:clientId/bank-transactions/batch-update-source
+const batchUpdateSourceSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1),
+  sourceAccountId: z.number().int().positive().nullable(),
+});
+
+btCollectionRouter.post('/batch-update-source', async (req: AuthRequest, res: Response): Promise<void> => {
+  const clientId = Number(req.params.clientId);
+  if (isNaN(clientId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } });
+    return;
+  }
+  const result = batchUpdateSourceSchema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  const { ids, sourceAccountId } = result.data;
+  try {
+    const updated = await db('bank_transactions')
+      .where({ client_id: clientId })
+      .whereIn('id', ids)
+      .update({ source_account_id: sourceAccountId });
+    res.json({ data: { updated }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
 // POST /api/v1/clients/:clientId/bank-transactions/ai-classify
 const aiClassifySchema = z.object({
   ids: z.array(z.number().int().positive()).min(1).max(100),
