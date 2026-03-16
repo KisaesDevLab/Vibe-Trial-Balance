@@ -4,6 +4,7 @@ import { PeriodSelector } from './PeriodSelector';
 import { useAuthStore, useUIStore } from '../store/uiStore';
 
 const NAV_ITEMS = [
+  { to: '/dashboard', label: 'Dashboard' },
   { to: '/clients', label: 'Clients' },
   { to: '/chart-of-accounts', label: 'Chart of Accounts' },
   { to: '/periods', label: 'Periods' },

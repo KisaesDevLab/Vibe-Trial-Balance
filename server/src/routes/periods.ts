@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { logAudit } from '../lib/periodGuard';
 
 export const periodCollectionRouter = Router({ mergeParams: true });
 periodCollectionRouter.use(authMiddleware);
@@ -105,6 +106,54 @@ periodItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<
       }
       res.json({ data: updated, error: null });
     });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
+// POST /api/v1/periods/:id/lock
+periodItemRouter.post('/:id/lock', async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = Number(req.params.id);
+  if (isNaN(id)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  try {
+    const [updated] = await db('periods')
+      .where({ id })
+      .update({ locked_at: db.fn.now(), locked_by: req.user!.userId })
+      .returning('*');
+    if (!updated) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
+      return;
+    }
+    await logAudit({ userId: req.user!.userId, periodId: id, entityType: 'period', entityId: id, action: 'lock', description: `Locked period "${updated.period_name}"` });
+    res.json({ data: updated, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
+// POST /api/v1/periods/:id/unlock
+periodItemRouter.post('/:id/unlock', async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = Number(req.params.id);
+  if (isNaN(id)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  try {
+    const [updated] = await db('periods')
+      .where({ id })
+      .update({ locked_at: null, locked_by: null })
+      .returning('*');
+    if (!updated) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
+      return;
+    }
+    await logAudit({ userId: req.user!.userId, periodId: id, entityType: 'period', entityId: id, action: 'unlock', description: `Unlocked period "${updated.period_name}"` });
+    res.json({ data: updated, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });

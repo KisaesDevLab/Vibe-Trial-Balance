@@ -5,6 +5,8 @@ import {
   createPeriod,
   updatePeriod,
   deletePeriod,
+  lockPeriod,
+  unlockPeriod,
   type Period,
   type PeriodInput,
 } from '../api/periods';
@@ -137,6 +139,16 @@ export function PeriodsPage() {
     onSuccess: () => invalidate(),
   });
 
+  const lockMutation = useMutation({
+    mutationFn: lockPeriod,
+    onSuccess: () => invalidate(),
+  });
+
+  const unlockMutation = useMutation({
+    mutationFn: unlockPeriod,
+    onSuccess: () => invalidate(),
+  });
+
   if (!selectedClientId) {
     return (
       <div className="flex items-center justify-center h-full text-gray-400">
@@ -180,6 +192,7 @@ export function PeriodsPage() {
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Start</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">End</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Status</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Lock</th>
                 <th className="px-4 py-2.5"></th>
               </tr>
             </thead>
@@ -208,6 +221,26 @@ export function PeriodsPage() {
                         </button>
                       )}
                     </td>
+                    <td className="px-4 py-2.5">
+                      {p.locked_at ? (
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Locked</span>
+                          <button
+                            onClick={() => unlockMutation.mutate(p.id)}
+                            className="text-xs text-gray-400 hover:text-blue-600"
+                          >
+                            Unlock
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { if (confirm(`Lock "${p.period_name}"? No changes can be made until unlocked.`)) lockMutation.mutate(p.id); }}
+                          className="text-xs text-gray-400 hover:text-amber-600"
+                        >
+                          Lock
+                        </button>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-right">
                       <button
                         onClick={() => { setSelectedPeriodId(p.id); }}
@@ -217,13 +250,15 @@ export function PeriodsPage() {
                       </button>
                       <button
                         onClick={() => { setEditPeriod(p); setFormError(null); }}
-                        className="text-xs text-blue-600 hover:text-blue-800 mr-3"
+                        disabled={!!p.locked_at}
+                        className="text-xs text-blue-600 hover:text-blue-800 mr-3 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => { if (confirm(`Delete "${p.period_name}"?`)) deleteMutation.mutate(p.id); }}
-                        className="text-xs text-red-500 hover:text-red-700"
+                        disabled={!!p.locked_at}
+                        className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         Delete
                       </button>

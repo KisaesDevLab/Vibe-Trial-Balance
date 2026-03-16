@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(cd:*)",
+      "Bash(npx tsc:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd /c \"taskkill /PID 2088 /F\")",
+      "Bash(cmd /c \"taskkill /F /PID 2088 2>&1\")",
+      "Bash(cmd /c \"taskkill /F /PID 2088\" 2>&1; echo exit:$?)",
+      "Bash(powershell -Command \"Stop-Process -Id 2088 -Force; Write-Host 'done'\")",
+      "Bash(docker compose:*)",
+      "Bash(docker exec:*)",
+      "Bash(curl:*)",
+      "Bash(find C:UserskwkcpProjectstrial-balance-appclientsrc -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.json \\\\\\))",
+      "Bash(find C:UserskwkcpProjectstrial-balance-appserversrc -type f \\\\\\(-name *.ts -o -name *.json \\\\\\))",
+      "Bash(find C:UserskwkcpProjectstrial-balance-appserver -path *migrations* -o -path *seeds*)",
+      "Bash(grep -E \"\\\\.\\(ts|js\\)$\")",
+      "Bash(jq -r \".content | select\\(. != null\\) | select\\(contains\\(\"\"Phase\"\"\\)\\)\" C:/Users/kwkcp/.claude/projects/C--Users-kwkcp-Projects-trial-balance-app/e3869bf0-def0-4cfa-a024-250e98effa17.jsonl)",
+      "Bash(python3:*)",
+      "Bash(npm install:*)",
+      "Bash(find C:/Users/kwkcp/Projects/trial-balance-app/client/src -name *.tsx)",
+      "Bash(xargs grep:*)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(node -e \"const knex = require\\(''knex''\\)\\(require\\(''./knexfile.js''\\).development\\); knex.raw\\(\"\"SELECT pg_get_viewdef\\(''v_adjusted_trial_balance'', true\\)\"\"\\).then\\(r => { console.log\\(r.rows[0].pg_get_viewdef\\); knex.destroy\\(\\); }\\).catch\\(e => { console.error\\(e.message\\); knex.destroy\\(\\); }\\);\")",
+      "Bash(npx knex:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

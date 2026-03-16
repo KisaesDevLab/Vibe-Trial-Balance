@@ -8,6 +8,8 @@ export interface Period {
   end_date: string | null;
   is_current: boolean;
   rolled_forward_from: number | null;
+  locked_at: string | null;
+  locked_by: number | null;
   created_at: string;
 }
 
@@ -32,3 +34,9 @@ export const updatePeriod = (id: number, input: Partial<PeriodInput>) =>
 
 export const deletePeriod = (id: number) =>
   apiFetch<{ id: number }>(`/periods/${id}`, { method: 'DELETE' });
+
+export const lockPeriod = (id: number) =>
+  apiFetch<Period>(`/periods/${id}/lock`, { method: 'POST' });
+
+export const unlockPeriod = (id: number) =>
+  apiFetch<Period>(`/periods/${id}/unlock`, { method: 'POST' });

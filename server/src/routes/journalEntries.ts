@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 
 export const jeCollectionRouter = Router({ mergeParams: true });
 jeCollectionRouter.use(authMiddleware);
@@ -98,6 +99,8 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
 
   try {
     await db.transaction(async (trx) => {
+      await assertPeriodUnlocked(periodId, trx);
+
       const lastEntry = await trx('journal_entries')
         .where({ period_id: periodId, entry_type: entryType })
         .max('entry_number as max')
@@ -125,9 +128,15 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
         })),
       );
 
+      await logAudit({ userId: req.user!.userId, periodId, entityType: 'journal_entry', entityId: entry.id, action: 'create', description: `Created ${entryType} AJE #${entryNumber}${description ? ': ' + description : ''}` }, trx);
       res.status(201).json({ data: { ...entry, lines }, error: null });
     });
   } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
+      return;
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
   }
@@ -250,6 +259,9 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
 
   try {
     const updatedEntry = await db.transaction(async (trx) => {
+      const existing2 = await trx('journal_entries').where({ id }).first('period_id');
+      if (existing2) await assertPeriodUnlocked(existing2.period_id, trx);
+
       const headerUpdates: Record<string, unknown> = { updated_at: trx.fn.now() };
       if (entryType !== undefined) headerUpdates.entry_type = entryType;
       if (entryDate !== undefined) headerUpdates.entry_date = entryDate;
@@ -264,10 +276,16 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
           lines.map((l) => ({ journal_entry_id: id, account_id: l.accountId, debit: l.debit, credit: l.credit })),
         );
       }
+      await logAudit({ userId: req.user!.userId, periodId: entry.period_id, entityType: 'journal_entry', entityId: id, action: 'update', description: `Updated JE #${entry.entry_number}` }, trx);
       return entry;
     });
     res.json({ data: updatedEntry, error: null });
   } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
+      return;
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     if (message === 'NOT_FOUND') {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
@@ -285,7 +303,7 @@ jeItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<voi
     return;
   }
   try {
-    const existing = await db('journal_entries').where({ id }).first('entry_type');
+    const existing = await db('journal_entries').where({ id }).first('entry_type', 'period_id', 'entry_number');
     if (!existing) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
       return;
@@ -294,13 +312,20 @@ jeItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<voi
       res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Trans entries are managed via Bank Transactions and cannot be deleted directly.' } });
       return;
     }
+    await assertPeriodUnlocked(existing.period_id);
     const [deleted] = await db('journal_entries').where({ id }).delete().returning('id');
     if (!deleted) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
       return;
     }
+    await logAudit({ userId: req.user!.userId, periodId: existing.period_id, entityType: 'journal_entry', entityId: id, action: 'delete', description: `Deleted ${existing.entry_type} JE #${existing.entry_number}` });
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
+      return;
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
   }

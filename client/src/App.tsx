@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
 import { AppShell } from './components/AppShell';
+import { DashboardPage } from './pages/DashboardPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { ChartOfAccountsPage } from './pages/ChartOfAccountsPage';
 import { PeriodsPage } from './pages/PeriodsPage';
@@ -35,7 +36,8 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route index element={<Navigate to="/clients" replace />} />
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="dashboard" element={<DashboardPage />} />
           <Route path="clients" element={<ClientsPage />} />
           <Route path="chart-of-accounts" element={<ChartOfAccountsPage />} />
           <Route path="periods" element={<PeriodsPage />} />
