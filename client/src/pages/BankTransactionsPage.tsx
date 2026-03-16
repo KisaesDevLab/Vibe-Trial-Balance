@@ -377,7 +377,7 @@ export function BankTransactionsPage() {
         <div className="flex items-center justify-center py-12 text-gray-400">Loading…</div>
       ) : transactions.length === 0 ? (
         <div className="bg-white rounded-lg border border-gray-200 px-4 py-10 text-center text-gray-400">
-          No transactions found. Import a CSV or adjust filters.
+          No transactions found. Import transactions or adjust filters.
         </div>
       ) : (
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
