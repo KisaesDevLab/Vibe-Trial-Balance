@@ -121,57 +121,96 @@ interface ParsedTx {
   check_number: string | null;
 }
 
+// Extract a leaf element value from XML OFX (has closing tags on every element)
 function ofxTagXml(block: string, tag: string): string | null {
-  const m = new RegExp(`<${tag}>([^<]*)</${tag}>`, 'i').exec(block);
+  const m = new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`, 'i').exec(block);
   return m ? m[1].trim() : null;
 }
 
+// Extract a leaf element value from SGML OFX (no closing tags on leaf elements;
+// value ends at end of line or next opening tag)
 function ofxTagSgml(block: string, tag: string): string | null {
-  const m = new RegExp(`<${tag}>([^\r\n<]*)`, 'i').exec(block);
+  const m = new RegExp(`<${tag}[^>]*>[ \t]*([^\r\n<]+)`, 'i').exec(block);
   return m ? m[1].trim() : null;
 }
 
 function ofxDate(raw: string): string | null {
-  // Formats: YYYYMMDD, YYYYMMDDHHMMSS, YYYYMMDDHHMMSS.XXX[+NN:NN]
-  const d = raw.replace(/[.\[+\-\s].*$/, '').trim();
-  if (d.length >= 8) return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  // Strip timezone suffix: YYYYMMDDHHMMSS.mmm[TZ:NAME] or [...] or [+HH] etc.
+  const d = raw.replace(/[\[.+\-].*$/, '').replace(/\s/g, '');
+  if (d.length >= 8 && /^\d{8}/.test(d)) {
+    return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  }
   return null;
 }
 
-function parseOfx(content: string): ParsedTx[] {
+function parseOfx(fileBuffer: Buffer): ParsedTx[] {
+  // Try UTF-8 first; fall back to latin1 for Windows-1252 encoded files
+  let content = fileBuffer.toString('utf8');
+  if (content.includes('\uFFFD')) {
+    content = fileBuffer.toString('latin1');
+  }
+
+  // Strip UTF-8 BOM if present
+  content = content.replace(/^\uFEFF/, '');
+
+  // Detect XML vs SGML:
+  //   OFX 2.x XML:  leaf elements have closing tags  e.g. </DTPOSTED>
+  //   OFX 1.x SGML: only aggregate elements have closing tags; leaf elements do NOT
+  //   OFXHEADER:200 also signals XML; OFXHEADER:100 signals SGML
+  const isXml =
+    /OFXHEADER:\s*200/i.test(content) ||
+    /^<\?xml/i.test(content.trimStart()) ||
+    /<\/DTPOSTED>/i.test(content) ||
+    /<\/TRNAMT>/i.test(content);
+
   const results: ParsedTx[] = [];
-  const isXml = /<\/STMTTRN>/i.test(content);
 
   if (isXml) {
-    const blockRe = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi;
+    const blockRe = /<STMTTRN[^>]*>([\s\S]*?)<\/STMTTRN>/gi;
     let m: RegExpExecArray | null;
     while ((m = blockRe.exec(content)) !== null) {
       const b = m[1];
       const date = ofxTagXml(b, 'DTPOSTED');
       const amt = ofxTagXml(b, 'TRNAMT');
-      const name = ofxTagXml(b, 'NAME') ?? ofxTagXml(b, 'MEMO');
+      const name = ofxTagXml(b, 'NAME') ?? ofxTagXml(b, 'MEMO') ?? ofxTagXml(b, 'PAYEE');
       const check = ofxTagXml(b, 'CHECKNUM');
       if (!date || !amt) continue;
       const parsedDate = ofxDate(date);
-      const parsedAmt = parseFloat(amt);
+      const parsedAmt = parseFloat(amt.replace(/[^0-9.\-]/g, ''));
       if (!parsedDate || isNaN(parsedAmt)) continue;
-      results.push({ transaction_date: parsedDate, description: name || null, amount: Math.round(parsedAmt * 100), check_number: check || null });
+      results.push({
+        transaction_date: parsedDate,
+        description: name || null,
+        amount: Math.round(parsedAmt * 100),
+        check_number: check || null,
+      });
     }
   } else {
-    const blocks = content.split(/<STMTTRN>/i).slice(1);
+    // SGML: aggregate elements like <STMTTRN>...</STMTTRN> have closing tags,
+    // but leaf elements like <DTPOSTED> and <TRNAMT> do not.
+    const blocks = content.split(/<STMTTRN[^>]*>/i).slice(1);
     for (const block of blocks) {
-      const b = block.split(/<\/STMTTRNLIST>|<\/BANKTRANLIST>/i)[0];
+      // Terminate block at </STMTTRN> (present in SGML for aggregate close)
+      const endIdx = block.search(/<\/STMTTRN>/i);
+      const b = endIdx >= 0 ? block.slice(0, endIdx) : block;
+
       const date = ofxTagSgml(b, 'DTPOSTED');
       const amt = ofxTagSgml(b, 'TRNAMT');
-      const name = ofxTagSgml(b, 'NAME') ?? ofxTagSgml(b, 'MEMO');
+      const name = ofxTagSgml(b, 'NAME') ?? ofxTagSgml(b, 'MEMO') ?? ofxTagSgml(b, 'PAYEE');
       const check = ofxTagSgml(b, 'CHECKNUM');
       if (!date || !amt) continue;
       const parsedDate = ofxDate(date);
-      const parsedAmt = parseFloat(amt);
+      const parsedAmt = parseFloat(amt.replace(/[^0-9.\-]/g, ''));
       if (!parsedDate || isNaN(parsedAmt)) continue;
-      results.push({ transaction_date: parsedDate, description: name || null, amount: Math.round(parsedAmt * 100), check_number: check || null });
+      results.push({
+        transaction_date: parsedDate,
+        description: name || null,
+        amount: Math.round(parsedAmt * 100),
+        check_number: check || null,
+      });
     }
   }
+
   return results;
 }
 
@@ -207,8 +246,7 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
     const isOfx = /\.(ofx|qfx|qbo)$/.test(filename);
 
     if (isOfx) {
-      const content = req.file.buffer.toString('utf8');
-      const parsed = parseOfx(content);
+      const parsed = parseOfx(req.file.buffer);
       for (const p of parsed) {
         rows.push({ client_id: clientId, period_id: periodId, source_account_id: sourceAccountId, classification_status: 'unclassified', ...p });
       }
@@ -273,7 +311,10 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
     }
 
     if (rows.length === 0) {
-      res.status(400).json({ data: null, error: { code: 'EMPTY_FILE', message: 'No valid rows found in CSV' } });
+      const hint = isOfx
+        ? 'No STMTTRN blocks found. Verify the file is a valid OFX/QFX/QBO export and contains transaction data.'
+        : 'No valid rows found. Check that the file has a header row with Date and Amount columns.';
+      res.status(400).json({ data: null, error: { code: 'EMPTY_FILE', message: hint } });
       return;
     }
 
