@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-// Font size range: 11–18px, default 14
+// Font size range: 11–36px, default 16, step 2 above 18
 const MIN_FONT = 11;
-const MAX_FONT = 18;
+const MAX_FONT = 36;
 
 export interface AuthUser {
   id: number;
@@ -49,8 +49,14 @@ export const useUIStore = create<UIStore>()(
       selectedPeriodId: null,
       setSelectedPeriodId: (id) => set({ selectedPeriodId: id }),
       fontSize: 16,
-      increaseFontSize: () => set((s) => ({ fontSize: Math.min(MAX_FONT, s.fontSize + 1) })),
-      decreaseFontSize: () => set((s) => ({ fontSize: Math.max(MIN_FONT, s.fontSize - 1) })),
+      increaseFontSize: () => set((s) => {
+        const step = s.fontSize >= 18 ? 2 : 1;
+        return { fontSize: Math.min(MAX_FONT, s.fontSize + step) };
+      }),
+      decreaseFontSize: () => set((s) => {
+        const step = s.fontSize > 18 ? 2 : 1;
+        return { fontSize: Math.max(MIN_FONT, s.fontSize - step) };
+      }),
     }),
     { name: 'ui-prefs', partialize: (s) => ({ fontSize: s.fontSize }) },
   ),
