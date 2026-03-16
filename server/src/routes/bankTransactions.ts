@@ -89,6 +89,20 @@ btCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<vo
   }
 });
 
+// ---- Flexible date parser ----
+// Handles YYYY-MM-DD, M/D/YYYY, MM/DD/YYYY, M/D/YY, M-D-YYYY variants
+function parseFlexDate(val: string): string | null {
+  const s = val.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const slash = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/.exec(s);
+  if (slash) {
+    const [, m, d, y] = slash;
+    const year = y.length === 2 ? (Number(y) >= 50 ? `19${y}` : `20${y}`) : y.padStart(4, '20');
+    return `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  return null;
+}
+
 // ---- OFX/QFX/QBO parser (handles both SGML 1.x and XML 2.x) ----
 
 interface ParsedTx {
@@ -188,29 +202,56 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
         rows.push({ client_id: clientId, period_id: periodId, classification_status: 'unclassified', ...p });
       }
     } else {
+      // Column mapping — explicit mapping from request body, or fall back to auto-detect
+      const dateCol: string = req.body.dateCol ?? '';
+      const descCol: string = req.body.descCol ?? '';
+      const amountCol: string = req.body.amountCol ?? '';
+      const debitCol: string = req.body.debitCol ?? '';
+      const creditCol: string = req.body.creditCol ?? '';
+      const checkCol: string = req.body.checkCol ?? '';
+
+      const pick = (row: Record<string, string>, explicit: string, fallbacks: string[]): string => {
+        if (explicit && row[explicit] !== undefined) return row[explicit];
+        for (const f of fallbacks) if (row[f] !== undefined) return row[f];
+        return '';
+      };
+
       await new Promise<void>((resolve, reject) => {
         const stream = Readable.from(req.file!.buffer);
         stream
           .pipe(parse({ headers: true, trim: true, ignoreEmpty: true }))
           .on('data', (row: Record<string, string>) => {
-            const dateVal = row['Date'] ?? row['date'] ?? row['Transaction Date'] ?? row['transaction_date'] ?? '';
-            const descVal = row['Description'] ?? row['description'] ?? row['Memo'] ?? row['memo'] ?? row['Payee'] ?? row['payee'] ?? '';
-            const amtVal = row['Amount'] ?? row['amount'] ?? row['Debit'] ?? row['debit'] ?? '';
-            const checkVal = row['Check'] ?? row['check'] ?? row['Check Number'] ?? row['check_number'] ?? '';
+            const dateRaw = pick(row, dateCol, ['Date', 'date', 'Transaction Date', 'transaction_date']);
+            const descRaw = pick(row, descCol, ['Description', 'description', 'Memo', 'memo', 'Payee', 'payee']);
+            const checkRaw = pick(row, checkCol, ['Check', 'check', 'Check Number', 'check_number']);
 
-            if (!dateVal || !amtVal) return;
+            if (!dateRaw) return;
 
-            const amtStr = amtVal.replace(/[^0-9.\-]/g, '');
-            const amtDollars = parseFloat(amtStr);
+            const transaction_date = parseFlexDate(dateRaw);
+            if (!transaction_date) return;
+
+            // Amount: explicit signed column, or debit/credit split, or auto-detect
+            let amtDollars: number;
+            if (amountCol && row[amountCol] !== undefined) {
+              amtDollars = parseFloat(row[amountCol].replace(/[^0-9.\-]/g, ''));
+            } else if (debitCol || creditCol) {
+              const dr = debitCol ? parseFloat((row[debitCol] ?? '0').replace(/[^0-9.\-]/g, '')) || 0 : 0;
+              const cr = creditCol ? parseFloat((row[creditCol] ?? '0').replace(/[^0-9.\-]/g, '')) || 0 : 0;
+              amtDollars = dr - cr;
+            } else {
+              const raw = pick(row, '', ['Amount', 'amount', 'Debit', 'debit']);
+              amtDollars = parseFloat(raw.replace(/[^0-9.\-]/g, ''));
+            }
+
             if (isNaN(amtDollars)) return;
 
             rows.push({
               client_id: clientId,
               period_id: periodId,
-              transaction_date: dateVal.trim(),
-              description: descVal.trim() || null,
+              transaction_date,
+              description: descRaw.trim() || null,
               amount: Math.round(amtDollars * 100),
-              check_number: checkVal.trim() || null,
+              check_number: checkRaw.trim() || null,
               classification_status: 'unclassified',
             });
           })

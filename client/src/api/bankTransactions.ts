@@ -40,10 +40,35 @@ export const listBankTransactions = (clientId: number, params?: { periodId?: num
   return apiFetch<BankTransaction[]>(`/clients/${clientId}/bank-transactions${q ? `?${q}` : ''}`);
 };
 
-export const importBankTransactions = (clientId: number, file: File, periodId?: number) => {
+export interface CsvMapping {
+  dateCol: string;
+  descCol: string;
+  amountMode: 'single' | 'split';
+  amountCol: string;
+  debitCol: string;
+  creditCol: string;
+  checkCol: string;
+}
+
+export const importBankTransactions = (
+  clientId: number,
+  file: File,
+  options?: { periodId?: number; mapping?: CsvMapping },
+) => {
   const formData = new FormData();
   formData.append('file', file);
-  if (periodId) formData.append('periodId', String(periodId));
+  if (options?.periodId) formData.append('periodId', String(options.periodId));
+  if (options?.mapping) {
+    const m = options.mapping;
+    if (m.dateCol) formData.append('dateCol', m.dateCol);
+    if (m.descCol) formData.append('descCol', m.descCol);
+    if (m.amountMode === 'single' && m.amountCol) formData.append('amountCol', m.amountCol);
+    if (m.amountMode === 'split') {
+      if (m.debitCol) formData.append('debitCol', m.debitCol);
+      if (m.creditCol) formData.append('creditCol', m.creditCol);
+    }
+    if (m.checkCol) formData.append('checkCol', m.checkCol);
+  }
   return apiFetch<{ imported: number }>(`/clients/${clientId}/bank-transactions/import`, {
     method: 'POST',
     body: formData,

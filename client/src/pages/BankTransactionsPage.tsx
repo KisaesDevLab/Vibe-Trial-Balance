@@ -10,6 +10,7 @@ import {
   deleteClassificationRule,
   type BankTransaction,
   type ClassificationStatus,
+  type CsvMapping,
 } from '../api/bankTransactions';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { useUIStore } from '../store/uiStore';
@@ -54,10 +55,15 @@ export function BankTransactionsPage() {
   const [filterPeriod, setFilterPeriod] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [showImport, setShowImport] = useState(false);
+  const [importStep, setImportStep] = useState<'file' | 'mapping'>('file');
   const [showRules, setShowRules] = useState(false);
   const [aiStatus, setAiStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importHeaders, setImportHeaders] = useState<string[]>([]);
+  const [importMapping, setImportMapping] = useState<CsvMapping>({
+    dateCol: '', descCol: '', amountMode: 'single', amountCol: '', debitCol: '', creditCol: '', checkCol: '',
+  });
   const [importError, setImportError] = useState<string | null>(null);
 
   const clientId = selectedClientId;
@@ -102,16 +108,59 @@ export function BankTransactionsPage() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ['bank-transactions', clientId] });
 
   const importMutation = useMutation({
-    mutationFn: ({ file, periodId }: { file: File; periodId?: number }) =>
-      importBankTransactions(clientId!, file, periodId),
+    mutationFn: ({ file, mapping }: { file: File; mapping?: CsvMapping }) =>
+      importBankTransactions(clientId!, file, { periodId: selectedPeriodId ?? undefined, mapping }),
     onSuccess: (res) => {
       if (res.error) { setImportError(res.error.message); return; }
       invalidate();
-      setShowImport(false);
-      setImportFile(null);
-      setImportError(null);
+      closeImport();
     },
   });
+
+  const closeImport = () => {
+    setShowImport(false);
+    setImportStep('file');
+    setImportFile(null);
+    setImportHeaders([]);
+    setImportMapping({ dateCol: '', descCol: '', amountMode: 'single', amountCol: '', debitCol: '', creditCol: '', checkCol: '' });
+    setImportError(null);
+  };
+
+  const isOfxFile = (f: File) => /\.(ofx|qfx|qbo)$/i.test(f.name);
+
+  const bestMatch = (headers: string[], candidates: string[]): string =>
+    candidates.find((c) => headers.some((h) => h.toLowerCase() === c.toLowerCase())) ?? '';
+
+  const autoDetectMapping = (headers: string[]): CsvMapping => ({
+    dateCol: bestMatch(headers, ['Date', 'Transaction Date', 'date', 'transaction_date']),
+    descCol: bestMatch(headers, ['Description', 'Memo', 'Payee', 'description', 'memo', 'payee']),
+    amountMode: headers.some((h) => /debit/i.test(h)) && headers.some((h) => /credit/i.test(h)) ? 'split' : 'single',
+    amountCol: bestMatch(headers, ['Amount', 'amount']),
+    debitCol: bestMatch(headers, ['Debit', 'debit', 'Withdrawal', 'withdrawal']),
+    creditCol: bestMatch(headers, ['Credit', 'credit', 'Deposit', 'deposit']),
+    checkCol: bestMatch(headers, ['Check', 'Check Number', 'check', 'check_number']),
+  });
+
+  const handleFileSelected = (file: File) => {
+    setImportFile(file);
+    setImportError(null);
+    if (isOfxFile(file)) {
+      setImportStep('file');
+      return;
+    }
+    // CSV: read first line to get headers
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = (e.target?.result as string) ?? '';
+      const firstLine = text.split(/\r?\n/)[0];
+      // Handle quoted headers
+      const headers = firstLine.split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+      setImportHeaders(headers);
+      setImportMapping(autoDetectMapping(headers));
+      setImportStep('mapping');
+    };
+    reader.readAsText(file);
+  };
 
   const classifyMutation = useMutation({
     mutationFn: ({ id, accountId }: { id: number; accountId: number }) =>
@@ -190,7 +239,7 @@ export function BankTransactionsPage() {
             Rules {rulesData ? `(${rulesData.length})` : ''}
           </button>
           <button
-            onClick={() => { setShowImport(true); setImportError(null); }}
+            onClick={() => { setShowImport(true); setImportStep('file'); setImportError(null); }}
             className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
           >
             Import Transactions
@@ -349,53 +398,139 @@ export function BankTransactionsPage() {
         </div>
       )}
 
-      {/* Import CSV Modal */}
+      {/* Import Modal */}
       {showImport && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
             <div className="flex items-center justify-between px-5 py-4 border-b">
-              <h2 className="text-base font-semibold">Import Transactions</h2>
-              <button onClick={() => { setShowImport(false); setImportFile(null); setImportError(null); }} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+              <h2 className="text-base font-semibold">
+                Import Transactions{importStep === 'mapping' ? ' — Map Columns' : ''}
+              </h2>
+              <button onClick={closeImport} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
             </div>
             <div className="px-5 py-4 space-y-4">
               {importError && (
                 <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{importError}</div>
               )}
-              <p className="text-sm text-gray-600">
-                Supported formats: <strong>OFX / QFX / QBO</strong> (bank export), or <strong>CSV</strong> with columns Date, Description, Amount, and optionally Check Number.
-              </p>
-              <div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".csv,.ofx,.qfx,.qbo,text/csv"
-                  onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
-                  className="block w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
-                />
-              </div>
-              {importFile && (
-                <p className="text-xs text-gray-500">{importFile.name} ({(importFile.size / 1024).toFixed(1)} KB)</p>
+
+              {/* Step 1: File selection */}
+              {importStep === 'file' && (
+                <>
+                  <p className="text-sm text-gray-600">
+                    Supported: <strong>OFX / QFX / QBO</strong> (bank export) or <strong>CSV</strong>.
+                  </p>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.ofx,.qfx,.qbo,text/csv"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelected(f); }}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                  />
+                  {importFile && (
+                    <p className="text-xs text-gray-500">{importFile.name} ({(importFile.size / 1024).toFixed(1)} KB)</p>
+                  )}
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button onClick={closeImport} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+                    {importFile && isOfxFile(importFile) && (
+                      <button
+                        onClick={() => importMutation.mutate({ file: importFile })}
+                        disabled={importMutation.isPending}
+                        className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        {importMutation.isPending ? 'Importing…' : 'Import'}
+                      </button>
+                    )}
+                  </div>
+                </>
               )}
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  onClick={() => { setShowImport(false); setImportFile(null); setImportError(null); }}
-                  className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
-                >Cancel</button>
-                <button
-                  onClick={() => {
-                    if (!importFile || !clientId) return;
-                    importMutation.mutate({ file: importFile, periodId: selectedPeriodId ?? undefined });
-                  }}
-                  disabled={!importFile || importMutation.isPending}
-                  className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {importMutation.isPending ? 'Importing…' : 'Import'}
-                </button>
-              </div>
+
+              {/* Step 2: Column mapping (CSV only) */}
+              {importStep === 'mapping' && (
+                <>
+                  <p className="text-xs text-gray-500 -mt-1">
+                    {importFile?.name} — {importHeaders.length} columns detected. Unset optional fields to skip.
+                  </p>
+                  <ColMapRow label="Date *" headers={importHeaders} value={importMapping.dateCol}
+                    onChange={(v) => setImportMapping((m) => ({ ...m, dateCol: v }))} />
+                  <ColMapRow label="Description" headers={importHeaders} value={importMapping.descCol}
+                    onChange={(v) => setImportMapping((m) => ({ ...m, descCol: v }))} optional />
+
+                  {/* Amount mode toggle */}
+                  <div>
+                    <span className="block text-xs font-medium text-gray-700 mb-1">Amount columns</span>
+                    <div className="flex gap-4 mb-2">
+                      {(['single', 'split'] as const).map((mode) => (
+                        <label key={mode} className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer">
+                          <input type="radio" name="amountMode" value={mode}
+                            checked={importMapping.amountMode === mode}
+                            onChange={() => setImportMapping((m) => ({ ...m, amountMode: mode }))}
+                          />
+                          {mode === 'single' ? 'Single signed column' : 'Separate Debit / Credit columns'}
+                        </label>
+                      ))}
+                    </div>
+                    {importMapping.amountMode === 'single' ? (
+                      <ColMapRow label="Amount *" headers={importHeaders} value={importMapping.amountCol}
+                        onChange={(v) => setImportMapping((m) => ({ ...m, amountCol: v }))} />
+                    ) : (
+                      <div className="grid grid-cols-2 gap-3">
+                        <ColMapRow label="Debit col" headers={importHeaders} value={importMapping.debitCol}
+                          onChange={(v) => setImportMapping((m) => ({ ...m, debitCol: v }))} optional />
+                        <ColMapRow label="Credit col" headers={importHeaders} value={importMapping.creditCol}
+                          onChange={(v) => setImportMapping((m) => ({ ...m, creditCol: v }))} optional />
+                      </div>
+                    )}
+                  </div>
+
+                  <ColMapRow label="Check #" headers={importHeaders} value={importMapping.checkCol}
+                    onChange={(v) => setImportMapping((m) => ({ ...m, checkCol: v }))} optional />
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button onClick={() => setImportStep('file')} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Back</button>
+                    <button
+                      onClick={() => { if (importFile) importMutation.mutate({ file: importFile, mapping: importMapping }); }}
+                      disabled={
+                        !importFile || importMutation.isPending ||
+                        !importMapping.dateCol ||
+                        (importMapping.amountMode === 'single' && !importMapping.amountCol)
+                      }
+                      className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {importMutation.isPending ? 'Importing…' : 'Import'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ColMapRow({
+  label, headers, value, onChange, optional,
+}: {
+  label: string;
+  headers: string[];
+  value: string;
+  onChange: (v: string) => void;
+  optional?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-xs font-medium text-gray-700 w-28 shrink-0">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+      >
+        <option value="">{optional ? '— skip —' : 'Select column…'}</option>
+        {headers.map((h) => (
+          <option key={h} value={h}>{h}</option>
+        ))}
+      </select>
     </div>
   );
 }
