@@ -193,7 +193,7 @@ export function BankTransactionsPage() {
             onClick={() => { setShowImport(true); setImportError(null); }}
             className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
           >
-            Import CSV
+            Import Transactions
           </button>
           {selected.size > 0 && (
             <button
@@ -354,7 +354,7 @@ export function BankTransactionsPage() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
             <div className="flex items-center justify-between px-5 py-4 border-b">
-              <h2 className="text-base font-semibold">Import CSV</h2>
+              <h2 className="text-base font-semibold">Import Transactions</h2>
               <button onClick={() => { setShowImport(false); setImportFile(null); setImportError(null); }} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
             </div>
             <div className="px-5 py-4 space-y-4">
