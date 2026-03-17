@@ -17,6 +17,8 @@ import { diagnosticsRouter } from './routes/diagnostics';
 import { reconciliationCollectionRouter, reconciliationItemRouter } from './routes/reconciliations';
 import { m1CollectionRouter, m1ItemRouter } from './routes/taxWorkpapers';
 import { engagementCollectionRouter, engagementItemRouter, engagementSummaryRouter } from './routes/engagement';
+import { cashFlowRouter } from './routes/cashFlow';
+import { savedReportCollectionRouter, savedReportItemRouter } from './routes/savedReports';
 import { db } from './db';
 
 const app = express();
@@ -62,6 +64,9 @@ app.use('/api/v1/m1-adjustments/:id', m1ItemRouter);
 app.use('/api/v1/periods/:periodId/engagement-tasks', engagementCollectionRouter);
 app.use('/api/v1/engagement-tasks/:id', engagementItemRouter);
 app.use('/api/v1/engagement-summary', engagementSummaryRouter);
+app.use('/api/v1/periods/:periodId/cash-flow', cashFlowRouter);
+app.use('/api/v1/clients/:clientId/saved-reports', savedReportCollectionRouter);
+app.use('/api/v1/saved-reports/:id', savedReportItemRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

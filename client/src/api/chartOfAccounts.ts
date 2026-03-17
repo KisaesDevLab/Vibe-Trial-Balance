@@ -13,6 +13,7 @@ export interface Account {
   preparer_notes: string | null;
   reviewer_notes: string | null;
   sort_order: number;
+  cash_flow_category: 'operating' | 'investing' | 'financing' | 'non_cash' | 'cash' | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -29,6 +30,7 @@ export interface AccountInput {
   preparerNotes?: string;
   reviewerNotes?: string;
   sortOrder?: number;
+  cashFlowCategory?: 'operating' | 'investing' | 'financing' | 'non_cash' | 'cash' | null;
 }
 
 export const listAccounts = (clientId: number) =>

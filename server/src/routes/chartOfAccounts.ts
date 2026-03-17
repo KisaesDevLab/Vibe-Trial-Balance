@@ -22,6 +22,7 @@ const accountSchema = z.object({
   preparerNotes: z.string().optional(),
   reviewerNotes: z.string().optional(),
   sortOrder: z.number().int().optional(),
+  cashFlowCategory: z.enum(['operating', 'investing', 'financing', 'non_cash', 'cash']).optional().nullable(),
 });
 
 // GET /api/v1/clients/:clientId/chart-of-accounts
@@ -94,6 +95,7 @@ coaCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<v
         preparer_notes: preparerNotes ?? null,
         reviewer_notes: reviewerNotes ?? null,
         sort_order: sortOrder ?? 0,
+        cash_flow_category: result.data.cashFlowCategory ?? null,
         is_active: true,
       })
       .returning('*');
@@ -305,7 +307,8 @@ coaItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<voi
   if (d.workpaperRef !== undefined) updates.workpaper_ref = d.workpaperRef;
   if (d.preparerNotes !== undefined) updates.preparer_notes = d.preparerNotes;
   if (d.reviewerNotes !== undefined) updates.reviewer_notes = d.reviewerNotes;
-  if (d.sortOrder !== undefined) updates.sort_order = d.sortOrder;
+  if (d.sortOrder          !== undefined) updates.sort_order         = d.sortOrder;
+  if (d.cashFlowCategory   !== undefined) updates.cash_flow_category = d.cashFlowCategory;
 
   try {
     const [updated] = await db('chart_of_accounts').where({ id }).update(updates).returning('*');

@@ -15,6 +15,8 @@ const NAV_ITEMS = [
   { to: '/tax-worksheets', label: 'Tax Worksheets' },
   { to: '/engagement', label: 'Engagement' },
   { to: '/financial-statements', label: 'Financial Statements' },
+  { to: '/cash-flow', label: 'Cash Flow Statement' },
+  { to: '/custom-reports', label: 'Custom Reports' },
   { to: '/trial-balance-report', label: 'TB Report' },
   { to: '/general-ledger', label: 'General Ledger' },
   { to: '/tax-code-report', label: 'Tax Code Report' },

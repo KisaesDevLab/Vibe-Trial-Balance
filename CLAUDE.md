@@ -15,7 +15,7 @@
 - API routes return: { data, error, meta }
 
 ## Current Phase
-Phase 11: Engagement Management (complete)
+Phase 12: Reporting Enhancements (complete)
 
 ## Completed
 - Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods
@@ -42,3 +42,7 @@ Phase 11: Engagement Management (complete)
 - Phase 11: Engagement Management — engagement_tasks table, Period Checklist (CRUD, status
   workflow open→in_progress→review→completed→n_a, assignees, progress bar, templates modal
   with 10 common tasks), All Open Items cross-client summary view grouped by client/period
+- Phase 12: Reporting Enhancements — cash_flow_category on COA, Cash Flow Statement (indirect
+  method; operating/investing/financing sections, net change reconciliation, Configure Mapping
+  tab for per-account category assignment), Custom Report Builder (saved_reports table, section
+  management, account picker, column selector book/tax/prior-year, inline preview)
