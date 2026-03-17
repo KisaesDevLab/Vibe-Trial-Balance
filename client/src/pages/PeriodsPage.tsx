@@ -12,7 +12,7 @@ import {
   type PeriodInput,
   type RollForwardInput,
 } from '../api/periods';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, useAuthStore } from '../store/uiStore';
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
   return (
@@ -189,6 +189,7 @@ function RollForwardModal({ source, onClose, onSuccess }: { source: Period; onCl
 
 export function PeriodsPage() {
   const { selectedClientId, setSelectedPeriodId } = useUIStore();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [editPeriod, setEditPeriod] = useState<Period | null>(null);
@@ -315,12 +316,14 @@ export function PeriodsPage() {
                       {p.locked_at ? (
                         <div className="flex items-center gap-2">
                           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Locked</span>
-                          <button
-                            onClick={() => unlockMutation.mutate(p.id)}
-                            className="text-xs text-gray-400 hover:text-blue-600"
-                          >
-                            Unlock
-                          </button>
+                          {isAdmin && (
+                            <button
+                              onClick={() => { if (confirm(`Unlock "${p.period_name}"? Changes will be permitted again.`)) unlockMutation.mutate(p.id); }}
+                              className="text-xs text-gray-400 hover:text-blue-600"
+                            >
+                              Unlock
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <button

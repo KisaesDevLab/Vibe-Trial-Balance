@@ -136,8 +136,12 @@ periodItemRouter.post('/:id/lock', async (req: AuthRequest, res: Response): Prom
   }
 });
 
-// POST /api/v1/periods/:id/unlock
+// POST /api/v1/periods/:id/unlock  (admin only)
 periodItemRouter.post('/:id/unlock', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Only admins can unlock periods.' } });
+    return;
+  }
   const id = Number(req.params.id);
   if (isNaN(id)) {
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
