@@ -195,6 +195,7 @@ export function PeriodsPage() {
   const [editPeriod, setEditPeriod] = useState<Period | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [rollForwardSource, setRollForwardSource] = useState<Period | null>(null);
+  const [lockError, setLockError] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['periods', selectedClientId],
@@ -232,7 +233,11 @@ export function PeriodsPage() {
 
   const lockMutation = useMutation({
     mutationFn: lockPeriod,
-    onSuccess: () => invalidate(),
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'Lock failed';
+      setLockError(msg);
+    },
+    onSuccess: () => { setLockError(null); invalidate(); },
   });
 
   const unlockMutation = useMutation({
@@ -270,6 +275,12 @@ export function PeriodsPage() {
 
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">{error.message}</div>
+      )}
+
+      {lockError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 text-sm rounded mb-3">
+          {lockError}
+        </div>
       )}
 
       {isLoading ? (
@@ -319,6 +330,7 @@ export function PeriodsPage() {
                           {isAdmin && (
                             <button
                               onClick={() => { if (confirm(`Unlock "${p.period_name}"? Changes will be permitted again.`)) unlockMutation.mutate(p.id); }}
+                              title="Unlock this period to allow changes"
                               className="text-xs text-gray-400 hover:text-blue-600"
                             >
                               Unlock
@@ -327,7 +339,8 @@ export function PeriodsPage() {
                         </div>
                       ) : (
                         <button
-                          onClick={() => { if (confirm(`Lock "${p.period_name}"? No changes can be made until unlocked.`)) lockMutation.mutate(p.id); }}
+                          onClick={() => { if (confirm(`Lock "${p.period_name}"? No changes can be made until unlocked.`)) { setLockError(null); lockMutation.mutate(p.id); } }}
+                          title="Lock this period"
                           className="text-xs text-gray-400 hover:text-amber-600"
                         >
                           Lock
@@ -350,6 +363,7 @@ export function PeriodsPage() {
                       <button
                         onClick={() => { setEditPeriod(p); setFormError(null); }}
                         disabled={!!p.locked_at}
+                        title={p.locked_at ? 'Period is locked. Unlock it to edit.' : 'Edit period'}
                         className="text-xs text-blue-600 hover:text-blue-800 mr-3 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         Edit
@@ -357,6 +371,7 @@ export function PeriodsPage() {
                       <button
                         onClick={() => { if (confirm(`Delete "${p.period_name}"?`)) deleteMutation.mutate(p.id); }}
                         disabled={!!p.locked_at}
+                        title={p.locked_at ? 'Period is locked. Unlock it to delete.' : 'Delete period'}
                         className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         Delete

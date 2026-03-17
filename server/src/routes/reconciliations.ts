@@ -236,6 +236,37 @@ reconciliationItemRouter.post('/complete', async (req: AuthRequest, res: Respons
   }
 });
 
+// POST /api/v1/reconciliations/:id/reopen  (admin only)
+reconciliationItemRouter.post('/reopen', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Only admins can reopen reconciliations.' } });
+    return;
+  }
+  const id = Number(req.params.id);
+  if (isNaN(id)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid ID' } });
+    return;
+  }
+  try {
+    const rec = await db('bank_reconciliations').where({ id }).first('id', 'status');
+    if (!rec) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Not found' } });
+      return;
+    }
+    if (rec.status !== 'completed') {
+      res.status(409).json({ data: null, error: { code: 'NOT_COMPLETED', message: 'Reconciliation is not completed' } });
+      return;
+    }
+    const [updated] = await db('bank_reconciliations')
+      .where({ id })
+      .update({ status: 'open', completed_by: null, completed_at: null })
+      .returning('*');
+    res.json({ data: { ...updated, statement_ending_balance: Number(updated.statement_ending_balance), beginning_book_balance: Number(updated.beginning_book_balance) }, error: null });
+  } catch (err: unknown) {
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+  }
+});
+
 // DELETE /api/v1/reconciliations/:id
 reconciliationItemRouter.delete('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const id = Number(req.params.id);

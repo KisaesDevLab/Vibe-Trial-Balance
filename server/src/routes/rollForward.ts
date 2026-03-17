@@ -68,6 +68,19 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
         );
       }
 
+      // Copy tickmark assignments
+      const tbTickmarks = await trx('tb_tickmarks').where({ period_id: sourceId });
+      if (tbTickmarks.length > 0) {
+        await trx('tb_tickmarks').insert(
+          tbTickmarks.map((tm: { account_id: number; tickmark_id: number }) => ({
+            period_id: period.id,
+            account_id: tm.account_id,
+            tickmark_id: tm.tickmark_id,
+            created_by: req.user!.userId,
+          }))
+        );
+      }
+
       // Copy recurring JEs
       let jeCopied = 0;
       if (copyRecurringJEs) {
@@ -113,7 +126,7 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
         entityType: 'period',
         entityId: period.id,
         action: 'create',
-        description: `Rolled forward from "${sourcePeriod.period_name}" — ${tbRows.length} TB accounts, ${jeCopied} recurring JEs copied`,
+        description: `Rolled forward from "${sourcePeriod.period_name}" — ${tbRows.length} TB accounts, ${jeCopied} recurring JEs, ${tbTickmarks.length} tickmark assignments copied`,
       }, trx);
 
       return { period, tbCount: tbRows.length, jeCopied };

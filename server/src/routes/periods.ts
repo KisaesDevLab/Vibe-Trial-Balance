@@ -120,6 +120,17 @@ periodItemRouter.post('/:id/lock', async (req: AuthRequest, res: Response): Prom
     return;
   }
   try {
+    // Check TB is balanced before allowing lock
+    const tbRows = await db('v_adjusted_trial_balance').where({ period_id: id });
+    if (tbRows.length > 0) {
+      const bkDr = tbRows.reduce((s: number, r: Record<string,unknown>) => s + Number(r.book_adjusted_debit), 0);
+      const bkCr = tbRows.reduce((s: number, r: Record<string,unknown>) => s + Number(r.book_adjusted_credit), 0);
+      if (Math.abs(bkDr - bkCr) > 0) {
+        const diff = (Math.abs(bkDr - bkCr) / 100).toFixed(2);
+        res.status(409).json({ data: null, error: { code: 'TB_OUT_OF_BALANCE', message: `Trial balance is out of balance by $${diff}. Resolve before locking.` } });
+        return;
+      }
+    }
     const [updated] = await db('periods')
       .where({ id })
       .update({ locked_at: db.fn.now(), locked_by: req.user!.userId })

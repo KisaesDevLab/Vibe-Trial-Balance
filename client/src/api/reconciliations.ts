@@ -73,3 +73,6 @@ export const completeReconciliation = (id: number) =>
 
 export const deleteReconciliation = (id: number) =>
   apiFetch<{ id: number }>(`/reconciliations/${id}`, { method: 'DELETE' });
+
+export const reopenReconciliation = (id: number) =>
+  apiFetch<Reconciliation>(`/reconciliations/${id}/reopen`, { method: 'POST' });

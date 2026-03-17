@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { runDiagnostics, type DiagnosticObservation } from '../api/diagnostics';
 import { useUIStore } from '../store/uiStore';
+import { Spinner } from '../components/Spinner';
 
 const SEVERITY_STYLES: Record<string, { badge: string; row: string; icon: string }> = {
   error:   { badge: 'bg-red-100 text-red-700 border border-red-200',    row: 'bg-red-50/60',     icon: '✕' },
@@ -66,15 +67,13 @@ export function DiagnosticsPage() {
         <button
           onClick={handleRun}
           disabled={loading}
+          title={loading ? 'AI diagnostics are running…' : undefined}
           className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
         >
           {loading ? (
             <>
-              <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-              </svg>
-              Analyzing…
+              <Spinner size="sm" />
+              Running…
             </>
           ) : (
             'Run AI Review'
@@ -97,7 +96,10 @@ export function DiagnosticsPage() {
 
       {loading && (
         <div className="bg-white rounded-lg border border-gray-200 px-6 py-12 text-center text-gray-400">
-          <p className="text-sm">Claude is reviewing the trial balance…</p>
+          <div className="flex items-center justify-center gap-3">
+            <Spinner size="lg" />
+            <p className="text-sm">Running AI diagnostics…</p>
+          </div>
         </div>
       )}
 

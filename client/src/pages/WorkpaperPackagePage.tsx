@@ -300,17 +300,17 @@ export function WorkpaperPackagePage() {
     queryFn:  () => listPeriods(selectedClientId!),
     enabled:  !!selectedClientId,
   });
-  const { data: tbData } = useQuery({
+  const { data: tbData, isLoading: tbLoading, error: tbError } = useQuery({
     queryKey: ['tb', selectedPeriodId],
     queryFn:  () => getTrialBalance(selectedPeriodId!),
     enabled:  !!selectedPeriodId && showPreview,
   });
-  const { data: tickmarkMapData } = useQuery({
+  const { data: tickmarkMapData, isLoading: tickmarkMapLoading, error: tickmarkMapError } = useQuery({
     queryKey: ['tb-tickmarks', selectedPeriodId],
     queryFn:  () => getTBTickmarks(selectedPeriodId!),
     enabled:  !!selectedPeriodId && showPreview,
   });
-  const { data: tickmarkLibData } = useQuery({
+  const { data: tickmarkLibData, isLoading: tickmarkLibLoading, error: tickmarkLibError } = useQuery({
     queryKey: ['tickmarks', selectedClientId],
     queryFn:  () => listTickmarks(selectedClientId!),
     enabled:  !!selectedClientId && showPreview,
@@ -393,7 +393,20 @@ export function WorkpaperPackagePage() {
             </div>
           </div>
 
+          {/* Error / loading guards */}
+          {(tbError || tickmarkMapError || tickmarkLibError || tbData?.error || tickmarkMapData?.error) && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4 mx-6 mt-4 print:hidden">
+              Failed to load workpaper data. Please refresh and try again.
+            </div>
+          )}
+          {(tbLoading || tickmarkMapLoading || tickmarkLibLoading) && (
+            <div className="px-6 py-8 text-center text-gray-500 text-sm print:hidden">
+              Loading preview…
+            </div>
+          )}
+
           {/* Package content */}
+          {!tbLoading && !tickmarkMapLoading && !tickmarkLibLoading && !tbError && !tickmarkMapError && !tickmarkLibError && (
           <div className="package-content">
             {/* Cover */}
             <CoverSection
@@ -436,6 +449,7 @@ export function WorkpaperPackagePage() {
               </>
             )}
           </div>
+          )}
         </div>
       )}
 

@@ -45,15 +45,33 @@ interface ModalProps {
   onSave: (input: M1Input) => void;
 }
 
+const AMOUNT_RE = /^-?\d+(\.\d{1,2})?$/;
+
+function isValidAmountStr(v: string): boolean {
+  const cleaned = v.replace(/[$,\s]/g, '');
+  return cleaned === '' || AMOUNT_RE.test(cleaned);
+}
+
 function M1Modal({ initial, onClose, onSave }: ModalProps) {
   const [description, setDescription] = useState(initial?.description ?? '');
   const [category, setCategory] = useState(initial?.category ?? '');
   const [bookStr, setBookStr] = useState(initial ? (initial.book_amount / 100).toFixed(2) : '');
   const [taxStr, setTaxStr] = useState(initial ? (initial.tax_amount / 100).toFixed(2) : '');
   const [notes, setNotes] = useState(initial?.notes ?? '');
+  const [amountError, setAmountError] = useState<string | null>(null);
+
+  function validateAmounts(): boolean {
+    if (!isValidAmountStr(bookStr) || !isValidAmountStr(taxStr)) {
+      setAmountError('Please enter a valid dollar amount (e.g. 1234.56)');
+      return false;
+    }
+    setAmountError(null);
+    return true;
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!validateAmounts()) return;
     onSave({
       description,
       category:  category || null,
@@ -64,6 +82,7 @@ function M1Modal({ initial, onClose, onSave }: ModalProps) {
   }
 
   const inputCls = 'w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500';
+  const inputErrCls = 'w-full border border-red-400 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-500';
   const labelCls = 'block text-xs font-medium text-gray-600 mb-1';
 
   return (
@@ -87,15 +106,28 @@ function M1Modal({ initial, onClose, onSave }: ModalProps) {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={labelCls}>Book Amount ($)</label>
-            <input className={inputCls} value={bookStr} onChange={e => setBookStr(e.target.value)}
-              placeholder="0.00" />
+            <input
+              className={amountError ? inputErrCls : inputCls}
+              value={bookStr}
+              onChange={e => { setBookStr(e.target.value); setAmountError(null); }}
+              onBlur={validateAmounts}
+              placeholder="0.00"
+            />
           </div>
           <div>
             <label className={labelCls}>Tax Amount ($)</label>
-            <input className={inputCls} value={taxStr} onChange={e => setTaxStr(e.target.value)}
-              placeholder="0.00" />
+            <input
+              className={amountError ? inputErrCls : inputCls}
+              value={taxStr}
+              onChange={e => { setTaxStr(e.target.value); setAmountError(null); }}
+              onBlur={validateAmounts}
+              placeholder="0.00"
+            />
           </div>
         </div>
+        {amountError && (
+          <p className="text-xs text-red-600 -mt-2">{amountError}</p>
+        )}
 
         <div>
           <label className={labelCls}>Notes</label>
@@ -107,8 +139,8 @@ function M1Modal({ initial, onClose, onSave }: ModalProps) {
             className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">
             Cancel
           </button>
-          <button type="submit"
-            className="px-3 py-1.5 text-sm bg-teal-600 text-white rounded hover:bg-teal-700">
+          <button type="submit" disabled={!!amountError}
+            className="px-3 py-1.5 text-sm bg-teal-600 text-white rounded hover:bg-teal-700 disabled:opacity-50">
             Save
           </button>
         </div>

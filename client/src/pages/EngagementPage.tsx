@@ -45,9 +45,10 @@ interface ModalProps {
   userOptions: { id: number; display_name: string }[];
   onClose: () => void;
   onSave: (input: TaskInput) => void;
+  isPending?: boolean;
 }
 
-function TaskModal({ initial, userOptions, onClose, onSave }: ModalProps) {
+function TaskModal({ initial, userOptions, onClose, onSave, isPending = false }: ModalProps) {
   const [title,       setTitle]       = useState(initial?.title ?? '');
   const [category,    setCategory]    = useState(initial?.category ?? '');
   const [status,      setStatus]      = useState<TaskStatus>(initial?.status ?? 'open');
@@ -115,13 +116,13 @@ function TaskModal({ initial, userOptions, onClose, onSave }: ModalProps) {
         </div>
 
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" onClick={onClose}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">
+          <button type="button" onClick={onClose} disabled={isPending}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50">
             Cancel
           </button>
-          <button type="submit"
-            className="px-3 py-1.5 text-sm bg-teal-600 text-white rounded hover:bg-teal-700">
-            Save
+          <button type="submit" disabled={isPending}
+            className="px-3 py-1.5 text-sm bg-teal-600 text-white rounded hover:bg-teal-700 disabled:opacity-50">
+            {isPending ? 'Saving…' : 'Save'}
           </button>
         </div>
       </form>
@@ -378,12 +379,14 @@ function ChecklistTab({ periodId }: { periodId: number }) {
       {/* Modals */}
       {modal === 'new' && (
         <TaskModal userOptions={users} onClose={() => setModal(null)}
-          onSave={input => createMut.mutate(input)} />
+          onSave={input => createMut.mutate(input)}
+          isPending={createMut.isPending} />
       )}
       {modal && modal !== 'new' && (
         <TaskModal initial={modal as EngagementTask} userOptions={users}
           onClose={() => setModal(null)}
-          onSave={input => updateMut.mutate({ id: (modal as EngagementTask).id, input })} />
+          onSave={input => updateMut.mutate({ id: (modal as EngagementTask).id, input })}
+          isPending={updateMut.isPending} />
       )}
       {showTemplates && (
         <TemplatesModal onClose={() => setShowTemplates(false)}
@@ -395,7 +398,11 @@ function ChecklistTab({ periodId }: { periodId: number }) {
 
 // ── Open Items Tab ────────────────────────────────────────────────────────────
 
-function OpenItemsTab() {
+interface OpenItemsTabProps {
+  onViewChecklist: (clientId: number, periodId: number) => void;
+}
+
+function OpenItemsTab({ onViewChecklist }: OpenItemsTabProps) {
   const { data } = useQuery({
     queryKey: ['engagement-summary'],
     queryFn:  getEngagementSummary,
@@ -429,7 +436,14 @@ function OpenItemsTab() {
           <h3 className="text-sm font-bold text-gray-800 border-b border-gray-200 pb-1">{client_name}</h3>
           {Object.entries(periods).map(([periodId, { period_name, tasks }]) => (
             <div key={periodId} className="pl-3 space-y-1">
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{period_name}</div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{period_name}</div>
+                <button
+                  onClick={() => onViewChecklist(Number(clientId), Number(periodId))}
+                  className="text-xs text-teal-600 hover:text-teal-800 hover:underline font-medium flex items-center gap-0.5">
+                  View Checklist →
+                </button>
+              </div>
               {tasks.map(task => (
                 <div key={task.id} className="flex items-start gap-3 py-1.5 border-b border-gray-100">
                   <StatusBadge status={task.status} />
@@ -458,7 +472,14 @@ type Tab = 'checklist' | 'open-items';
 
 export function EngagementPage() {
   const [tab, setTab] = useState<Tab>('checklist');
-  const { selectedClientId, selectedPeriodId } = useUIStore();
+  const { selectedClientId, selectedPeriodId, setSelectedClientId, setSelectedPeriodId } = useUIStore();
+
+  function handleViewChecklist(clientId: number, periodId: number) {
+    setSelectedClientId(clientId);   // also resets selectedPeriodId to null in the store
+    setSelectedPeriodId(periodId);
+    setTab('checklist');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 
   const { data: periodsData } = useQuery({
     queryKey: ['periods', selectedClientId],
@@ -498,7 +519,7 @@ export function EngagementPage() {
           ? <ChecklistTab periodId={selectedPeriodId} />
           : <div className="py-8 text-center text-gray-400 text-sm">Select a client and period to view the checklist.</div>
       )}
-      {tab === 'open-items' && <OpenItemsTab />}
+      {tab === 'open-items' && <OpenItemsTab onViewChecklist={handleViewChecklist} />}
     </div>
   );
 }

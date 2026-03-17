@@ -20,6 +20,7 @@ import { engagementCollectionRouter, engagementItemRouter, engagementSummaryRout
 import { cashFlowRouter } from './routes/cashFlow';
 import { tickmarkLibraryCollectionRouter, tickmarkLibraryItemRouter, tbTickmarkRouter } from './routes/tickmarks';
 import { savedReportCollectionRouter, savedReportItemRouter } from './routes/savedReports';
+import { varianceNotesRouter } from './routes/varianceNotes';
 import { db } from './db';
 
 const app = express();
@@ -71,6 +72,7 @@ app.use('/api/v1/tickmarks/:id', tickmarkLibraryItemRouter);
 app.use('/api/v1/periods/:periodId/tb-tickmarks', tbTickmarkRouter);
 app.use('/api/v1/clients/:clientId/saved-reports', savedReportCollectionRouter);
 app.use('/api/v1/saved-reports/:id', savedReportItemRouter);
+app.use('/api/v1/periods/:periodId/variance-notes', varianceNotesRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

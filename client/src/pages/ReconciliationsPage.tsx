@@ -8,12 +8,13 @@ import {
   toggleReconciliationItem,
   completeReconciliation,
   deleteReconciliation,
+  reopenReconciliation,
   type Reconciliation,
   type ReconciliationTransaction,
 } from '../api/reconciliations';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { listPeriods } from '../api/periods';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, useAuthStore } from '../store/uiStore';
 
 function fmt(cents: number): string {
   const abs = Math.abs(cents);
@@ -32,12 +33,14 @@ function NewReconciliationModal({
   clientId,
   accounts,
   periodId,
+  periods,
   onClose,
   onCreate,
 }: {
   clientId: number;
   accounts: Account[];
   periodId: number | null;
+  periods: Array<{ id: number; locked_at?: string | null }>;
   onClose: () => void;
   onCreate: (id: number) => void;
 }) {
@@ -49,6 +52,9 @@ function NewReconciliationModal({
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  const selectedPeriod = periodId ? periods.find((p) => p.id === periodId) : null;
+  const isPeriodLocked = !!selectedPeriod?.locked_at;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -80,6 +86,11 @@ function NewReconciliationModal({
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
         </div>
         <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
+          {isPeriodLocked && (
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+              This period is locked and cannot have new reconciliations added.
+            </p>
+          )}
           {error && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</p>}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">Bank Account</label>
@@ -136,7 +147,12 @@ function NewReconciliationModal({
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
-            <button type="submit" disabled={saving} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+            <button
+              type="submit"
+              disabled={saving || isPeriodLocked}
+              title={isPeriodLocked ? 'Period is locked. Unlock it to add reconciliations.' : undefined}
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+            >
               {saving ? 'Creating…' : 'Create'}
             </button>
           </div>
@@ -368,9 +384,11 @@ function TxnList({
 
 export function ReconciliationsPage() {
   const { selectedClientId, selectedPeriodId } = useUIStore();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const qc = useQueryClient();
   const [showNew, setShowNew] = useState(false);
   const [activeRecId, setActiveRecId] = useState<number | null>(null);
+  const [reopenMessage, setReopenMessage] = useState<string | null>(null);
 
   const { data: accounts } = useQuery({
     queryKey: ['accounts', selectedClientId],
@@ -404,6 +422,15 @@ export function ReconciliationsPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteReconciliation,
     onSuccess: () => qc.invalidateQueries({ queryKey: listQueryKey }),
+  });
+
+  const reopenMutation = useMutation({
+    mutationFn: reopenReconciliation,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['reconciliations', selectedClientId] });
+      setReopenMessage('Reconciliation reopened successfully.');
+      setTimeout(() => setReopenMessage(null), 4000);
+    },
   });
 
   if (!selectedClientId) {
@@ -445,6 +472,8 @@ export function ReconciliationsPage() {
       </div>
 
       {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">{(error as Error).message}</div>}
+      {reopenMessage && <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded text-sm mb-4">{reopenMessage}</div>}
+      {reopenMutation.isError && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">{(reopenMutation.error as Error)?.message ?? 'Failed to reopen reconciliation.'}</div>}
 
       {isLoading ? (
         <div className="flex items-center justify-center py-12 text-gray-400">Loading…</div>
@@ -493,6 +522,15 @@ export function ReconciliationsPage() {
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-right">
+                        {isAdmin && r.status === 'completed' && (
+                          <button
+                            onClick={() => { if (confirm(`Reopen "${r.account_name}" reconciliation dated ${r.statement_date}?`)) reopenMutation.mutate(r.id); }}
+                            disabled={reopenMutation.isPending}
+                            className="text-xs text-amber-600 hover:text-amber-800 mr-2 disabled:opacity-50"
+                          >
+                            {reopenMutation.isPending ? 'Reopening…' : 'Reopen'}
+                          </button>
+                        )}
                         <button
                           onClick={() => setActiveRecId(r.id)}
                           className="text-xs text-blue-600 hover:text-blue-800 mr-3"
@@ -522,6 +560,7 @@ export function ReconciliationsPage() {
           clientId={selectedClientId}
           accounts={accounts ?? []}
           periodId={selectedPeriodId}
+          periods={periods ?? []}
           onClose={() => setShowNew(false)}
           onCreate={(id) => { setShowNew(false); setActiveRecId(id); }}
         />

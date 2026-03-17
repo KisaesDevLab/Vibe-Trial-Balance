@@ -14,3 +14,6 @@ export const saveSettings = (data: { claudeApiKey?: string }) =>
 
 export const deleteClaudeApiKey = () =>
   apiFetch<{ deleted: boolean }>('/settings/claude-api-key', { method: 'DELETE' });
+
+export const testClaudeKey = () =>
+  apiFetch<{ valid: boolean; message?: string }>('/settings/test-claude-key', { method: 'POST' });

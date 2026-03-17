@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getSettings, saveSettings, deleteClaudeApiKey } from '../api/settings';
+import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey } from '../api/settings';
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -8,6 +8,8 @@ export function SettingsPage() {
   const [showInput, setShowInput] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [testResult, setTestResult] = useState<{ valid: boolean; message?: string } | null>(null);
+  const [testing, setTesting] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['settings'],
@@ -39,6 +41,14 @@ export function SettingsPage() {
     },
   });
 
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    const res = await testClaudeKey();
+    setTesting(false);
+    if (res.data) setTestResult(res.data);
+  };
+
   const currentKey = data?.claude_api_key;
 
   return (
@@ -69,8 +79,17 @@ export function SettingsPage() {
                     Replace
                   </button>
                   <button
+                    onClick={handleTest}
+                    disabled={testing}
+                    title={testing ? 'Test in progress…' : undefined}
+                    className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {testing ? 'Testing…' : 'Test'}
+                  </button>
+                  <button
                     onClick={() => { if (confirm('Remove the stored API key?')) deleteMutation.mutate(); }}
                     disabled={deleteMutation.isPending}
+                    title={deleteMutation.isPending ? 'Removing key…' : undefined}
                     className="px-3 py-1.5 text-sm text-red-500 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
                   >
                     Remove
@@ -91,7 +110,7 @@ export function SettingsPage() {
                     className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                   {saveError && (
-                    <p className="text-xs text-red-600">{saveError}</p>
+                    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">{saveError}</div>
                   )}
                   <div className="flex gap-2">
                     <button
@@ -118,7 +137,15 @@ export function SettingsPage() {
               )}
 
               {saveSuccess && (
-                <p className="text-xs text-green-600">API key saved successfully.</p>
+                <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded text-sm">API key saved successfully.</div>
+              )}
+
+              {testResult && (
+                testResult.valid ? (
+                  <div className="bg-green-50 border border-green-200 text-green-700 px-3 py-2 rounded text-sm">✓ API key is valid and connected to Claude.</div>
+                ) : (
+                  <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">✗ Invalid API key: {testResult.message ?? 'Connection failed.'}</div>
+                )
               )}
             </div>
           )}

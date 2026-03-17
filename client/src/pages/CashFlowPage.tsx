@@ -288,6 +288,13 @@ function StatementTab({ periodId }: { periodId: number }) {
                 </td>
               </tr>
             )}
+            {cf.beginningCash === 0 && (
+              <tr>
+                <td colSpan={2} className="px-3 py-2 text-xs text-blue-700 bg-blue-50">
+                  Note: Beginning cash is $0.00 — confirm prior year balances have been imported for all Cash & Equivalents accounts.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

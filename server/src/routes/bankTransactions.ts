@@ -5,8 +5,14 @@ import { parse } from 'fast-csv';
 import { Readable } from 'stream';
 import Anthropic from '@anthropic-ai/sdk';
 import type { Knex } from 'knex';
+import { createHash } from 'crypto';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { logAudit } from '../lib/periodGuard';
+
+function txHash(date: string, description: string, amount: number): string {
+  return createHash('sha256').update(`${date}|${description}|${amount}`).digest('hex').slice(0, 64);
+}
 
 // ---- Journal entry sync helper ----
 // Creates, replaces, or deletes the auto-generated book JE for a bank transaction.
@@ -82,6 +88,23 @@ btCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
     return;
   }
   try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(500, Math.max(10, Number(req.query.pageSize) || 100));
+    const offset = (page - 1) * pageSize;
+
+    let countQuery = db('bank_transactions').where({ client_id: clientId });
+    if (req.query.sourceAccountId) {
+      countQuery = countQuery.where('source_account_id', Number(req.query.sourceAccountId));
+    }
+    if (req.query.periodId) {
+      countQuery = countQuery.where('period_id', Number(req.query.periodId));
+    }
+    if (req.query.status) {
+      countQuery = countQuery.where('classification_status', String(req.query.status));
+    }
+    const [{ count }] = await countQuery.count('id as count');
+    const total = Number(count);
+
     let query = db('bank_transactions as bt')
       .where('bt.client_id', clientId)
       .leftJoin('chart_of_accounts as coa', 'bt.account_id', 'coa.id')
@@ -109,8 +132,8 @@ btCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
       query = query.where('bt.classification_status', String(req.query.status));
     }
 
-    const rows = await query;
-    res.json({ data: rows, error: null, meta: { count: rows.length } });
+    const rows = await query.limit(pageSize).offset(offset);
+    res.json({ data: rows, error: null, meta: { total, page, pageSize, pages: Math.ceil(total / pageSize) } });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
@@ -377,12 +400,17 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
       return;
     }
 
-    const chunkSize = 500;
-    for (let i = 0; i < rows.length; i += chunkSize) {
-      await db('bank_transactions').insert(rows.slice(i, i + chunkSize));
+    let importedCount = 0;
+    let duplicateCount = 0;
+    for (const row of rows) {
+      const hash = txHash(row.transaction_date, row.description ?? '', row.amount);
+      const existing = await db('bank_transactions').where({ client_id: clientId, import_hash: hash }).first('id');
+      if (existing) { duplicateCount++; continue; }
+      await db('bank_transactions').insert({ ...row, import_hash: hash });
+      importedCount++;
     }
 
-    res.json({ data: { imported: rows.length }, error: null });
+    res.json({ data: { imported: importedCount, duplicates: duplicateCount }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
@@ -682,6 +710,9 @@ btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promis
     let finalRow: Record<string, unknown>;
 
     await db.transaction(async (trx) => {
+      // Fetch existing transaction before update for reclassification audit
+      const existingTx = await trx('bank_transactions').where({ id, client_id: clientId }).first();
+
       const updated = await trx('bank_transactions')
         .where({ id, client_id: clientId })
         .update(updates)
@@ -713,6 +744,19 @@ btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promis
       await syncTxJE(trx, id, clientId, req.user!.userId);
       // Re-fetch after JE sync so journal_entry_id is current
       finalRow = await trx('bank_transactions').where({ id }).first();
+
+      // If transaction had a linked JE, log the reclassification
+      const newAccountId = updates.account_id as number | undefined;
+      if (existingTx?.journal_entry_id && newAccountId && existingTx?.account_id !== newAccountId) {
+        await logAudit({
+          userId: req.user!.userId,
+          periodId: existingTx.period_id,
+          entityType: 'bank_transaction',
+          entityId: id,
+          action: 'reclassify',
+          description: `Bank transaction reclassified — linked JE #${existingTx.journal_entry_id} updated`,
+        }, trx);
+      }
     });
 
     res.json({ data: finalRow!, error: null });
@@ -767,6 +811,7 @@ btRulesRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =>
       .join('chart_of_accounts as c', 'r.account_id', 'c.id')
       .where('r.client_id', clientId)
       .select('r.*', 'c.account_name', 'c.account_number')
+      .orderBy('r.sort_order', 'asc')
       .orderBy('r.times_confirmed', 'desc');
     res.json({ data: rules, error: null, meta: { count: rules.length } });
   } catch (err: unknown) {

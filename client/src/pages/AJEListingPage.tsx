@@ -176,6 +176,61 @@ export function AJEListingPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Account summary */}
+          {(() => {
+            // Build account summary
+            const accountSummaryMap = new Map<string, { name: string; debit: number; credit: number }>();
+            for (const entry of entries) {
+              for (const line of entry.lines) {
+                const key = line.account_number ?? 'Unknown';
+                const existing = accountSummaryMap.get(key) ?? { name: line.account_name ?? '', debit: 0, credit: 0 };
+                accountSummaryMap.set(key, {
+                  name: existing.name || (line.account_name ?? ''),
+                  debit: existing.debit + line.debit,
+                  credit: existing.credit + line.credit,
+                });
+              }
+            }
+            const accountSummary = [...accountSummaryMap.entries()]
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([acct, vals]) => ({ account: acct, ...vals }));
+
+            return accountSummary.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Summary by Account</h3>
+                <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 w-28">Acct #</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500">Account Name</th>
+                        <th className="px-4 py-2 text-right text-xs font-semibold text-gray-500 w-36">Total Dr</th>
+                        <th className="px-4 py-2 text-right text-xs font-semibold text-gray-500 w-36">Total Cr</th>
+                        <th className="px-4 py-2 text-right text-xs font-semibold text-gray-500 w-36">Net</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {accountSummary.map(({ account, name, debit, credit }) => {
+                        const net = debit - credit;
+                        return (
+                          <tr key={account} className="hover:bg-gray-50">
+                            <td className="px-4 py-1.5 text-sm text-gray-600 whitespace-nowrap">{account}</td>
+                            <td className="px-3 py-1.5 text-sm text-gray-700">{name}</td>
+                            <td className="px-4 py-1.5 text-right text-sm font-mono text-gray-700">{debit > 0 ? fmt(debit) : '—'}</td>
+                            <td className="px-4 py-1.5 text-right text-sm font-mono text-gray-700">{credit > 0 ? fmt(credit) : '—'}</td>
+                            <td className={`px-4 py-1.5 text-right text-sm font-mono font-semibold ${net > 0 ? 'text-gray-800' : net < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                              {net !== 0 ? fmt(Math.abs(net)) + (net < 0 ? ' Cr' : ' Dr') : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
         </>
       )}
     </div>

@@ -67,3 +67,26 @@ settingsRouter.delete('/claude-api-key', async (_req: AuthRequest, res: Response
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
   }
 });
+
+// POST /api/v1/settings/test-claude-key
+settingsRouter.post('/test-claude-key', async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const row = await db('settings').where({ key: 'claude_api_key' }).first('value');
+    const apiKey = (row?.value as string | undefined) || process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      res.status(400).json({ data: null, error: { code: 'NO_KEY', message: 'No API key configured' } });
+      return;
+    }
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey });
+    await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1,
+      messages: [{ role: 'user', content: 'ping' }],
+    });
+    res.json({ data: { valid: true }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.json({ data: { valid: false, message }, error: null });
+  }
+});

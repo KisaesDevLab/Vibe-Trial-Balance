@@ -86,6 +86,8 @@ export function BankTransactionsPage() {
   const [importError, setImportError] = useState<string | null>(null);
   const [editingDescId, setEditingDescId] = useState<number | null>(null);
   const [editingDescValue, setEditingDescValue] = useState('');
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  const [showSourceAccountRequired, setShowSourceAccountRequired] = useState(false);
 
   const clientId = selectedClientId;
   const txQueryKey = ['bank-transactions', clientId, filterStatus, filterPeriod ? selectedPeriodId : null, filterSourceAccount];
@@ -156,6 +158,7 @@ export function BankTransactionsPage() {
     setImportMapping({ dateCol: '', descCol: '', amountMode: 'single', amountCol: '', debitCol: '', creditCol: '', checkCol: '' });
     setImportSourceAccountId('');
     setImportError(null);
+    setShowSourceAccountRequired(false);
   };
 
   const isOfxFile = (f: File) => /\.(ofx|qfx|qbo)$/i.test(f.name);
@@ -214,21 +217,40 @@ export function BankTransactionsPage() {
     onSuccess: () => invalidate(),
   });
 
+  const showBatchMessage = (msg: string) => {
+    setBatchMessage(msg);
+    setTimeout(() => setBatchMessage(null), 4000);
+  };
+
   const batchDeleteMutation = useMutation({
     mutationFn: (ids: number[]) => batchDeleteTransactions(clientId!, ids),
-    onSuccess: () => { invalidate(); setSelected(new Set()); },
+    onSuccess: (_res, ids) => {
+      invalidate();
+      setSelected(new Set());
+      showBatchMessage(`Deleted ${ids.length} transaction(s) successfully.`);
+    },
   });
 
   const batchClassifyMutation = useMutation({
     mutationFn: ({ ids, accountId }: { ids: number[]; accountId: number }) =>
       batchClassifyTransactions(clientId!, ids, accountId),
-    onSuccess: () => { invalidate(); setSelected(new Set()); setBatchAccountId(''); },
+    onSuccess: (_res, { ids }) => {
+      invalidate();
+      setSelected(new Set());
+      setBatchAccountId('');
+      showBatchMessage(`Classified ${ids.length} transaction(s) successfully.`);
+    },
   });
 
   const batchSourceMutation = useMutation({
     mutationFn: ({ ids, sourceAccountId }: { ids: number[]; sourceAccountId: number | null }) =>
       batchUpdateSourceAccount(clientId!, ids, sourceAccountId),
-    onSuccess: () => { invalidate(); setSelected(new Set()); setBatchSourceAccountId(''); },
+    onSuccess: (_res, { ids }) => {
+      invalidate();
+      setSelected(new Set());
+      setBatchSourceAccountId('');
+      showBatchMessage(`Updated source account on ${ids.length} transaction(s).`);
+    },
   });
 
   const aiMutation = useMutation({
@@ -236,12 +258,14 @@ export function BankTransactionsPage() {
     onMutate: () => setAiStatus('Running AI classification…'),
     onSuccess: (res, ids) => {
       if (res.error) { setAiStatus(`Error: ${res.error.message}`); return; }
+      const unclassifiedBefore = rawTransactions.filter((t) => t.classification_status === 'unclassified').length;
       invalidate();
       const n = res.data?.classified ?? 0;
       const attempted = res.data?.results?.length ?? n;
       const skipped = ids.length - attempted;
       const skipNote = skipped > 0 ? ` (${skipped} already confirmed/manual — skipped)` : '';
-      setAiStatus(`AI classified ${n} transaction(s).${skipNote}`);
+      const remaining = Math.max(0, unclassifiedBefore - n);
+      setAiStatus(`AI classified ${n} transaction(s).${skipNote} ${remaining} unclassified transaction(s) remain.`);
       setSelected(new Set());
     },
   });
@@ -373,7 +397,11 @@ export function BankTransactionsPage() {
               </select>
               {batchAccountId && (
                 <button
-                  onClick={() => batchClassifyMutation.mutate({ ids: [...selected], accountId: Number(batchAccountId) })}
+                  onClick={() => {
+                    const categoryName = accounts.find((a) => String(a.id) === batchAccountId)?.account_name ?? batchAccountId;
+                    if (!confirm(`Classify ${selected.size} transaction(s) as "${categoryName}"?`)) return;
+                    batchClassifyMutation.mutate({ ids: [...selected], accountId: Number(batchAccountId) });
+                  }}
                   disabled={batchClassifyMutation.isPending}
                   className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
                 >
@@ -454,6 +482,11 @@ export function BankTransactionsPage() {
           </label>
         )}
       </div>
+
+      {/* Batch operation success message */}
+      {batchMessage && (
+        <div className="bg-green-50 border border-green-200 text-green-700 text-sm px-4 py-2 rounded mb-3">{batchMessage}</div>
+      )}
 
       {/* Classification Rules panel */}
       {showRules && (
@@ -642,7 +675,7 @@ export function BankTransactionsPage() {
                     <label className="block text-xs font-medium text-gray-700 mb-1">Source Account (bank / credit card)</label>
                     <select
                       value={importSourceAccountId}
-                      onChange={(e) => setImportSourceAccountId(e.target.value)}
+                      onChange={(e) => { setImportSourceAccountId(e.target.value); setShowSourceAccountRequired(false); }}
                       className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">— select account —</option>
@@ -650,12 +683,18 @@ export function BankTransactionsPage() {
                         <option key={a.id} value={a.id}>{a.account_number} – {a.account_name}</option>
                       ))}
                     </select>
+                    {showSourceAccountRequired && !importSourceAccountId && (
+                      <p className="text-red-600 text-xs mt-1">A source account is required.</p>
+                    )}
                   </div>
                   <div className="flex justify-end gap-2 pt-2">
                     <button onClick={closeImport} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
                     {importFile && isOfxFile(importFile) && (
                       <button
-                        onClick={() => importMutation.mutate({ file: importFile })}
+                        onClick={() => {
+                          if (!importSourceAccountId) { setShowSourceAccountRequired(true); return; }
+                          importMutation.mutate({ file: importFile });
+                        }}
                         disabled={importMutation.isPending}
                         className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
                       >
@@ -711,7 +750,7 @@ export function BankTransactionsPage() {
                     <label className="block text-xs font-medium text-gray-700 mb-1">Source Account (bank / credit card)</label>
                     <select
                       value={importSourceAccountId}
-                      onChange={(e) => setImportSourceAccountId(e.target.value)}
+                      onChange={(e) => { setImportSourceAccountId(e.target.value); setShowSourceAccountRequired(false); }}
                       className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">— select account —</option>
@@ -719,16 +758,23 @@ export function BankTransactionsPage() {
                         <option key={a.id} value={a.id}>{a.account_number} – {a.account_name}</option>
                       ))}
                     </select>
+                    {showSourceAccountRequired && !importSourceAccountId && (
+                      <p className="text-red-600 text-xs mt-1">A source account is required.</p>
+                    )}
                   </div>
 
                   <div className="flex justify-end gap-2 pt-2">
                     <button onClick={() => setImportStep('file')} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Back</button>
                     <button
-                      onClick={() => { if (importFile) importMutation.mutate({ file: importFile, mapping: importMapping }); }}
+                      onClick={() => {
+                        if (!importSourceAccountId) { setShowSourceAccountRequired(true); return; }
+                        if (importFile) importMutation.mutate({ file: importFile, mapping: importMapping });
+                      }}
                       disabled={
                         !importFile || importMutation.isPending ||
                         !importMapping.dateCol ||
-                        (importMapping.amountMode === 'single' && !importMapping.amountCol)
+                        (importMapping.amountMode === 'single' && !importMapping.amountCol) ||
+                        !importSourceAccountId
                       }
                       className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
                     >
