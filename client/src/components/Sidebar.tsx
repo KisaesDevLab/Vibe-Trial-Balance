@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { to: '/bank-transactions', label: 'Bank Transactions' },
   { to: '/reconciliations', label: 'Reconciliations' },
   { to: '/tax-worksheets', label: 'Tax Worksheets' },
+  { to: '/engagement', label: 'Engagement' },
   { to: '/financial-statements', label: 'Financial Statements' },
   { to: '/trial-balance-report', label: 'TB Report' },
   { to: '/general-ledger', label: 'General Ledger' },

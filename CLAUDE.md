@@ -15,7 +15,7 @@
 - API routes return: { data, error, meta }
 
 ## Current Phase
-Phase 10: Tax Workpapers & Schedules (complete)
+Phase 11: Engagement Management (complete)
 
 ## Completed
 - Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods
@@ -39,3 +39,6 @@ Phase 10: Tax Workpapers & Schedules (complete)
 - Phase 10: Tax Workpapers & Schedules — m1_adjustments table, M-1 Worksheet (book-to-tax
   reconciliation with summary, Excel/PDF export), Tax Basis Schedule (account-level book vs
   tax comparison with Excel/PDF export), SheetJS (xlsx) for Excel generation
+- Phase 11: Engagement Management — engagement_tasks table, Period Checklist (CRUD, status
+  workflow open→in_progress→review→completed→n_a, assignees, progress bar, templates modal
+  with 10 common tasks), All Open Items cross-client summary view grouped by client/period

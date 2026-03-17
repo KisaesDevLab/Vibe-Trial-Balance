@@ -16,6 +16,7 @@ import { settingsRouter } from './routes/settings';
 import { diagnosticsRouter } from './routes/diagnostics';
 import { reconciliationCollectionRouter, reconciliationItemRouter } from './routes/reconciliations';
 import { m1CollectionRouter, m1ItemRouter } from './routes/taxWorkpapers';
+import { engagementCollectionRouter, engagementItemRouter, engagementSummaryRouter } from './routes/engagement';
 import { db } from './db';
 
 const app = express();
@@ -58,6 +59,9 @@ app.use('/api/v1/clients/:clientId/reconciliations', reconciliationCollectionRou
 app.use('/api/v1/reconciliations/:id', reconciliationItemRouter);
 app.use('/api/v1/periods/:periodId/m1-adjustments', m1CollectionRouter);
 app.use('/api/v1/m1-adjustments/:id', m1ItemRouter);
+app.use('/api/v1/periods/:periodId/engagement-tasks', engagementCollectionRouter);
+app.use('/api/v1/engagement-tasks/:id', engagementItemRouter);
+app.use('/api/v1/engagement-summary', engagementSummaryRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
