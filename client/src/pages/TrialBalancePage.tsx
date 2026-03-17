@@ -21,6 +21,14 @@ import {
 } from '../api/trialBalance';
 import { updateAccount, type AccountInput } from '../api/chartOfAccounts';
 import { useUIStore } from '../store/uiStore';
+import {
+  listTickmarks,
+  getTBTickmarks,
+  toggleTBTickmark,
+  TICKMARK_COLOR_CLASSES,
+  type Tickmark,
+  type TBTickmarkMap,
+} from '../api/tickmarks';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -113,13 +121,14 @@ function downloadCsv(filename: string, rows: string[][]): void {
 }
 
 export function TrialBalancePage() {
-  const { selectedPeriodId } = useUIStore();
+  const { selectedPeriodId, selectedClientId } = useUIStore();
   const qc = useQueryClient();
   const [sorting, setSorting] = useState<SortingState>([]);
   const [lastSyncMsg, setLastSyncMsg] = useState<string | null>(null);
   const [syncedUpToDate, setSyncedUpToDate] = useState(false);
   const [showTax, setShowTax] = useState(true);
   const [notesRow, setNotesRow] = useState<TBRow | null>(null);
+  const [tickmarkRow, setTickmarkRow] = useState<TBRow | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showPYImportModal, setShowPYImportModal] = useState(false);
   const [filterText, setFilterText] = useState('');
@@ -163,6 +172,34 @@ export function TrialBalancePage() {
       return res.data;
     },
     enabled: selectedPeriodId !== null,
+  });
+
+  const { data: tickmarkLibrary } = useQuery({
+    queryKey: ['tickmarks', selectedClientId],
+    queryFn: async () => {
+      if (!selectedClientId) return [] as Tickmark[];
+      const res = await listTickmarks(selectedClientId);
+      if (res.error) throw new Error(res.error.message);
+      return res.data;
+    },
+    enabled: selectedClientId !== null,
+  });
+
+  const { data: tbTickmarks } = useQuery({
+    queryKey: ['tb-tickmarks', selectedPeriodId],
+    queryFn: async () => {
+      if (!selectedPeriodId) return {} as TBTickmarkMap;
+      const res = await getTBTickmarks(selectedPeriodId);
+      if (res.error) throw new Error(res.error.message);
+      return res.data;
+    },
+    enabled: selectedPeriodId !== null,
+  });
+
+  const toggleTickmarkMut = useMutation({
+    mutationFn: ({ accountId, tickmarkId }: { accountId: number; tickmarkId: number }) =>
+      toggleTBTickmark(selectedPeriodId!, accountId, tickmarkId),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['tb-tickmarks', selectedPeriodId] }),
   });
 
   const handleExportCsv = () => {
@@ -591,6 +628,29 @@ export function TrialBalancePage() {
         );
       },
     }),
+    columnHelper.display({
+      id: 'tickmarks',
+      header: 'Marks',
+      cell: ({ row }) => {
+        const marks = tbTickmarks?.[row.original.account_id] ?? [];
+        return (
+          <button
+            onClick={() => setTickmarkRow(row.original)}
+            title="Assign tickmarks"
+            className="flex items-center gap-0.5 min-w-[2rem] h-6 px-1 rounded hover:bg-gray-200"
+          >
+            {marks.length === 0
+              ? <span className="text-gray-300 text-xs">—</span>
+              : marks.map((m) => (
+                  <span key={m.id} className={`inline-flex items-center justify-center w-5 h-5 rounded text-xs font-bold ${TICKMARK_COLOR_CLASSES[m.color]}`}>
+                    {m.symbol}
+                  </span>
+                ))
+            }
+          </button>
+        );
+      },
+    }),
   ];
 
   const columnVisibility: VisibilityState = {
@@ -771,6 +831,7 @@ export function TrialBalancePage() {
                 <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold border-r border-gray-300">Tax Code</th>
                 <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold border-r border-gray-300">W/P</th>
                 <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold"></th>
+                <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold">Marks</th>
               </tr>
               {/* Column headers */}
               {tableInstance.getHeaderGroups().map((hg) => (
@@ -792,7 +853,7 @@ export function TrialBalancePage() {
             <tbody className="divide-y divide-gray-100">
               {tableInstance.getRowModel().rows.length === 0 ? (
                 <tr>
-                  <td colSpan={showTax ? 15 : 11} className="px-4 py-10 text-center text-gray-400">
+                  <td colSpan={showTax ? 17 : 13} className="px-4 py-10 text-center text-gray-400">
                     No trial balance data. Click &ldquo;Initialize from COA&rdquo; to populate from the chart of accounts.
                   </td>
                 </tr>
@@ -825,7 +886,7 @@ export function TrialBalancePage() {
                   {showTax && <td className="px-2 py-1.5 text-right text-sm text-purple-700 border-r border-gray-200">{fmtTotal(colSum('tax_adj_credit'))}</td>}
                   {showTax && <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80">{fmtTotal(colSum('tax_adjusted_debit'))}</td>}
                   {showTax && <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">{fmtTotal(colSum('tax_adjusted_credit'))}</td>}
-                  <td colSpan={2}></td>
+                  <td colSpan={4}></td>
                 </tr>
                 {/* Net income / (loss) */}
                 <tr className="border-t border-gray-300 bg-gray-50">
@@ -845,7 +906,7 @@ export function TrialBalancePage() {
                       {fmtNet(txNetIncome)}
                     </td>
                   )}
-                  <td colSpan={2}></td>
+                  <td colSpan={4}></td>
                 </tr>
               </tfoot>
             )}
@@ -882,6 +943,17 @@ export function TrialBalancePage() {
             accountMutation.mutate({ accountId, updates: { preparerNotes, reviewerNotes } });
             setNotesRow(null);
           }}
+        />
+      )}
+
+      {/* Tickmark modal */}
+      {tickmarkRow && (
+        <TickmarkModal
+          row={tickmarkRow}
+          library={tickmarkLibrary ?? []}
+          assigned={tbTickmarks?.[tickmarkRow.account_id] ?? []}
+          onClose={() => setTickmarkRow(null)}
+          onToggle={(tickmarkId) => toggleTickmarkMut.mutate({ accountId: tickmarkRow.account_id, tickmarkId })}
         />
       )}
     </div>
@@ -1119,6 +1191,65 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
     </div>
   );
 }
+
+// ─── Tickmark Modal ────────────────────────────────────────────────────────────
+
+function TickmarkModal({ row, library, assigned, onClose, onToggle }: {
+  row: TBRow;
+  library: Tickmark[];
+  assigned: Pick<Tickmark, 'id' | 'symbol' | 'description' | 'color'>[];
+  onClose: () => void;
+  onToggle: (tickmarkId: number) => void;
+}) {
+  const assignedIds = new Set(assigned.map((a) => a.id));
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-sm">
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <div>
+            <h2 className="text-base font-semibold">{row.account_number} — {row.account_name}</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Assign Tickmarks</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        <div className="px-5 py-3 space-y-1 max-h-80 overflow-y-auto">
+          {library.length === 0 ? (
+            <p className="text-sm text-gray-400 py-4 text-center">No tickmarks defined for this client.</p>
+          ) : (
+            library.map((tm) => {
+              const isOn = assignedIds.has(tm.id);
+              return (
+                <button
+                  key={tm.id}
+                  onClick={() => onToggle(tm.id)}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg border text-left transition-colors ${
+                    isOn ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  <span className={`inline-flex items-center justify-center w-7 h-7 rounded text-sm font-bold shrink-0 ${TICKMARK_COLOR_CLASSES[tm.color]}`}>
+                    {tm.symbol}
+                  </span>
+                  <span className="text-sm text-gray-700 flex-1">{tm.description}</span>
+                  {isOn && (
+                    <svg className="w-4 h-4 text-blue-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
+                    </svg>
+                  )}
+                </button>
+              );
+            })
+          )}
+        </div>
+        <div className="px-5 py-3 border-t flex justify-end">
+          <button onClick={onClose} className="px-4 py-1.5 bg-gray-100 text-gray-700 text-sm rounded hover:bg-gray-200">Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Notes Modal ───────────────────────────────────────────────────────────────
 
 function NotesModal({ row, onClose, onSave }: {
   row: TBRow;

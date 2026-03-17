@@ -15,7 +15,7 @@
 - API routes return: { data, error, meta }
 
 ## Current Phase
-Phase 12: Reporting Enhancements (complete)
+Phase 13: Workpaper Package & Tickmarks (complete)
 
 ## Completed
 - Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods
@@ -46,3 +46,7 @@ Phase 12: Reporting Enhancements (complete)
   method; operating/investing/financing sections, net change reconciliation, Configure Mapping
   tab for per-account category assignment), Custom Report Builder (saved_reports table, section
   management, account picker, column selector book/tax/prior-year, inline preview)
+- Phase 13: Workpaper Package & Tickmarks — tickmark_library + tb_tickmarks tables, tickmark
+  library CRUD per client (symbol/description/color), TB page tickmarks column with toggle modal,
+  TB Report tickmark superscripts + legend, Workpaper Package page (cover + TOC + selectable
+  report sections: TB, Balance Sheet, Income Statement, Cash Flow; firm/preparer config, print)

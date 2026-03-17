@@ -22,6 +22,7 @@ import { TaxWorksheetsPage } from './pages/TaxWorksheetsPage';
 import { EngagementPage } from './pages/EngagementPage';
 import { CashFlowPage } from './pages/CashFlowPage';
 import { CustomReportPage } from './pages/CustomReportPage';
+import { WorkpaperPackagePage } from './pages/WorkpaperPackagePage';
 import { useAuthStore } from './store/uiStore';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -64,6 +65,7 @@ export default function App() {
           <Route path="engagement" element={<EngagementPage />} />
           <Route path="cash-flow" element={<CashFlowPage />} />
           <Route path="custom-reports" element={<CustomReportPage />} />
+          <Route path="workpaper-package" element={<WorkpaperPackagePage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

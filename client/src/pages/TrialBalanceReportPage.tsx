@@ -3,6 +3,7 @@ import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
 import { useUIStore } from '../store/uiStore';
+import { getTBTickmarks, TICKMARK_COLOR_CLASSES, type TBTickmarkMap } from '../api/tickmarks';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -80,6 +81,17 @@ export function TrialBalanceReportPage() {
     queryKey: ['periods', selectedClientId],
     queryFn: async () => { const r = await listPeriods(selectedClientId!); return r.data ?? []; },
     enabled: selectedClientId !== null,
+  });
+
+  const { data: tbTickmarks } = useQuery({
+    queryKey: ['tb-tickmarks', selectedPeriodId],
+    queryFn: async () => {
+      if (!selectedPeriodId) return {} as TBTickmarkMap;
+      const res = await getTBTickmarks(selectedPeriodId);
+      if (res.error) throw new Error(res.error.message);
+      return res.data;
+    },
+    enabled: selectedPeriodId !== null,
   });
 
   const client = clients?.find((c) => c.id === selectedClientId);
@@ -212,7 +224,16 @@ export function TrialBalanceReportPage() {
                       return (
                         <tr key={r.account_id} className="border-t border-gray-100 hover:bg-gray-50">
                           <td className="px-2 py-1 text-sm text-gray-600 border-r border-gray-200 whitespace-nowrap">{r.account_number}</td>
-                          <td className="px-2 py-1 text-sm text-gray-700 border-r border-gray-200">{r.account_name}</td>
+                          <td className="px-2 py-1 text-sm text-gray-700 border-r border-gray-200">
+                            <span className="flex items-center gap-1 flex-wrap">
+                              {r.account_name}
+                              {(tbTickmarks?.[r.account_id] ?? []).map((tm) => (
+                                <span key={tm.id} className={`inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold ${TICKMARK_COLOR_CLASSES[tm.color]}`} title={tm.description}>
+                                  {tm.symbol}
+                                </span>
+                              ))}
+                            </span>
+                          </td>
                           <td className="px-2 py-1 text-xs text-gray-500 border-r border-gray-200">{r.workpaper_ref ?? ''}</td>
                           <td className={`${tdCls} bg-gray-50/50 text-gray-500`}>{fmt(r.prior_year_debit)}</td>
                           <td className={`${tdCls} bg-gray-50/50 text-gray-500 border-r border-gray-300`}>{fmt(r.prior_year_credit)}</td>
@@ -261,6 +282,34 @@ export function TrialBalanceReportPage() {
           </table>
         </div>
       )}
+
+      {/* Tickmark legend */}
+      {tbTickmarks && Object.keys(tbTickmarks).length > 0 && (() => {
+        // Collect unique tickmarks across all accounts
+        const seen = new Map<number, { symbol: string; description: string; color: string }>();
+        for (const marks of Object.values(tbTickmarks)) {
+          for (const m of marks) {
+            if (!seen.has(m.id)) seen.set(m.id, m);
+          }
+        }
+        const unique = Array.from(seen.values());
+        if (unique.length === 0) return null;
+        return (
+          <div className="mt-4 border border-gray-200 rounded-lg px-4 py-3 bg-white">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Tickmark Legend</p>
+            <div className="flex flex-wrap gap-3">
+              {unique.map((tm) => (
+                <div key={tm.symbol} className="flex items-center gap-1.5 text-sm text-gray-700">
+                  <span className={`inline-flex items-center justify-center w-5 h-5 rounded text-xs font-bold ${TICKMARK_COLOR_CLASSES[tm.color as keyof typeof TICKMARK_COLOR_CLASSES]}`}>
+                    {tm.symbol}
+                  </span>
+                  <span>{tm.description}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -18,6 +18,7 @@ import { reconciliationCollectionRouter, reconciliationItemRouter } from './rout
 import { m1CollectionRouter, m1ItemRouter } from './routes/taxWorkpapers';
 import { engagementCollectionRouter, engagementItemRouter, engagementSummaryRouter } from './routes/engagement';
 import { cashFlowRouter } from './routes/cashFlow';
+import { tickmarkLibraryCollectionRouter, tickmarkLibraryItemRouter, tbTickmarkRouter } from './routes/tickmarks';
 import { savedReportCollectionRouter, savedReportItemRouter } from './routes/savedReports';
 import { db } from './db';
 
@@ -65,6 +66,9 @@ app.use('/api/v1/periods/:periodId/engagement-tasks', engagementCollectionRouter
 app.use('/api/v1/engagement-tasks/:id', engagementItemRouter);
 app.use('/api/v1/engagement-summary', engagementSummaryRouter);
 app.use('/api/v1/periods/:periodId/cash-flow', cashFlowRouter);
+app.use('/api/v1/clients/:clientId/tickmarks', tickmarkLibraryCollectionRouter);
+app.use('/api/v1/tickmarks/:id', tickmarkLibraryItemRouter);
+app.use('/api/v1/periods/:periodId/tb-tickmarks', tbTickmarkRouter);
 app.use('/api/v1/clients/:clientId/saved-reports', savedReportCollectionRouter);
 app.use('/api/v1/saved-reports/:id', savedReportItemRouter);
 

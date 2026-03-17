@@ -22,6 +22,7 @@ const NAV_ITEMS = [
   { to: '/tax-code-report', label: 'Tax Code Report' },
   { to: '/workpaper-index', label: 'Workpaper Index' },
   { to: '/aje-listing', label: 'AJE Listing' },
+  { to: '/workpaper-package', label: 'Workpaper Package' },
   { to: '/diagnostics', label: 'AI Diagnostics' },
   { to: '/settings', label: 'Settings' },
 ];
@@ -42,7 +43,7 @@ export function Sidebar() {
         {selectedClientId && <PeriodSelector />}
       </div>
 
-      <nav className="flex-1 px-2 py-3 space-y-0.5">
+      <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
         {NAV_ITEMS.map((item) => (
           <NavLink
             key={item.to}
