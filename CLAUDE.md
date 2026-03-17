@@ -15,7 +15,7 @@
 - API routes return: { data, error, meta }
 
 ## Current Phase
-Phase 9: Bank Reconciliation
+Phase 9: Bank Reconciliation (complete)
 
 ## Completed
 - Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods
@@ -32,3 +32,7 @@ Phase 9: Bank Reconciliation
 - Phase 7: Trial Balance Import & Prior Year Comparison — prior_year_debit/credit columns,
   import endpoints (current + PY), 2-step CSV import modals on TrialBalancePage,
   PY columns in TB Report, Prior Year ColSet in Financial Statements
+- Phase 8: Diagnostics & Polish — EIN on clients, report headers (client name/EIN/dates),
+  TB Report variance columns (CY vs PY), AI Diagnostics page (Claude Haiku), TB filter bar
+- Phase 9: Bank Reconciliation — reconciliations + reconciliation_items tables, full CRUD,
+  reconciliation workspace (outstanding/cleared panels, balance summary, complete workflow)
