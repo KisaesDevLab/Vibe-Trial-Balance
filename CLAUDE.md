@@ -15,7 +15,7 @@
 - API routes return: { data, error, meta }
 
 ## Current Phase
-Phase 8: Diagnostics & Polish
+Phase 9: Bank Reconciliation
 
 ## Completed
 - Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods

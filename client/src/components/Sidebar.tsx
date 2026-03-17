@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { to: '/trial-balance', label: 'Trial Balance' },
   { to: '/journal-entries', label: 'Journal Entries' },
   { to: '/bank-transactions', label: 'Bank Transactions' },
+  { to: '/reconciliations', label: 'Reconciliations' },
   { to: '/financial-statements', label: 'Financial Statements' },
   { to: '/trial-balance-report', label: 'TB Report' },
   { to: '/general-ledger', label: 'General Ledger' },
