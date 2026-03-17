@@ -25,16 +25,17 @@ const CAT_LABEL: Record<string, string> = {
   revenue: 'Revenue', expenses: 'Expenses',
 };
 
-interface Totals { ud: number; uc: number; bad: number; bac: number; bd: number; bc: number; tad: number; tac: number; td: number; tc: number; }
+interface Totals { pyd: number; pyc: number; ud: number; uc: number; bad: number; bac: number; bd: number; bc: number; tad: number; tac: number; td: number; tc: number; }
 
 function sumRows(rows: TBRow[]): Totals {
   return rows.reduce((s, r) => ({
+    pyd: s.pyd + r.prior_year_debit, pyc: s.pyc + r.prior_year_credit,
     ud: s.ud + r.unadjusted_debit, uc: s.uc + r.unadjusted_credit,
     bad: s.bad + r.book_adj_debit, bac: s.bac + r.book_adj_credit,
     bd: s.bd + r.book_adjusted_debit, bc: s.bc + r.book_adjusted_credit,
     tad: s.tad + r.tax_adj_debit, tac: s.tac + r.tax_adj_credit,
     td: s.td + r.tax_adjusted_debit, tc: s.tc + r.tax_adjusted_credit,
-  }), { ud:0,uc:0,bad:0,bac:0,bd:0,bc:0,tad:0,tac:0,td:0,tc:0 });
+  }), { pyd:0,pyc:0,ud:0,uc:0,bad:0,bac:0,bd:0,bc:0,tad:0,tac:0,td:0,tc:0 });
 }
 
 const thCls = 'px-2 py-1.5 text-right text-xs font-semibold text-gray-600 border-r border-gray-200 last:border-r-0 whitespace-nowrap';
@@ -61,6 +62,7 @@ export function TrialBalanceReportPage() {
   const handleExport = () => {
     const header = [
       'Account #', 'Account Name', 'Category', 'Tax Line', 'Workpaper Ref',
+      'PY Dr', 'PY Cr',
       'Unadj Dr', 'Unadj Cr',
       'Book AJE Dr', 'Book AJE Cr',
       'Book Adj Dr', 'Book Adj Cr',
@@ -69,6 +71,7 @@ export function TrialBalanceReportPage() {
     ];
     const dataRows = rows.map((r) => [
       r.account_number, r.account_name, r.category, r.tax_line ?? '', r.workpaper_ref ?? '',
+      String(r.prior_year_debit / 100), String(r.prior_year_credit / 100),
       String(r.unadjusted_debit / 100), String(r.unadjusted_credit / 100),
       String(r.book_adj_debit / 100), String(r.book_adj_credit / 100),
       String(r.book_adjusted_debit / 100), String(r.book_adjusted_credit / 100),
@@ -115,6 +118,8 @@ export function TrialBalanceReportPage() {
                 <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 w-24 border-r border-gray-200">Acct #</th>
                 <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 border-r border-gray-200">Account Name</th>
                 <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 w-16 border-r border-gray-200">WP Ref</th>
+                {/* Prior Year */}
+                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-500 border-r border-gray-300 bg-gray-50">Prior Year</th>
                 {/* Unadjusted */}
                 <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-600 border-r border-gray-300 bg-white">Unadjusted</th>
                 {/* Book AJE */}
@@ -128,6 +133,7 @@ export function TrialBalanceReportPage() {
               </tr>
               <tr className="bg-gray-50 border-b-2 border-gray-400">
                 <th className="border-r border-gray-200" /><th className="border-r border-gray-200" /><th className="border-r border-gray-200" />
+                <th className={`${thCls} bg-gray-50`}>Dr</th><th className={`${thCls} bg-gray-50 border-r border-gray-300`}>Cr</th>
                 <th className={thCls}>Dr</th><th className={`${thCls} border-r border-gray-300`}>Cr</th>
                 <th className={`${thCls} bg-blue-50`}>Dr</th><th className={`${thCls} bg-blue-50 border-r border-gray-300`}>Cr</th>
                 <th className={`${thCls} bg-blue-100`}>Dr</th><th className={`${thCls} bg-blue-100 border-r border-gray-300`}>Cr</th>
@@ -143,13 +149,15 @@ export function TrialBalanceReportPage() {
                 return (
                   <>
                     <tr key={`${cat}-hdr`} className="bg-gray-100">
-                      <td colSpan={13} className="px-2 py-1 text-xs font-bold text-gray-700 uppercase tracking-wide">{CAT_LABEL[cat]}</td>
+                      <td colSpan={15} className="px-2 py-1 text-xs font-bold text-gray-700 uppercase tracking-wide">{CAT_LABEL[cat]}</td>
                     </tr>
                     {catRows.map((r) => (
                       <tr key={r.account_id} className="border-t border-gray-100 hover:bg-gray-50">
                         <td className="px-2 py-1 text-sm text-gray-600 border-r border-gray-200 whitespace-nowrap">{r.account_number}</td>
                         <td className="px-2 py-1 text-sm text-gray-700 border-r border-gray-200">{r.account_name}</td>
                         <td className="px-2 py-1 text-xs text-gray-500 border-r border-gray-200">{r.workpaper_ref ?? ''}</td>
+                        <td className={`${tdCls} bg-gray-50/50 text-gray-500`}>{fmt(r.prior_year_debit)}</td>
+                        <td className={`${tdCls} bg-gray-50/50 text-gray-500 border-r border-gray-300`}>{fmt(r.prior_year_credit)}</td>
                         <td className={tdCls}>{fmt(r.unadjusted_debit)}</td>
                         <td className={`${tdCls} border-r border-gray-300`}>{fmt(r.unadjusted_credit)}</td>
                         <td className={`${tdCls} bg-blue-50/50`}>{fmt(r.book_adj_debit)}</td>
@@ -164,19 +172,21 @@ export function TrialBalanceReportPage() {
                     ))}
                     <tr key={`${cat}-tot`} className="border-t border-gray-300">
                       <td className="px-2 py-1 border-r border-gray-200" /><td className={`${tdTotalCls} text-left`}>Total {CAT_LABEL[cat]}</td><td className="px-2 border-r border-gray-200 border-t border-gray-400 bg-gray-50" />
+                      <td className={`${tdTotalCls} bg-gray-50 text-gray-500`}>{fmtTotal(tot.pyd)}</td><td className={`${tdTotalCls} bg-gray-50 text-gray-500 border-r border-gray-300`}>{fmtTotal(tot.pyc)}</td>
                       <td className={tdTotalCls}>{fmtTotal(tot.ud)}</td><td className={`${tdTotalCls} border-r border-gray-300`}>{fmtTotal(tot.uc)}</td>
                       <td className={`${tdTotalCls} bg-blue-50`}>{fmtTotal(tot.bad)}</td><td className={`${tdTotalCls} bg-blue-50 border-r border-gray-300`}>{fmtTotal(tot.bac)}</td>
                       <td className={`${tdTotalCls} bg-blue-100`}>{fmtTotal(tot.bd)}</td><td className={`${tdTotalCls} bg-blue-100 border-r border-gray-300`}>{fmtTotal(tot.bc)}</td>
                       <td className={`${tdTotalCls} bg-purple-50`}>{fmtTotal(tot.tad)}</td><td className={`${tdTotalCls} bg-purple-50 border-r border-gray-300`}>{fmtTotal(tot.tac)}</td>
                       <td className={`${tdTotalCls} bg-purple-100`}>{fmtTotal(tot.td)}</td><td className={`${tdTotalCls} bg-purple-100`}>{fmtTotal(tot.tc)}</td>
                     </tr>
-                    <tr key={`${cat}-sp`}><td colSpan={13} className="py-1" /></tr>
+                    <tr key={`${cat}-sp`}><td colSpan={15} className="py-1" /></tr>
                   </>
                 );
               })}
               {/* Grand Total */}
               <tr>
                 <td className="px-2 border-r border-gray-200" /><td className={`${tdGrandCls} text-left`}>Grand Total</td><td className="px-2 border-r border-gray-200 border-t-2 border-gray-700 bg-gray-100" />
+                <td className={`${tdGrandCls} bg-gray-50 text-gray-500`}>{fmtTotal(grand.pyd)}</td><td className={`${tdGrandCls} bg-gray-50 text-gray-500 border-r border-gray-300`}>{fmtTotal(grand.pyc)}</td>
                 <td className={tdGrandCls}>{fmtTotal(grand.ud)}</td><td className={`${tdGrandCls} border-r border-gray-300`}>{fmtTotal(grand.uc)}</td>
                 <td className={`${tdGrandCls} bg-blue-50`}>{fmtTotal(grand.bad)}</td><td className={`${tdGrandCls} bg-blue-50 border-r border-gray-300`}>{fmtTotal(grand.bac)}</td>
                 <td className={`${tdGrandCls} bg-blue-100`}>{fmtTotal(grand.bd)}</td><td className={`${tdGrandCls} bg-blue-100 border-r border-gray-300`}>{fmtTotal(grand.bc)}</td>

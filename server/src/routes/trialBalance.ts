@@ -10,6 +10,7 @@ tbPeriodRouter.use(authMiddleware);
 function parseBigInts(row: Record<string, unknown>): Record<string, unknown> {
   const bigintFields = [
     'unadjusted_debit', 'unadjusted_credit',
+    'prior_year_debit', 'prior_year_credit',
     'book_adj_debit', 'book_adj_credit',
     'tax_adj_debit', 'tax_adj_credit',
     'book_adjusted_debit', 'book_adjusted_credit',
@@ -98,6 +99,119 @@ tbPeriodRouter.post('/initialize', async (req: AuthRequest, res: Response): Prom
     }
 
     res.json({ data: { initialized: toInsert.length, removed }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
+// POST /api/v1/periods/:periodId/trial-balance/import
+// Bulk upsert unadjusted balances matched by account_number
+const importRowSchema = z.object({
+  accountNumber: z.string().min(1),
+  debit: z.number().int().min(0),
+  credit: z.number().int().min(0),
+});
+const importSchema = z.object({ rows: z.array(importRowSchema).min(1) });
+
+tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = Number(req.params.periodId);
+  if (isNaN(periodId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  const result = importSchema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  try {
+    const period = await db('periods').where({ id: periodId }).first('client_id');
+    if (!period) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
+      return;
+    }
+    const accounts = await db('chart_of_accounts')
+      .where({ client_id: period.client_id, is_active: true })
+      .select('id', 'account_number');
+    const accountMap = new Map<string, number>(accounts.map((a: { id: number; account_number: string }) => [a.account_number, a.id]));
+
+    let upserted = 0;
+    let skipped = 0;
+    for (const row of result.data.rows) {
+      const accountId = accountMap.get(row.accountNumber);
+      if (!accountId) { skipped++; continue; }
+      await db('trial_balance')
+        .insert({
+          period_id: periodId,
+          account_id: accountId,
+          unadjusted_debit: row.debit,
+          unadjusted_credit: row.credit,
+          updated_by: req.user!.userId,
+          updated_at: db.fn.now(),
+        })
+        .onConflict(['period_id', 'account_id'])
+        .merge(['unadjusted_debit', 'unadjusted_credit', 'updated_by', 'updated_at']);
+      upserted++;
+    }
+    res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
+// POST /api/v1/periods/:periodId/trial-balance/import-prior-year
+const priorYearRowSchema = z.object({
+  accountNumber: z.string().min(1),
+  debit: z.number().int().min(0),
+  credit: z.number().int().min(0),
+});
+const priorYearImportSchema = z.object({ rows: z.array(priorYearRowSchema).min(1) });
+
+tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = Number(req.params.periodId);
+  if (isNaN(periodId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  const result = priorYearImportSchema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  try {
+    const period = await db('periods').where({ id: periodId }).first('client_id');
+    if (!period) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
+      return;
+    }
+    const accounts = await db('chart_of_accounts')
+      .where({ client_id: period.client_id, is_active: true })
+      .select('id', 'account_number');
+    const accountMap = new Map<string, number>(accounts.map((a: { id: number; account_number: string }) => [a.account_number, a.id]));
+
+    let upserted = 0;
+    let skipped = 0;
+    for (const row of result.data.rows) {
+      const accountId = accountMap.get(row.accountNumber);
+      if (!accountId) { skipped++; continue; }
+      await db('trial_balance')
+        .insert({
+          period_id: periodId,
+          account_id: accountId,
+          unadjusted_debit: 0,
+          unadjusted_credit: 0,
+          prior_year_debit: row.debit,
+          prior_year_credit: row.credit,
+          updated_by: req.user!.userId,
+          updated_at: db.fn.now(),
+        })
+        .onConflict(['period_id', 'account_id'])
+        .merge(['prior_year_debit', 'prior_year_credit', 'updated_by', 'updated_at']);
+      upserted++;
+    }
+    res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });

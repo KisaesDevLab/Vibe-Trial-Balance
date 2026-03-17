@@ -14,7 +14,10 @@ import {
   getTrialBalance,
   initializeTrialBalance,
   updateBalance,
+  importTBBalances,
+  importPriorYearBalances,
   type TBRow,
+  type TBImportRow,
 } from '../api/trialBalance';
 import { updateAccount, type AccountInput } from '../api/chartOfAccounts';
 import { useUIStore } from '../store/uiStore';
@@ -117,6 +120,8 @@ export function TrialBalancePage() {
   const [syncedUpToDate, setSyncedUpToDate] = useState(false);
   const [showTax, setShowTax] = useState(true);
   const [notesRow, setNotesRow] = useState<TBRow | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showPYImportModal, setShowPYImportModal] = useState(false);
 
   // Excel-like cell selection
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -656,6 +661,18 @@ export function TrialBalancePage() {
             <span className="text-xs text-gray-500">{lastSyncMsg}</span>
           )}
           <button
+            onClick={() => setShowPYImportModal(true)}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
+          >
+            Import PY
+          </button>
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="px-3 py-1.5 text-sm border border-indigo-300 text-indigo-700 rounded hover:bg-indigo-50"
+          >
+            Import Balances
+          </button>
+          <button
             onClick={handleExportCsv}
             disabled={!data?.length}
             className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40"
@@ -787,6 +804,26 @@ export function TrialBalancePage() {
         </div>
       )}
 
+      {/* TB Balance Import modal */}
+      {showImportModal && selectedPeriodId && (
+        <TBImportModal
+          periodId={selectedPeriodId}
+          mode="current"
+          onClose={() => setShowImportModal(false)}
+          onSuccess={() => { setShowImportModal(false); qc.invalidateQueries({ queryKey }); }}
+        />
+      )}
+
+      {/* Prior Year Import modal */}
+      {showPYImportModal && selectedPeriodId && (
+        <TBImportModal
+          periodId={selectedPeriodId}
+          mode="prior-year"
+          onClose={() => setShowPYImportModal(false)}
+          onSuccess={() => { setShowPYImportModal(false); qc.invalidateQueries({ queryKey }); }}
+        />
+      )}
+
       {/* Notes modal */}
       {notesRow && (
         <NotesModal
@@ -798,6 +835,238 @@ export function TrialBalancePage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ─── TB Import Modal ───────────────────────────────────────────────────────────
+
+interface TBMapping {
+  accountNumberCol: string;
+  debitCol: string;
+  creditCol: string;
+}
+
+function parseCsvLine(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; }
+    else if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+    else { current += ch; }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function bestTBMatch(headers: string[], candidates: string[]): string {
+  const lower = headers.map((h) => h.toLowerCase().replace(/[\s_-]/g, ''));
+  for (const c of candidates) {
+    const idx = lower.indexOf(c.toLowerCase().replace(/[\s_-]/g, ''));
+    if (idx !== -1) return headers[idx];
+  }
+  return '';
+}
+
+function autoDetectTBMapping(headers: string[]): TBMapping {
+  return {
+    accountNumberCol: bestTBMatch(headers, ['accountnumber', 'account_number', 'acct#', 'acctno', 'acct', 'number', 'code']),
+    debitCol: bestTBMatch(headers, ['debit', 'dr', 'debitamount', 'debit_amount']),
+    creditCol: bestTBMatch(headers, ['credit', 'cr', 'creditamount', 'credit_amount']),
+  };
+}
+
+function TBImportModal({ periodId, mode, onClose, onSuccess }: {
+  periodId: number;
+  mode: 'current' | 'prior-year';
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [step, setStep] = useState<1 | 2>(1);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [rawRows, setRawRows] = useState<string[][]>([]);
+  const [mapping, setMapping] = useState<TBMapping>({ accountNumberCol: '', debitCol: '', creditCol: '' });
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<{ upserted: number; skipped: number; total: number } | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  const title = mode === 'current' ? 'Import Unadjusted Balances' : 'Import Prior Year Balances';
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length < 2) { setError('File must have at least a header row and one data row.'); return; }
+      const hdrs = parseCsvLine(lines[0]);
+      const rows = lines.slice(1).map(parseCsvLine);
+      setHeaders(hdrs);
+      setRawRows(rows);
+      setMapping(autoDetectTBMapping(hdrs));
+      setError('');
+      setStep(2);
+    };
+    reader.readAsText(file);
+  }
+
+  async function handleImport() {
+    if (!mapping.accountNumberCol) { setError('Account Number column is required.'); return; }
+    if (!mapping.debitCol) { setError('Debit column is required.'); return; }
+    if (!mapping.creditCol) { setError('Credit column is required.'); return; }
+
+    const acctIdx = headers.indexOf(mapping.accountNumberCol);
+    const drIdx = headers.indexOf(mapping.debitCol);
+    const crIdx = headers.indexOf(mapping.creditCol);
+
+    const rows: TBImportRow[] = rawRows
+      .filter((r) => r[acctIdx]?.trim())
+      .map((r) => ({
+        accountNumber: r[acctIdx]?.trim() ?? '',
+        debit: Math.round((parseFloat(r[drIdx]?.replace(/[^0-9.-]/g, '') || '0') || 0) * 100),
+        credit: Math.round((parseFloat(r[crIdx]?.replace(/[^0-9.-]/g, '') || '0') || 0) * 100),
+      }));
+
+    if (!rows.length) { setError('No valid rows to import.'); return; }
+    setImporting(true);
+    setError('');
+    try {
+      const fn = mode === 'current' ? importTBBalances : importPriorYearBalances;
+      const res = await fn(periodId, rows);
+      if (res.error) { setError(res.error.message); setImporting(false); return; }
+      setResult(res.data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Import failed');
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  if (result) {
+    return (
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-sm">
+          <div className="px-5 py-4 border-b">
+            <h2 className="text-base font-semibold">{title} — Complete</h2>
+          </div>
+          <div className="px-5 py-4 space-y-2 text-sm">
+            <p><span className="font-medium">{result.upserted}</span> rows imported</p>
+            {result.skipped > 0 && <p className="text-amber-600"><span className="font-medium">{result.skipped}</span> rows skipped (account number not found in COA)</p>}
+            <p className="text-gray-500">Total in file: {result.total}</p>
+          </div>
+          <div className="px-5 py-3 border-t flex justify-end">
+            <button onClick={onSuccess} className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">Done</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <div>
+            <h2 className="text-base font-semibold">{title}</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Step {step} of 2 — {step === 1 ? 'Select CSV file' : 'Map columns'}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+
+        <div className="px-5 py-4">
+          {step === 1 && (
+            <div className="space-y-3">
+              <p className="text-sm text-gray-600">
+                CSV must have columns for Account Number, Debit, and Credit (in dollars, not cents).
+              </p>
+              <label className="block">
+                <span className="sr-only">Choose CSV file</span>
+                <input
+                  type="file"
+                  accept=".csv,.txt"
+                  onChange={handleFile}
+                  className="block w-full text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border file:border-gray-300 file:text-sm file:bg-gray-50 hover:file:bg-gray-100"
+                />
+              </label>
+              {error && <p className="text-sm text-red-600">{error}</p>}
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-4">
+              <p className="text-xs text-gray-500">{rawRows.length} data rows detected · {headers.length} columns</p>
+
+              <div className="space-y-2">
+                {([
+                  { label: 'Account Number *', key: 'accountNumberCol' as keyof TBMapping },
+                  { label: 'Debit *', key: 'debitCol' as keyof TBMapping },
+                  { label: 'Credit *', key: 'creditCol' as keyof TBMapping },
+                ] as Array<{ label: string; key: keyof TBMapping }>).map(({ label, key }) => (
+                  <div key={key} className="flex items-center gap-3">
+                    <span className="text-xs text-gray-600 w-36 shrink-0">{label}</span>
+                    <select
+                      value={mapping[key]}
+                      onChange={(e) => setMapping((m) => ({ ...m, [key]: e.target.value }))}
+                      className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">— skip —</option>
+                      {headers.map((h) => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+
+              {/* Preview */}
+              <div className="overflow-auto max-h-40 border border-gray-200 rounded">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="px-2 py-1 text-left font-medium text-gray-500">Acct #</th>
+                      <th className="px-2 py-1 text-right font-medium text-gray-500">Debit</th>
+                      <th className="px-2 py-1 text-right font-medium text-gray-500">Credit</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {rawRows.slice(0, 50).map((row, i) => {
+                      const acctIdx = headers.indexOf(mapping.accountNumberCol);
+                      const drIdx = headers.indexOf(mapping.debitCol);
+                      const crIdx = headers.indexOf(mapping.creditCol);
+                      return (
+                        <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'}>
+                          <td className="px-2 py-0.5 text-gray-700">{acctIdx >= 0 ? row[acctIdx] : '—'}</td>
+                          <td className="px-2 py-0.5 text-right text-gray-700">{drIdx >= 0 ? row[drIdx] : '—'}</td>
+                          <td className="px-2 py-0.5 text-right text-gray-700">{crIdx >= 0 ? row[crIdx] : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {error && <p className="text-sm text-red-600">{error}</p>}
+            </div>
+          )}
+        </div>
+
+        {step === 2 && (
+          <div className="px-5 py-3 border-t flex justify-between items-center">
+            <button onClick={() => setStep(1)} className="text-sm text-gray-500 hover:text-gray-700">← Back</button>
+            <div className="flex gap-2">
+              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+              <button
+                onClick={handleImport}
+                disabled={importing}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+              >
+                {importing ? 'Importing…' : 'Import'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -18,7 +18,7 @@ function fmtTotal(cents: number): string {
   return cents < 0 ? `(${str})` : str;
 }
 
-type ColSet = 'unadjusted' | 'book' | 'tax';
+type ColSet = 'unadjusted' | 'book' | 'tax' | 'prior-year';
 
 function netBalance(row: TBRow, colSet: ColSet): number {
   let dr: number, cr: number;
@@ -26,8 +26,10 @@ function netBalance(row: TBRow, colSet: ColSet): number {
     dr = row.unadjusted_debit; cr = row.unadjusted_credit;
   } else if (colSet === 'book') {
     dr = row.book_adjusted_debit; cr = row.book_adjusted_credit;
-  } else {
+  } else if (colSet === 'tax') {
     dr = row.tax_adjusted_debit; cr = row.tax_adjusted_credit;
+  } else {
+    dr = row.prior_year_debit; cr = row.prior_year_credit;
   }
   return row.normal_balance === 'debit' ? dr - cr : cr - dr;
 }
@@ -203,6 +205,7 @@ const COL_LABELS: Record<ColSet, string> = {
   unadjusted: 'Unadjusted',
   book: 'Book Adjusted',
   tax: 'Tax Adjusted',
+  'prior-year': 'Prior Year',
 };
 
 export function FinancialStatementsPage() {
@@ -267,6 +270,7 @@ export function FinancialStatementsPage() {
             onChange={(e) => setColSet(e.target.value as ColSet)}
             className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
+            <option value="prior-year">Prior Year</option>
             <option value="unadjusted">Unadjusted</option>
             <option value="book">Book Adjusted</option>
             <option value="tax">Tax Adjusted</option>

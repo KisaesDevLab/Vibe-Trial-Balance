@@ -15,6 +15,8 @@ export interface TBRow {
   reviewer_notes: string | null;
   unadjusted_debit: number;
   unadjusted_credit: number;
+  prior_year_debit: number;
+  prior_year_credit: number;
   book_adj_debit: number;
   book_adj_credit: number;
   tax_adj_debit: number;
@@ -32,6 +34,24 @@ export const initializeTrialBalance = (periodId: number) =>
   apiFetch<{ initialized: number; removed: number }>(`/periods/${periodId}/trial-balance/initialize`, {
     method: 'POST',
   });
+
+export interface TBImportRow {
+  accountNumber: string;
+  debit: number;
+  credit: number;
+}
+
+export const importTBBalances = (periodId: number, rows: TBImportRow[]) =>
+  apiFetch<{ upserted: number; skipped: number; total: number }>(
+    `/periods/${periodId}/trial-balance/import`,
+    { method: 'POST', body: JSON.stringify({ rows }) },
+  );
+
+export const importPriorYearBalances = (periodId: number, rows: TBImportRow[]) =>
+  apiFetch<{ upserted: number; skipped: number; total: number }>(
+    `/periods/${periodId}/trial-balance/import-prior-year`,
+    { method: 'POST', body: JSON.stringify({ rows }) },
+  );
 
 export const updateBalance = (
   periodId: number,
