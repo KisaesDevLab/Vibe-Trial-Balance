@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { to: '/journal-entries', label: 'Journal Entries' },
   { to: '/bank-transactions', label: 'Bank Transactions' },
   { to: '/reconciliations', label: 'Reconciliations' },
+  { to: '/tax-worksheets', label: 'Tax Worksheets' },
   { to: '/financial-statements', label: 'Financial Statements' },
   { to: '/trial-balance-report', label: 'TB Report' },
   { to: '/general-ledger', label: 'General Ledger' },

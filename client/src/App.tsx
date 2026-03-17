@@ -18,6 +18,7 @@ import { AJEListingPage } from './pages/AJEListingPage';
 import { UsersPage } from './pages/UsersPage';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { ReconciliationsPage } from './pages/ReconciliationsPage';
+import { TaxWorksheetsPage } from './pages/TaxWorksheetsPage';
 import { useAuthStore } from './store/uiStore';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="users" element={<UsersPage />} />
           <Route path="diagnostics" element={<DiagnosticsPage />} />
           <Route path="reconciliations" element={<ReconciliationsPage />} />
+          <Route path="tax-worksheets" element={<TaxWorksheetsPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

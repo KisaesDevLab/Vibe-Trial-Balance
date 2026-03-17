@@ -15,7 +15,7 @@
 - API routes return: { data, error, meta }
 
 ## Current Phase
-Phase 9: Bank Reconciliation (complete)
+Phase 10: Tax Workpapers & Schedules (complete)
 
 ## Completed
 - Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods
@@ -36,3 +36,6 @@ Phase 9: Bank Reconciliation (complete)
   TB Report variance columns (CY vs PY), AI Diagnostics page (Claude Haiku), TB filter bar
 - Phase 9: Bank Reconciliation — reconciliations + reconciliation_items tables, full CRUD,
   reconciliation workspace (outstanding/cleared panels, balance summary, complete workflow)
+- Phase 10: Tax Workpapers & Schedules — m1_adjustments table, M-1 Worksheet (book-to-tax
+  reconciliation with summary, Excel/PDF export), Tax Basis Schedule (account-level book vs
+  tax comparison with Excel/PDF export), SheetJS (xlsx) for Excel generation

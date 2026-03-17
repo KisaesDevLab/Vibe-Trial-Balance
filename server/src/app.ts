@@ -15,6 +15,7 @@ import { btCollectionRouter, btRulesRouter } from './routes/bankTransactions';
 import { settingsRouter } from './routes/settings';
 import { diagnosticsRouter } from './routes/diagnostics';
 import { reconciliationCollectionRouter, reconciliationItemRouter } from './routes/reconciliations';
+import { m1CollectionRouter, m1ItemRouter } from './routes/taxWorkpapers';
 import { db } from './db';
 
 const app = express();
@@ -55,6 +56,8 @@ app.use('/api/v1/settings', settingsRouter);
 app.use('/api/v1/periods/:periodId/diagnostics', diagnosticsRouter);
 app.use('/api/v1/clients/:clientId/reconciliations', reconciliationCollectionRouter);
 app.use('/api/v1/reconciliations/:id', reconciliationItemRouter);
+app.use('/api/v1/periods/:periodId/m1-adjustments', m1CollectionRouter);
+app.use('/api/v1/m1-adjustments/:id', m1ItemRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
