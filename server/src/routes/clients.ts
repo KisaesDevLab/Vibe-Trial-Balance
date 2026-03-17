@@ -11,6 +11,7 @@ const clientSchema = z.object({
   entityType: z.enum(['1065', '1120', '1120S', '1040_C']),
   taxYearEnd: z.string().max(4).optional(),
   defaultTaxSoftware: z.enum(['ultratax', 'cch', 'lacerte', 'drake']).optional(),
+  taxId: z.string().max(20).optional().nullable(),
 });
 
 router.get('/', async (_req: AuthRequest, res: Response): Promise<void> => {
@@ -33,7 +34,7 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
     return;
   }
 
-  const { name, entityType, taxYearEnd, defaultTaxSoftware } = result.data;
+  const { name, entityType, taxYearEnd, defaultTaxSoftware, taxId } = result.data;
 
   try {
     const [client] = await db('clients')
@@ -42,6 +43,7 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
         entity_type: entityType,
         tax_year_end: taxYearEnd ?? '1231',
         default_tax_software: defaultTaxSoftware ?? 'ultratax',
+        tax_id: taxId ?? null,
         is_active: true,
       })
       .returning('*');
@@ -96,6 +98,8 @@ router.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   if (result.data.taxYearEnd !== undefined) updates.tax_year_end = result.data.taxYearEnd;
   if (result.data.defaultTaxSoftware !== undefined)
     updates.default_tax_software = result.data.defaultTaxSoftware;
+  if (result.data.taxId !== undefined)
+    updates.tax_id = result.data.taxId;
 
   try {
     const [updated] = await db('clients').where({ id }).update(updates).returning('*');

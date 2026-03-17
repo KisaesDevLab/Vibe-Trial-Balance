@@ -40,6 +40,7 @@ function ClientForm({ initial, onSave, onCancel, saving, error }: ClientFormProp
     entityType: initial?.entityType ?? '1065',
     taxYearEnd: initial?.taxYearEnd ?? '1231',
     defaultTaxSoftware: initial?.defaultTaxSoftware ?? 'ultratax',
+    taxId: initial?.taxId ?? '',
   });
 
   const set = <K extends keyof ClientInput>(k: K, v: ClientInput[K]) =>
@@ -92,6 +93,15 @@ function ClientForm({ initial, onSave, onCancel, saving, error }: ClientFormProp
           >
             {TAX_SOFTWARE.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">EIN / Tax ID</label>
+          <input
+            value={form.taxId ?? ''}
+            onChange={(e) => set('taxId', e.target.value || null)}
+            placeholder="XX-XXXXXXX"
+            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
         </div>
       </div>
       <div className="flex justify-end gap-2 pt-2">
@@ -172,6 +182,7 @@ export function ClientsPage() {
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Name</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Entity</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">EIN</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Tax Year End</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Software</th>
                 <th className="px-4 py-2.5"></th>
@@ -180,7 +191,7 @@ export function ClientsPage() {
             <tbody className="divide-y divide-gray-100">
               {clients.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+                  <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
                     No clients yet. Click &ldquo;+ Add Client&rdquo; to create one.
                   </td>
                 </tr>
@@ -189,6 +200,7 @@ export function ClientsPage() {
                   <tr key={c.id} className="hover:bg-gray-50">
                     <td className="px-4 py-2.5 font-medium text-gray-900">{c.name}</td>
                     <td className="px-4 py-2.5 text-gray-600">{c.entity_type}</td>
+                    <td className="px-4 py-2.5 text-gray-500 font-mono text-xs">{c.tax_id ?? '—'}</td>
                     <td className="px-4 py-2.5 text-gray-600">{c.tax_year_end}</td>
                     <td className="px-4 py-2.5 text-gray-600 capitalize">{c.default_tax_software}</td>
                     <td className="px-4 py-2.5 text-right">
@@ -232,6 +244,7 @@ export function ClientsPage() {
               entityType: editClient.entity_type,
               taxYearEnd: editClient.tax_year_end,
               defaultTaxSoftware: editClient.default_tax_software,
+              taxId: editClient.tax_id,
             }}
             onSave={(input) => updateMutation.mutate({ id: editClient.id, input })}
             onCancel={() => setEditClient(null)}

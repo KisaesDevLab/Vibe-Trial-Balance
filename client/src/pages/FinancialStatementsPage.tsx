@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
+import { listClients } from '../api/clients';
+import { listPeriods } from '../api/periods';
 import { useUIStore } from '../store/uiStore';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -224,6 +226,20 @@ export function FinancialStatementsPage() {
     enabled: selectedPeriodId !== null,
   });
 
+  const { data: clients } = useQuery({
+    queryKey: ['clients'],
+    queryFn: async () => { const r = await listClients(); return r.data ?? []; },
+  });
+
+  const { data: periods } = useQuery({
+    queryKey: ['periods', selectedClientId],
+    queryFn: async () => { const r = await listPeriods(selectedClientId!); return r.data ?? []; },
+    enabled: selectedClientId !== null,
+  });
+
+  const client = clients?.find((c) => c.id === selectedClientId);
+  const period = periods?.find((p) => p.id === selectedPeriodId);
+
   const rows = (data ?? []).filter((r) => r.is_active);
 
   const handleExport = () => {
@@ -307,6 +323,26 @@ export function FinancialStatementsPage() {
           </button>
         ))}
       </div>
+
+      {/* Report header */}
+      {client && (
+        <div className="bg-white rounded-lg border border-gray-200 px-5 py-3 mb-4 text-sm">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="font-semibold text-gray-900 text-base">{client.name}</p>
+              <p className="text-gray-500 text-xs mt-0.5">{client.entity_type}{client.tax_id ? ` · EIN: ${client.tax_id}` : ''}</p>
+            </div>
+            {period && (
+              <div className="text-right text-xs text-gray-500">
+                <p className="font-medium text-gray-700">{period.period_name}</p>
+                {period.start_date && period.end_date && (
+                  <p>{period.start_date} – {period.end_date}</p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">

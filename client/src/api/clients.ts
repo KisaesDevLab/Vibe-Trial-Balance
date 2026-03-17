@@ -6,6 +6,7 @@ export interface Client {
   entity_type: '1065' | '1120' | '1120S' | '1040_C';
   tax_year_end: string;
   default_tax_software: 'ultratax' | 'cch' | 'lacerte' | 'drake';
+  tax_id: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -16,6 +17,7 @@ export interface ClientInput {
   entityType: '1065' | '1120' | '1120S' | '1040_C';
   taxYearEnd?: string;
   defaultTaxSoftware?: 'ultratax' | 'cch' | 'lacerte' | 'drake';
+  taxId?: string | null;
 }
 
 export const listClients = () => apiFetch<Client[]>('/clients');

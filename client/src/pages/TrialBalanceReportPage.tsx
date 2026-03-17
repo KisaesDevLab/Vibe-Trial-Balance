@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
+import { listClients } from '../api/clients';
+import { listPeriods } from '../api/periods';
 import { useUIStore } from '../store/uiStore';
 
 function fmt(cents: number): string {
@@ -25,6 +27,18 @@ const CAT_LABEL: Record<string, string> = {
   revenue: 'Revenue', expenses: 'Expenses',
 };
 
+function netRow(r: TBRow, dk: keyof TBRow, ck: keyof TBRow): number {
+  const dr = r[dk] as number;
+  const cr = r[ck] as number;
+  return r.normal_balance === 'debit' ? dr - cr : cr - dr;
+}
+
+function fmtPct(pct: number | null): React.ReactNode {
+  if (pct === null) return <span className="text-gray-400">—</span>;
+  const cls = pct > 0 ? 'text-green-700' : pct < 0 ? 'text-red-600' : 'text-gray-400';
+  return <span className={cls}>{pct > 0 ? '+' : ''}{pct.toFixed(1)}%</span>;
+}
+
 interface Totals { pyd: number; pyc: number; ud: number; uc: number; bad: number; bac: number; bd: number; bc: number; tad: number; tac: number; td: number; tc: number; }
 
 function sumRows(rows: TBRow[]): Totals {
@@ -44,7 +58,7 @@ const tdTotalCls = 'px-2 py-1.5 text-right text-sm font-mono font-semibold text-
 const tdGrandCls = 'px-2 py-2 text-right text-sm font-mono font-bold text-gray-900 border-r border-gray-200 last:border-r-0 border-t-2 border-gray-700 bg-gray-100';
 
 export function TrialBalanceReportPage() {
-  const { selectedPeriodId } = useUIStore();
+  const { selectedPeriodId, selectedClientId } = useUIStore();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['trial-balance', selectedPeriodId],
@@ -56,6 +70,20 @@ export function TrialBalanceReportPage() {
     },
     enabled: selectedPeriodId !== null,
   });
+
+  const { data: clients } = useQuery({
+    queryKey: ['clients'],
+    queryFn: async () => { const r = await listClients(); return r.data ?? []; },
+  });
+
+  const { data: periods } = useQuery({
+    queryKey: ['periods', selectedClientId],
+    queryFn: async () => { const r = await listPeriods(selectedClientId!); return r.data ?? []; },
+    enabled: selectedClientId !== null,
+  });
+
+  const client = clients?.find((c) => c.id === selectedClientId);
+  const period = periods?.find((p) => p.id === selectedPeriodId);
 
   const rows = (data ?? []).filter((r) => r.is_active);
 
@@ -104,6 +132,26 @@ export function TrialBalanceReportPage() {
         </div>
       </div>
 
+      {/* Report header */}
+      {client && (
+        <div className="bg-white rounded-lg border border-gray-200 px-5 py-3 mb-4 text-sm">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="font-semibold text-gray-900 text-base">{client.name}</p>
+              <p className="text-gray-500 text-xs mt-0.5">{client.entity_type}{client.tax_id ? ` · EIN: ${client.tax_id}` : ''}</p>
+            </div>
+            {period && (
+              <div className="text-right text-xs text-gray-500">
+                <p className="font-medium text-gray-700">{period.period_name}</p>
+                {period.start_date && period.end_date && (
+                  <p>{period.start_date} – {period.end_date}</p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">{(error as Error).message}</div>}
 
       {isLoading ? (
@@ -129,7 +177,9 @@ export function TrialBalanceReportPage() {
                 {/* Tax AJE */}
                 <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-purple-700 border-r border-gray-300 bg-purple-50">Tax AJE</th>
                 {/* Tax Adjusted */}
-                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-purple-900 bg-purple-100">Tax Adjusted</th>
+                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-purple-900 border-r border-gray-300 bg-purple-100">Tax Adjusted</th>
+                {/* Variance */}
+                <th colSpan={3} className="px-2 py-1 text-center text-xs font-semibold text-teal-700 bg-teal-50">CY vs PY</th>
               </tr>
               <tr className="bg-gray-50 border-b-2 border-gray-400">
                 <th className="border-r border-gray-200" /><th className="border-r border-gray-200" /><th className="border-r border-gray-200" />
@@ -138,7 +188,10 @@ export function TrialBalanceReportPage() {
                 <th className={`${thCls} bg-blue-50`}>Dr</th><th className={`${thCls} bg-blue-50 border-r border-gray-300`}>Cr</th>
                 <th className={`${thCls} bg-blue-100`}>Dr</th><th className={`${thCls} bg-blue-100 border-r border-gray-300`}>Cr</th>
                 <th className={`${thCls} bg-purple-50`}>Dr</th><th className={`${thCls} bg-purple-50 border-r border-gray-300`}>Cr</th>
-                <th className={`${thCls} bg-purple-100`}>Dr</th><th className={`${thCls} bg-purple-100`}>Cr</th>
+                <th className={`${thCls} bg-purple-100`}>Dr</th><th className={`${thCls} bg-purple-100 border-r border-gray-300`}>Cr</th>
+                <th className={`${thCls} bg-teal-50`}>PY Net</th>
+                <th className={`${thCls} bg-teal-50`}>CY Net</th>
+                <th className={`${thCls} bg-teal-50`}>Var %</th>
               </tr>
             </thead>
             <tbody>
@@ -149,27 +202,36 @@ export function TrialBalanceReportPage() {
                 return (
                   <>
                     <tr key={`${cat}-hdr`} className="bg-gray-100">
-                      <td colSpan={15} className="px-2 py-1 text-xs font-bold text-gray-700 uppercase tracking-wide">{CAT_LABEL[cat]}</td>
+                      <td colSpan={18} className="px-2 py-1 text-xs font-bold text-gray-700 uppercase tracking-wide">{CAT_LABEL[cat]}</td>
                     </tr>
-                    {catRows.map((r) => (
-                      <tr key={r.account_id} className="border-t border-gray-100 hover:bg-gray-50">
-                        <td className="px-2 py-1 text-sm text-gray-600 border-r border-gray-200 whitespace-nowrap">{r.account_number}</td>
-                        <td className="px-2 py-1 text-sm text-gray-700 border-r border-gray-200">{r.account_name}</td>
-                        <td className="px-2 py-1 text-xs text-gray-500 border-r border-gray-200">{r.workpaper_ref ?? ''}</td>
-                        <td className={`${tdCls} bg-gray-50/50 text-gray-500`}>{fmt(r.prior_year_debit)}</td>
-                        <td className={`${tdCls} bg-gray-50/50 text-gray-500 border-r border-gray-300`}>{fmt(r.prior_year_credit)}</td>
-                        <td className={tdCls}>{fmt(r.unadjusted_debit)}</td>
-                        <td className={`${tdCls} border-r border-gray-300`}>{fmt(r.unadjusted_credit)}</td>
-                        <td className={`${tdCls} bg-blue-50/50`}>{fmt(r.book_adj_debit)}</td>
-                        <td className={`${tdCls} bg-blue-50/50 border-r border-gray-300`}>{fmt(r.book_adj_credit)}</td>
-                        <td className={`${tdCls} bg-blue-100/50`}>{fmt(r.book_adjusted_debit)}</td>
-                        <td className={`${tdCls} bg-blue-100/50 border-r border-gray-300`}>{fmt(r.book_adjusted_credit)}</td>
-                        <td className={`${tdCls} bg-purple-50/50`}>{fmt(r.tax_adj_debit)}</td>
-                        <td className={`${tdCls} bg-purple-50/50 border-r border-gray-300`}>{fmt(r.tax_adj_credit)}</td>
-                        <td className={`${tdCls} bg-purple-100/50`}>{fmt(r.tax_adjusted_debit)}</td>
-                        <td className={`${tdCls} bg-purple-100/50`}>{fmt(r.tax_adjusted_credit)}</td>
-                      </tr>
-                    ))}
+                    {catRows.map((r) => {
+                      const pyNet = netRow(r, 'prior_year_debit', 'prior_year_credit');
+                      const cyNet = netRow(r, 'book_adjusted_debit', 'book_adjusted_credit');
+                      const varAmt = cyNet - pyNet;
+                      const varPct = pyNet !== 0 ? (varAmt / Math.abs(pyNet)) * 100 : null;
+                      return (
+                        <tr key={r.account_id} className="border-t border-gray-100 hover:bg-gray-50">
+                          <td className="px-2 py-1 text-sm text-gray-600 border-r border-gray-200 whitespace-nowrap">{r.account_number}</td>
+                          <td className="px-2 py-1 text-sm text-gray-700 border-r border-gray-200">{r.account_name}</td>
+                          <td className="px-2 py-1 text-xs text-gray-500 border-r border-gray-200">{r.workpaper_ref ?? ''}</td>
+                          <td className={`${tdCls} bg-gray-50/50 text-gray-500`}>{fmt(r.prior_year_debit)}</td>
+                          <td className={`${tdCls} bg-gray-50/50 text-gray-500 border-r border-gray-300`}>{fmt(r.prior_year_credit)}</td>
+                          <td className={tdCls}>{fmt(r.unadjusted_debit)}</td>
+                          <td className={`${tdCls} border-r border-gray-300`}>{fmt(r.unadjusted_credit)}</td>
+                          <td className={`${tdCls} bg-blue-50/50`}>{fmt(r.book_adj_debit)}</td>
+                          <td className={`${tdCls} bg-blue-50/50 border-r border-gray-300`}>{fmt(r.book_adj_credit)}</td>
+                          <td className={`${tdCls} bg-blue-100/50`}>{fmt(r.book_adjusted_debit)}</td>
+                          <td className={`${tdCls} bg-blue-100/50 border-r border-gray-300`}>{fmt(r.book_adjusted_credit)}</td>
+                          <td className={`${tdCls} bg-purple-50/50`}>{fmt(r.tax_adj_debit)}</td>
+                          <td className={`${tdCls} bg-purple-50/50 border-r border-gray-300`}>{fmt(r.tax_adj_credit)}</td>
+                          <td className={`${tdCls} bg-purple-100/50`}>{fmt(r.tax_adjusted_debit)}</td>
+                          <td className={`${tdCls} bg-purple-100/50 border-r border-gray-300`}>{fmt(r.tax_adjusted_credit)}</td>
+                          <td className={`${tdCls} bg-teal-50/50 text-gray-600`}>{fmtTotal(pyNet)}</td>
+                          <td className={`${tdCls} bg-teal-50/50 text-gray-700`}>{fmtTotal(cyNet)}</td>
+                          <td className={`${tdCls} bg-teal-50/50`}>{fmtPct(varPct)}</td>
+                        </tr>
+                      );
+                    })}
                     <tr key={`${cat}-tot`} className="border-t border-gray-300">
                       <td className="px-2 py-1 border-r border-gray-200" /><td className={`${tdTotalCls} text-left`}>Total {CAT_LABEL[cat]}</td><td className="px-2 border-r border-gray-200 border-t border-gray-400 bg-gray-50" />
                       <td className={`${tdTotalCls} bg-gray-50 text-gray-500`}>{fmtTotal(tot.pyd)}</td><td className={`${tdTotalCls} bg-gray-50 text-gray-500 border-r border-gray-300`}>{fmtTotal(tot.pyc)}</td>
@@ -177,9 +239,10 @@ export function TrialBalanceReportPage() {
                       <td className={`${tdTotalCls} bg-blue-50`}>{fmtTotal(tot.bad)}</td><td className={`${tdTotalCls} bg-blue-50 border-r border-gray-300`}>{fmtTotal(tot.bac)}</td>
                       <td className={`${tdTotalCls} bg-blue-100`}>{fmtTotal(tot.bd)}</td><td className={`${tdTotalCls} bg-blue-100 border-r border-gray-300`}>{fmtTotal(tot.bc)}</td>
                       <td className={`${tdTotalCls} bg-purple-50`}>{fmtTotal(tot.tad)}</td><td className={`${tdTotalCls} bg-purple-50 border-r border-gray-300`}>{fmtTotal(tot.tac)}</td>
-                      <td className={`${tdTotalCls} bg-purple-100`}>{fmtTotal(tot.td)}</td><td className={`${tdTotalCls} bg-purple-100`}>{fmtTotal(tot.tc)}</td>
+                      <td className={`${tdTotalCls} bg-purple-100`}>{fmtTotal(tot.td)}</td><td className={`${tdTotalCls} bg-purple-100 border-r border-gray-300`}>{fmtTotal(tot.tc)}</td>
+                      <td colSpan={3} className={`${tdTotalCls} bg-teal-50`}></td>
                     </tr>
-                    <tr key={`${cat}-sp`}><td colSpan={15} className="py-1" /></tr>
+                    <tr key={`${cat}-sp`}><td colSpan={18} className="py-1" /></tr>
                   </>
                 );
               })}
@@ -191,7 +254,8 @@ export function TrialBalanceReportPage() {
                 <td className={`${tdGrandCls} bg-blue-50`}>{fmtTotal(grand.bad)}</td><td className={`${tdGrandCls} bg-blue-50 border-r border-gray-300`}>{fmtTotal(grand.bac)}</td>
                 <td className={`${tdGrandCls} bg-blue-100`}>{fmtTotal(grand.bd)}</td><td className={`${tdGrandCls} bg-blue-100 border-r border-gray-300`}>{fmtTotal(grand.bc)}</td>
                 <td className={`${tdGrandCls} bg-purple-50`}>{fmtTotal(grand.tad)}</td><td className={`${tdGrandCls} bg-purple-50 border-r border-gray-300`}>{fmtTotal(grand.tac)}</td>
-                <td className={`${tdGrandCls} bg-purple-100`}>{fmtTotal(grand.td)}</td><td className={`${tdGrandCls} bg-purple-100`}>{fmtTotal(grand.tc)}</td>
+                <td className={`${tdGrandCls} bg-purple-100`}>{fmtTotal(grand.td)}</td><td className={`${tdGrandCls} bg-purple-100 border-r border-gray-300`}>{fmtTotal(grand.tc)}</td>
+                <td colSpan={3} className={`${tdGrandCls} bg-teal-50`}></td>
               </tr>
             </tbody>
           </table>

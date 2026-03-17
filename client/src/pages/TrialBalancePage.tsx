@@ -122,6 +122,8 @@ export function TrialBalancePage() {
   const [notesRow, setNotesRow] = useState<TBRow | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showPYImportModal, setShowPYImportModal] = useState(false);
+  const [filterText, setFilterText] = useState('');
+  const [filterCategory, setFilterCategory] = useState<string>('');
 
   // Excel-like cell selection
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -263,10 +265,21 @@ export function TrialBalancePage() {
     [balanceMutation],
   );
 
+  // ── Filter ────────────────────────────────────────────────────────────────
+
+  const filteredDataForNav = (data ?? []).filter((r) => {
+    if (filterCategory && r.category !== filterCategory) return false;
+    if (filterText) {
+      const q = filterText.toLowerCase();
+      return r.account_number.toLowerCase().includes(q) || r.account_name.toLowerCase().includes(q);
+    }
+    return true;
+  });
+
   // ── Table (placeholder for navigation row count) ───────────────────────────
 
   const table = useReactTable({
-    data: data ?? [],
+    data: filteredDataForNav,
     columns: [],
     state: { sorting },
     onSortingChange: setSorting,
@@ -588,7 +601,7 @@ export function TrialBalancePage() {
   };
 
   const tableInstance = useReactTable({
-    data: data ?? [],
+    data: filteredDataForNav,
     columns,
     state: { sorting, columnVisibility },
     onSortingChange: setSorting,
@@ -597,7 +610,7 @@ export function TrialBalancePage() {
     getGroupedRowModel: getGroupedRowModel(),
   });
 
-  // ── Footer calculations ────────────────────────────────────────────────────
+  // ── Footer calculations (uses unfiltered data for totals) ─────────────────
 
   const rows = data ?? [];
   const colSum = (key: keyof TBRow) => rows.reduce((s, r) => s + (r[key] as number), 0);
@@ -689,6 +702,42 @@ export function TrialBalancePage() {
             </button>
           )}
         </div>
+      </div>
+
+      {/* Filter bar */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50 shrink-0">
+        <input
+          type="text"
+          value={filterText}
+          onChange={(e) => { setFilterText(e.target.value); setActiveCell(null); }}
+          placeholder="Search accounts…"
+          className="border border-gray-300 rounded px-2 py-1 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <select
+          value={filterCategory}
+          onChange={(e) => { setFilterCategory(e.target.value); setActiveCell(null); }}
+          className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">All categories</option>
+          <option value="assets">Assets</option>
+          <option value="liabilities">Liabilities</option>
+          <option value="equity">Equity</option>
+          <option value="revenue">Revenue</option>
+          <option value="expenses">Expenses</option>
+        </select>
+        {(filterText || filterCategory) && (
+          <button
+            onClick={() => { setFilterText(''); setFilterCategory(''); }}
+            className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200"
+          >
+            Clear
+          </button>
+        )}
+        {(filterText || filterCategory) && data && (
+          <span className="text-xs text-gray-500 ml-1">
+            {filteredDataForNav.length} of {data.length} accounts
+          </span>
+        )}
       </div>
 
       {error && (

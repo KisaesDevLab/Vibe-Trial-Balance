@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { to: '/tax-code-report', label: 'Tax Code Report' },
   { to: '/workpaper-index', label: 'Workpaper Index' },
   { to: '/aje-listing', label: 'AJE Listing' },
+  { to: '/diagnostics', label: 'AI Diagnostics' },
   { to: '/settings', label: 'Settings' },
 ];
 

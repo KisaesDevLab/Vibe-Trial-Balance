@@ -15,7 +15,7 @@
 - API routes return: { data, error, meta }
 
 ## Current Phase
-Phase 6: Workflow & Collaboration
+Phase 8: Diagnostics & Polish
 
 ## Completed
 - Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods
@@ -26,3 +26,9 @@ Phase 6: Workflow & Collaboration
   Workpaper Index, AJE Listing (all with CSV export and print)
 - Phase 5: Period Controls, Audit Trail & Dashboard — period locking, audit_log table,
   Dashboard page with stats + activity feed
+- Phase 6: Workflow & Collaboration — period roll-forward, user management (admin CRUD),
+  workpaper notes on TB rows (preparer/reviewer), COA import from CSV with column mapping,
+  COA copy-from-client
+- Phase 7: Trial Balance Import & Prior Year Comparison — prior_year_debit/credit columns,
+  import endpoints (current + PY), 2-step CSV import modals on TrialBalancePage,
+  PY columns in TB Report, Prior Year ColSet in Financial Statements
