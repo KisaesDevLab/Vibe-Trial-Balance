@@ -10,6 +10,8 @@ const NAV_ITEMS = [
   { to: '/periods', label: 'Periods' },
   { to: '/trial-balance', label: 'Trial Balance' },
   { to: '/tax-mapping', label: 'Tax Mapping' },
+  { to: '/tax-basis-pl', label: 'Tax-Basis P&L' },
+  { to: '/tax-return-order', label: 'Tax Return Order' },
   { to: '/tickmarks', label: 'Tickmarks' },
   { to: '/journal-entries', label: 'Journal Entries' },
   { to: '/bank-transactions', label: 'Bank Transactions' },

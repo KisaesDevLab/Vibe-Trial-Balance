@@ -26,6 +26,8 @@ import { WorkpaperPackagePage } from './pages/WorkpaperPackagePage';
 import { TickmarksPage } from './pages/TickmarksPage';
 import { TaxCodesPage } from './pages/TaxCodesPage';
 import { TaxMappingPage } from './pages/TaxMappingPage';
+import { TaxBasisPlPage } from './pages/TaxBasisPlPage';
+import { TaxReturnOrderPage } from './pages/TaxReturnOrderPage';
 import { useAuthStore } from './store/uiStore';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -71,6 +73,8 @@ export default function App() {
           <Route path="workpaper-package" element={<WorkpaperPackagePage />} />
           <Route path="tickmarks" element={<TickmarksPage />} />
           <Route path="tax-mapping" element={<TaxMappingPage />} />
+          <Route path="tax-basis-pl" element={<TaxBasisPlPage />} />
+          <Route path="tax-return-order" element={<TaxReturnOrderPage />} />
           <Route path="tax-codes" element={<TaxCodesPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>

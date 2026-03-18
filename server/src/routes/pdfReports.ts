@@ -10,6 +10,8 @@ import {
   generateBalanceSheetPdf,
   generateTaxCodeReportPdf,
   generateWorkpaperIndexPdf,
+  generateTaxBasisPlPdf,
+  generateTaxReturnOrderPdf,
 } from '../pdf/reportGenerators';
 
 export const pdfReportsRouter = Router({ mergeParams: true });
@@ -189,6 +191,42 @@ pdfReportsRouter.get('/periods/:periodId/workpaper-index', async (req: AuthReque
   try {
     const buffer = await generateWorkpaperIndexPdf(db, periodId);
     sendPdf(res, buffer, `workpaper-index-${periodId}.pdf`, isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/reports/periods/:periodId/tax-basis-pl
+// ─────────────────────────────────────────────────────────────────────────────
+pdfReportsRouter.get('/periods/:periodId/tax-basis-pl', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = getPeriodId(req);
+  if (periodId === null) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  try {
+    const buffer = await generateTaxBasisPlPdf(db, periodId);
+    sendPdf(res, buffer, `tax-basis-pl-${periodId}.pdf`, isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/reports/periods/:periodId/tax-return-order
+// ─────────────────────────────────────────────────────────────────────────────
+pdfReportsRouter.get('/periods/:periodId/tax-return-order', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = getPeriodId(req);
+  if (periodId === null) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  try {
+    const buffer = await generateTaxReturnOrderPdf(db, periodId);
+    sendPdf(res, buffer, `tax-return-order-${periodId}.pdf`, isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });

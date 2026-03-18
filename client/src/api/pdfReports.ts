@@ -36,4 +36,6 @@ export const pdfReports = {
   balanceSheet: (periodId: number) => `/api/v1/reports/periods/${periodId}/balance-sheet`,
   taxCodeReport: (periodId: number) => `/api/v1/reports/periods/${periodId}/tax-code-report`,
   workpaperIndex: (periodId: number) => `/api/v1/reports/periods/${periodId}/workpaper-index`,
+  taxBasisPl: (periodId: number) => `/api/v1/reports/periods/${periodId}/tax-basis-pl`,
+  taxReturnOrder: (periodId: number) => `/api/v1/reports/periods/${periodId}/tax-return-order`,
 };

@@ -823,3 +823,145 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number): Pro
     content,
   }));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (i) Tax-Basis P&L PDF  (income/expense accounts grouped by tax code)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise<Buffer> {
+  const svc  = await PdfTemplateService.fromDb(db);
+  const info = await getPeriodInfo(db, periodId);
+
+  type TbRow = {
+    account_number: string; account_name: string; normal_balance: string;
+    tax_adjusted_debit: string | number; tax_adjusted_credit: string | number;
+    tax_code_id: number | null; tax_code: string | null;
+    tc_description: string | null; sort_order: number | null;
+  };
+
+  const rows = await db('v_adjusted_trial_balance as vtb')
+    .join('chart_of_accounts as coa', 'coa.id', 'vtb.account_id')
+    .leftJoin('tax_codes as tc', 'tc.id', 'coa.tax_code_id')
+    .where('vtb.period_id', periodId)
+    .where('vtb.is_active', true)
+    .whereIn('vtb.category', ['revenue', 'expenses'])
+    .select(
+      'vtb.account_number', 'vtb.account_name', 'vtb.normal_balance',
+      'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
+      'coa.tax_code_id',
+      'tc.tax_code', 'tc.description as tc_description', 'tc.sort_order',
+    )
+    .orderByRaw('tc.sort_order ASC NULLS LAST, tc.tax_code ASC NULLS LAST, vtb.account_number ASC') as TbRow[];
+
+  const cols   = ['Tax Code', 'Description', 'Acct #', 'Account Name', 'Tax-Adj Net'];
+  const widths = [55, '*', 45, '*', 80];
+  const tableBody: TableCell[][] = [svc.headerRow(cols)];
+
+  const groups = new Map<string, { label: string; desc: string; rows: TbRow[] }>();
+  for (const r of rows) {
+    const key = r.tax_code ?? '__UNASSIGNED__';
+    if (!groups.has(key)) {
+      groups.set(key, { label: r.tax_code ?? 'Unassigned', desc: r.tc_description ?? '(no tax code assigned)', rows: [] });
+    }
+    groups.get(key)!.rows.push(r);
+  }
+
+  let grandNet = 0;
+  let rowIdx = 0;
+  for (const [, grp] of groups.entries()) {
+    tableBody.push(svc.sectionHeaderRow(`${grp.label} — ${grp.desc}`, cols.length));
+    let grpNet = 0;
+    for (const r of grp.rows) {
+      const dr  = Number(r.tax_adjusted_debit  ?? 0);
+      const cr  = Number(r.tax_adjusted_credit ?? 0);
+      const net = r.normal_balance === 'debit' ? dr - cr : cr - dr;
+      grpNet += net;
+      tableBody.push(svc.dataRow([grp.label === 'Unassigned' ? '—' : grp.label, '', r.account_number, r.account_name, net], { isAlt: rowIdx % 2 === 1 }));
+      rowIdx++;
+    }
+    tableBody.push(svc.dataRow(['', '', '', `Total ${grp.label}`, grpNet], { bold: true, shade: true }));
+    grandNet += grpNet;
+    rowIdx++;
+  }
+  tableBody.push(svc.dataRow(['', '', '', 'Net Income (Loss)', grandNet], { bold: true, shade: true }));
+
+  const content: Content[] = [{
+    table: { headerRows: 1, widths, body: tableBody },
+    layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
+  }];
+  return svc.generateBuffer(svc.buildDocument({
+    title: 'Tax-Basis Profit & Loss', clientName: info.client_name,
+    ein: info.ein ?? undefined, periodName: info.name,
+    startDate: fmtDate(info.start_date), endDate: fmtDate(info.end_date), content,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (j) Tax Return Order PDF  (all accounts in tax code sort_order)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateTaxReturnOrderPdf(db: Knex, periodId: number): Promise<Buffer> {
+  const svc  = await PdfTemplateService.fromDb(db);
+  const info = await getPeriodInfo(db, periodId);
+
+  type TaxRow = {
+    account_number: string; account_name: string; category: string; normal_balance: string;
+    tax_adjusted_debit: string | number; tax_adjusted_credit: string | number;
+    tax_code: string | null; tc_description: string | null; sort_order: number | null;
+  };
+
+  const rows = await db('v_adjusted_trial_balance as vtb')
+    .join('chart_of_accounts as coa', 'coa.id', 'vtb.account_id')
+    .leftJoin('tax_codes as tc', 'tc.id', 'coa.tax_code_id')
+    .where('vtb.period_id', periodId)
+    .where('vtb.is_active', true)
+    .select(
+      'vtb.account_number', 'vtb.account_name', 'vtb.category', 'vtb.normal_balance',
+      'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
+      'tc.tax_code', 'tc.description as tc_description', 'tc.sort_order',
+    )
+    .orderByRaw('tc.sort_order ASC NULLS LAST, tc.tax_code ASC NULLS LAST, vtb.account_number ASC') as TaxRow[];
+
+  const cols   = ['Sort', 'Tax Code', 'Acct #', 'Account Name', 'Category', 'Tax-Adj Net'];
+  const widths = [30, 55, 45, '*', 55, 75];
+  const tableBody: TableCell[][] = [svc.headerRow(cols)];
+
+  let grandNet = 0;
+  let rowIdx = 0;
+  let lastCode: string | null | undefined = undefined;
+
+  for (const r of rows) {
+    const code = r.tax_code ?? null;
+    if (code !== lastCode) {
+      tableBody.push(svc.sectionHeaderRow(
+        code ? `${code} — ${r.tc_description ?? ''}` : 'Unassigned — no tax code mapped',
+        cols.length,
+      ));
+      lastCode = code;
+    }
+    const dr  = Number(r.tax_adjusted_debit  ?? 0);
+    const cr  = Number(r.tax_adjusted_credit ?? 0);
+    const net = r.normal_balance === 'debit' ? dr - cr : cr - dr;
+    grandNet += net;
+    tableBody.push(svc.dataRow([
+      r.sort_order !== null ? String(r.sort_order) : '—',
+      r.tax_code ?? '—',
+      r.account_number,
+      r.account_name,
+      r.category.charAt(0).toUpperCase() + r.category.slice(1),
+      net,
+    ], { isAlt: rowIdx % 2 === 1 }));
+    rowIdx++;
+  }
+  tableBody.push(svc.dataRow(['', '', '', '', 'Grand Total (Net)', grandNet], { bold: true, shade: true }));
+
+  const content: Content[] = [{
+    table: { headerRows: 1, widths, body: tableBody },
+    layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
+  }];
+  return svc.generateBuffer(svc.buildDocument({
+    title: 'Tax Return Order', clientName: info.client_name,
+    ein: info.ein ?? undefined, periodName: info.name,
+    startDate: fmtDate(info.start_date), endDate: fmtDate(info.end_date), content,
+  }));
+}
