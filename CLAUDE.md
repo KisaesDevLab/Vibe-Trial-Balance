@@ -27,7 +27,7 @@
 Canonical phases from NEXT_PHASE.md (master plan). App-only features built before plan adoption are tracked separately.
 
 ## Current Phase
-Plan Phase 7: Tax Basis Roll-Forward (next)
+Plan Phase 8: Multi-Period Comparison (next)
 
 ## Completed — Plan Phases
 - Plan Phase 1: Foundation — Auth, Clients, Chart of Accounts, Periods
@@ -36,6 +36,7 @@ Plan Phase 7: Tax Basis Roll-Forward (next)
 - Plan Phase 4: Tax Code Management — tax_codes + tax_code_software_maps tables, 500+ seeded codes (1065/1120/1120S/1040/common), full CRUD API, TaxCodesPage (admin) with software mappings, CSV import/export; activity_type on clients
 - Plan Phase 5: Tax Mapping View — TaxMappingPage (separate page): account table with tax code dropdowns, progress bar, category subtotals, net income row, balance sheet check, optimistic updates with flash; dual-write COA PATCH (tax_code_id → also sets tax_line for compat)
 - Plan Phase 6: PDF Report Generation — pdfmake server-side PDFs for all 8 report types, PdfTemplateService (Roboto fonts, branded header/footer, formatCents), 8 PDF endpoints; client PDF buttons replace window.print() on all report pages
+- Plan Phase 7: Financial Statements — Tax-Basis P&L (income/expense grouped by tax code, sort_order, per-code subtotals, net income), Tax Return Order (all accounts in tax return order with category filter); PDF + frontend for both; IS/BS/CashFlow already complete from prior phases
 
 ## Completed — App-Only Features (built before plan adoption, kept and maintained)
 - Bank Transactions + AI Classification (OFX/CSV import, AI classify, rules, batch ops, source accounts, import dedup via SHA-256 hash, reclassify audit trail, pagination, sort_order priority)
