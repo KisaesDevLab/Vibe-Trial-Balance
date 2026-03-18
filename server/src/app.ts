@@ -21,6 +21,8 @@ import { cashFlowRouter } from './routes/cashFlow';
 import { tickmarkLibraryCollectionRouter, tickmarkLibraryItemRouter, tbTickmarkRouter } from './routes/tickmarks';
 import { savedReportCollectionRouter, savedReportItemRouter } from './routes/savedReports';
 import { varianceNotesRouter } from './routes/varianceNotes';
+import { pdfReportsRouter } from './routes/pdfReports';
+import { taxCodesRouter } from './routes/taxCodes';
 import { db } from './db';
 
 const app = express();
@@ -73,6 +75,8 @@ app.use('/api/v1/periods/:periodId/tb-tickmarks', tbTickmarkRouter);
 app.use('/api/v1/clients/:clientId/saved-reports', savedReportCollectionRouter);
 app.use('/api/v1/saved-reports/:id', savedReportItemRouter);
 app.use('/api/v1/periods/:periodId/variance-notes', varianceNotesRouter);
+app.use('/api/v1/reports', pdfReportsRouter);
+app.use('/api/v1/tax-codes', taxCodesRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
