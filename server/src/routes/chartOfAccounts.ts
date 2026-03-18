@@ -18,6 +18,9 @@ const accountSchema = z.object({
   subcategory: z.string().max(100).optional(),
   normalBalance: z.enum(['debit', 'credit']),
   taxLine: z.string().max(50).optional(),
+  taxCodeId: z.number().int().nullable().optional(),
+  taxLineSource: z.enum(['manual', 'ai', 'import', 'rule']).optional(),
+  taxLineConfidence: z.number().min(0).max(1).optional(),
   workpaperRef: z.string().max(50).optional(),
   preparerNotes: z.string().optional(),
   reviewerNotes: z.string().optional(),
@@ -304,6 +307,18 @@ coaItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<voi
   if (d.subcategory !== undefined) updates.subcategory = d.subcategory;
   if (d.normalBalance !== undefined) updates.normal_balance = d.normalBalance;
   if (d.taxLine !== undefined) updates.tax_line = d.taxLine;
+  if (d.taxCodeId !== undefined) {
+    updates.tax_code_id = d.taxCodeId;
+    // Dual-write: if assigning a code, look up its string for backward compat
+    if (d.taxCodeId !== null) {
+      const tc = await db('tax_codes').where({ id: d.taxCodeId }).first();
+      if (tc) updates.tax_line = tc.tax_code;
+    } else {
+      updates.tax_line = null;
+    }
+  }
+  if (d.taxLineSource !== undefined) updates.tax_line_source = d.taxLineSource;
+  if (d.taxLineConfidence !== undefined) updates.tax_line_confidence = d.taxLineConfidence;
   if (d.workpaperRef !== undefined) updates.workpaper_ref = d.workpaperRef;
   if (d.preparerNotes !== undefined) updates.preparer_notes = d.preparerNotes;
   if (d.reviewerNotes !== undefined) updates.reviewer_notes = d.reviewerNotes;

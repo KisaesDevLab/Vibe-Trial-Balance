@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, useAuthStore } from '../store/uiStore';
 import { getTrialBalance, TBRow } from '../api/trialBalance';
+import { downloadPdf, pdfReports } from '../api/pdfReports';
 import { getCashFlow } from '../api/cashFlow';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
@@ -288,11 +289,31 @@ type SectionId = typeof AVAILABLE_SECTIONS[number]['id'];
 
 export function WorkpaperPackagePage() {
   const { selectedClientId, selectedPeriodId } = useUIStore();
+  const token = useAuthStore((s) => s.token);
   const [firmName,   setFirmName]   = useState('');
   const [preparedBy, setPreparedBy] = useState('');
   const [reviewedBy, setReviewedBy] = useState('');
   const [selected,   setSelected]   = useState<Set<SectionId>>(new Set(['tb', 'balance-sheet', 'income-stmt']));
   const [showPreview, setShowPreview] = useState(false);
+  const [quickPdfLoading, setQuickPdfLoading] = useState<string | null>(null);
+  const [quickPdfError, setQuickPdfError] = useState<string | null>(null);
+
+  const handleQuickDownload = async (reportKey: 'tb' | 'is') => {
+    if (!selectedPeriodId || !token) return;
+    setQuickPdfLoading(reportKey);
+    setQuickPdfError(null);
+    try {
+      if (reportKey === 'tb') {
+        await downloadPdf(pdfReports.trialBalance(selectedPeriodId), `trial-balance-${selectedPeriodId}.pdf`, token);
+      } else {
+        await downloadPdf(pdfReports.incomeStatement(selectedPeriodId), `income-statement-${selectedPeriodId}.pdf`, token);
+      }
+    } catch (e) {
+      setQuickPdfError((e as Error).message);
+    } finally {
+      setQuickPdfLoading(null);
+    }
+  };
 
   const { data: clientsData } = useQuery({ queryKey: ['clients'], queryFn: listClients, enabled: !!selectedClientId });
   const { data: periodsData  } = useQuery({
@@ -364,6 +385,32 @@ export function WorkpaperPackagePage() {
             <span className="text-sm">{s.label}</span>
           </label>
         ))}
+      </div>
+
+      {/* Quick PDF downloads */}
+      <div className="border border-gray-200 rounded-lg p-4 space-y-2">
+        <h2 className="text-sm font-semibold text-gray-700 mb-2">Quick PDF Downloads</h2>
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => handleQuickDownload('tb')}
+            disabled={quickPdfLoading !== null}
+            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {quickPdfLoading === 'tb' ? 'Generating…' : '⬇ Download TB PDF'}
+          </button>
+          <button
+            onClick={() => handleQuickDownload('is')}
+            disabled={quickPdfLoading !== null}
+            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {quickPdfLoading === 'is' ? 'Generating…' : '⬇ Download Financial Statements PDF'}
+          </button>
+        </div>
+        {quickPdfError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded mt-2">
+            {quickPdfError}
+          </div>
+        )}
       </div>
 
       <button

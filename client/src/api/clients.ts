@@ -5,6 +5,7 @@ export interface Client {
   name: string;
   entity_type: '1065' | '1120' | '1120S' | '1040_C';
   tax_year_end: string;
+  activity_type: 'business' | 'rental' | 'farm' | 'farm_rental';
   default_tax_software: 'ultratax' | 'cch' | 'lacerte' | 'drake';
   tax_id: string | null;
   is_active: boolean;

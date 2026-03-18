@@ -13,6 +13,9 @@ export interface Account {
   preparer_notes: string | null;
   reviewer_notes: string | null;
   sort_order: number;
+  tax_code_id: number | null;
+  tax_line_source: 'manual' | 'ai' | 'import' | 'rule' | null;
+  tax_line_confidence: number | null;
   cash_flow_category: 'operating' | 'investing' | 'financing' | 'non_cash' | 'cash' | null;
   is_active: boolean;
   created_at: string;
@@ -26,6 +29,7 @@ export interface AccountInput {
   subcategory?: string;
   normalBalance: 'debit' | 'credit';
   taxLine?: string;
+  taxCodeId?: number | null;
   workpaperRef?: string;
   preparerNotes?: string;
   reviewerNotes?: string;

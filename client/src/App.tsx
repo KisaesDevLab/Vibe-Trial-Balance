@@ -24,6 +24,8 @@ import { CashFlowPage } from './pages/CashFlowPage';
 import { CustomReportPage } from './pages/CustomReportPage';
 import { WorkpaperPackagePage } from './pages/WorkpaperPackagePage';
 import { TickmarksPage } from './pages/TickmarksPage';
+import { TaxCodesPage } from './pages/TaxCodesPage';
+import { TaxMappingPage } from './pages/TaxMappingPage';
 import { useAuthStore } from './store/uiStore';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -68,6 +70,8 @@ export default function App() {
           <Route path="custom-reports" element={<CustomReportPage />} />
           <Route path="workpaper-package" element={<WorkpaperPackagePage />} />
           <Route path="tickmarks" element={<TickmarksPage />} />
+          <Route path="tax-mapping" element={<TaxMappingPage />} />
+          <Route path="tax-codes" element={<TaxCodesPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

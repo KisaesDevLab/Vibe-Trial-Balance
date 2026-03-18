@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, useAuthStore } from '../store/uiStore';
 import { getTBTickmarks, TICKMARK_COLOR_CLASSES, type TBTickmarkMap } from '../api/tickmarks';
+import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -60,6 +62,35 @@ const tdGrandCls = 'px-2 py-2 text-right text-sm font-mono font-bold text-gray-9
 
 export function TrialBalanceReportPage() {
   const { selectedPeriodId, selectedClientId } = useUIStore();
+  const token = useAuthStore((s) => s.token);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  const handlePreview = async () => {
+    if (!selectedPeriodId || !token) return;
+    setPdfLoading(true);
+    setPdfError(null);
+    try {
+      await openPdfPreview(pdfReports.trialBalance(selectedPeriodId) + '?preview=true', token);
+    } catch (e) {
+      setPdfError((e as Error).message);
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!selectedPeriodId || !token) return;
+    setPdfLoading(true);
+    setPdfError(null);
+    try {
+      await downloadPdf(pdfReports.trialBalance(selectedPeriodId), `trial-balance-${selectedPeriodId}.pdf`, token);
+    } catch (e) {
+      setPdfError((e as Error).message);
+    } finally {
+      setPdfLoading(false);
+    }
+  };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['trial-balance', selectedPeriodId],
@@ -140,9 +171,28 @@ export function TrialBalanceReportPage() {
         <h2 className="text-xl font-semibold text-gray-900">Trial Balance Report</h2>
         <div className="flex items-center gap-2">
           <button onClick={handleExport} disabled={!rows.length} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40">Export CSV</button>
-          <button onClick={() => window.print()} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Print</button>
+          <button
+            onClick={handlePreview}
+            disabled={pdfLoading}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+          >
+            {pdfLoading ? 'Generating…' : '↗ Preview PDF'}
+          </button>
+          <button
+            onClick={handleDownload}
+            disabled={pdfLoading}
+            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {pdfLoading ? 'Generating…' : '⬇ Download PDF'}
+          </button>
         </div>
       </div>
+
+      {pdfError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded mt-2 mb-4">
+          {pdfError}
+        </div>
+      )}
 
       {/* Report header */}
       {client && (
