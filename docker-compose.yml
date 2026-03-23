@@ -1,12 +1,12 @@
 ﻿services:
   db:
     image: postgres:16-alpine
-    container_name: trialbalance-db
+    container_name: vibe-tb-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: trialbalance
+      POSTGRES_USER: vibetb
       POSTGRES_PASSWORD: localdev123
-      POSTGRES_DB: trialbalance_db
+      POSTGRES_DB: vibe_tb_db
     ports:
       - "5432:5432"
     volumes:
@@ -14,7 +14,7 @@
 
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: trialbalance-pgadmin
+    container_name: vibe-tb-pgadmin
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@local.dev

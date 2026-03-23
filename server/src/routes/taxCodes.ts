@@ -1,10 +1,19 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
+import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 router.use(authMiddleware);
+
+function requireAdmin(req: AuthRequest, res: Response): boolean {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
+    return false;
+  }
+  return true;
+}
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -27,6 +36,7 @@ const taxCodeSchema = z.object({
   sortOrder: z.number().int().optional(),
   isSystem: z.boolean().optional(),
   isActive: z.boolean().optional(),
+  isM1Adjustment: z.boolean().optional(),
   notes: z.string().optional(),
   maps: z.array(mapSchema).optional(),
 });
@@ -42,6 +52,7 @@ function toRow(d: z.infer<typeof taxCodeSchema>) {
     sort_order: d.sortOrder ?? 0,
     is_system: d.isSystem ?? false,
     is_active: d.isActive ?? true,
+    is_m1_adjustment: d.isM1Adjustment ?? false,
     notes: d.notes ?? null,
   };
 }
@@ -158,12 +169,8 @@ router.get('/available', async (req: AuthRequest, res: Response): Promise<void> 
       })
       .select('tc.*', 'tcsm.software_code')
       .where('tc.is_active', true)
-      .where(function () {
-        this.where('tc.return_form', resolvedReturnForm).orWhere('tc.return_form', 'common');
-      })
-      .where(function () {
-        this.where('tc.activity_type', resolvedActivityType).orWhere('tc.activity_type', 'common');
-      })
+      .where('tc.return_form', resolvedReturnForm)
+      .where('tc.activity_type', resolvedActivityType)
       .orderBy([{ column: 'tc.sort_order', order: 'asc' }, { column: 'tc.tax_code', order: 'asc' }]);
 
     res.json({ data: rows, error: null, meta: { count: rows.length } });
@@ -206,43 +213,44 @@ router.get('/export', async (req: AuthRequest, res: Response): Promise<void> => 
       }
     }
 
-    const escapeCell = (v: unknown): string => {
-      if (v === null || v === undefined) return '';
-      const s = String(v);
-      if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-        return `"${s.replace(/"/g, '""')}"`;
-      }
-      return s;
-    };
-
-    const headers = [
-      'return_form', 'activity_type', 'tax_code', 'description', 'sort_order', 'notes',
-      'ultratax_code', 'cch_code', 'lacerte_code', 'gosystem_code', 'generic_code',
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Tax Codes');
+    ws.columns = [
+      { header: 'return_form',      key: 'return_form',      width: 14 },
+      { header: 'activity_type',    key: 'activity_type',    width: 14 },
+      { header: 'tax_code',         key: 'tax_code',         width: 18 },
+      { header: 'description',      key: 'description',      width: 40 },
+      { header: 'sort_order',       key: 'sort_order',       width: 12 },
+      { header: 'is_m1_adjustment', key: 'is_m1_adjustment', width: 16 },
+      { header: 'notes',            key: 'notes',            width: 30 },
+      { header: 'ultratax_code',    key: 'ultratax_code',    width: 14 },
+      { header: 'cch_code',         key: 'cch_code',         width: 14 },
+      { header: 'lacerte_code',     key: 'lacerte_code',     width: 14 },
+      { header: 'gosystem_code',    key: 'gosystem_code',    width: 14 },
+      { header: 'generic_code',     key: 'generic_code',     width: 14 },
     ];
-
-    const csvRows: string[] = [headers.join(',')];
     for (const c of codes) {
       const sm = softwareMaps[c.id] ?? {};
-      const row = [
-        escapeCell(c.return_form),
-        escapeCell(c.activity_type),
-        escapeCell(c.tax_code),
-        escapeCell(c.description),
-        escapeCell(c.sort_order),
-        escapeCell(c.notes),
-        escapeCell(sm['ultratax'] ?? ''),
-        escapeCell(sm['cch'] ?? ''),
-        escapeCell(sm['lacerte'] ?? ''),
-        escapeCell(sm['gosystem'] ?? ''),
-        escapeCell(sm['generic'] ?? ''),
-      ];
-      csvRows.push(row.join(','));
+      ws.addRow({
+        return_form:      c.return_form ?? '',
+        activity_type:    c.activity_type ?? '',
+        tax_code:         c.tax_code ?? '',
+        description:      c.description ?? '',
+        sort_order:       c.sort_order ?? 0,
+        is_m1_adjustment: c.is_m1_adjustment ? 'true' : 'false',
+        notes:            c.notes ?? '',
+        ultratax_code:    sm['ultratax'] ?? '',
+        cch_code:         sm['cch'] ?? '',
+        lacerte_code:     sm['lacerte'] ?? '',
+        gosystem_code:    sm['gosystem'] ?? '',
+        generic_code:     sm['generic'] ?? '',
+      });
     }
-
     const suffix = taxSoftware ? `-${taxSoftware}` : '';
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="tax-codes${suffix}.csv"`);
-    res.send(csvRows.join('\n'));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="tax-codes${suffix}.xlsx"`);
+    await wb.xlsx.write(res);
+    res.end();
   } catch (err: unknown) {
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
   }
@@ -271,6 +279,7 @@ router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
 // ── POST /import/preview ──────────────────────────────────────────────────────
 
 router.post('/import/preview', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
   try {
     const { csv } = req.body as { csv?: string };
     if (!csv || typeof csv !== 'string') {
@@ -288,6 +297,7 @@ router.post('/import/preview', async (req: AuthRequest, res: Response): Promise<
 // ── POST /import ──────────────────────────────────────────────────────────────
 
 router.post('/import', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
   try {
     const { csv } = req.body as { csv?: string };
     if (!csv || typeof csv !== 'string') {
@@ -306,6 +316,7 @@ router.post('/import', async (req: AuthRequest, res: Response): Promise<void> =>
 // ── POST /bulk ────────────────────────────────────────────────────────────────
 
 router.post('/bulk', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
   try {
     const bulkSchema = z.array(taxCodeSchema.extend({ id: z.number().int().optional() }));
     const result = bulkSchema.safeParse(req.body);
@@ -339,6 +350,7 @@ router.post('/bulk', async (req: AuthRequest, res: Response): Promise<void> => {
 // ── POST / ────────────────────────────────────────────────────────────────────
 
 router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
   const result = taxCodeSchema.safeParse(req.body);
   if (!result.success) {
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
@@ -360,6 +372,7 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
 // ── PUT /:id ──────────────────────────────────────────────────────────────────
 
 router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) {
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid tax code ID' } });
@@ -394,6 +407,7 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
 // ── DELETE /:id ───────────────────────────────────────────────────────────────
 
 router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) {
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid tax code ID' } });
@@ -451,6 +465,7 @@ router.get('/:id/mappings', async (req: AuthRequest, res: Response): Promise<voi
 // ── POST /:id/mappings ────────────────────────────────────────────────────────
 
 router.post('/:id/mappings', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) {
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid tax code ID' } });
@@ -485,6 +500,7 @@ router.post('/:id/mappings', async (req: AuthRequest, res: Response): Promise<vo
 // ── PUT /mappings/:mapId ──────────────────────────────────────────────────────
 
 router.put('/mappings/:mapId', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
   const mapId = Number(req.params.mapId);
   if (isNaN(mapId)) {
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid mapping ID' } });
@@ -520,6 +536,7 @@ router.put('/mappings/:mapId', async (req: AuthRequest, res: Response): Promise<
 // ── DELETE /mappings/:mapId ───────────────────────────────────────────────────
 
 router.delete('/mappings/:mapId', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
   const mapId = Number(req.params.mapId);
   if (isNaN(mapId)) {
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid mapping ID' } });
@@ -545,6 +562,7 @@ interface CsvTaxCodeRow {
   tax_code: string;
   description: string;
   sort_order?: number;
+  is_m1_adjustment: boolean;
   notes?: string;
   maps: { tax_software: string; software_code: string }[];
 }
@@ -573,6 +591,7 @@ function parseCsvToRows(csv: string): CsvTaxCodeRow[] {
       tax_code: obj['tax_code'] ?? '',
       description: obj['description'] ?? '',
       sort_order: obj['sort_order'] ? Number(obj['sort_order']) : undefined,
+      is_m1_adjustment: obj['is_m1_adjustment'] === 'true' || obj['is_m1_adjustment'] === '1',
       notes: obj['notes'] || undefined,
       maps,
     });
@@ -622,6 +641,7 @@ async function applyUpsertRows(rows: CsvTaxCodeRow[]) {
       tax_code: r.tax_code,
       description: r.description,
       sort_order: r.sort_order ?? 0,
+      is_m1_adjustment: r.is_m1_adjustment,
       notes: r.notes ?? null,
     };
 

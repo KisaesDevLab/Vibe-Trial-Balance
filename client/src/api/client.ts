@@ -1,3 +1,5 @@
+import { useAuthStore } from '../store/uiStore';
+
 const BASE_URL = '/api/v1';
 
 function getToken(): string | null {
@@ -8,6 +10,13 @@ function getToken(): string | null {
     return parsed.state?.token ?? null;
   } catch {
     return null;
+  }
+}
+
+function handleUnauthorized(): void {
+  useAuthStore.getState().clearAuth();
+  if (!window.location.pathname.startsWith('/login')) {
+    window.location.href = '/login';
   }
 }
 
@@ -36,6 +45,11 @@ export async function apiFetch<T>(
     });
   } catch {
     return { data: null, error: { code: 'NETWORK_ERROR', message: 'Cannot reach server. Is it running?' } };
+  }
+
+  if (response.status === 401) {
+    handleUnauthorized();
+    return { data: null, error: { code: 'UNAUTHORIZED', message: 'Session expired. Please log in again.' } };
   }
 
   try {

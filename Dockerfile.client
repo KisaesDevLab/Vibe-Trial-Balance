@@ -1,0 +1,17 @@
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+# Install client dependencies
+COPY client/package.json client/package-lock.json* client/
+RUN cd client && npm install
+
+# Copy client source and build
+COPY client/ client/
+RUN cd client && npm run build
+
+# Serve with Nginx
+FROM nginx:alpine
+COPY --from=build /app/client/dist /usr/share/nginx/html
+COPY deploy/nginx-docker.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80

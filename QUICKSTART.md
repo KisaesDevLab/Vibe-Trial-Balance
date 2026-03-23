@@ -1,4 +1,4 @@
-# Quick Reference — Trial Balance App
+# Quick Reference — Vibe Trial Balance
 
 ## First Time Setup
 ```powershell
@@ -46,8 +46,8 @@ git stash pop          # if you had uncommitted changes
 | Start backend only | `cd server && npm run dev` |
 | Start frontend only | `cd client && npm run dev` |
 | Start both | `npm run dev` |
-| Check database tables | `docker exec -it trialbalance-db psql -U trialbalance -d trialbalance_db -c "\dt"` |
-| Open database shell | `docker exec -it trialbalance-db psql -U trialbalance -d trialbalance_db` |
+| Check database tables | `docker exec -it vibe-tb-db psql -U vibetb -d vibe_tb_db -c "\dt"` |
+| Open database shell | `docker exec -it vibe-tb-db psql -U vibetb -d vibe_tb_db` |
 
 ---
 
@@ -65,7 +65,7 @@ git stash pop          # if you had uncommitted changes
 2. Login with admin@local.dev / admin
 3. Right-click "Servers" → Register → Server
 4. General tab → Name: `Local`
-5. Connection tab → Host: `db`, Port: `5432`, Username: `trialbalance`, Password: `localdev123`
+5. Connection tab → Host: `db`, Port: `5432`, Username: `vibetb`, Password: `localdev123`
 6. Save
 
 ---

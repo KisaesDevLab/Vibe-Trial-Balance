@@ -183,6 +183,15 @@ periodItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise
     return;
   }
   try {
+    const period = await db('periods').where({ id }).first('id', 'locked_at');
+    if (!period) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
+      return;
+    }
+    if (period.locked_at && req.user?.role !== 'admin') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: 'Cannot delete a locked period. Ask an admin to unlock it first.' } });
+      return;
+    }
     const [deleted] = await db('periods').where({ id }).delete().returning('id');
     if (!deleted) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });

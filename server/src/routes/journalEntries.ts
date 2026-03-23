@@ -40,10 +40,14 @@ jeCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
     return;
   }
   const typeFilter = typeof req.query.type === 'string' ? req.query.type : null;
+  const accountIdFilter = typeof req.query.accountId === 'string' ? Number(req.query.accountId) : null;
 
   try {
     let q = db('journal_entries').where({ period_id: periodId });
     if (typeFilter) q = q.where({ entry_type: typeFilter });
+    if (accountIdFilter && !isNaN(accountIdFilter)) {
+      q = q.whereIn('id', db('journal_entry_lines').where('account_id', accountIdFilter).select('journal_entry_id'));
+    }
     const entries = await q.orderBy('entry_type').orderBy('entry_number');
 
     const entryIds = entries.map((e: { id: number }) => e.id);
@@ -101,6 +105,9 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
     await db.transaction(async (trx) => {
       await assertPeriodUnlocked(periodId, trx);
 
+      // Lock the period row as a serialization point so concurrent JE creation
+      // can't compute the same entry_number
+      await trx.raw('SELECT id FROM periods WHERE id = ? FOR UPDATE', [periodId]);
       const lastEntry = await trx('journal_entries')
         .where({ period_id: periodId, entry_type: entryType })
         .max('entry_number as max')
@@ -193,6 +200,9 @@ jeItemRouter.put('/:id/lines', async (req: AuthRequest, res: Response): Promise<
 
   try {
     await db.transaction(async (trx) => {
+      const je = await trx('journal_entries').where({ id }).first('period_id');
+      if (!je) throw Object.assign(new Error('Journal entry not found'), { code: 'NOT_FOUND', status: 404 });
+      await assertPeriodUnlocked(je.period_id, trx);
       await trx('journal_entry_lines').where({ journal_entry_id: id }).delete();
       await trx('journal_entry_lines').insert(
         lines.map((l) => ({
@@ -205,6 +215,15 @@ jeItemRouter.put('/:id/lines', async (req: AuthRequest, res: Response): Promise<
     });
     res.json({ data: { id, lines }, error: null });
   } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked' } });
+      return;
+    }
+    if (e.code === 'NOT_FOUND') {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
+      return;
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
   }
@@ -217,14 +236,11 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid ID' } });
     return;
   }
+  let existing: { entry_type: string } | undefined;
   try {
-    const existing = await db('journal_entries').where({ id }).first('entry_type');
+    existing = await db('journal_entries').where({ id }).first('entry_type');
     if (!existing) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
-      return;
-    }
-    if (existing.entry_type === 'trans') {
-      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Trans entries are managed via Bank Transactions and cannot be edited directly.' } });
       return;
     }
   } catch (err: unknown) {
@@ -263,7 +279,8 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
       if (existing2) await assertPeriodUnlocked(existing2.period_id, trx);
 
       const headerUpdates: Record<string, unknown> = { updated_at: trx.fn.now() };
-      if (entryType !== undefined) headerUpdates.entry_type = entryType;
+      // Don't allow changing entry_type for trans entries
+      if (entryType !== undefined && existing.entry_type !== 'trans') headerUpdates.entry_type = entryType;
       if (entryDate !== undefined) headerUpdates.entry_date = entryDate;
       if (description !== undefined) headerUpdates.description = description;
 
@@ -276,6 +293,18 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
           lines.map((l) => ({ journal_entry_id: id, account_id: l.accountId, debit: l.debit, credit: l.credit })),
         );
       }
+
+      // Sync changes back to the linked bank transaction
+      if (existing.entry_type === 'trans') {
+        const btUpdates: Record<string, unknown> = {};
+        if (entryDate !== undefined) btUpdates.transaction_date = entryDate;
+        if (description !== undefined) btUpdates.description = description;
+        if (lines) btUpdates.amount = lines.reduce((s, l) => s + l.debit, 0);
+        if (Object.keys(btUpdates).length > 0) {
+          await trx('bank_transactions').where({ journal_entry_id: id }).update(btUpdates);
+        }
+      }
+
       await logAudit({ userId: req.user!.userId, periodId: entry.period_id, entityType: 'journal_entry', entityId: id, action: 'update', description: `Updated JE #${entry.entry_number}` }, trx);
       return entry;
     });
@@ -306,10 +335,6 @@ jeItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<voi
     const existing = await db('journal_entries').where({ id }).first('entry_type', 'period_id', 'entry_number');
     if (!existing) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
-      return;
-    }
-    if (existing.entry_type === 'trans') {
-      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Trans entries are managed via Bank Transactions and cannot be deleted directly.' } });
       return;
     }
     await assertPeriodUnlocked(existing.period_id);

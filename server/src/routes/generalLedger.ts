@@ -26,11 +26,10 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
         'coa.account_name',
         'coa.category',
         'coa.normal_balance',
-        'coa.sort_order',
         'tb.unadjusted_debit',
         'tb.unadjusted_credit',
       )
-      .orderBy(['coa.sort_order', 'coa.account_number']);
+      .orderBy('coa.account_number');
 
     // All JE lines for the period
     const jeLines = await db('journal_entry_lines as jel')
@@ -43,7 +42,6 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
         'coa.account_name',
         'coa.category',
         'coa.normal_balance',
-        'coa.sort_order',
         'je.entry_date',
         'je.entry_number',
         'je.entry_type',
@@ -51,17 +49,17 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
         'jel.debit',
         'jel.credit',
       )
-      .orderBy(['coa.sort_order', 'coa.account_number', 'je.entry_date', 'je.entry_number']);
+      .orderBy(['coa.account_number', 'je.entry_date', 'je.entry_number']);
 
     // Index TB rows by account_id
-    interface TBRow { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; sort_order: number; unadjusted_debit: unknown; unadjusted_credit: unknown; }
-    interface JELine { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; sort_order: number; entry_date: string; entry_number: number; entry_type: string; description: string | null; debit: unknown; credit: unknown; }
+    interface TBRow { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; unadjusted_debit: unknown; unadjusted_credit: unknown; }
+    interface JELine { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; entry_date: string; entry_number: number; entry_type: string; description: string | null; debit: unknown; credit: unknown; }
 
     const tbMap = new Map<number, TBRow>();
     for (const row of tbRows as TBRow[]) tbMap.set(row.account_id, row);
 
     // Collect all unique accounts (TB + JE), preserving sort
-    const accountOrder = new Map<number, { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; sort_order: number }>();
+    const accountOrder = new Map<number, { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string }>();
     for (const row of tbRows as TBRow[]) {
       if (!accountOrder.has(row.account_id)) accountOrder.set(row.account_id, row);
     }
@@ -77,11 +75,10 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
       linesByAccount.set(line.account_id, existing);
     }
 
-    // Build result sorted by sort_order then account_number
-    const accounts = [...accountOrder.values()].sort((a, b) => {
-      const sd = a.sort_order - b.sort_order;
-      return sd !== 0 ? sd : a.account_number.localeCompare(b.account_number);
-    });
+    // Build result sorted by account_number
+    const accounts = [...accountOrder.values()].sort((a, b) =>
+      a.account_number.localeCompare(b.account_number),
+    );
 
     const result = accounts.map((acct) => {
       const tb = tbMap.get(acct.account_id);

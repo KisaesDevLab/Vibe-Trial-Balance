@@ -10,9 +10,9 @@ const clientSchema = z.object({
   name: z.string().min(1).max(255),
   entityType: z.enum(['1065', '1120', '1120S', '1040_C']),
   taxYearEnd: z.string().max(4).optional(),
-  defaultTaxSoftware: z.enum(['ultratax', 'cch', 'lacerte', 'drake']).optional(),
+  defaultTaxSoftware: z.enum(['ultratax', 'cch', 'lacerte', 'gosystem']).optional(),
   taxId: z.string().max(20).optional().nullable(),
-  activityType: z.string().max(20).optional().default('business'),
+  activityType: z.enum(['business', 'rental', 'farm', 'farm_rental']).optional().default('business'),
 });
 
 router.get('/', async (_req: AuthRequest, res: Response): Promise<void> => {

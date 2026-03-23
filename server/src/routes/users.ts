@@ -85,6 +85,11 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
     return;
   }
 
+  if (id === req.user!.userId && parsed.data.isActive === false) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_INPUT', message: 'You cannot deactivate your own account.' } });
+    return;
+  }
+
   const updates: Record<string, unknown> = { updated_at: db.fn.now() };
   if (parsed.data.displayName !== undefined) updates.display_name = parsed.data.displayName;
   if (parsed.data.role !== undefined) updates.role = parsed.data.role;

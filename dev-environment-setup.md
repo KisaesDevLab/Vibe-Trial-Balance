@@ -69,8 +69,8 @@ Open PowerShell or your preferred terminal:
 
 ```bash
 cd C:\Users\YourName\Projects    # or wherever you keep code
-git clone https://github.com/YOUR_USERNAME/trial-balance-app.git
-cd trial-balance-app
+git clone https://github.com/YOUR_USERNAME/vibe-tb.git
+cd vibe-tb
 ```
 
 ---
@@ -81,7 +81,7 @@ If you haven't already committed the starter kit files to the repo,
 create this folder structure and add the files from the starter kit:
 
 ```
-trial-balance-app/
+vibe-tb/
 ├── client/                      # (created by Claude Code in Phase 1)
 ├── server/
 │   ├── migrations/
@@ -117,12 +117,12 @@ one command stops it.
 services:
   db:
     image: postgres:16-alpine
-    container_name: trialbalance-db
+    container_name: vibe-tb-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: trialbalance
+      POSTGRES_USER: vibetb
       POSTGRES_PASSWORD: localdev123
-      POSTGRES_DB: trialbalance_db
+      POSTGRES_DB: vibe_tb_db
     ports:
       - "5432:5432"
     volumes:
@@ -131,7 +131,7 @@ services:
   # Optional: pgAdmin web UI for browsing your database
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: trialbalance-pgadmin
+    container_name: vibe-tb-pgadmin
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@local.dev
@@ -156,8 +156,8 @@ volumes:
 # Database
 DB_HOST=127.0.0.1
 DB_PORT=5432
-DB_NAME=trialbalance_db
-DB_USER=trialbalance
+DB_NAME=vibe_tb_db
+DB_USER=vibetb
 DB_PASSWORD=localdev123
 
 # Auth
@@ -178,8 +178,8 @@ NODE_ENV=development
 # Database
 DB_HOST=127.0.0.1
 DB_PORT=5432
-DB_NAME=trialbalance_db
-DB_USER=trialbalance
+DB_NAME=vibe_tb_db
+DB_USER=vibetb
 DB_PASSWORD=
 
 # Auth
@@ -255,7 +255,7 @@ docker compose ps              # Check what's running
 **To access pgAdmin** (optional database browser):
 1. Open http://localhost:5050
 2. Login: `admin@local.dev` / `admin`
-3. Add server: Host = `db`, Port = `5432`, User = `trialbalance`, Password = `localdev123`
+3. Add server: Host = `db`, Port = `5432`, User = `vibetb`, Password = `localdev123`
 
 ---
 
@@ -264,7 +264,7 @@ docker compose ps              # Check what's running
 Quick test to confirm PostgreSQL is accessible:
 
 ```bash
-docker exec -it trialbalance-db psql -U trialbalance -d trialbalance_db -c "SELECT version();"
+docker exec -it vibe-tb-db psql -U vibetb -d vibe_tb_db -c "SELECT version();"
 ```
 
 Should output something like: `PostgreSQL 16.x on x86_64...`
@@ -285,7 +285,7 @@ Open VS Code, go to Extensions (Ctrl+Shift+X), install:
 ### VS Code PostgreSQL Connection
 After installing the PostgreSQL extension:
 1. Click the database icon in the sidebar
-2. Add connection: Host `127.0.0.1`, Port `5432`, User `trialbalance`, Password `localdev123`, Database `trialbalance_db`, SSL off
+2. Add connection: Host `127.0.0.1`, Port `5432`, User `vibetb`, Password `localdev123`, Database `vibe_tb_db`, SSL off
 3. You can now browse tables and run queries directly in VS Code
 
 ---
@@ -307,7 +307,7 @@ the admin user + tax line reference data.
 
 **Verify tables were created:**
 ```bash
-docker exec -it trialbalance-db psql -U trialbalance -d trialbalance_db -c "\dt"
+docker exec -it vibe-tb-db psql -U vibetb -d vibe_tb_db -c "\dt"
 ```
 
 Should list all 12 tables plus the `knex_migrations` tracking table.
@@ -405,7 +405,7 @@ Something else is using PostgreSQL's port. Either:
 - Check container logs: `docker compose logs db`
 
 ### Migration fails
-- Make sure the database exists: `docker exec -it trialbalance-db psql -U trialbalance -d trialbalance_db -c "SELECT 1;"`
+- Make sure the database exists: `docker exec -it vibe-tb-db psql -U vibetb -d vibe_tb_db -c "SELECT 1;"`
 - Check `.env` credentials match docker-compose.yml
 
 ### "Cannot find module" errors

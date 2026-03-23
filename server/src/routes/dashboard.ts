@@ -17,10 +17,12 @@ dashboardRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> 
     // Period info (including lock status + locker name)
     const period = await db('periods')
       .leftJoin('app_users as locker', 'locker.id', 'periods.locked_by')
+      .leftJoin('clients', 'clients.id', 'periods.client_id')
       .where('periods.id', periodId)
       .first(
         'periods.*',
         'locker.display_name as locked_by_name',
+        'clients.name as client_name',
       );
 
     if (!period) {

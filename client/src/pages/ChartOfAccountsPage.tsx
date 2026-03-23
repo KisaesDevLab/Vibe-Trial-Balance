@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   useReactTable,
@@ -19,6 +19,7 @@ import {
   type AccountInput,
 } from '../api/chartOfAccounts';
 import { listClients, type Client } from '../api/clients';
+import { listTaxCodes, type TaxCode } from '../api/taxCodes';
 import { useUIStore } from '../store/uiStore';
 
 const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'] as const;
@@ -32,10 +33,77 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 const columnHelper = createColumnHelper<Account>();
 
+const defaultNormalBalance = (category: string): 'debit' | 'credit' =>
+  (category === 'assets' || category === 'expenses') ? 'debit' : 'credit';
+
+// --- Tax Code Dropdown ---
+
+function TaxCodeDropdown({ currentCodeId, taxCodes, onSelect }: {
+  currentCodeId: number | null;
+  taxCodes: TaxCode[];
+  onSelect: (codeId: number | null, taxLine: string | null) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const current = taxCodes.find((c) => c.id === currentCodeId);
+  const filtered = taxCodes.filter((c) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return c.tax_code.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
+  });
+  const selectCode = (code: TaxCode | null) => {
+    onSelect(code?.id ?? null, code?.tax_code ?? null);
+    setOpen(false);
+    setSearch('');
+  };
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`w-full text-left px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white hover:border-blue-400 ${currentCodeId ? '' : 'text-gray-400 dark:text-gray-500 italic'}`}
+      >
+        {current
+          ? <span><span className="font-mono font-medium">{current.tax_code}</span> — {current.description}</span>
+          : '— unassigned —'}
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-96 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
+          <div className="p-2 border-b dark:border-gray-700">
+            <input
+              autoFocus
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search code or description…"
+              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+            />
+          </div>
+          <div className="max-h-60 overflow-y-auto">
+            <button type="button" onClick={() => selectCode(null)}
+              className="w-full text-left px-3 py-1.5 text-xs text-gray-400 dark:text-gray-500 italic hover:bg-gray-50 dark:hover:bg-gray-700 border-b dark:border-gray-700">
+              — unassigned —
+            </button>
+            {filtered.length === 0
+              ? <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">No matching codes</p>
+              : filtered.map((c) => (
+                <button key={c.id} type="button" onClick={() => selectCode(c)}
+                  className={`w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 ${currentCodeId === c.id ? 'bg-blue-50 dark:bg-blue-900/20 font-medium' : ''}`}>
+                  <span className="font-mono font-medium text-gray-900 dark:text-white">{c.tax_code}</span>
+                  <span className="text-gray-500 dark:text-gray-400 ml-1">— {c.description}</span>
+                </button>
+              ))
+            }
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Account Form ---
 interface AccountFormProps {
   clientId: number;
-  initial?: Partial<AccountInput>;
+  initial?: Partial<AccountInput> & { taxCodeId?: number | null; importAliases?: string[] };
   onSave: (input: AccountInput) => void;
   onCancel: () => void;
   saving: boolean;
@@ -43,63 +111,87 @@ interface AccountFormProps {
 }
 
 function AccountForm({ clientId: _clientId, initial, onSave, onCancel, saving, error }: AccountFormProps) {
-  const [form, setForm] = useState<AccountInput>({
+  const [form, setForm] = useState<AccountInput & { taxCodeId: number | null }>({
     accountNumber: initial?.accountNumber ?? '',
     accountName: initial?.accountName ?? '',
     category: initial?.category ?? 'assets',
     subcategory: initial?.subcategory ?? '',
-    normalBalance: initial?.normalBalance ?? 'debit',
+    normalBalance: initial?.normalBalance ?? defaultNormalBalance(initial?.category ?? 'assets'),
+    taxCodeId: initial?.taxCodeId ?? null,
     taxLine: initial?.taxLine ?? '',
     workpaperRef: initial?.workpaperRef ?? '',
-    sortOrder: initial?.sortOrder ?? 0,
+    unit: initial?.unit ?? '',
   });
+  const [aliases, setAliases] = useState<string[]>(initial?.importAliases ?? []);
+  const [aliasInput, setAliasInput] = useState('');
+
+  const { data: tcData } = useQuery({
+    queryKey: ['tax-codes'],
+    queryFn: () => listTaxCodes(),
+  });
+  const taxCodes = tcData?.data ?? [];
 
   const set = (field: keyof AccountInput, value: string | number) =>
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => ({
+      ...prev,
+      [field]: value,
+      // Auto-derive normal balance when category changes, unless user has already overridden it
+      ...(field === 'category' ? { normalBalance: defaultNormalBalance(value as string) } : {}),
+    }));
+
+  const handleAddAlias = () => {
+    const trimmed = aliasInput.trim();
+    if (trimmed && !aliases.includes(trimmed)) {
+      setAliases((prev) => [...prev, trimmed]);
+    }
+    setAliasInput('');
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSave({
       ...form,
       subcategory: form.subcategory || undefined,
+      taxCodeId: form.taxCodeId ?? null,
       taxLine: form.taxLine || undefined,
       workpaperRef: form.workpaperRef || undefined,
+      importAliases: aliases,
     });
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-sm">
           {error}
         </div>
       )}
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Account #</label>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Account #</label>
           <input
             value={form.accountNumber}
             onChange={(e) => set('accountNumber', e.target.value)}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
             required
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Account Name</label>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Account Name</label>
           <input
             value={form.accountName}
             onChange={(e) => set('accountName', e.target.value)}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
             required
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Category</label>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
           <select
             value={form.category}
             onChange={(e) => set('category', e.target.value)}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
           >
             {CATEGORIES.map((c) => (
               <option key={c} value={c}>
@@ -109,51 +201,98 @@ function AccountForm({ clientId: _clientId, initial, onSave, onCancel, saving, e
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Subcategory</label>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Subcategory</label>
           <input
             value={form.subcategory ?? ''}
             onChange={(e) => set('subcategory', e.target.value)}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
             placeholder="Optional"
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Normal Balance</label>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Normal Balance
+            <span className="ml-1 font-normal text-gray-400 dark:text-gray-500">(auto — override for contra accounts)</span>
+          </label>
           <select
             value={form.normalBalance}
             onChange={(e) => set('normalBalance', e.target.value)}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
           >
             <option value="debit">Debit</option>
             <option value="credit">Credit</option>
           </select>
         </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Tax Line</label>
-          <input
-            value={form.taxLine ?? ''}
-            onChange={(e) => set('taxLine', e.target.value)}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Optional"
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Tax Code</label>
+          <TaxCodeDropdown
+            currentCodeId={form.taxCodeId ?? null}
+            taxCodes={taxCodes}
+            onSelect={(codeId, taxLine) => setForm((prev) => ({ ...prev, taxCodeId: codeId, taxLine: taxLine ?? '' }))}
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Workpaper Ref</label>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Workpaper Ref</label>
           <input
             value={form.workpaperRef ?? ''}
             onChange={(e) => set('workpaperRef', e.target.value)}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
             placeholder="Optional"
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Sort Order</label>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Unit
+            <span className="ml-1 font-normal text-gray-400 dark:text-gray-500">(e.g. property or entity)</span>
+          </label>
           <input
-            type="number"
-            value={form.sortOrder ?? 0}
-            onChange={(e) => set('sortOrder', Number(e.target.value))}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={form.unit ?? ''}
+            onChange={(e) => set('unit', e.target.value)}
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+            placeholder="Optional"
           />
+        </div>
+      </div>
+
+      {/* Import Aliases */}
+      <div className="border-t dark:border-gray-700 pt-3">
+        <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Import Aliases
+          <span className="ml-1 font-normal text-gray-400 dark:text-gray-500">(alternative names used in imported files — added automatically on import and rename)</span>
+        </label>
+        <div className="flex flex-wrap gap-1.5 mb-2 min-h-[1.75rem]">
+          {aliases.length === 0 && <span className="text-xs text-gray-400 dark:text-gray-500 italic">No aliases yet</span>}
+          {aliases.map((alias) => (
+            <span key={alias} className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded text-xs text-gray-700 dark:text-gray-300">
+              {alias}
+              <button
+                type="button"
+                onClick={() => setAliases((prev) => prev.filter((a) => a !== alias))}
+                className="text-gray-400 dark:text-gray-500 hover:text-red-500 leading-none"
+                title="Remove alias"
+              >
+                &times;
+              </button>
+            </span>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={aliasInput}
+            onChange={(e) => setAliasInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddAlias(); } }}
+            placeholder="Add an alias (e.g. A/R, Receivables)…"
+            className="flex-1 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+          />
+          <button
+            type="button"
+            onClick={handleAddAlias}
+            disabled={!aliasInput.trim()}
+            className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-40 dark:text-gray-300"
+          >
+            Add
+          </button>
         </div>
       </div>
 
@@ -161,7 +300,7 @@ function AccountForm({ clientId: _clientId, initial, onSave, onCancel, saving, e
         <button
           type="button"
           onClick={onCancel}
-          className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
+          className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300"
         >
           Cancel
         </button>
@@ -181,10 +320,10 @@ function AccountForm({ clientId: _clientId, initial, onSave, onCancel, saving, e
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl">
-        <div className="flex items-center justify-between px-5 py-4 border-b">
-          <h2 className="text-base font-semibold">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
+          <h2 className="text-base font-semibold dark:text-white">{title}</h2>
+          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4">{children}</div>
       </div>
@@ -231,7 +370,7 @@ interface CoaMapping {
   subcategoryCol: string;
   taxLineCol: string;
   workpaperRefCol: string;
-  sortOrderCol: string;
+  unitCol: string;
 }
 
 interface MappedRow {
@@ -242,7 +381,7 @@ interface MappedRow {
   subcategory?: string;
   taxLine?: string;
   workpaperRef?: string;
-  sortOrder?: number;
+  unit?: string;
   _errors: string[];
 }
 
@@ -259,7 +398,7 @@ function autoDetectMapping(headers: string[]): CoaMapping {
     subcategoryCol:   bestMatch(headers, ['subcategory', 'sub_category', 'sub category', 'sub']),
     taxLineCol:       bestMatch(headers, ['tax_line', 'tax line', 'tax_code', 'tax code', 'tax']),
     workpaperRefCol:  bestMatch(headers, ['workpaper_ref', 'workpaper ref', 'wp_ref', 'wp ref', 'workpaper']),
-    sortOrderCol:     bestMatch(headers, ['sort_order', 'sort order', 'order', 'sequence', 'sort']),
+    unitCol:          bestMatch(headers, ['unit', 'property', 'entity', 'division']),
   };
 }
 
@@ -271,20 +410,18 @@ function applyMapping(dataRows: string[][], headers: string[], mapping: CoaMappi
     const accountNumber = get(mapping.accountNumberCol);
     const accountName   = get(mapping.accountNameCol);
     const category      = get(mapping.categoryCol).toLowerCase();
-    const normalBalance = get(mapping.normalBalanceCol).toLowerCase();
-    const sortRaw       = get(mapping.sortOrderCol);
+    const rawNormalBalance = get(mapping.normalBalanceCol).toLowerCase();
+    const normalBalance = rawNormalBalance || defaultNormalBalance(category);
     if (!accountNumber) errors.push('account_number required');
     if (!accountName)   errors.push('account_name required');
     if (!VALID_CATEGORIES.has(category)) errors.push(`invalid category "${category}"`);
-    if (!VALID_BALANCES.has(normalBalance)) errors.push(`invalid normal_balance "${normalBalance}"`);
-    const sortOrder = sortRaw ? Number(sortRaw) : undefined;
-    if (sortRaw && isNaN(sortOrder!)) errors.push('sort_order must be a number');
+    if (rawNormalBalance && !VALID_BALANCES.has(rawNormalBalance)) errors.push(`invalid normal_balance "${rawNormalBalance}"`);
     return {
       accountNumber, accountName, category, normalBalance,
       subcategory:  get(mapping.subcategoryCol)  || undefined,
       taxLine:      get(mapping.taxLineCol)       || undefined,
       workpaperRef: get(mapping.workpaperRefCol)  || undefined,
-      sortOrder,
+      unit:         get(mapping.unitCol)          || undefined,
       _errors: errors,
     };
   });
@@ -296,11 +433,11 @@ function ColMapRow({ label, headers, value, onChange, optional }: {
 }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="text-xs font-medium text-gray-700 w-32 shrink-0">{label}</span>
+      <span className="text-xs font-medium text-gray-700 dark:text-gray-300 w-32 shrink-0">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="flex-1 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
       >
         <option value="">{optional ? '— skip —' : 'Select column…'}</option>
         {headers.map((h) => <option key={h} value={h}>{h}</option>)}
@@ -322,7 +459,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
   const [headers, setHeaders] = useState<string[]>([]);
   const [mapping, setMapping] = useState<CoaMapping>({
     accountNumberCol: '', accountNameCol: '', categoryCol: '', normalBalanceCol: '',
-    subcategoryCol: '', taxLineCol: '', workpaperRefCol: '', sortOrderCol: '',
+    subcategoryCol: '', taxLineCol: '', workpaperRefCol: '', unitCol: '',
   });
   const [fileName, setFileName] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
@@ -355,7 +492,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
   const validRows  = mappedRows.filter((r) => r._errors.length === 0);
   const errorCount = mappedRows.filter((r) => r._errors.length > 0).length;
   const canProceed = !!mapping.accountNumberCol && !!mapping.accountNameCol &&
-                     !!mapping.categoryCol && !!mapping.normalBalanceCol;
+                     !!mapping.categoryCol;
 
   const handleImport = () => {
     importMutation.mutate(validRows.map((r) => ({
@@ -366,7 +503,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
       subcategory:   r.subcategory,
       taxLine:       r.taxLine,
       workpaperRef:  r.workpaperRef,
-      sortOrder:     r.sortOrder,
+      unit:          r.unit,
     })));
   };
 
@@ -381,7 +518,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
       <div className="space-y-4">
         {result?.data ? (
           <>
-            <div className="bg-green-50 border border-green-200 rounded px-4 py-3 text-sm text-green-800">
+            <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded px-4 py-3 text-sm text-green-800 dark:text-green-400">
               Import complete: <strong>{result.data.inserted}</strong> inserted, <strong>{result.data.updated}</strong> updated.
             </div>
             <div className="flex justify-end">
@@ -390,19 +527,49 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
           </>
         ) : step === 'file' ? (
           <>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
               Select any CSV file — you'll map which column maps to which field on the next step.
               Existing accounts with the same account number will be updated; new ones will be inserted.
             </p>
+            <div className="bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-700 rounded p-3 text-xs">
+              <p className="font-semibold text-gray-600 dark:text-gray-400 mb-1.5">Valid values</p>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-0.5">
+                <div>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">category</span>
+                  <ul className="mt-0.5 space-y-0.5 text-gray-500 dark:text-gray-400">
+                    {([
+                      ['assets', 'debit'],
+                      ['liabilities', 'credit'],
+                      ['equity', 'credit'],
+                      ['revenue', 'credit'],
+                      ['expenses', 'debit'],
+                    ] as const).map(([cat, bal]) => (
+                      <li key={cat}>
+                        <code className="text-gray-800 dark:text-gray-200">{cat}</code>
+                        <span className="text-gray-400 dark:text-gray-500 ml-1">→ defaults to <code>{bal}</code></span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">normal_balance</span>
+                  <ul className="mt-0.5 space-y-0.5 text-gray-500 dark:text-gray-400">
+                    <li><code className="text-gray-800 dark:text-gray-200">debit</code></li>
+                    <li><code className="text-gray-800 dark:text-gray-200">credit</code></li>
+                    <li className="text-gray-400 dark:text-gray-500 italic">omit to use category default</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Select CSV file</label>
-              <input ref={fileRef} type="file" accept=".csv,.txt" onChange={handleFile} className="text-sm text-gray-700" />
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Select CSV file</label>
+              <input ref={fileRef} type="file" accept=".csv,.txt" onChange={handleFile} className="text-sm text-gray-700 dark:text-gray-300" />
               {fileName && rawRows.length > 0 && (
-                <p className="text-xs text-gray-500 mt-1">{fileName} — {rawRows.length} data rows, {headers.length} columns detected</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{fileName} — {rawRows.length} data rows, {headers.length} columns detected</p>
               )}
             </div>
             <div className="flex justify-end gap-2 pt-2">
-              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
               <button
                 onClick={() => setStep('mapping')}
                 disabled={rawRows.length === 0}
@@ -414,74 +581,74 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
           </>
         ) : (
           <>
-            <p className="text-xs text-gray-500 -mt-1">
+            <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1">
               {fileName} — {rawRows.length} rows, {headers.length} columns. Unset optional fields to skip them.
             </p>
 
             {/* Required */}
             <div className="space-y-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Required</p>
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Required</p>
               <ColMapRow label="Account Number *" headers={headers} value={mapping.accountNumberCol} onChange={(v) => set('accountNumberCol', v)} />
               <ColMapRow label="Account Name *"   headers={headers} value={mapping.accountNameCol}   onChange={(v) => set('accountNameCol', v)} />
               <ColMapRow label="Category *"        headers={headers} value={mapping.categoryCol}       onChange={(v) => set('categoryCol', v)} />
-              <ColMapRow label="Normal Balance *"  headers={headers} value={mapping.normalBalanceCol} onChange={(v) => set('normalBalanceCol', v)} />
             </div>
 
             {/* Optional */}
             <div className="space-y-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Optional</p>
-              <ColMapRow label="Subcategory"   headers={headers} value={mapping.subcategoryCol}  onChange={(v) => set('subcategoryCol', v)}  optional />
-              <ColMapRow label="Tax Line"      headers={headers} value={mapping.taxLineCol}       onChange={(v) => set('taxLineCol', v)}       optional />
-              <ColMapRow label="Workpaper Ref" headers={headers} value={mapping.workpaperRefCol}  onChange={(v) => set('workpaperRefCol', v)}  optional />
-              <ColMapRow label="Sort Order"    headers={headers} value={mapping.sortOrderCol}     onChange={(v) => set('sortOrderCol', v)}     optional />
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Optional</p>
+              <ColMapRow label="Normal Balance" headers={headers} value={mapping.normalBalanceCol} onChange={(v) => set('normalBalanceCol', v)} optional />
+              <ColMapRow label="Subcategory"    headers={headers} value={mapping.subcategoryCol}   onChange={(v) => set('subcategoryCol', v)}  optional />
+              <ColMapRow label="Tax Line"       headers={headers} value={mapping.taxLineCol}        onChange={(v) => set('taxLineCol', v)}       optional />
+              <ColMapRow label="Workpaper Ref"  headers={headers} value={mapping.workpaperRefCol}   onChange={(v) => set('workpaperRefCol', v)}  optional />
+              <ColMapRow label="Unit"           headers={headers} value={mapping.unitCol}           onChange={(v) => set('unitCol', v)}          optional />
             </div>
 
             {/* Preview */}
             {canProceed && mappedRows.length > 0 && (
               <div>
                 <div className="flex items-center gap-4 mb-2 text-sm">
-                  <span className="text-gray-700">{mappedRows.length} rows</span>
-                  <span className="text-green-700 font-medium">{validRows.length} valid</span>
-                  {errorCount > 0 && <span className="text-red-600 font-medium">{errorCount} with errors</span>}
+                  <span className="text-gray-700 dark:text-gray-300">{mappedRows.length} rows</span>
+                  <span className="text-green-700 dark:text-green-400 font-medium">{validRows.length} valid</span>
+                  {errorCount > 0 && <span className="text-red-600 dark:text-red-400 font-medium">{errorCount} with errors</span>}
                 </div>
-                <div className="border border-gray-200 rounded overflow-auto max-h-44">
+                <div className="border border-gray-200 dark:border-gray-700 rounded overflow-auto max-h-44">
                   <table className="w-full text-xs">
-                    <thead className="bg-gray-50 sticky top-0">
+                    <thead className="bg-gray-50 dark:bg-gray-800/60 sticky top-0">
                       <tr>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500 w-5">#</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Acct #</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Name</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Category</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Bal</th>
-                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Issues</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500 dark:text-gray-400 w-5">#</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500 dark:text-gray-400">Acct #</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500 dark:text-gray-400">Name</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500 dark:text-gray-400">Category</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500 dark:text-gray-400">Bal</th>
+                        <th className="px-2 py-1.5 text-left font-semibold text-gray-500 dark:text-gray-400">Issues</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100">
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                       {mappedRows.slice(0, 50).map((r, i) => (
-                        <tr key={i} className={r._errors.length > 0 ? 'bg-red-50' : ''}>
-                          <td className="px-2 py-1 text-gray-400">{i + 1}</td>
-                          <td className="px-2 py-1 font-mono">{r.accountNumber}</td>
+                        <tr key={i} className={r._errors.length > 0 ? 'bg-red-50 dark:bg-red-900/20' : ''}>
+                          <td className="px-2 py-1 text-gray-400 dark:text-gray-500">{i + 1}</td>
+                          <td className="px-2 py-1 font-mono text-sm">{r.accountNumber}</td>
                           <td className="px-2 py-1 max-w-32 truncate">{r.accountName}</td>
                           <td className="px-2 py-1">{r.category}</td>
                           <td className="px-2 py-1">{r.normalBalance}</td>
-                          <td className="px-2 py-1 text-red-600">{r._errors.join('; ')}</td>
+                          <td className="px-2 py-1 text-red-600 dark:text-red-400">{r._errors.join('; ')}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
                 {mappedRows.length > 50 && (
-                  <p className="text-xs text-gray-400 mt-1">Showing first 50 of {mappedRows.length} rows.</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Showing first 50 of {mappedRows.length} rows.</p>
                 )}
               </div>
             )}
 
             {importMutation.data?.error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{importMutation.data.error.message}</div>
+              <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-sm">{importMutation.data.error.message}</div>
             )}
 
             <div className="flex justify-end gap-2 pt-2">
-              <button onClick={() => setStep('file')} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Back</button>
+              <button onClick={() => setStep('file')} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Back</button>
               <button
                 onClick={handleImport}
                 disabled={!canProceed || validRows.length === 0 || importMutation.isPending}
@@ -543,7 +710,7 @@ function CopyFromClientModal({ clientId, onClose, onSuccess }: CopyModalProps) {
       <div className="space-y-4">
         {result?.data ? (
           <>
-            <div className="bg-green-50 border border-green-200 rounded px-4 py-3 text-sm text-green-800">
+            <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded px-4 py-3 text-sm text-green-800 dark:text-green-400">
               Copy complete: <strong>{result.data.inserted}</strong> inserted,{' '}
               <strong>{result.data.updated}</strong> updated,{' '}
               <strong>{result.data.skipped}</strong> skipped.
@@ -555,11 +722,11 @@ function CopyFromClientModal({ clientId, onClose, onSuccess }: CopyModalProps) {
         ) : (
           <>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Source Client</label>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Source Client</label>
               <select
                 value={sourceId ?? ''}
                 onChange={(e) => setSourceId(e.target.value ? Number(e.target.value) : null)}
-                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
               >
                 <option value="">— Select a client —</option>
                 {otherClients.map((c: Client) => (
@@ -569,30 +736,30 @@ function CopyFromClientModal({ clientId, onClose, onSuccess }: CopyModalProps) {
             </div>
 
             {sourceId && sourceCoaData !== undefined && (
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
                 Source has <strong>{sourceCoaData.length}</strong> active account{sourceCoaData.length !== 1 ? 's' : ''}.
               </p>
             )}
 
-            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
               <input
                 type="checkbox"
                 checked={overwrite}
                 onChange={(e) => setOverwrite(e.target.checked)}
-                className="rounded border-gray-300 text-blue-600"
+                className="rounded border-gray-300 dark:border-gray-600 text-blue-600"
               />
               Overwrite existing accounts with the same account number
             </label>
-            <p className="text-xs text-gray-500 -mt-2">
+            <p className="text-xs text-gray-500 dark:text-gray-400 -mt-2">
               When unchecked, accounts that already exist in the destination are skipped.
             </p>
 
             {copyMutation.data?.error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">{copyMutation.data.error.message}</div>
+              <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-sm">{copyMutation.data.error.message}</div>
             )}
 
             <div className="flex justify-end gap-2 pt-2">
-              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
               <button
                 onClick={() => copyMutation.mutate()}
                 disabled={!sourceId || copyMutation.isPending}
@@ -618,6 +785,9 @@ export function ChartOfAccountsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [showCopy, setShowCopy] = useState(false);
+  const [filterText, setFilterText] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterUnit, setFilterUnit] = useState('');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['chart-of-accounts', selectedClientId],
@@ -653,10 +823,32 @@ export function ChartOfAccountsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteAccount(id),
-    onSuccess: () => {
+    onSuccess: (r) => {
+      if (r.error) {
+        alert(r.error.message);
+        return;
+      }
       qc.invalidateQueries({ queryKey: ['chart-of-accounts', selectedClientId] });
     },
   });
+
+  const availableUnits = useMemo(
+    () => [...new Set((data ?? []).map((a) => a.unit).filter((u): u is string => !!u))].sort(),
+    [data],
+  );
+
+  const filteredData = useMemo(
+    () => (data ?? []).filter((a) => {
+      if (filterCategory && a.category !== filterCategory) return false;
+      if (filterUnit && a.unit !== filterUnit) return false;
+      if (filterText) {
+        const q = filterText.toLowerCase();
+        return a.account_number.toLowerCase().includes(q) || a.account_name.toLowerCase().includes(q);
+      }
+      return true;
+    }),
+    [data, filterCategory, filterUnit, filterText],
+  );
 
   const columns = [
     columnHelper.accessor('account_number', {
@@ -683,12 +875,20 @@ export function ChartOfAccountsPage() {
       header: 'Normal Bal.',
       cell: (info) => <span className="capitalize">{info.getValue()}</span>,
     }),
-    columnHelper.accessor('tax_line', {
-      header: 'Tax Line',
-      cell: (info) => info.getValue() ?? <span className="text-gray-300">—</span>,
+    columnHelper.accessor('tax_code_id', {
+      header: 'Tax Code',
+      cell: (info) => {
+        const acct = info.row.original;
+        if (!acct.tax_code_id) return <span className="text-gray-300">—</span>;
+        return <span className="font-mono text-xs">{acct.tax_line ?? `#${acct.tax_code_id}`}</span>;
+      },
     }),
     columnHelper.accessor('workpaper_ref', {
       header: 'W/P Ref',
+      cell: (info) => info.getValue() ?? <span className="text-gray-300">—</span>,
+    }),
+    columnHelper.accessor('unit', {
+      header: 'Unit',
       cell: (info) => info.getValue() ?? <span className="text-gray-300">—</span>,
     }),
     columnHelper.display({
@@ -698,7 +898,7 @@ export function ChartOfAccountsPage() {
         <div className="flex items-center gap-2 justify-end">
           <button
             onClick={() => { setEditAccount(row.original); setFormError(null); }}
-            className="text-xs text-blue-600 hover:text-blue-800"
+            className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
           >
             Edit
           </button>
@@ -708,7 +908,7 @@ export function ChartOfAccountsPage() {
                 deleteMutation.mutate(row.original.id);
               }
             }}
-            className="text-xs text-red-500 hover:text-red-700"
+            className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
           >
             Delete
           </button>
@@ -718,7 +918,7 @@ export function ChartOfAccountsPage() {
   ];
 
   const table = useReactTable({
-    data: data ?? [],
+    data: filteredData,
     columns,
     state: { sorting },
     onSortingChange: setSorting,
@@ -728,7 +928,7 @@ export function ChartOfAccountsPage() {
 
   if (!selectedClientId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
         <div className="text-center">
           <p className="text-lg font-medium">No client selected</p>
           <p className="text-sm mt-1">Choose a client from the sidebar to view their chart of accounts.</p>
@@ -741,21 +941,21 @@ export function ChartOfAccountsPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">Chart of Accounts</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Chart of Accounts</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             {data ? `${data.length} account${data.length !== 1 ? 's' : ''}` : ''}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowImport(true)}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300"
           >
             Import CSV
           </button>
           <button
             onClick={() => setShowCopy(true)}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300"
           >
             Copy from Client
           </button>
@@ -769,24 +969,70 @@ export function ChartOfAccountsPage() {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm mb-4">
           {error.message}
         </div>
       )}
 
+      {/* Filter bar */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <input
+          type="text"
+          value={filterText}
+          onChange={(e) => setFilterText(e.target.value)}
+          placeholder="Search accounts…"
+          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+        />
+        <select
+          value={filterCategory}
+          onChange={(e) => setFilterCategory(e.target.value)}
+          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+        >
+          <option value="">All categories</option>
+          <option value="assets">Assets</option>
+          <option value="liabilities">Liabilities</option>
+          <option value="equity">Equity</option>
+          <option value="revenue">Revenue</option>
+          <option value="expenses">Expenses</option>
+        </select>
+        {availableUnits.length > 0 && (
+          <select
+            value={filterUnit}
+            onChange={(e) => setFilterUnit(e.target.value)}
+            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All units</option>
+            {availableUnits.map((u) => <option key={u} value={u}>{u}</option>)}
+          </select>
+        )}
+        {(filterText || filterCategory || filterUnit) && (
+          <>
+            <button
+              onClick={() => { setFilterText(''); setFilterCategory(''); setFilterUnit(''); }}
+              className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              Clear
+            </button>
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              {filteredData.length} of {data?.length ?? 0} accounts
+            </span>
+          </>
+        )}
+      </div>
+
       {isLoading ? (
-        <div className="flex items-center justify-center py-12 text-gray-400">Loading...</div>
+        <div className="flex items-center justify-center py-12 text-gray-400 dark:text-gray-500">Loading...</div>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 {table.getHeaderGroups().map((hg) => (
-                  <tr key={hg.id} className="border-b border-gray-200 bg-gray-50">
+                  <tr key={hg.id} className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
                     {hg.headers.map((header) => (
                       <th
                         key={header.id}
-                        className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap cursor-pointer select-none"
+                        className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap cursor-pointer select-none"
                         onClick={header.column.getToggleSortingHandler()}
                       >
                         <span className="flex items-center gap-1">
@@ -799,18 +1045,20 @@ export function ChartOfAccountsPage() {
                   </tr>
                 ))}
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {table.getRowModel().rows.length === 0 ? (
                   <tr>
-                    <td colSpan={columns.length} className="px-3 py-8 text-center text-gray-400">
-                      No accounts yet. Click &ldquo;+ Add Account&rdquo; to get started.
+                    <td colSpan={columns.length} className="px-3 py-8 text-center text-gray-400 dark:text-gray-500">
+                      {(filterText || filterCategory || filterUnit)
+                        ? 'No accounts match the current filter.'
+                        : 'No accounts yet. Click \u201c+ Add Account\u201d to get started.'}
                     </td>
                   </tr>
                 ) : (
                   table.getRowModel().rows.map((row) => (
-                    <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={row.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                       {row.getVisibleCells().map((cell) => (
-                        <td key={cell.id} className="px-3 py-2.5 text-gray-700">
+                        <td key={cell.id} className="px-3 py-2.5 text-gray-700 dark:text-gray-300">
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
                       ))}
@@ -847,9 +1095,11 @@ export function ChartOfAccountsPage() {
               category: editAccount.category,
               subcategory: editAccount.subcategory ?? undefined,
               normalBalance: editAccount.normal_balance,
+              taxCodeId: editAccount.tax_code_id,
               taxLine: editAccount.tax_line ?? undefined,
               workpaperRef: editAccount.workpaper_ref ?? undefined,
-              sortOrder: editAccount.sort_order,
+              unit: editAccount.unit ?? undefined,
+              importAliases: editAccount.import_aliases ?? [],
             }}
             onSave={(input) => updateMutation.mutate({ id: editAccount.id, input })}
             onCancel={() => setEditAccount(null)}
@@ -885,9 +1135,9 @@ export function ChartOfAccountsPage() {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  assets: 'bg-blue-50 text-blue-700',
-  liabilities: 'bg-orange-50 text-orange-700',
-  equity: 'bg-purple-50 text-purple-700',
-  revenue: 'bg-green-50 text-green-700',
-  expenses: 'bg-red-50 text-red-700',
+  assets: 'bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400',
+  liabilities: 'bg-orange-50 dark:bg-orange-900/40 text-orange-700 dark:text-orange-400',
+  equity: 'bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400',
+  revenue: 'bg-green-50 dark:bg-green-900/40 text-green-700 dark:text-green-400',
+  expenses: 'bg-red-50 dark:bg-red-900/40 text-red-700 dark:text-red-400',
 };

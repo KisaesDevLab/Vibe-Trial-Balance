@@ -1,5 +1,5 @@
 <#
-  Trial Balance App - Test a Branch
+  Vibe Trial Balance - Test a Branch
   Usage: .\test-branch.ps1 build/phase-2
 #>
 
@@ -26,12 +26,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Make sure database is running
-$dbRunning = docker ps --filter "name=trialbalance-db" --format "{{.Names}}" 2>$null
-if ($dbRunning -ne "trialbalance-db") {
+$dbRunning = docker ps --filter "name=vibe-tb-db" --format "{{.Names}}" 2>$null
+if ($dbRunning -ne "vibe-tb-db") {
     Write-Info "Starting PostgreSQL..."
     docker compose up -d db 2>$null
     for ($i = 0; $i -lt 15; $i++) {
-        docker exec trialbalance-db pg_isready -U trialbalance 2>$null | Out-Null
+        docker exec vibe-tb-db pg_isready -U vibetb 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) { break }
         Start-Sleep -Seconds 1
     }

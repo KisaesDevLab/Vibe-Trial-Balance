@@ -12,6 +12,7 @@ import {
   generateWorkpaperIndexPdf,
   generateTaxBasisPlPdf,
   generateTaxReturnOrderPdf,
+  generateFluxAnalysisPdf,
 } from '../pdf/reportGenerators';
 
 export const pdfReportsRouter = Router({ mergeParams: true });
@@ -44,6 +45,37 @@ function getPeriodId(req: AuthRequest): number | null {
 function isPreview(req: AuthRequest): boolean {
   return req.query.preview === 'true' || req.query.preview === '1';
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/reports/periods/:periodId/flux/:comparePeriodId
+// ─────────────────────────────────────────────────────────────────────────────
+pdfReportsRouter.get('/periods/:periodId/flux/:comparePeriodId', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId        = getPeriodId(req);
+  const comparePeriodId = Number(req.params.comparePeriodId);
+  if (periodId === null || isNaN(comparePeriodId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period IDs' } });
+    return;
+  }
+  try {
+    const [period, comparePeriod] = await Promise.all([
+      db('periods').where({ id: periodId }).first('id', 'client_id'),
+      db('periods').where({ id: comparePeriodId }).first('id', 'client_id'),
+    ]);
+    if (!period || !comparePeriod) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
+      return;
+    }
+    if (period.client_id !== comparePeriod.client_id) {
+      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Periods must belong to the same client' } });
+      return;
+    }
+    const buffer = await generateFluxAnalysisPdf(db, periodId, comparePeriodId);
+    sendPdf(res, buffer, `flux-analysis-${periodId}-vs-${comparePeriodId}.pdf`, isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/reports/periods/:periodId/trial-balance

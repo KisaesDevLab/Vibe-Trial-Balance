@@ -18,7 +18,7 @@ export interface AuditEntry {
 }
 
 export interface DashboardData {
-  period: Period & { locked_by_name: string | null };
+  period: Period & { locked_by_name: string | null; client_name: string | null };
   stats: DashboardStats;
   audit_log: AuditEntry[];
 }

@@ -70,7 +70,6 @@ function TBSection({ rows, tickmarkMap, library }: {
   const tdR = 'px-2 py-0.5 text-xs text-right tabular-nums';
   const tdL = 'px-2 py-0.5 text-xs';
 
-  // Collect all unique tickmarks used
   const usedIds = new Set<number>();
   rows.forEach(r => (tickmarkMap[r.account_id] ?? []).forEach(t => usedIds.add(t.id)));
   const usedMarks = library.filter(t => usedIds.has(t.id));
@@ -274,46 +273,51 @@ function CashFlowSection({ periodId }: { periodId: number }) {
   );
 }
 
-// ── Package config ────────────────────────────────────────────────────────────
+// ── Section definitions ───────────────────────────────────────────────────────
 
-const AVAILABLE_SECTIONS = [
+const PREVIEW_SECTIONS = [
   { id: 'tb',           label: 'Trial Balance' },
   { id: 'balance-sheet', label: 'Balance Sheet' },
   { id: 'income-stmt',  label: 'Income Statement' },
   { id: 'cash-flow',    label: 'Cash Flow Statement' },
 ] as const;
 
-type SectionId = typeof AVAILABLE_SECTIONS[number]['id'];
+type PreviewSectionId = typeof PREVIEW_SECTIONS[number]['id'];
+
+interface PdfReportSection {
+  id: string;
+  label: string;
+  url: (periodId: number) => string;
+  filename: (periodId: number) => string;
+}
+
+const PDF_REPORT_SECTIONS: PdfReportSection[] = [
+  { id: 'pdf-tb',           label: 'Trial Balance (PDF)',         url: (id) => pdfReports.trialBalance(id),    filename: (id) => `trial-balance-${id}.pdf` },
+  { id: 'pdf-is',           label: 'Income Statement (PDF)',      url: (id) => pdfReports.incomeStatement(id), filename: (id) => `income-statement-${id}.pdf` },
+  { id: 'pdf-bs',           label: 'Balance Sheet (PDF)',         url: (id) => pdfReports.balanceSheet(id),    filename: (id) => `balance-sheet-${id}.pdf` },
+  { id: 'pdf-je',           label: 'Journal Entries (PDF)',       url: (id) => pdfReports.journalEntries(id),  filename: (id) => `journal-entries-${id}.pdf` },
+  { id: 'pdf-aje',          label: 'AJE Listing (PDF)',           url: (id) => pdfReports.ajeListing(id),      filename: (id) => `aje-listing-${id}.pdf` },
+  { id: 'pdf-gl',           label: 'General Ledger (PDF)',        url: (id) => pdfReports.generalLedger(id),   filename: (id) => `general-ledger-${id}.pdf` },
+  { id: 'pdf-tax-code',     label: 'Tax Code Report (PDF)',       url: (id) => pdfReports.taxCodeReport(id),   filename: (id) => `tax-code-report-${id}.pdf` },
+  { id: 'pdf-wp-index',     label: 'Workpaper Index (PDF)',       url: (id) => pdfReports.workpaperIndex(id),  filename: (id) => `workpaper-index-${id}.pdf` },
+  { id: 'pdf-tax-pl',       label: 'Tax-Basis P&L (PDF)',         url: (id) => pdfReports.taxBasisPl(id),      filename: (id) => `tax-basis-pl-${id}.pdf` },
+  { id: 'pdf-tax-return',   label: 'Tax Return Order (PDF)',      url: (id) => pdfReports.taxReturnOrder(id),  filename: (id) => `tax-return-order-${id}.pdf` },
+];
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function WorkpaperPackagePage() {
   const { selectedClientId, selectedPeriodId } = useUIStore();
-  const token = useAuthStore((s) => s.token);
+  const token = useAuthStore((s) => s.token) ?? '';
+
   const [firmName,   setFirmName]   = useState('');
   const [preparedBy, setPreparedBy] = useState('');
   const [reviewedBy, setReviewedBy] = useState('');
-  const [selected,   setSelected]   = useState<Set<SectionId>>(new Set(['tb', 'balance-sheet', 'income-stmt']));
+  const [selected,   setSelected]   = useState<Set<PreviewSectionId>>(new Set(['tb', 'balance-sheet', 'income-stmt']));
+  const [selectedPdf, setSelectedPdf] = useState<Set<string>>(new Set());
   const [showPreview, setShowPreview] = useState(false);
-  const [quickPdfLoading, setQuickPdfLoading] = useState<string | null>(null);
-  const [quickPdfError, setQuickPdfError] = useState<string | null>(null);
-
-  const handleQuickDownload = async (reportKey: 'tb' | 'is') => {
-    if (!selectedPeriodId || !token) return;
-    setQuickPdfLoading(reportKey);
-    setQuickPdfError(null);
-    try {
-      if (reportKey === 'tb') {
-        await downloadPdf(pdfReports.trialBalance(selectedPeriodId), `trial-balance-${selectedPeriodId}.pdf`, token);
-      } else {
-        await downloadPdf(pdfReports.incomeStatement(selectedPeriodId), `income-statement-${selectedPeriodId}.pdf`, token);
-      }
-    } catch (e) {
-      setQuickPdfError((e as Error).message);
-    } finally {
-      setQuickPdfLoading(null);
-    }
-  };
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+  const [pdfErrors, setPdfErrors] = useState<string[]>([]);
 
   const { data: clientsData } = useQuery({ queryKey: ['clients'], queryFn: listClients, enabled: !!selectedClientId });
   const { data: periodsData  } = useQuery({
@@ -343,7 +347,7 @@ export function WorkpaperPackagePage() {
   const tickmarkMap  = tickmarkMapData?.data ?? {};
   const tickmarkLibrary = tickmarkLibData?.data ?? [];
 
-  function toggle(id: SectionId) {
+  function togglePreview(id: PreviewSectionId) {
     setSelected(prev => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
@@ -351,23 +355,44 @@ export function WorkpaperPackagePage() {
     });
   }
 
-  const includedSections = AVAILABLE_SECTIONS.filter(s => selected.has(s.id));
-  const tocItems = ['Cover Page', 'Table of Contents', ...includedSections.map(s => s.label)];
+  function togglePdf(id: string) {
+    setSelectedPdf(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
 
-  const inputCls = 'border border-gray-300 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-teal-500';
-  const labelCls = 'block text-xs font-medium text-gray-600 mb-1';
+  function toggleAllPdf(checked: boolean) {
+    setSelectedPdf(checked ? new Set(PDF_REPORT_SECTIONS.map(s => s.id)) : new Set());
+  }
+
+  const includedPreviewSections = PREVIEW_SECTIONS.filter(s => selected.has(s.id));
+  const includedPdfSections = PDF_REPORT_SECTIONS.filter(s => selectedPdf.has(s.id));
+
+  const tocItems = [
+    'Cover Page',
+    'Table of Contents',
+    ...includedPreviewSections.map(s => s.label),
+  ];
+
+  const inputCls = 'border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-teal-500 dark:bg-gray-700 dark:text-white';
+  const labelCls = 'block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1';
+
+  const allPdfSelected = PDF_REPORT_SECTIONS.every(s => selectedPdf.has(s.id));
+  const somePdfSelected = PDF_REPORT_SECTIONS.some(s => selectedPdf.has(s.id)) && !allPdfSelected;
 
   if (!selectedClientId || !selectedPeriodId) {
-    return <div className="p-8 text-center text-gray-400 text-sm">Select a client and period to generate a workpaper package.</div>;
+    return <div className="p-8 text-center text-gray-400 dark:text-gray-500 text-sm">Select a client and period to generate a workpaper package.</div>;
   }
 
   return (
     <div className="p-6 max-w-2xl space-y-6">
-      <h1 className="text-lg font-bold text-gray-800">Workpaper Package</h1>
+      <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Workpaper Package</h1>
 
       {/* Cover page config */}
-      <div className="border border-gray-200 rounded-lg p-4 space-y-3">
-        <h2 className="text-sm font-semibold text-gray-700">Cover Page</h2>
+      <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-3">
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Cover Page</h2>
         <div className="grid grid-cols-2 gap-3">
           <div><label className={labelCls}>Firm Name</label><input className={inputCls} value={firmName} onChange={e => setFirmName(e.target.value)} placeholder="Your firm name…" /></div>
           <div><label className={labelCls}>Prepared By</label><input className={inputCls} value={preparedBy} onChange={e => setPreparedBy(e.target.value)} /></div>
@@ -376,56 +401,90 @@ export function WorkpaperPackagePage() {
       </div>
 
       {/* Section selection */}
-      <div className="border border-gray-200 rounded-lg p-4 space-y-2">
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">Include Sections</h2>
-        {AVAILABLE_SECTIONS.map(s => (
-          <label key={s.id} className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggle(s.id)}
-              className="rounded border-gray-300 text-teal-600" />
-            <span className="text-sm">{s.label}</span>
-          </label>
-        ))}
+      <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-4">
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Include Sections</h2>
+
+        {/* Inline preview sections */}
+        <div>
+          <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Preview / Print</p>
+          <div className="space-y-1.5">
+            {PREVIEW_SECTIONS.map(s => (
+              <label key={s.id} className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={selected.has(s.id)} onChange={() => togglePreview(s.id)}
+                  className="rounded border-gray-300 dark:border-gray-600 text-teal-600" />
+                <span className="text-sm dark:text-gray-300">{s.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="border-t border-gray-100 dark:border-gray-700" />
+
+        {/* PDF report sections */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">PDF Reports</p>
+            <label className="flex items-center gap-1.5 cursor-pointer text-xs text-gray-500 dark:text-gray-400">
+              <input
+                type="checkbox"
+                checked={allPdfSelected}
+                ref={el => { if (el) el.indeterminate = somePdfSelected; }}
+                onChange={e => toggleAllPdf(e.target.checked)}
+                className="rounded border-gray-300 dark:border-gray-600 text-teal-600"
+              />
+              Select all
+            </label>
+          </div>
+          <div className="space-y-1.5">
+            {PDF_REPORT_SECTIONS.map(s => (
+              <label key={s.id} className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={selectedPdf.has(s.id)} onChange={() => togglePdf(s.id)}
+                  className="rounded border-gray-300 dark:border-gray-600 text-teal-600" />
+                <span className="text-sm dark:text-gray-300">{s.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* Quick PDF downloads */}
-      <div className="border border-gray-200 rounded-lg p-4 space-y-2">
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">Quick PDF Downloads</h2>
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={() => handleQuickDownload('tb')}
-            disabled={quickPdfLoading !== null}
-            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-          >
-            {quickPdfLoading === 'tb' ? 'Generating…' : '⬇ Download TB PDF'}
-          </button>
-          <button
-            onClick={() => handleQuickDownload('is')}
-            disabled={quickPdfLoading !== null}
-            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-          >
-            {quickPdfLoading === 'is' ? 'Generating…' : '⬇ Download Financial Statements PDF'}
-          </button>
-        </div>
-        {quickPdfError && (
-          <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded mt-2">
-            {quickPdfError}
+      <div className="space-y-2">
+        <button
+          onClick={async () => {
+            setShowPreview(true);
+            if (includedPdfSections.length > 0 && selectedPeriodId) {
+              setPdfDownloading(true);
+              setPdfErrors([]);
+              const errs: string[] = [];
+              for (const section of includedPdfSections) {
+                try {
+                  await downloadPdf(section.url(selectedPeriodId), section.filename(selectedPeriodId), token);
+                  await new Promise(r => setTimeout(r, 400));
+                } catch (e) {
+                  errs.push(`${section.label}: ${(e as Error).message}`);
+                }
+              }
+              if (errs.length) setPdfErrors(errs);
+              setPdfDownloading(false);
+            }
+          }}
+          disabled={pdfDownloading}
+          className="px-4 py-2 bg-teal-600 text-white text-sm font-medium rounded hover:bg-teal-700 disabled:opacity-50"
+        >
+          {pdfDownloading ? 'Downloading PDFs…' : 'Generate Package'}
+        </button>
+        {pdfErrors.length > 0 && (
+          <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 text-xs px-3 py-2 rounded space-y-1">
+            {pdfErrors.map((e, i) => <p key={i}>{e}</p>)}
           </div>
         )}
       </div>
-
-      <button
-        onClick={() => setShowPreview(true)}
-        className="px-4 py-2 bg-teal-600 text-white text-sm font-medium rounded hover:bg-teal-700"
-      >
-        Generate Preview
-      </button>
 
       {/* Preview overlay */}
       {showPreview && (
         <div className="fixed inset-0 bg-white z-50 overflow-auto">
           {/* Print toolbar */}
-          <div className="sticky top-0 bg-gray-100 border-b border-gray-300 px-6 py-2 flex items-center justify-between print:hidden">
-            <span className="text-sm font-medium text-gray-700">
+          <div className="sticky top-0 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 px-6 py-2 flex items-center justify-between print:hidden">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
               {client?.name} — {period?.period_name} Workpaper Package
             </span>
             <div className="flex gap-2">
@@ -434,7 +493,7 @@ export function WorkpaperPackagePage() {
                 Print / Save as PDF
               </button>
               <button onClick={() => setShowPreview(false)}
-                className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-100">
+                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300">
                 Close
               </button>
             </div>
@@ -470,7 +529,7 @@ export function WorkpaperPackagePage() {
             <div className="page-break" />
             <TocSection sections={tocItems} />
 
-            {/* Selected sections */}
+            {/* Inline preview sections */}
             {selected.has('tb') && (
               <>
                 <div className="page-break" />
@@ -495,6 +554,7 @@ export function WorkpaperPackagePage() {
                 <CashFlowSection periodId={selectedPeriodId} />
               </>
             )}
+
           </div>
           )}
         </div>

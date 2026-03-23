@@ -39,6 +39,8 @@ interface UIStore {
   fontSize: number;
   increaseFontSize: () => void;
   decreaseFontSize: () => void;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
 }
 
 export const useUIStore = create<UIStore>()(
@@ -57,7 +59,9 @@ export const useUIStore = create<UIStore>()(
         const step = s.fontSize > 18 ? 2 : 1;
         return { fontSize: Math.max(MIN_FONT, s.fontSize - step) };
       }),
+      isDarkMode: false,
+      toggleDarkMode: () => set((s) => ({ isDarkMode: !s.isDarkMode })),
     }),
-    { name: 'ui-prefs', partialize: (s) => ({ fontSize: s.fontSize }) },
+    { name: 'ui-prefs', partialize: (s) => ({ fontSize: s.fontSize, selectedClientId: s.selectedClientId, selectedPeriodId: s.selectedPeriodId, isDarkMode: s.isDarkMode }) },
   ),
 );

@@ -1,17 +1,12 @@
 import { Router, Response } from 'express';
-import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { logAiUsage } from '../lib/aiUsage';
+import { getLLMProvider } from '../lib/aiClient';
+import { extractJsonArray } from '../lib/aiJsonExtract';
 
 export const diagnosticsRouter = Router({ mergeParams: true });
 diagnosticsRouter.use(authMiddleware);
-
-async function getAnthropicClient(): Promise<Anthropic> {
-  const setting = await db('settings').where({ key: 'claude_api_key' }).first('value');
-  const apiKey = setting?.value ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('Claude API key not configured');
-  return new Anthropic({ apiKey });
-}
 
 function parseBigInt(v: unknown): number {
   if (v === null || v === undefined) return 0;
@@ -112,18 +107,19 @@ Focus on:
 
 Return 5-15 observations. Be specific and actionable.`;
 
-    const anthropic = await getAnthropicClient();
-    const aiMessage = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 2048,
+    const { provider, fastModel } = await getLLMProvider();
+    const aiResult = await provider.complete({
+      model: fastModel,
+      maxTokens: 2048,
       messages: [{ role: 'user', content: prompt }],
     });
+    logAiUsage({ endpoint: 'diagnostics', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId: null });
 
-    const raw = (aiMessage.content[0] as { type: string; text: string }).text.trim();
-    // Extract JSON array from response
-    const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error('AI returned invalid format');
-    const observations = JSON.parse(jsonMatch[0]) as unknown[];
+    const observations = extractJsonArray(aiResult.text);
+    if (!observations) {
+      res.status(502).json({ data: null, error: { code: 'AI_PARSE_ERROR', message: 'AI returned an unrecognized format. Please try again.' } });
+      return;
+    }
 
     res.json({ data: { observations, periodId }, error: null });
   } catch (err: unknown) {

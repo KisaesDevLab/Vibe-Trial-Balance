@@ -6,4 +6,5 @@ server/dist/
 *.log
 Thumbs.db
 uploads/
+server/backups/
 coverage/

@@ -15,22 +15,22 @@ exports.seed = async function (knex) {
   }).returning('*');
 
   const accounts = [
-    { account_number: '1000', account_name: 'Cash - Operating',         category: 'assets',      normal_balance: 'debit',  sort_order: 10,  tax_line: null,      cash_flow_category: 'cash' },
-    { account_number: '1100', account_name: 'Accounts Receivable',      category: 'assets',      normal_balance: 'debit',  sort_order: 20,  tax_line: null,      cash_flow_category: 'operating' },
-    { account_number: '1500', account_name: 'Property & Equipment',     category: 'assets',      normal_balance: 'debit',  sort_order: 30,  tax_line: null,      cash_flow_category: 'investing' },
-    { account_number: '2000', account_name: 'Accounts Payable',         category: 'liabilities', normal_balance: 'credit', sort_order: 40,  tax_line: null,      cash_flow_category: 'operating' },
-    { account_number: '2100', account_name: 'Accrued Liabilities',      category: 'liabilities', normal_balance: 'credit', sort_order: 50,  tax_line: null,      cash_flow_category: 'operating' },
-    { account_number: '2500', account_name: 'Notes Payable',            category: 'liabilities', normal_balance: 'credit', sort_order: 60,  tax_line: null,      cash_flow_category: 'financing' },
-    { account_number: '3000', account_name: 'Common Stock',             category: 'equity',      normal_balance: 'credit', sort_order: 70,  tax_line: null,      cash_flow_category: null },
-    { account_number: '3100', account_name: 'Retained Earnings',        category: 'equity',      normal_balance: 'credit', sort_order: 80,  tax_line: null,      cash_flow_category: null },
-    { account_number: '4000', account_name: 'Service Revenue',          category: 'revenue',     normal_balance: 'credit', sort_order: 90,  tax_line: '1120S-1a', cash_flow_category: null },
-    { account_number: '4100', account_name: 'Product Sales',            category: 'revenue',     normal_balance: 'credit', sort_order: 100, tax_line: '1120S-1c', cash_flow_category: null },
-    { account_number: '5000', account_name: 'Cost of Goods Sold',       category: 'expenses',    normal_balance: 'debit',  sort_order: 110, tax_line: '1120S-2',  cash_flow_category: null },
-    { account_number: '6000', account_name: 'Salaries & Wages',         category: 'expenses',    normal_balance: 'debit',  sort_order: 120, tax_line: '1120S-8',  cash_flow_category: null },
-    { account_number: '6100', account_name: 'Rent Expense',             category: 'expenses',    normal_balance: 'debit',  sort_order: 130, tax_line: '1120S-12', cash_flow_category: null },
-    { account_number: '6200', account_name: 'Depreciation Expense',     category: 'expenses',    normal_balance: 'debit',  sort_order: 140, tax_line: '1120S-14', cash_flow_category: 'non_cash' },
-    { account_number: '6300', account_name: 'Professional Fees',        category: 'expenses',    normal_balance: 'debit',  sort_order: 150, tax_line: '1120S-19', cash_flow_category: null },
-    { account_number: '6400', account_name: 'Utilities Expense',        category: 'expenses',    normal_balance: 'debit',  sort_order: 160, tax_line: '1120S-19', cash_flow_category: null },
+    { account_number: '1000', account_name: 'Cash - Operating',         category: 'assets',      normal_balance: 'debit',  tax_line: null,      cash_flow_category: 'cash' },
+    { account_number: '1100', account_name: 'Accounts Receivable',      category: 'assets',      normal_balance: 'debit',  tax_line: null,      cash_flow_category: 'operating' },
+    { account_number: '1500', account_name: 'Property & Equipment',     category: 'assets',      normal_balance: 'debit',  tax_line: null,      cash_flow_category: 'investing' },
+    { account_number: '2000', account_name: 'Accounts Payable',         category: 'liabilities', normal_balance: 'credit', tax_line: null,      cash_flow_category: 'operating' },
+    { account_number: '2100', account_name: 'Accrued Liabilities',      category: 'liabilities', normal_balance: 'credit', tax_line: null,      cash_flow_category: 'operating' },
+    { account_number: '2500', account_name: 'Notes Payable',            category: 'liabilities', normal_balance: 'credit', tax_line: null,      cash_flow_category: 'financing' },
+    { account_number: '3000', account_name: 'Common Stock',             category: 'equity',      normal_balance: 'credit', tax_line: null,      cash_flow_category: null },
+    { account_number: '3100', account_name: 'Retained Earnings',        category: 'equity',      normal_balance: 'credit', tax_line: null,      cash_flow_category: null },
+    { account_number: '4000', account_name: 'Service Revenue',          category: 'revenue',     normal_balance: 'credit', tax_line: '1120S-1a', cash_flow_category: null },
+    { account_number: '4100', account_name: 'Product Sales',            category: 'revenue',     normal_balance: 'credit', tax_line: '1120S-1c', cash_flow_category: null },
+    { account_number: '5000', account_name: 'Cost of Goods Sold',       category: 'expenses',    normal_balance: 'debit',  tax_line: '1120S-2',  cash_flow_category: null },
+    { account_number: '6000', account_name: 'Salaries & Wages',         category: 'expenses',    normal_balance: 'debit',  tax_line: '1120S-8',  cash_flow_category: null },
+    { account_number: '6100', account_name: 'Rent Expense',             category: 'expenses',    normal_balance: 'debit',  tax_line: '1120S-12', cash_flow_category: null },
+    { account_number: '6200', account_name: 'Depreciation Expense',     category: 'expenses',    normal_balance: 'debit',  tax_line: '1120S-14', cash_flow_category: 'non_cash' },
+    { account_number: '6300', account_name: 'Professional Fees',        category: 'expenses',    normal_balance: 'debit',  tax_line: '1120S-19', cash_flow_category: null },
+    { account_number: '6400', account_name: 'Utilities Expense',        category: 'expenses',    normal_balance: 'debit',  tax_line: '1120S-19', cash_flow_category: null },
   ];
 
   const insertedAccounts = await knex('chart_of_accounts')

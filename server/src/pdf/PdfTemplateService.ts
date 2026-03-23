@@ -3,19 +3,19 @@ import { Knex } from 'knex';
 import type { TDocumentDefinitions, Content, TableCell, Style } from 'pdfmake/interfaces';
 
 // Server-side pdfmake uses the PdfPrinter class from src/printer.js
-// The vfs_fonts.js contains Roboto TTFs encoded as base64 strings
-// We load them once and pass to the printer via virtualFileSystem
+// vfs_fonts.js exports the font dict directly: { 'Roboto-Regular.ttf': '<base64>', ... }
+// We decode each font to a Buffer and pass them to PdfPrinter — no filesystem reads needed.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const PdfPrinter = require('pdfmake/src/printer') as any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const vfsFonts = require('pdfmake/build/vfs_fonts') as any;
+const vfsData: Record<string, string> = require('pdfmake/build/vfs_fonts') as any;
 
 const FONTS = {
   Roboto: {
-    normal:      'Roboto-Regular.ttf',
-    bold:        'Roboto-Medium.ttf',
-    italics:     'Roboto-Italic.ttf',
-    bolditalics: 'Roboto-MediumItalic.ttf',
+    normal:      Buffer.from(vfsData['Roboto-Regular.ttf'],       'base64'),
+    bold:        Buffer.from(vfsData['Roboto-Medium.ttf'],        'base64'),
+    italics:     Buffer.from(vfsData['Roboto-Italic.ttf'],        'base64'),
+    bolditalics: Buffer.from(vfsData['Roboto-MediumItalic.ttf'],  'base64'),
   },
 };
 
@@ -47,6 +47,7 @@ export interface DocOptions {
   endDate?: string;
   preparer?: string;
   content: Content[];
+  pageOrientation?: 'portrait' | 'landscape';
 }
 
 export class PdfTemplateService {
@@ -58,13 +59,6 @@ export class PdfTemplateService {
     this.firmName    = firmName;
     this.firmAddress = firmAddress;
     this.printer = new PdfPrinter(FONTS);
-    // Register the vfs so fonts can be resolved
-    // The vfs object from vfs_fonts.js is keyed differently per version
-    if (vfsFonts && vfsFonts.pdfMake && vfsFonts.pdfMake.vfs) {
-      // older builds
-      this.printer.fontDescriptors = FONTS;
-      // we pass it inline to createPdfKitDocument instead
-    }
   }
 
   static async fromDb(db: Knex): Promise<PdfTemplateService> {
@@ -203,6 +197,7 @@ export class PdfTemplateService {
   buildDocument(opts: DocOptions): TDocumentDefinitions {
     const {
       title, clientName, ein, periodName, startDate, endDate, preparer, content,
+      pageOrientation = 'landscape',
     } = opts;
 
     const dateRange = startDate && endDate
@@ -245,7 +240,7 @@ export class PdfTemplateService {
 
     return {
       pageSize: 'LETTER',
-      pageOrientation: 'landscape',
+      pageOrientation,
       pageMargins: [36, 40, 36, 40],
       info: { title, author: this.firmName || 'PdfReports', subject: clientName },
       defaultStyle: { font: 'Roboto', fontSize: FONT_SIZE.body },
@@ -300,9 +295,7 @@ export class PdfTemplateService {
   generateBuffer(docDef: TDocumentDefinitions): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       try {
-        // Pass vfs so that font filenames in FONTS can be resolved
-        const vfs: Record<string, string> = vfsFonts.pdfMake?.vfs ?? vfsFonts;
-        const pdfDoc = this.printer.createPdfKitDocument(docDef, { fontDescriptors: FONTS, vfs });
+        const pdfDoc = this.printer.createPdfKitDocument(docDef);
         const chunks: Buffer[] = [];
         pdfDoc.on('data', (chunk: Buffer) => chunks.push(chunk));
         pdfDoc.on('end', () => resolve(Buffer.concat(chunks)));

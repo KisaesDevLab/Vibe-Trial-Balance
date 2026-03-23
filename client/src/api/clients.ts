@@ -19,6 +19,7 @@ export interface ClientInput {
   taxYearEnd?: string;
   defaultTaxSoftware?: 'ultratax' | 'cch' | 'lacerte' | 'drake';
   taxId?: string | null;
+  activityType?: 'business' | 'rental' | 'farm' | 'farm_rental';
 }
 
 export const listClients = () => apiFetch<Client[]>('/clients');

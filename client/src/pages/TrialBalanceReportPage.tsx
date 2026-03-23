@@ -6,6 +6,7 @@ import { listPeriods } from '../api/periods';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { getTBTickmarks, TICKMARK_COLOR_CLASSES, type TBTickmarkMap } from '../api/tickmarks';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
+import { downloadXlsx } from '../utils/downloadXlsx';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -14,14 +15,6 @@ function fmt(cents: number): string {
 
 function fmtTotal(cents: number): string {
   return (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function downloadCsv(filename: string, rows: string[][]): void {
-  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
 }
 
 const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'] as const;
@@ -37,8 +30,8 @@ function netRow(r: TBRow, dk: keyof TBRow, ck: keyof TBRow): number {
 }
 
 function fmtPct(pct: number | null): React.ReactNode {
-  if (pct === null) return <span className="text-gray-400">—</span>;
-  const cls = pct > 0 ? 'text-green-700' : pct < 0 ? 'text-red-600' : 'text-gray-400';
+  if (pct === null) return <span className="text-gray-400 dark:text-gray-500">—</span>;
+  const cls = pct > 0 ? 'text-green-700 dark:text-green-400' : pct < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400 dark:text-gray-500';
   return <span className={cls}>{pct > 0 ? '+' : ''}{pct.toFixed(1)}%</span>;
 }
 
@@ -55,10 +48,10 @@ function sumRows(rows: TBRow[]): Totals {
   }), { pyd:0,pyc:0,ud:0,uc:0,bad:0,bac:0,bd:0,bc:0,tad:0,tac:0,td:0,tc:0 });
 }
 
-const thCls = 'px-2 py-1.5 text-right text-xs font-semibold text-gray-600 border-r border-gray-200 last:border-r-0 whitespace-nowrap';
-const tdCls = 'px-2 py-1 text-right text-sm font-mono text-gray-700 border-r border-gray-200 last:border-r-0';
-const tdTotalCls = 'px-2 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 border-r border-gray-200 last:border-r-0 border-t border-gray-400 bg-gray-50';
-const tdGrandCls = 'px-2 py-2 text-right text-sm font-mono font-bold text-gray-900 border-r border-gray-200 last:border-r-0 border-t-2 border-gray-700 bg-gray-100';
+const thCls = 'px-2 py-1.5 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700 last:border-r-0 whitespace-nowrap';
+const tdCls = 'px-2 py-1 text-right text-sm font-mono text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700 last:border-r-0';
+const tdTotalCls = 'px-2 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200 border-r border-gray-200 dark:border-gray-700 last:border-r-0 border-t border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/60';
+const tdGrandCls = 'px-2 py-2 text-right text-sm font-mono font-bold text-gray-900 dark:text-white border-r border-gray-200 dark:border-gray-700 last:border-r-0 border-t-2 border-gray-700 dark:border-gray-500 bg-gray-100 dark:bg-gray-700';
 
 export function TrialBalanceReportPage() {
   const { selectedPeriodId, selectedClientId } = useUIStore();
@@ -149,12 +142,12 @@ export function TrialBalanceReportPage() {
       String(r.tax_adj_debit / 100), String(r.tax_adj_credit / 100),
       String(r.tax_adjusted_debit / 100), String(r.tax_adjusted_credit / 100),
     ]);
-    downloadCsv(`trial-balance-report-${selectedPeriodId}.csv`, [header, ...dataRows]);
+    downloadXlsx(`trial-balance-report-${selectedPeriodId}.xlsx`, [header, ...dataRows]);
   };
 
   if (!selectedPeriodId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
         <div className="text-center">
           <p className="text-lg font-medium">No period selected</p>
           <p className="text-sm mt-1">Choose a client and period from the sidebar.</p>
@@ -168,13 +161,13 @@ export function TrialBalanceReportPage() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900">Trial Balance Report</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Trial Balance Report</h2>
         <div className="flex items-center gap-2">
-          <button onClick={handleExport} disabled={!rows.length} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40">Export CSV</button>
+          <button onClick={handleExport} disabled={!rows.length} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40">Export Excel</button>
           <button
             onClick={handlePreview}
             disabled={pdfLoading}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
           >
             {pdfLoading ? 'Generating…' : '↗ Preview PDF'}
           </button>
@@ -189,22 +182,22 @@ export function TrialBalanceReportPage() {
       </div>
 
       {pdfError && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded mt-2 mb-4">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 text-sm px-3 py-2 rounded mt-2 mb-4">
           {pdfError}
         </div>
       )}
 
       {/* Report header */}
       {client && (
-        <div className="bg-white rounded-lg border border-gray-200 px-5 py-3 mb-4 text-sm">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-5 py-3 mb-4 text-sm">
           <div className="flex items-start justify-between">
             <div>
-              <p className="font-semibold text-gray-900 text-base">{client.name}</p>
-              <p className="text-gray-500 text-xs mt-0.5">{client.entity_type}{client.tax_id ? ` · EIN: ${client.tax_id}` : ''}</p>
+              <p className="font-semibold text-gray-900 dark:text-white text-base">{client.name}</p>
+              <p className="text-gray-500 dark:text-gray-400 text-xs mt-0.5">{client.entity_type}{client.tax_id ? ` · EIN: ${client.tax_id}` : ''}</p>
             </div>
             {period && (
-              <div className="text-right text-xs text-gray-500">
-                <p className="font-medium text-gray-700">{period.period_name}</p>
+              <div className="text-right text-xs text-gray-500 dark:text-gray-400">
+                <p className="font-medium text-gray-700 dark:text-gray-300">{period.period_name}</p>
                 {period.start_date && period.end_date && (
                   <p>{period.start_date} – {period.end_date}</p>
                 )}
@@ -214,46 +207,46 @@ export function TrialBalanceReportPage() {
         </div>
       )}
 
-      {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">{(error as Error).message}</div>}
+      {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm mb-4">{(error as Error).message}</div>}
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-12 text-gray-400">Loading…</div>
+        <div className="flex items-center justify-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
       ) : rows.length === 0 ? (
-        <div className="bg-white rounded-lg border border-gray-200 px-4 py-10 text-center text-gray-400">No trial balance data for this period.</div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-10 text-center text-gray-400 dark:text-gray-500">No trial balance data for this period.</div>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-x-auto">
           <table className="w-full text-sm border-collapse">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-300">
-                <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 w-24 border-r border-gray-200">Acct #</th>
-                <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 border-r border-gray-200">Account Name</th>
-                <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 w-16 border-r border-gray-200">WP Ref</th>
+              <tr className="bg-gray-50 dark:bg-gray-800/60 border-b border-gray-300 dark:border-gray-600">
+                <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-24 border-r border-gray-200 dark:border-gray-700">Acct #</th>
+                <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700">Account Name</th>
+                <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-16 border-r border-gray-200 dark:border-gray-700">WP Ref</th>
                 {/* Prior Year */}
-                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-500 border-r border-gray-300 bg-gray-50">Prior Year</th>
+                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">Prior Year</th>
                 {/* Unadjusted */}
-                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-600 border-r border-gray-300 bg-white">Unadjusted</th>
+                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 border-r border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800">Unadjusted</th>
                 {/* Book AJE */}
-                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-blue-700 border-r border-gray-300 bg-blue-50">Book AJE</th>
+                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-blue-700 dark:text-blue-400 border-r border-gray-300 dark:border-gray-600 bg-blue-50 dark:bg-blue-900/20">Book AJE</th>
                 {/* Book Adjusted */}
-                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-blue-900 border-r border-gray-300 bg-blue-100">Book Adjusted</th>
+                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-blue-900 dark:text-blue-300 border-r border-gray-300 dark:border-gray-600 bg-blue-100 dark:bg-blue-900/40">Book Adjusted</th>
                 {/* Tax AJE */}
-                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-purple-700 border-r border-gray-300 bg-purple-50">Tax AJE</th>
+                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-purple-700 dark:text-purple-400 border-r border-gray-300 dark:border-gray-600 bg-purple-50 dark:bg-purple-900/20">Tax AJE</th>
                 {/* Tax Adjusted */}
-                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-purple-900 border-r border-gray-300 bg-purple-100">Tax Adjusted</th>
+                <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-purple-900 dark:text-purple-300 border-r border-gray-300 dark:border-gray-600 bg-purple-100 dark:bg-purple-900/40">Tax Adjusted</th>
                 {/* Variance */}
-                <th colSpan={3} className="px-2 py-1 text-center text-xs font-semibold text-teal-700 bg-teal-50">CY vs PY</th>
+                <th colSpan={3} className="px-2 py-1 text-center text-xs font-semibold text-teal-700 dark:text-teal-400 bg-teal-50 dark:bg-teal-900/20">CY vs PY</th>
               </tr>
-              <tr className="bg-gray-50 border-b-2 border-gray-400">
-                <th className="border-r border-gray-200" /><th className="border-r border-gray-200" /><th className="border-r border-gray-200" />
-                <th className={`${thCls} bg-gray-50`}>Dr</th><th className={`${thCls} bg-gray-50 border-r border-gray-300`}>Cr</th>
-                <th className={thCls}>Dr</th><th className={`${thCls} border-r border-gray-300`}>Cr</th>
-                <th className={`${thCls} bg-blue-50`}>Dr</th><th className={`${thCls} bg-blue-50 border-r border-gray-300`}>Cr</th>
-                <th className={`${thCls} bg-blue-100`}>Dr</th><th className={`${thCls} bg-blue-100 border-r border-gray-300`}>Cr</th>
-                <th className={`${thCls} bg-purple-50`}>Dr</th><th className={`${thCls} bg-purple-50 border-r border-gray-300`}>Cr</th>
-                <th className={`${thCls} bg-purple-100`}>Dr</th><th className={`${thCls} bg-purple-100 border-r border-gray-300`}>Cr</th>
-                <th className={`${thCls} bg-teal-50`}>PY Net</th>
-                <th className={`${thCls} bg-teal-50`}>CY Net</th>
-                <th className={`${thCls} bg-teal-50`}>Var %</th>
+              <tr className="bg-gray-50 dark:bg-gray-800/60 border-b-2 border-gray-400 dark:border-gray-600">
+                <th className="border-r border-gray-200 dark:border-gray-700" /><th className="border-r border-gray-200 dark:border-gray-700" /><th className="border-r border-gray-200 dark:border-gray-700" />
+                <th className={`${thCls} bg-gray-50 dark:bg-gray-800/60`}>Dr</th><th className={`${thCls} bg-gray-50 dark:bg-gray-800/60 border-r border-gray-300 dark:border-gray-600`}>Cr</th>
+                <th className={thCls}>Dr</th><th className={`${thCls} border-r border-gray-300 dark:border-gray-600`}>Cr</th>
+                <th className={`${thCls} bg-blue-50 dark:bg-blue-900/20`}>Dr</th><th className={`${thCls} bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600`}>Cr</th>
+                <th className={`${thCls} bg-blue-100 dark:bg-blue-900/40`}>Dr</th><th className={`${thCls} bg-blue-100 dark:bg-blue-900/40 border-r border-gray-300 dark:border-gray-600`}>Cr</th>
+                <th className={`${thCls} bg-purple-50 dark:bg-purple-900/20`}>Dr</th><th className={`${thCls} bg-purple-50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600`}>Cr</th>
+                <th className={`${thCls} bg-purple-100 dark:bg-purple-900/40`}>Dr</th><th className={`${thCls} bg-purple-100 dark:bg-purple-900/40 border-r border-gray-300 dark:border-gray-600`}>Cr</th>
+                <th className={`${thCls} bg-teal-50 dark:bg-teal-900/20`}>PY Net</th>
+                <th className={`${thCls} bg-teal-50 dark:bg-teal-900/20`}>CY Net</th>
+                <th className={`${thCls} bg-teal-50 dark:bg-teal-900/20`}>Var %</th>
               </tr>
             </thead>
             <tbody>
@@ -263,8 +256,8 @@ export function TrialBalanceReportPage() {
                 const tot = sumRows(catRows);
                 return (
                   <>
-                    <tr key={`${cat}-hdr`} className="bg-gray-100">
-                      <td colSpan={18} className="px-2 py-1 text-xs font-bold text-gray-700 uppercase tracking-wide">{CAT_LABEL[cat]}</td>
+                    <tr key={`${cat}-hdr`} className="bg-gray-100 dark:bg-gray-700">
+                      <td colSpan={18} className="px-2 py-1 text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{CAT_LABEL[cat]}</td>
                     </tr>
                     {catRows.map((r) => {
                       const pyNet = netRow(r, 'prior_year_debit', 'prior_year_credit');
@@ -272,9 +265,9 @@ export function TrialBalanceReportPage() {
                       const varAmt = cyNet - pyNet;
                       const varPct = pyNet !== 0 ? (varAmt / Math.abs(pyNet)) * 100 : null;
                       return (
-                        <tr key={r.account_id} className="border-t border-gray-100 hover:bg-gray-50">
-                          <td className="px-2 py-1 text-sm text-gray-600 border-r border-gray-200 whitespace-nowrap">{r.account_number}</td>
-                          <td className="px-2 py-1 text-sm text-gray-700 border-r border-gray-200">
+                        <tr key={r.account_id} className="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                          <td className="px-2 py-1 text-sm font-mono text-gray-600 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700 whitespace-nowrap">{r.account_number}</td>
+                          <td className="px-2 py-1 text-sm text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">
                             <span className="flex items-center gap-1 flex-wrap">
                               {r.account_name}
                               {(tbTickmarks?.[r.account_id] ?? []).map((tm) => (
@@ -284,34 +277,34 @@ export function TrialBalanceReportPage() {
                               ))}
                             </span>
                           </td>
-                          <td className="px-2 py-1 text-xs text-gray-500 border-r border-gray-200">{r.workpaper_ref ?? ''}</td>
-                          <td className={`${tdCls} bg-gray-50/50 text-gray-500`}>{fmt(r.prior_year_debit)}</td>
-                          <td className={`${tdCls} bg-gray-50/50 text-gray-500 border-r border-gray-300`}>{fmt(r.prior_year_credit)}</td>
+                          <td className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700">{r.workpaper_ref ?? ''}</td>
+                          <td className={`${tdCls} bg-gray-50/50 dark:bg-gray-800/30 text-gray-500 dark:text-gray-400`}>{fmt(r.prior_year_debit)}</td>
+                          <td className={`${tdCls} bg-gray-50/50 dark:bg-gray-800/30 text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.prior_year_credit)}</td>
                           <td className={tdCls}>{fmt(r.unadjusted_debit)}</td>
-                          <td className={`${tdCls} border-r border-gray-300`}>{fmt(r.unadjusted_credit)}</td>
-                          <td className={`${tdCls} bg-blue-50/50`}>{fmt(r.book_adj_debit)}</td>
-                          <td className={`${tdCls} bg-blue-50/50 border-r border-gray-300`}>{fmt(r.book_adj_credit)}</td>
-                          <td className={`${tdCls} bg-blue-100/50`}>{fmt(r.book_adjusted_debit)}</td>
-                          <td className={`${tdCls} bg-blue-100/50 border-r border-gray-300`}>{fmt(r.book_adjusted_credit)}</td>
-                          <td className={`${tdCls} bg-purple-50/50`}>{fmt(r.tax_adj_debit)}</td>
-                          <td className={`${tdCls} bg-purple-50/50 border-r border-gray-300`}>{fmt(r.tax_adj_credit)}</td>
-                          <td className={`${tdCls} bg-purple-100/50`}>{fmt(r.tax_adjusted_debit)}</td>
-                          <td className={`${tdCls} bg-purple-100/50 border-r border-gray-300`}>{fmt(r.tax_adjusted_credit)}</td>
-                          <td className={`${tdCls} bg-teal-50/50 text-gray-600`}>{fmtTotal(pyNet)}</td>
-                          <td className={`${tdCls} bg-teal-50/50 text-gray-700`}>{fmtTotal(cyNet)}</td>
-                          <td className={`${tdCls} bg-teal-50/50`}>{fmtPct(varPct)}</td>
+                          <td className={`${tdCls} border-r border-gray-300 dark:border-gray-600`}>{fmt(r.unadjusted_credit)}</td>
+                          <td className={`${tdCls} bg-blue-50/50 dark:bg-blue-900/10`}>{fmt(r.book_adj_debit)}</td>
+                          <td className={`${tdCls} bg-blue-50/50 dark:bg-blue-900/10 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.book_adj_credit)}</td>
+                          <td className={`${tdCls} bg-blue-100/50 dark:bg-blue-900/20`}>{fmt(r.book_adjusted_debit)}</td>
+                          <td className={`${tdCls} bg-blue-100/50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.book_adjusted_credit)}</td>
+                          <td className={`${tdCls} bg-purple-50/50 dark:bg-purple-900/10`}>{fmt(r.tax_adj_debit)}</td>
+                          <td className={`${tdCls} bg-purple-50/50 dark:bg-purple-900/10 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.tax_adj_credit)}</td>
+                          <td className={`${tdCls} bg-purple-100/50 dark:bg-purple-900/20`}>{fmt(r.tax_adjusted_debit)}</td>
+                          <td className={`${tdCls} bg-purple-100/50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.tax_adjusted_credit)}</td>
+                          <td className={`${tdCls} bg-teal-50/50 dark:bg-teal-900/10 text-gray-600 dark:text-gray-400`}>{fmtTotal(pyNet)}</td>
+                          <td className={`${tdCls} bg-teal-50/50 dark:bg-teal-900/10 text-gray-700 dark:text-gray-300`}>{fmtTotal(cyNet)}</td>
+                          <td className={`${tdCls} bg-teal-50/50 dark:bg-teal-900/10`}>{fmtPct(varPct)}</td>
                         </tr>
                       );
                     })}
-                    <tr key={`${cat}-tot`} className="border-t border-gray-300">
-                      <td className="px-2 py-1 border-r border-gray-200" /><td className={`${tdTotalCls} text-left`}>Total {CAT_LABEL[cat]}</td><td className="px-2 border-r border-gray-200 border-t border-gray-400 bg-gray-50" />
-                      <td className={`${tdTotalCls} bg-gray-50 text-gray-500`}>{fmtTotal(tot.pyd)}</td><td className={`${tdTotalCls} bg-gray-50 text-gray-500 border-r border-gray-300`}>{fmtTotal(tot.pyc)}</td>
-                      <td className={tdTotalCls}>{fmtTotal(tot.ud)}</td><td className={`${tdTotalCls} border-r border-gray-300`}>{fmtTotal(tot.uc)}</td>
-                      <td className={`${tdTotalCls} bg-blue-50`}>{fmtTotal(tot.bad)}</td><td className={`${tdTotalCls} bg-blue-50 border-r border-gray-300`}>{fmtTotal(tot.bac)}</td>
-                      <td className={`${tdTotalCls} bg-blue-100`}>{fmtTotal(tot.bd)}</td><td className={`${tdTotalCls} bg-blue-100 border-r border-gray-300`}>{fmtTotal(tot.bc)}</td>
-                      <td className={`${tdTotalCls} bg-purple-50`}>{fmtTotal(tot.tad)}</td><td className={`${tdTotalCls} bg-purple-50 border-r border-gray-300`}>{fmtTotal(tot.tac)}</td>
-                      <td className={`${tdTotalCls} bg-purple-100`}>{fmtTotal(tot.td)}</td><td className={`${tdTotalCls} bg-purple-100 border-r border-gray-300`}>{fmtTotal(tot.tc)}</td>
-                      <td colSpan={3} className={`${tdTotalCls} bg-teal-50`}></td>
+                    <tr key={`${cat}-tot`} className="border-t border-gray-300 dark:border-gray-600">
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-gray-700" /><td className={`${tdTotalCls} text-left`}>Total {CAT_LABEL[cat]}</td><td className="px-2 border-r border-gray-200 dark:border-gray-700 border-t border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/60" />
+                      <td className={`${tdTotalCls} bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400`}>{fmtTotal(tot.pyd)}</td><td className={`${tdTotalCls} bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(tot.pyc)}</td>
+                      <td className={tdTotalCls}>{fmtTotal(tot.ud)}</td><td className={`${tdTotalCls} border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(tot.uc)}</td>
+                      <td className={`${tdTotalCls} bg-blue-50 dark:bg-blue-900/20`}>{fmtTotal(tot.bad)}</td><td className={`${tdTotalCls} bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(tot.bac)}</td>
+                      <td className={`${tdTotalCls} bg-blue-100 dark:bg-blue-900/40`}>{fmtTotal(tot.bd)}</td><td className={`${tdTotalCls} bg-blue-100 dark:bg-blue-900/40 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(tot.bc)}</td>
+                      <td className={`${tdTotalCls} bg-purple-50 dark:bg-purple-900/20`}>{fmtTotal(tot.tad)}</td><td className={`${tdTotalCls} bg-purple-50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(tot.tac)}</td>
+                      <td className={`${tdTotalCls} bg-purple-100 dark:bg-purple-900/40`}>{fmtTotal(tot.td)}</td><td className={`${tdTotalCls} bg-purple-100 dark:bg-purple-900/40 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(tot.tc)}</td>
+                      <td colSpan={3} className={`${tdTotalCls} bg-teal-50 dark:bg-teal-900/20`}></td>
                     </tr>
                     <tr key={`${cat}-sp`}><td colSpan={18} className="py-1" /></tr>
                   </>
@@ -319,14 +312,14 @@ export function TrialBalanceReportPage() {
               })}
               {/* Grand Total */}
               <tr>
-                <td className="px-2 border-r border-gray-200" /><td className={`${tdGrandCls} text-left`}>Grand Total</td><td className="px-2 border-r border-gray-200 border-t-2 border-gray-700 bg-gray-100" />
-                <td className={`${tdGrandCls} bg-gray-50 text-gray-500`}>{fmtTotal(grand.pyd)}</td><td className={`${tdGrandCls} bg-gray-50 text-gray-500 border-r border-gray-300`}>{fmtTotal(grand.pyc)}</td>
-                <td className={tdGrandCls}>{fmtTotal(grand.ud)}</td><td className={`${tdGrandCls} border-r border-gray-300`}>{fmtTotal(grand.uc)}</td>
-                <td className={`${tdGrandCls} bg-blue-50`}>{fmtTotal(grand.bad)}</td><td className={`${tdGrandCls} bg-blue-50 border-r border-gray-300`}>{fmtTotal(grand.bac)}</td>
-                <td className={`${tdGrandCls} bg-blue-100`}>{fmtTotal(grand.bd)}</td><td className={`${tdGrandCls} bg-blue-100 border-r border-gray-300`}>{fmtTotal(grand.bc)}</td>
-                <td className={`${tdGrandCls} bg-purple-50`}>{fmtTotal(grand.tad)}</td><td className={`${tdGrandCls} bg-purple-50 border-r border-gray-300`}>{fmtTotal(grand.tac)}</td>
-                <td className={`${tdGrandCls} bg-purple-100`}>{fmtTotal(grand.td)}</td><td className={`${tdGrandCls} bg-purple-100 border-r border-gray-300`}>{fmtTotal(grand.tc)}</td>
-                <td colSpan={3} className={`${tdGrandCls} bg-teal-50`}></td>
+                <td className="px-2 border-r border-gray-200 dark:border-gray-700" /><td className={`${tdGrandCls} text-left`}>Grand Total</td><td className="px-2 border-r border-gray-200 dark:border-gray-700 border-t-2 border-gray-700 dark:border-gray-500 bg-gray-100 dark:bg-gray-700" />
+                <td className={`${tdGrandCls} bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400`}>{fmtTotal(grand.pyd)}</td><td className={`${tdGrandCls} bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(grand.pyc)}</td>
+                <td className={tdGrandCls}>{fmtTotal(grand.ud)}</td><td className={`${tdGrandCls} border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(grand.uc)}</td>
+                <td className={`${tdGrandCls} bg-blue-50 dark:bg-blue-900/20`}>{fmtTotal(grand.bad)}</td><td className={`${tdGrandCls} bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(grand.bac)}</td>
+                <td className={`${tdGrandCls} bg-blue-100 dark:bg-blue-900/40`}>{fmtTotal(grand.bd)}</td><td className={`${tdGrandCls} bg-blue-100 dark:bg-blue-900/40 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(grand.bc)}</td>
+                <td className={`${tdGrandCls} bg-purple-50 dark:bg-purple-900/20`}>{fmtTotal(grand.tad)}</td><td className={`${tdGrandCls} bg-purple-50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(grand.tac)}</td>
+                <td className={`${tdGrandCls} bg-purple-100 dark:bg-purple-900/40`}>{fmtTotal(grand.td)}</td><td className={`${tdGrandCls} bg-purple-100 dark:bg-purple-900/40 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(grand.tc)}</td>
+                <td colSpan={3} className={`${tdGrandCls} bg-teal-50 dark:bg-teal-900/20`}></td>
               </tr>
             </tbody>
           </table>
@@ -345,11 +338,11 @@ export function TrialBalanceReportPage() {
         const unique = Array.from(seen.values());
         if (unique.length === 0) return null;
         return (
-          <div className="mt-4 border border-gray-200 rounded-lg px-4 py-3 bg-white">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Tickmark Legend</p>
+          <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-3 bg-white dark:bg-gray-800">
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Tickmark Legend</p>
             <div className="flex flex-wrap gap-3">
               {unique.map((tm) => (
-                <div key={tm.symbol} className="flex items-center gap-1.5 text-sm text-gray-700">
+                <div key={tm.symbol} className="flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-300">
                   <span className={`inline-flex items-center justify-center w-5 h-5 rounded text-xs font-bold ${TICKMARK_COLOR_CLASSES[tm.color as keyof typeof TICKMARK_COLOR_CLASSES]}`}>
                     {tm.symbol}
                   </span>

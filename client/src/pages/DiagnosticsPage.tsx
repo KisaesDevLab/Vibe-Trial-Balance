@@ -4,9 +4,9 @@ import { useUIStore } from '../store/uiStore';
 import { Spinner } from '../components/Spinner';
 
 const SEVERITY_STYLES: Record<string, { badge: string; row: string; icon: string }> = {
-  error:   { badge: 'bg-red-100 text-red-700 border border-red-200',    row: 'bg-red-50/60',     icon: '✕' },
-  warning: { badge: 'bg-amber-100 text-amber-700 border border-amber-200', row: 'bg-amber-50/60', icon: '!' },
-  info:    { badge: 'bg-blue-100 text-blue-700 border border-blue-200',  row: 'bg-blue-50/30',    icon: 'i' },
+  error:   { badge: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-700',    row: 'bg-red-50/60 dark:bg-red-900/20',     icon: '✕' },
+  warning: { badge: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-700', row: 'bg-amber-50/60 dark:bg-amber-900/20', icon: '!' },
+  info:    { badge: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-700',  row: 'bg-blue-50/30 dark:bg-blue-900/10',    icon: 'i' },
 };
 
 export function DiagnosticsPage() {
@@ -34,7 +34,7 @@ export function DiagnosticsPage() {
 
   if (!selectedPeriodId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
         <div className="text-center">
           <p className="text-lg font-medium">No period selected</p>
           <p className="text-sm mt-1">Choose a client and period from the sidebar.</p>
@@ -59,8 +59,8 @@ export function DiagnosticsPage() {
     <div className="p-6 max-w-4xl">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">AI Period Diagnostics</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">AI Period Diagnostics</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             Claude reviews the trial balance and flags issues, variances, and observations.
           </p>
         </div>
@@ -82,20 +82,20 @@ export function DiagnosticsPage() {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm mb-4">
           {error}
         </div>
       )}
 
       {!observations && !loading && (
-        <div className="bg-white rounded-lg border border-gray-200 px-6 py-12 text-center text-gray-400">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-6 py-12 text-center text-gray-400 dark:text-gray-500">
           <p className="text-base font-medium mb-1">No diagnostics run yet</p>
           <p className="text-sm">Click &ldquo;Run AI Review&rdquo; to analyze this period.</p>
         </div>
       )}
 
       {loading && (
-        <div className="bg-white rounded-lg border border-gray-200 px-6 py-12 text-center text-gray-400">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-6 py-12 text-center text-gray-400 dark:text-gray-500">
           <div className="flex items-center justify-center gap-3">
             <Spinner size="lg" />
             <p className="text-sm">Running AI diagnostics…</p>
@@ -109,14 +109,14 @@ export function DiagnosticsPage() {
           <div className="flex items-center gap-3 mb-4">
             <button
               onClick={() => setFilter('all')}
-              className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${filter === 'all' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${filter === 'all' ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
             >
               All ({observations.length})
             </button>
             {counts.error > 0 && (
               <button
                 onClick={() => setFilter('error')}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${filter === 'error' ? 'bg-red-600 text-white' : 'bg-red-100 text-red-700 hover:bg-red-200'}`}
+                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${filter === 'error' ? 'bg-red-600 text-white' : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/60'}`}
               >
                 Errors ({counts.error})
               </button>
@@ -124,7 +124,7 @@ export function DiagnosticsPage() {
             {counts.warning > 0 && (
               <button
                 onClick={() => setFilter('warning')}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${filter === 'warning' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}
+                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${filter === 'warning' ? 'bg-amber-600 text-white' : 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/60'}`}
               >
                 Warnings ({counts.warning})
               </button>
@@ -132,20 +132,20 @@ export function DiagnosticsPage() {
             {counts.info > 0 && (
               <button
                 onClick={() => setFilter('info')}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${filter === 'info' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}
+                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${filter === 'info' ? 'bg-blue-600 text-white' : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/60'}`}
               >
                 Info ({counts.info})
               </button>
             )}
-            <span className="ml-auto text-xs text-gray-400">Powered by Claude</span>
+            <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">Powered by Claude</span>
           </div>
 
           {/* Observations list */}
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
             {filtered!.length === 0 ? (
-              <div className="px-5 py-8 text-center text-gray-400 text-sm">No {filter} observations.</div>
+              <div className="px-5 py-8 text-center text-gray-400 dark:text-gray-500 text-sm">No {filter} observations.</div>
             ) : (
-              <ul className="divide-y divide-gray-100">
+              <ul className="divide-y divide-gray-100 dark:divide-gray-700">
                 {filtered!.map((obs, i) => {
                   const s = SEVERITY_STYLES[obs.severity] ?? SEVERITY_STYLES.info;
                   return (
@@ -158,9 +158,9 @@ export function DiagnosticsPage() {
                           <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${s.badge}`}>
                             {obs.severity.toUpperCase()}
                           </span>
-                          <span className="text-xs text-gray-500 font-medium">{obs.category}</span>
+                          <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">{obs.category}</span>
                         </div>
-                        <p className="text-sm text-gray-700">{obs.message}</p>
+                        <p className="text-sm text-gray-700 dark:text-gray-300">{obs.message}</p>
                       </div>
                     </li>
                   );
@@ -169,7 +169,7 @@ export function DiagnosticsPage() {
             )}
           </div>
 
-          <p className="text-xs text-gray-400 mt-3 text-right">
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-3 text-right">
             AI analysis is for review assistance only. Always verify findings independently.
           </p>
         </>

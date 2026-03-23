@@ -49,14 +49,21 @@ export function TaxReturnOrderPage() {
     queryFn: () => listPeriods(selectedClientId!),
     enabled: !!selectedClientId,
   });
-  const { data: tbData, isLoading: tbLoading } = useQuery({
+  const { data: tbRows, isLoading: tbLoading } = useQuery({
     queryKey: ['trial-balance', selectedPeriodId],
-    queryFn: () => getTrialBalance(selectedPeriodId!),
+    queryFn: async () => {
+      const res = await getTrialBalance(selectedPeriodId!);
+      if (res.error) throw new Error(res.error.message);
+      return res.data;
+    },
     enabled: !!selectedPeriodId,
   });
-  const { data: coaData, isLoading: coaLoading } = useQuery({
+  const { data: coaAccounts, isLoading: coaLoading } = useQuery({
     queryKey: ['chart-of-accounts', selectedClientId],
-    queryFn: () => listAccounts(selectedClientId!),
+    queryFn: async () => {
+      const res = await listAccounts(selectedClientId!);
+      return res.data ?? [];
+    },
     enabled: !!selectedClientId,
   });
   const { data: tcData } = useQuery({
@@ -74,21 +81,55 @@ export function TaxReturnOrderPage() {
   );
 
   const groups = useMemo((): TaxGroup[] => {
-    const tbRows = tbData?.data ?? [];
-    const accounts = coaData?.data ?? [];
+    const tbRowList = tbRows ?? [];
+    const accounts = coaAccounts ?? [];
     const taxCodes = tcData?.data ?? [];
 
-    const accountMap = new Map<number, Account>(accounts.map((a) => [a.id, a]));
+    // Keyed by account_id for O(1) lookup
+    const tbMap = new Map<number, TBRow>(tbRowList.map((r) => [r.account_id, r]));
     const taxCodeMap = new Map<number, TaxCode>(taxCodes.map((tc) => [tc.id, tc]));
 
-    const filtered = filterCategory ? tbRows.filter((r) => r.category === filterCategory) : tbRows;
+    // Iterate over COA accounts so accounts without TB entries still appear
+    const filteredAccounts = accounts.filter(
+      (a) => a.is_active && (!filterCategory || a.category === filterCategory),
+    );
 
     const groupMap = new Map<number | null, TaxGroup>();
-    for (const r of filtered) {
-      const account = accountMap.get(r.account_id);
-      if (!account) continue;
+    for (const account of filteredAccounts) {
+      const tbRow = tbMap.get(account.id);
       const tcId = account.tax_code_id;
       const tc = tcId !== null ? taxCodeMap.get(tcId) : undefined;
+
+      const r: TBRow = tbRow ?? {
+        period_id: selectedPeriodId ?? 0,
+        account_id: account.id,
+        account_number: account.account_number,
+        account_name: account.account_name,
+        category: account.category,
+        normal_balance: account.normal_balance,
+        tax_line: account.tax_line,
+        workpaper_ref: account.workpaper_ref,
+        unit: account.unit,
+        is_active: account.is_active,
+        preparer_notes: account.preparer_notes,
+        reviewer_notes: account.reviewer_notes,
+        unadjusted_debit: 0,
+        unadjusted_credit: 0,
+        prior_year_debit: 0,
+        prior_year_credit: 0,
+        trans_adj_debit: 0,
+        trans_adj_credit: 0,
+        post_trans_debit: 0,
+        post_trans_credit: 0,
+        book_adj_debit: 0,
+        book_adj_credit: 0,
+        tax_adj_debit: 0,
+        tax_adj_credit: 0,
+        book_adjusted_debit: 0,
+        book_adjusted_credit: 0,
+        tax_adjusted_debit: 0,
+        tax_adjusted_credit: 0,
+      };
 
       if (!groupMap.has(tcId)) {
         groupMap.set(tcId, {
@@ -106,7 +147,7 @@ export function TaxReturnOrderPage() {
     }
 
     return Array.from(groupMap.values()).sort((a, b) => a.sortOrder - b.sortOrder || a.taxCode.localeCompare(b.taxCode));
-  }, [tbData, coaData, tcData, filterCategory]);
+  }, [tbRows, coaAccounts, tcData, filterCategory, selectedPeriodId]);
 
   const grandNet = groups.reduce((s, g) => s + g.net, 0);
   const mappedCount = groups.filter((g) => g.taxCodeId !== null).reduce((s, g) => s + g.rows.length, 0);
@@ -128,10 +169,10 @@ export function TaxReturnOrderPage() {
   };
 
   if (!selectedClientId) {
-    return <div className="p-8 text-center text-gray-500 text-sm">Select a client to view the Tax Return Order report.</div>;
+    return <div className="p-8 text-center text-gray-500 dark:text-gray-400 text-sm">Select a client to view the Tax Return Order report.</div>;
   }
   if (!selectedPeriodId) {
-    return <div className="p-8 text-center text-gray-500 text-sm">Select a period to view the Tax Return Order report.</div>;
+    return <div className="p-8 text-center text-gray-500 dark:text-gray-400 text-sm">Select a period to view the Tax Return Order report.</div>;
   }
 
   const isLoading = tbLoading || coaLoading;
@@ -139,12 +180,12 @@ export function TaxReturnOrderPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="shrink-0 border-b border-gray-200 bg-white px-6 py-4">
+      <div className="shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-6 py-4">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h1 className="text-lg font-semibold text-gray-900">Tax Return Order</h1>
+            <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Return Order</h1>
             {client && period && (
-              <p className="text-sm text-gray-500 mt-0.5">
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                 {client.name} — {period.period_name}
                 {!isLoading && (
                   <span className="ml-2 text-xs">
@@ -158,7 +199,7 @@ export function TaxReturnOrderPage() {
             <button
               onClick={handlePreview}
               disabled={pdfLoading || !groups.length}
-              className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
             >
               {pdfLoading ? 'Generating…' : '↗ Preview PDF'}
             </button>
@@ -177,7 +218,7 @@ export function TaxReturnOrderPage() {
           <select
             value={filterCategory}
             onChange={(e) => setFilterCategory(e.target.value)}
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
           >
             <option value="">All Categories</option>
             {Object.entries(CATEGORY_LABELS).map(([v, l]) => (
@@ -186,74 +227,76 @@ export function TaxReturnOrderPage() {
           </select>
         </div>
 
-        {pdfError && <p className="mt-2 text-sm text-red-600">PDF error: {pdfError}</p>}
+        {pdfError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">PDF error: {pdfError}</p>}
       </div>
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
         {isLoading ? (
-          <div className="p-8 text-center text-gray-500 text-sm">Loading…</div>
+          <div className="p-8 text-center text-gray-500 dark:text-gray-400 text-sm">Loading…</div>
         ) : groups.length === 0 ? (
-          <div className="p-8 text-center text-gray-500 text-sm">
+          <div className="p-8 text-center text-gray-500 dark:text-gray-400 text-sm">
             No accounts found for the selected filters.
           </div>
         ) : (
-          <table className="w-full text-sm border-collapse">
-            <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 z-10">
+          <div className="px-6 py-4">
+          <table className="w-full max-w-4xl text-sm border-collapse">
+            <thead className="sticky top-0 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700 z-10">
               <tr>
-                <th className="text-right px-3 py-2 font-medium text-gray-600 w-14">Sort</th>
-                <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">Tax Code</th>
-                <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">Acct #</th>
-                <th className="text-left px-3 py-2 font-medium text-gray-600">Account Name</th>
-                <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">Category</th>
-                <th className="text-right px-3 py-2 font-medium text-gray-600 w-32">Tax-Adj Net</th>
+                <th className="text-right px-3 py-2 font-medium text-gray-600 dark:text-gray-400 w-14">Sort</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-600 dark:text-gray-400 w-28">Tax Code</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-600 dark:text-gray-400 w-24">Acct #</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-600 dark:text-gray-400">Account Name</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-600 dark:text-gray-400 w-24">Category</th>
+                <th className="text-right px-3 py-2 font-medium text-gray-600 dark:text-gray-400 w-32">Tax-Adj Net</th>
               </tr>
             </thead>
             <tbody>
               {groups.map((grp) => (
                 <>
-                  <tr key={`hdr-${grp.taxCode}`} className="bg-gray-100 border-t border-gray-200">
-                    <td className="px-3 py-1.5 text-right text-xs text-gray-400 tabular-nums">
+                  <tr key={`hdr-${grp.taxCode}`} className="bg-gray-100 dark:bg-gray-700 border-t border-gray-200 dark:border-gray-700">
+                    <td className="px-3 py-1.5 text-right text-xs font-mono text-gray-400 dark:text-gray-500 tabular-nums">
                       {grp.sortOrder < 99999 ? grp.sortOrder : '—'}
                     </td>
-                    <td className="px-3 py-1.5 font-mono font-semibold text-xs text-gray-700">{grp.taxCode}</td>
-                    <td colSpan={3} className="px-3 py-1.5 text-xs text-gray-500">{grp.description}</td>
+                    <td className="px-3 py-1.5 font-mono font-semibold text-xs text-gray-700 dark:text-gray-300">{grp.taxCode}</td>
+                    <td colSpan={3} className="px-3 py-1.5 text-xs text-gray-500 dark:text-gray-400">{grp.description}</td>
                     <td className="px-3 py-1.5" />
                   </tr>
                   {grp.rows.map((r, i) => (
-                    <tr key={r.account_id} className={`border-t border-gray-100 ${i % 2 === 1 ? 'bg-gray-50/50' : ''}`}>
-                      <td className="px-3 py-1.5 text-right text-xs text-gray-300 tabular-nums">
+                    <tr key={r.account_id} className={`border-t border-gray-100 dark:border-gray-700 ${i % 2 === 1 ? 'bg-gray-50/50 dark:bg-gray-800/30' : ''}`}>
+                      <td className="px-3 py-1.5 text-right text-xs font-mono text-gray-300 dark:text-gray-600 tabular-nums">
                         {grp.sortOrder < 99999 ? grp.sortOrder : ''}
                       </td>
-                      <td className="px-3 py-1.5 text-xs font-mono text-gray-400">{grp.taxCode === 'Unassigned' ? '—' : grp.taxCode}</td>
-                      <td className="px-3 py-1.5 text-xs font-mono text-gray-600">{r.account_number}</td>
-                      <td className="px-3 py-1.5 text-gray-900">{r.account_name}</td>
-                      <td className="px-3 py-1.5 text-xs text-gray-500 capitalize">{r.category}</td>
-                      <td className={`px-3 py-1.5 text-right font-mono tabular-nums text-sm ${taxNet(r) < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                      <td className="px-3 py-1.5 text-xs font-mono text-gray-400 dark:text-gray-500">{grp.taxCode === 'Unassigned' ? '—' : grp.taxCode}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-gray-600 dark:text-gray-400">{r.account_number}</td>
+                      <td className="px-3 py-1.5 text-gray-900 dark:text-gray-200">{r.account_name}</td>
+                      <td className="px-3 py-1.5 text-xs text-gray-500 dark:text-gray-400 capitalize">{r.category}</td>
+                      <td className={`px-3 py-1.5 text-right font-mono tabular-nums text-sm ${taxNet(r) < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-200'}`}>
                         {fmt(taxNet(r))}
                       </td>
                     </tr>
                   ))}
-                  <tr key={`sub-${grp.taxCode}`} className="bg-gray-50 border-t border-gray-300">
-                    <td colSpan={5} className="px-3 py-1.5 text-xs font-semibold text-gray-700 text-right pr-4">
+                  <tr key={`sub-${grp.taxCode}`} className="bg-gray-50 dark:bg-gray-800/60 border-t border-gray-300 dark:border-gray-600">
+                    <td colSpan={5} className="px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300 text-right pr-4">
                       Total {grp.taxCode}
                     </td>
-                    <td className={`px-3 py-1.5 text-right font-mono font-semibold tabular-nums text-sm ${grp.net < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                    <td className={`px-3 py-1.5 text-right font-mono font-semibold tabular-nums text-sm ${grp.net < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-white'}`}>
                       {fmt(grp.net)}
                     </td>
                   </tr>
                 </>
               ))}
-              <tr className="border-t-2 border-gray-400 bg-blue-50">
-                <td colSpan={5} className="px-3 py-2 text-sm font-bold text-gray-800 text-right pr-4">
+              <tr className="border-t-2 border-gray-400 dark:border-gray-500 bg-blue-50 dark:bg-blue-900/20">
+                <td colSpan={5} className="px-3 py-2 text-sm font-bold text-gray-800 dark:text-gray-200 text-right pr-4">
                   Grand Total (Net)
                 </td>
-                <td className={`px-3 py-2 text-right font-mono font-bold tabular-nums ${grandNet < 0 ? 'text-red-700' : grandNet > 0 ? 'text-green-700' : 'text-gray-700'}`}>
+                <td className={`px-3 py-2 text-right font-mono font-bold tabular-nums ${grandNet < 0 ? 'text-red-700 dark:text-red-400' : grandNet > 0 ? 'text-green-700 dark:text-green-400' : 'text-gray-700 dark:text-gray-300'}`}>
                   {fmt(grandNet)}
                 </td>
               </tr>
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>

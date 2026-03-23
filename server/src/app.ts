@@ -18,17 +18,33 @@ import { reconciliationCollectionRouter, reconciliationItemRouter } from './rout
 import { m1CollectionRouter, m1ItemRouter } from './routes/taxWorkpapers';
 import { engagementCollectionRouter, engagementItemRouter, engagementSummaryRouter } from './routes/engagement';
 import { cashFlowRouter } from './routes/cashFlow';
-import { tickmarkLibraryCollectionRouter, tickmarkLibraryItemRouter, tbTickmarkRouter } from './routes/tickmarks';
+import { tickmarkLibraryCollectionRouter, tickmarkLibraryItemRouter, tbTickmarkRouter, systemTickmarkCollectionRouter, systemTickmarkItemRouter } from './routes/tickmarks';
 import { savedReportCollectionRouter, savedReportItemRouter } from './routes/savedReports';
 import { varianceNotesRouter } from './routes/varianceNotes';
 import { pdfReportsRouter } from './routes/pdfReports';
 import { taxCodesRouter } from './routes/taxCodes';
+import { comparisonRouter } from './routes/comparison';
+import { exportsRouter } from './routes/exports';
+import { taxLineAssignmentRouter } from './routes/taxLineAssignment';
+import { csvImportRouter } from './routes/csvImport';
+import { pdfImportRouter } from './routes/pdfImport';
+import { documentsCollectionRouter, documentsItemRouter } from './routes/documents';
+import { backupRouter, restoreRouter, startBackupScheduler } from './routes/backup';
+import { auditLogRouter } from './routes/auditLog';
+import { supportRouter } from './routes/support';
+import { coaTemplatesRouter } from './routes/coaTemplates';
+import { payeesRouter } from './routes/payees';
+import { unitsRouter } from './routes/units';
+import { mcpRouter } from './routes/mcpHttp';
 import { db } from './db';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',
+  credentials: true,
+}));
 app.use(express.json());
 
 app.get('/api/v1/health', async (_req, res) => {
@@ -72,15 +88,33 @@ app.use('/api/v1/periods/:periodId/cash-flow', cashFlowRouter);
 app.use('/api/v1/clients/:clientId/tickmarks', tickmarkLibraryCollectionRouter);
 app.use('/api/v1/tickmarks/:id', tickmarkLibraryItemRouter);
 app.use('/api/v1/periods/:periodId/tb-tickmarks', tbTickmarkRouter);
+app.use('/api/v1/system-tickmarks', systemTickmarkCollectionRouter);
+app.use('/api/v1/system-tickmarks/:id', systemTickmarkItemRouter);
 app.use('/api/v1/clients/:clientId/saved-reports', savedReportCollectionRouter);
 app.use('/api/v1/saved-reports/:id', savedReportItemRouter);
 app.use('/api/v1/periods/:periodId/variance-notes', varianceNotesRouter);
 app.use('/api/v1/reports', pdfReportsRouter);
 app.use('/api/v1/tax-codes', taxCodesRouter);
+app.use('/api/v1/periods/:periodId/compare/:comparePeriodId', comparisonRouter);
+app.use('/api/v1/periods/:periodId/exports', exportsRouter);
+app.use('/api/v1/tax-lines', taxLineAssignmentRouter);
+app.use('/api/v1/import/csv', csvImportRouter);
+app.use('/api/v1/import/pdf', pdfImportRouter);
+app.use('/api/v1/clients/:clientId/documents', documentsCollectionRouter);
+app.use('/api/v1/documents', documentsItemRouter);
+app.use('/api/v1/backup', backupRouter);
+app.use('/api/v1/restore', restoreRouter);
+app.use('/api/v1/audit-log', auditLogRouter);
+app.use('/api/v1/support', supportRouter);
+app.use('/api/v1/coa-templates', coaTemplatesRouter);
+app.use('/api/v1/clients/:clientId/payees', payeesRouter);
+app.use('/api/v1/clients/:clientId/units', unitsRouter);
+app.use('/mcp', mcpRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/api/v1/health`);
+  startBackupScheduler();
 });
 
 export { app, db };

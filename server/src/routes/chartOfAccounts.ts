@@ -24,9 +24,16 @@ const accountSchema = z.object({
   workpaperRef: z.string().max(50).optional(),
   preparerNotes: z.string().optional(),
   reviewerNotes: z.string().optional(),
-  sortOrder: z.number().int().optional(),
+  unit: z.string().max(100).optional().nullable(),
   cashFlowCategory: z.enum(['operating', 'investing', 'financing', 'non_cash', 'cash']).optional().nullable(),
+  importAliases: z.array(z.string().max(255)).max(50).optional(),
 });
+
+function parseAliases(val: unknown): string[] {
+  if (Array.isArray(val)) return val as string[];
+  if (typeof val === 'string') { try { return JSON.parse(val); } catch { return []; } }
+  return [];
+}
 
 // GET /api/v1/clients/:clientId/chart-of-accounts
 coaCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -41,10 +48,7 @@ coaCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<vo
   try {
     const accounts = await db('chart_of_accounts')
       .where({ client_id: clientId, is_active: true })
-      .orderBy([
-        { column: 'sort_order', order: 'asc' },
-        { column: 'account_number', order: 'asc' },
-      ]);
+      .orderBy('account_number', 'asc');
     res.json({ data: accounts, error: null, meta: { count: accounts.length } });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -78,13 +82,24 @@ coaCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<v
     subcategory,
     normalBalance,
     taxLine,
+    taxCodeId,
+    taxLineSource,
+    taxLineConfidence,
     workpaperRef,
     preparerNotes,
     reviewerNotes,
-    sortOrder,
+    unit,
+    cashFlowCategory,
   } = result.data;
 
   try {
+    // Dual-write: if taxCodeId supplied, look up tax_code string for backward compat
+    let resolvedTaxLine = taxLine ?? null;
+    if (taxCodeId != null) {
+      const tc = await db('tax_codes').where({ id: taxCodeId }).first();
+      if (tc) resolvedTaxLine = tc.tax_code;
+    }
+
     const [account] = await db('chart_of_accounts')
       .insert({
         client_id: clientId,
@@ -93,12 +108,15 @@ coaCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<v
         category,
         subcategory: subcategory ?? null,
         normal_balance: normalBalance,
-        tax_line: taxLine ?? null,
+        tax_line: resolvedTaxLine,
+        tax_code_id: taxCodeId ?? null,
+        tax_line_source: taxLineSource ?? null,
+        tax_line_confidence: taxLineConfidence ?? null,
         workpaper_ref: workpaperRef ?? null,
         preparer_notes: preparerNotes ?? null,
         reviewer_notes: reviewerNotes ?? null,
-        sort_order: sortOrder ?? 0,
-        cash_flow_category: result.data.cashFlowCategory ?? null,
+        unit: unit ?? null,
+        cash_flow_category: cashFlowCategory ?? null,
         is_active: true,
       })
       .returning('*');
@@ -124,7 +142,7 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
     return;
   }
 
-  const rowSchema = accountSchema.extend({ sortOrder: z.number().int().optional().default(0) });
+  const rowSchema = accountSchema;
   const bodySchema = z.object({ rows: z.array(rowSchema).min(1).max(2000) });
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
@@ -137,8 +155,16 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
   let updated = 0;
 
   try {
+    // Pre-build a tax_code string → id lookup for the import batch
+    const allTaxCodes = await db('tax_codes').select('id', 'tax_code');
+    const taxCodeLookup = new Map<string, number>(allTaxCodes.map((tc: { id: number; tax_code: string }) => [tc.tax_code, tc.id]));
+
     await db.transaction(async (trx) => {
       for (const r of rows) {
+        // Resolve tax_line string to tax_code_id if possible
+        const resolvedTaxCodeId = r.taxLine ? (taxCodeLookup.get(r.taxLine) ?? null) : null;
+        const resolvedTaxLine = r.taxLine ?? null;
+
         const existing = await trx('chart_of_accounts')
           .where({ client_id: clientId, account_number: r.accountNumber })
           .first('id');
@@ -149,9 +175,10 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
             category: r.category,
             subcategory: r.subcategory ?? null,
             normal_balance: r.normalBalance,
-            tax_line: r.taxLine ?? null,
+            tax_line: resolvedTaxLine,
+            tax_code_id: resolvedTaxCodeId,
             workpaper_ref: r.workpaperRef ?? null,
-            sort_order: r.sortOrder ?? 0,
+            unit: r.unit ?? null,
             is_active: true,
             updated_at: trx.fn.now(),
           });
@@ -164,9 +191,10 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
             category: r.category,
             subcategory: r.subcategory ?? null,
             normal_balance: r.normalBalance,
-            tax_line: r.taxLine ?? null,
+            tax_line: resolvedTaxLine,
+            tax_code_id: resolvedTaxCodeId,
             workpaper_ref: r.workpaperRef ?? null,
-            sort_order: r.sortOrder ?? 0,
+            unit: r.unit ?? null,
             is_active: true,
           });
           inserted++;
@@ -221,8 +249,9 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
               subcategory: acct.subcategory,
               normal_balance: acct.normal_balance,
               tax_line: acct.tax_line,
+              tax_code_id: acct.tax_code_id,
               workpaper_ref: acct.workpaper_ref,
-              sort_order: acct.sort_order,
+              unit: acct.unit ?? null,
               is_active: true,
               updated_at: trx.fn.now(),
             });
@@ -239,8 +268,9 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
             subcategory: acct.subcategory,
             normal_balance: acct.normal_balance,
             tax_line: acct.tax_line,
+            tax_code_id: acct.tax_code_id,
             workpaper_ref: acct.workpaper_ref,
-            sort_order: acct.sort_order,
+            unit: acct.unit ?? null,
             is_active: true,
           });
           inserted++;
@@ -322,8 +352,24 @@ coaItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<voi
   if (d.workpaperRef !== undefined) updates.workpaper_ref = d.workpaperRef;
   if (d.preparerNotes !== undefined) updates.preparer_notes = d.preparerNotes;
   if (d.reviewerNotes !== undefined) updates.reviewer_notes = d.reviewerNotes;
-  if (d.sortOrder          !== undefined) updates.sort_order         = d.sortOrder;
+  if (d.unit               !== undefined) updates.unit               = d.unit;
   if (d.cashFlowCategory   !== undefined) updates.cash_flow_category = d.cashFlowCategory;
+
+  // Handle import_aliases: auto-save old name when renaming, merge with explicit list
+  if (d.accountName !== undefined || d.importAliases !== undefined) {
+    const current = await db('chart_of_accounts').where({ id }).first('account_name', 'import_aliases');
+    if (current) {
+      // Start from explicit list if provided, else keep existing
+      let aliases = d.importAliases !== undefined ? [...d.importAliases] : parseAliases(current.import_aliases);
+      // Auto-save old name as alias when renaming
+      if (d.accountName !== undefined && d.accountName !== current.account_name) {
+        if (!aliases.includes(current.account_name)) {
+          aliases.push(current.account_name);
+        }
+      }
+      updates.import_aliases = JSON.stringify(aliases);
+    }
+  }
 
   try {
     const [updated] = await db('chart_of_accounts').where({ id }).update(updates).returning('*');
@@ -351,6 +397,22 @@ coaItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<vo
   }
 
   try {
+    // Block delete if any period has a non-zero balance for this account
+    const balanceRows = await db('trial_balance')
+      .where({ account_id: id })
+      .where(function () {
+        this.whereNot({ unadjusted_debit: 0 }).orWhereNot({ unadjusted_credit: 0 });
+      })
+      .count('id as cnt')
+      .first();
+    if (Number(balanceRows?.cnt ?? 0) > 0) {
+      res.status(409).json({
+        data: null,
+        error: { code: 'HAS_BALANCE', message: 'Cannot delete an account that has trial balance entries. Zero out the balance first.' },
+      });
+      return;
+    }
+
     const [updated] = await db('chart_of_accounts')
       .where({ id })
       .update({ is_active: false, updated_at: db.fn.now() })

@@ -3,12 +3,14 @@ import { z } from 'zod';
 import multer from 'multer';
 import { parse } from 'fast-csv';
 import { Readable } from 'stream';
-import Anthropic from '@anthropic-ai/sdk';
 import type { Knex } from 'knex';
 import { createHash } from 'crypto';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
+import { logAiUsage } from '../lib/aiUsage';
+import { getLLMProvider } from '../lib/aiClient';
+import { extractJsonArray } from '../lib/aiJsonExtract';
 
 function txHash(date: string, description: string, amount: number): string {
   return createHash('sha256').update(`${date}|${description}|${amount}`).digest('hex').slice(0, 64);
@@ -42,6 +44,8 @@ async function syncTxJE(
   const debitAccountId  = tx.amount > 0 ? tx.source_account_id : tx.account_id;
   const creditAccountId = tx.amount > 0 ? tx.account_id : tx.source_account_id;
 
+  // Lock the period row as serialization point to prevent duplicate entry_numbers
+  await trx.raw('SELECT id FROM periods WHERE id = ? FOR UPDATE', [tx.period_id]);
   const lastEntry = await trx('journal_entries')
     .where({ period_id: tx.period_id, entry_type: 'trans' })
     .max('entry_number as max')
@@ -73,12 +77,6 @@ btRulesRouter.use(authMiddleware);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-async function getAnthropicClient(): Promise<Anthropic> {
-  const setting = await db('settings').where({ key: 'claude_api_key' }).first('value');
-  const apiKey = (setting?.value as string | undefined) || process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw Object.assign(new Error('Claude API key not configured. Add it in Settings.'), { code: 'NO_API_KEY' });
-  return new Anthropic({ apiKey });
-}
 
 // GET /api/v1/clients/:clientId/bank-transactions
 btCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -101,6 +99,11 @@ btCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
     }
     if (req.query.status) {
       countQuery = countQuery.where('classification_status', String(req.query.status));
+    }
+    if (req.query.entrySource) {
+      countQuery = countQuery.where('entry_source', String(req.query.entrySource));
+    } else if (req.query.excludeEntrySource) {
+      countQuery = countQuery.whereNot('entry_source', String(req.query.excludeEntrySource));
     }
     const [{ count }] = await countQuery.count('id as count');
     const total = Number(count);
@@ -130,6 +133,11 @@ btCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
     }
     if (req.query.status) {
       query = query.where('bt.classification_status', String(req.query.status));
+    }
+    if (req.query.entrySource) {
+      query = query.where('bt.entry_source', String(req.query.entrySource));
+    } else if (req.query.excludeEntrySource) {
+      query = query.whereNot('bt.entry_source', String(req.query.excludeEntrySource));
     }
 
     const rows = await query.limit(pageSize).offset(offset);
@@ -402,15 +410,107 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
 
     let importedCount = 0;
     let duplicateCount = 0;
-    for (const row of rows) {
-      const hash = txHash(row.transaction_date, row.description ?? '', row.amount);
-      const existing = await db('bank_transactions').where({ client_id: clientId, import_hash: hash }).first('id');
-      if (existing) { duplicateCount++; continue; }
-      await db('bank_transactions').insert({ ...row, import_hash: hash });
-      importedCount++;
-    }
+    await db.transaction(async (trx) => {
+      for (const row of rows) {
+        const hash = txHash(row.transaction_date, row.description ?? '', row.amount);
+        const [inserted] = await trx('bank_transactions')
+          .insert({ ...row, import_hash: hash })
+          .onConflict(['client_id', 'import_hash'])
+          .ignore()
+          .returning('id');
+        if (inserted) { importedCount++; } else { duplicateCount++; }
+      }
+    });
 
     res.json({ data: { imported: importedCount, duplicates: duplicateCount }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
+// POST /api/v1/clients/:clientId/bank-transactions/manual
+const manualBatchSchema = z.object({
+  periodId: z.number().int().positive().optional(),
+  sourceAccountId: z.number().int().positive().optional(), // batch-level fallback
+  transactions: z.array(z.object({
+    transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    description: z.string().max(500).min(1),
+    amount: z.number().int().refine((v) => v !== 0, { message: 'Amount must be non-zero' }),
+    checkNumber: z.string().max(20).optional(),
+    accountId: z.number().int().positive(),
+    sourceAccountId: z.number().int().positive().optional(), // per-transaction (overrides batch)
+    createRule: z.boolean().optional(),
+  })).min(1),
+});
+
+btCollectionRouter.post('/manual', async (req: AuthRequest, res: Response): Promise<void> => {
+  const clientId = Number(req.params.clientId);
+  if (isNaN(clientId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } });
+    return;
+  }
+  const result = manualBatchSchema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  const { periodId, sourceAccountId, transactions } = result.data;
+  try {
+    let createdIds: number[] = [];
+    let rulesUpdated = 0;
+
+    await db.transaction(async (trx) => {
+      const inserted: Array<{ id: number }> = [];
+
+      for (const tx of transactions) {
+        const [row] = await trx('bank_transactions').insert({
+          client_id: clientId,
+          period_id: periodId ?? null,
+          source_account_id: tx.sourceAccountId ?? sourceAccountId ?? null,
+          transaction_date: tx.transactionDate,
+          description: tx.description,
+          amount: tx.amount,
+          check_number: tx.checkNumber ?? null,
+          account_id: tx.accountId,
+          classification_status: 'manual',
+          entry_source: 'manual',
+          classified_by: req.user!.userId,
+        }).returning('id');
+        inserted.push(row);
+
+        // Sync journal entry
+        await syncTxJE(trx, row.id as number, clientId, req.user!.userId);
+
+        // Create or reinforce classification rule
+        if (tx.createRule !== false) {
+          const existing = await trx('classification_rules')
+            .where({ client_id: clientId, payee_pattern: tx.description.trim() })
+            .first();
+          await trx('classification_rules')
+            .insert({
+              client_id: clientId,
+              payee_pattern: tx.description.trim(),
+              account_id: tx.accountId,
+              times_confirmed: 1,
+            })
+            .onConflict(['client_id', 'payee_pattern'])
+            .merge({
+              account_id: tx.accountId,
+              times_confirmed: db.raw('classification_rules.times_confirmed + 1'),
+              updated_at: db.fn.now(),
+            });
+          rulesUpdated++;
+        }
+      }
+
+      createdIds = inserted.map((r) => r.id as number);
+    });
+
+    res.status(201).json({
+      data: { created: createdIds.length, ids: createdIds, rulesUpdated },
+      error: null,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
@@ -627,28 +727,18 @@ ${txList}
 
 Respond with a JSON array and nothing else. Each element: { "id": number, "accountId": number, "confidence": 0.0-1.0, "reasoning": string }`;
 
-    const anthropic = await getAnthropicClient();
-    const aiMessage = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8192,
-      stop_sequences: ['\n\n\n'],
+    const { provider, fastModel } = await getLLMProvider();
+    const aiResult = await provider.complete({
+      model: fastModel,
+      maxTokens: 8192,
+      stopSequences: ['\n\n\n'],
       messages: [{ role: 'user', content: prompt }],
     });
+    logAiUsage({ endpoint: 'bank/classify', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
 
-    const responseText = aiMessage.content[0].type === 'text' ? aiMessage.content[0].text : '';
-
-    // Extract the JSON array robustly — find the outermost [...] regardless of surrounding text
-    const arrayMatch = responseText.match(/\[[\s\S]*\]/);
-    if (!arrayMatch) {
+    const suggestions = extractJsonArray<{ id: number; accountId: number; confidence: number; reasoning: string }>(aiResult.text);
+    if (!suggestions) {
       res.status(500).json({ data: null, error: { code: 'AI_PARSE_ERROR', message: 'AI response did not contain a JSON array' } });
-      return;
-    }
-
-    let suggestions: Array<{ id: number; accountId: number; confidence: number; reasoning: string }> = [];
-    try {
-      suggestions = JSON.parse(arrayMatch[0]);
-    } catch {
-      res.status(500).json({ data: null, error: { code: 'AI_PARSE_ERROR', message: 'Failed to parse AI response as JSON' } });
       return;
     }
 
@@ -680,6 +770,11 @@ const classifySchema = z.object({
   periodId: z.number().int().positive().nullable().optional(),
   classificationStatus: z.enum(['unclassified', 'ai_suggested', 'confirmed', 'manual']).optional(),
   description: z.string().max(500).nullable().optional(),
+  // Manual-entry editable fields
+  transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  amount: z.number().int().refine((v) => v !== 0, { message: 'Amount must be non-zero' }).optional(),
+  sourceAccountId: z.number().int().positive().nullable().optional(),
+  checkNumber: z.string().max(20).nullable().optional(),
 });
 
 btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -699,6 +794,10 @@ btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promis
   if (result.data.accountId !== undefined) updates.account_id = result.data.accountId;
   if (result.data.periodId !== undefined) updates.period_id = result.data.periodId;
   if (result.data.description !== undefined) updates.description = result.data.description;
+  if (result.data.transactionDate !== undefined) updates.transaction_date = result.data.transactionDate;
+  if (result.data.amount !== undefined) updates.amount = result.data.amount;
+  if (result.data.sourceAccountId !== undefined) updates.source_account_id = result.data.sourceAccountId;
+  if (result.data.checkNumber !== undefined) updates.check_number = result.data.checkNumber;
   if (result.data.classificationStatus !== undefined) {
     updates.classification_status = result.data.classificationStatus;
   } else if (result.data.accountId) {
@@ -707,7 +806,7 @@ btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promis
   }
 
   try {
-    let finalRow: Record<string, unknown>;
+    let finalRow: Record<string, unknown> | undefined;
 
     await db.transaction(async (trx) => {
       // Fetch existing transaction before update for reclassification audit
@@ -724,11 +823,11 @@ btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promis
 
       // Upsert classification rule when manually confirming
       const status = updates.classification_status as string | undefined;
-      if ((status === 'confirmed' || status === 'manual') && updates.account_id && finalRow.description) {
+      if ((status === 'confirmed' || status === 'manual') && updates.account_id && finalRow!.description) {
         await trx('classification_rules')
           .insert({
             client_id: clientId,
-            payee_pattern: (finalRow.description as string).trim(),
+            payee_pattern: (finalRow!.description as string).trim(),
             account_id: updates.account_id,
             times_confirmed: 1,
           })
@@ -759,7 +858,11 @@ btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promis
       }
     });
 
-    res.json({ data: finalRow!, error: null });
+    if (!finalRow) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Transaction not found after update' } });
+      return;
+    }
+    res.json({ data: finalRow, error: null });
   } catch (err: unknown) {
     if (err instanceof Error && err.message === 'NOT_FOUND') {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Transaction not found' } });

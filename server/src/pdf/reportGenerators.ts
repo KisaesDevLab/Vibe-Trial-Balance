@@ -26,12 +26,12 @@ async function getPeriodInfo(db: Knex, periodId: number): Promise<PeriodInfo> {
     .where('p.id', periodId)
     .select(
       'p.id',
-      'p.name',
+      'p.period_name as name',
       'p.start_date',
       'p.end_date',
       'p.client_id',
       'c.name as client_name',
-      'c.ein',
+      'c.tax_id as ein',
     )
     .first();
   if (!row) throw Object.assign(new Error('Period not found'), { code: 'NOT_FOUND', status: 404 });
@@ -55,7 +55,7 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number): Promi
 
   const rows = await db('v_adjusted_trial_balance')
     .where({ period_id: periodId, is_active: true })
-    .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'account_number', order: 'asc' }]);
+    .orderBy('account_number', 'asc');
 
   const cols = [
     'Acct #', 'Account Name',
@@ -215,8 +215,7 @@ export async function generateJournalEntryListingPdf(
 
   for (const entry of entries as Record<string, unknown>[]) {
     const entryLines = linesByEntry.get(entry.id as number) ?? [];
-    const isFirst = true;
-    let firstLine = isFirst;
+    let firstLine = true;
 
     for (const line of entryLines as Record<string, unknown>[]) {
       const dr = Number(line.debit  ?? 0);
@@ -385,10 +384,10 @@ export async function generateGeneralLedgerPdf(
     .where('tb.period_id', periodId)
     .select(
       'coa.id as account_id', 'coa.account_number', 'coa.account_name',
-      'coa.normal_balance', 'coa.sort_order',
+      'coa.normal_balance',
       'tb.unadjusted_debit', 'tb.unadjusted_credit',
     )
-    .orderBy(['coa.sort_order', 'coa.account_number']);
+    .orderBy('coa.account_number');
 
   if (accountId) tbQ = tbQ.where('coa.id', accountId);
 
@@ -404,7 +403,7 @@ export async function generateGeneralLedgerPdf(
       'je.entry_date', 'je.entry_number', 'je.entry_type', 'je.description',
       'jel.debit', 'jel.credit',
     )
-    .orderBy(['coa.sort_order', 'coa.account_number', 'je.entry_date', 'je.entry_number']);
+    .orderBy(['coa.account_number', 'je.entry_date', 'je.entry_number']);
 
   if (accountId) jeQ = jeQ.where('coa.id', accountId);
 
@@ -502,7 +501,7 @@ export async function generateIncomeStatementPdf(
   const rows = await db('v_adjusted_trial_balance')
     .where({ period_id: periodId, is_active: true })
     .whereIn('category', ['revenue', 'expenses'])
-    .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'account_number', order: 'asc' }]);
+    .orderBy('account_number', 'asc');
 
   const cols = includePriorYear
     ? ['Acct #', 'Account Name', 'Current Year', 'Prior Year', 'Change']
@@ -607,7 +606,7 @@ export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promi
   const rows = await db('v_adjusted_trial_balance')
     .where({ period_id: periodId, is_active: true })
     .whereIn('category', ['assets', 'liabilities', 'equity'])
-    .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'account_number', order: 'asc' }]);
+    .orderBy('account_number', 'asc');
 
   const cols   = ['Acct #', 'Account Name', 'Amount'];
   const widths = [45, '*', 80];
@@ -689,27 +688,26 @@ export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Prom
   const info = await getPeriodInfo(db, periodId);
 
   const rows = await db('v_adjusted_trial_balance as vtb')
-    .join('chart_of_accounts as coa', 'coa.id', 'vtb.account_id')
     .where('vtb.period_id', periodId)
     .where('vtb.is_active', true)
-    .whereNotNull('coa.tax_code')
+    .whereNotNull('vtb.tax_line')
     .select(
       'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
       'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
       'vtb.normal_balance',
-      'coa.tax_code', 'coa.tax_line',
+      'vtb.tax_line',
     )
-    .orderBy(['coa.tax_code', 'vtb.account_number']);
+    .orderBy(['vtb.tax_line', 'vtb.account_number']);
 
   const cols   = ['Tax Code', 'Tax Line', 'Acct #', 'Account Name', 'Tax-Adj DR', 'Tax-Adj CR', 'Net Amount'];
   const widths = [55, '*', 45, '*', 65, 65, 65];
 
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
 
-  // Group by tax_code
+  // Group by tax_line
   const codeMap = new Map<string, typeof rows>();
   for (const r of rows as Record<string, unknown>[]) {
-    const code = String(r.tax_code ?? 'Unassigned');
+    const code = String(r.tax_line ?? 'Unassigned');
     if (!codeMap.has(code)) codeMap.set(code, []);
     codeMap.get(code)!.push(r);
   }
@@ -729,7 +727,7 @@ export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Prom
 
       tableBody.push(svc.dataRow([
         code,
-        r.tax_line as string ?? '',
+        '',
         r.account_number as string,
         r.account_name   as string,
         dr, cr, net,
@@ -770,10 +768,6 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number): Pro
 
   // Get TB rows with notes
   const rows = await db('v_adjusted_trial_balance as vtb')
-    .leftJoin('workpaper_notes as wn', function () {
-      this.on('wn.period_id', '=', 'vtb.period_id')
-          .andOn('wn.account_id', '=', 'vtb.account_id');
-    })
     .where('vtb.period_id', periodId)
     .where('vtb.is_active', true)
     .select(
@@ -781,9 +775,9 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number): Pro
       'vtb.category',
       'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
       'vtb.normal_balance',
-      'wn.preparer_note', 'wn.reviewer_note', 'wn.workpaper_ref',
+      'vtb.preparer_notes', 'vtb.reviewer_notes', 'vtb.workpaper_ref',
     )
-    .orderBy([{ column: 'vtb.sort_order', order: 'asc' }, { column: 'vtb.account_number', order: 'asc' }]);
+    .orderBy('vtb.account_number', 'asc');
 
   const cols   = ['Acct #', 'Account Name', 'Category', 'Book Balance', 'WP Ref', 'Preparer Note', 'Reviewer Note'];
   const widths = [45, '*', 55, 65, 45, '*', '*'];
@@ -801,9 +795,9 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number): Pro
       r.account_name   as string,
       r.category       as string,
       bal,
-      r.workpaper_ref  as string ?? '',
-      r.preparer_note  as string ?? '',
-      r.reviewer_note  as string ?? '',
+      r.workpaper_ref   as string ?? '',
+      r.preparer_notes  as string ?? '',
+      r.reviewer_notes  as string ?? '',
     ], { isAlt: rowIdx % 2 === 1 }));
     rowIdx++;
   }
@@ -833,7 +827,7 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
   const info = await getPeriodInfo(db, periodId);
 
   type TbRow = {
-    account_number: string; account_name: string; normal_balance: string;
+    account_number: string; account_name: string; normal_balance: string; category: string;
     tax_adjusted_debit: string | number; tax_adjusted_credit: string | number;
     tax_code_id: number | null; tax_code: string | null;
     tc_description: string | null; sort_order: number | null;
@@ -846,7 +840,7 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
     .where('vtb.is_active', true)
     .whereIn('vtb.category', ['revenue', 'expenses'])
     .select(
-      'vtb.account_number', 'vtb.account_name', 'vtb.normal_balance',
+      'vtb.account_number', 'vtb.account_name', 'vtb.normal_balance', 'vtb.category',
       'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
       'coa.tax_code_id',
       'tc.tax_code', 'tc.description as tc_description', 'tc.sort_order',
@@ -866,7 +860,8 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
     groups.get(key)!.rows.push(r);
   }
 
-  let grandNet = 0;
+  let grandRevenue = 0;
+  let grandExpenses = 0;
   let rowIdx = 0;
   for (const [, grp] of groups.entries()) {
     tableBody.push(svc.sectionHeaderRow(`${grp.label} — ${grp.desc}`, cols.length));
@@ -876,14 +871,18 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
       const cr  = Number(r.tax_adjusted_credit ?? 0);
       const net = r.normal_balance === 'debit' ? dr - cr : cr - dr;
       grpNet += net;
+      // Accumulate revenue and expenses separately for net income
+      if (r.category === 'revenue') grandRevenue += net;
+      else grandExpenses += net;
       tableBody.push(svc.dataRow([grp.label === 'Unassigned' ? '—' : grp.label, '', r.account_number, r.account_name, net], { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
     }
     tableBody.push(svc.dataRow(['', '', '', `Total ${grp.label}`, grpNet], { bold: true, shade: true }));
-    grandNet += grpNet;
     rowIdx++;
   }
-  tableBody.push(svc.dataRow(['', '', '', 'Net Income (Loss)', grandNet], { bold: true, shade: true }));
+  // Net Income = Revenue - Expenses (both shown as positive above)
+  const netIncome = grandRevenue - grandExpenses;
+  tableBody.push(svc.dataRow(['', '', '', 'Net Income (Loss)', netIncome], { bold: true, shade: true }));
 
   const content: Content[] = [{
     table: { headerRows: 1, widths, body: tableBody },
@@ -892,7 +891,8 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
   return svc.generateBuffer(svc.buildDocument({
     title: 'Tax-Basis Profit & Loss', clientName: info.client_name,
     ein: info.ein ?? undefined, periodName: info.name,
-    startDate: fmtDate(info.start_date), endDate: fmtDate(info.end_date), content,
+    startDate: fmtDate(info.start_date), endDate: fmtDate(info.end_date),
+    pageOrientation: 'portrait', content,
   }));
 }
 
@@ -963,5 +963,121 @@ export async function generateTaxReturnOrderPdf(db: Knex, periodId: number): Pro
     title: 'Tax Return Order', clientName: info.client_name,
     ein: info.ein ?? undefined, periodName: info.name,
     startDate: fmtDate(info.start_date), endDate: fmtDate(info.end_date), content,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (j) Flux Analysis PDF  (two-period comparison with variance)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateFluxAnalysisPdf(
+  db: Knex,
+  periodId: number,
+  comparePeriodId: number,
+): Promise<Buffer> {
+  const svc  = await PdfTemplateService.fromDb(db);
+  const info = await getPeriodInfo(db, periodId);
+
+  const comparePeriod = await db('periods').where({ id: comparePeriodId })
+    .first('period_name', 'start_date', 'end_date');
+  if (!comparePeriod) throw Object.assign(new Error('Compare period not found'), { status: 404 });
+
+  function netBal(dr: number, cr: number, nb: string): number {
+    return nb === 'debit' ? dr - cr : cr - dr;
+  }
+
+  const [currentRows, compareRows] = await Promise.all([
+    db('v_adjusted_trial_balance as vtb')
+      .where('vtb.period_id', periodId).where('vtb.is_active', true)
+      .select(
+        'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
+        'vtb.category', 'vtb.normal_balance',
+        'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
+      )
+      .orderBy('vtb.account_number', 'asc'),
+    db('v_adjusted_trial_balance as vtb')
+      .where('vtb.period_id', comparePeriodId).where('vtb.is_active', true)
+      .select('vtb.account_id', 'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit'),
+  ]);
+
+  const cmpMap = new Map<number, { dr: number; cr: number }>();
+  for (const r of compareRows as Record<string, unknown>[]) {
+    cmpMap.set(Number(r.account_id), { dr: Number(r.book_adjusted_debit), cr: Number(r.book_adjusted_credit) });
+  }
+
+  const notes = await db('variance_notes')
+    .where({ period_id: periodId, compare_period_id: comparePeriodId })
+    .select('account_id', 'note');
+  const notesMap = new Map<number, string>();
+  for (const n of notes as Record<string, unknown>[]) notesMap.set(Number(n.account_id), String(n.note));
+
+  const cols   = ['Acct #', 'Account Name', info.name, comparePeriod.period_name, '$ Change', '% Change', 'Note'];
+  const widths = [42, '*', 68, 68, 68, 48, '*'];
+
+  const tableBody: TableCell[][] = [svc.headerRow(cols)];
+  let rowIdx = 0;
+
+  const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'];
+
+  for (const cat of CATEGORIES) {
+    const catRows = (currentRows as Record<string, unknown>[]).filter((r) => r.category === cat);
+    if (catRows.length === 0) continue;
+
+    tableBody.push(svc.sectionHeaderRow(cat.charAt(0).toUpperCase() + cat.slice(1), cols.length));
+
+    let catCurrent = 0;
+    let catCompare = 0;
+
+    for (const r of catRows) {
+      const nb   = r.normal_balance as string;
+      const curr = netBal(Number(r.book_adjusted_debit), Number(r.book_adjusted_credit), nb);
+      const cmp  = cmpMap.get(Number(r.account_id));
+      const prev = cmp ? netBal(cmp.dr, cmp.cr, nb) : 0;
+      const chg  = curr - prev;
+      const pct  = prev !== 0 ? (chg / Math.abs(prev)) * 100 : null;
+
+      catCurrent += curr;
+      catCompare += prev;
+
+      tableBody.push(svc.dataRow([
+        r.account_number as string,
+        r.account_name   as string,
+        curr, prev, chg,
+        pct !== null ? `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%` : (curr !== 0 ? 'New' : '—'),
+        notesMap.get(Number(r.account_id)) ?? '',
+      ], { isAlt: rowIdx % 2 === 1 }));
+      rowIdx++;
+    }
+
+    const catChg = catCurrent - catCompare;
+    const catPct = catCompare !== 0 ? (catChg / Math.abs(catCompare)) * 100 : null;
+    tableBody.push(svc.dataRow([
+      '', `Total ${cat.charAt(0).toUpperCase() + cat.slice(1)}`,
+      catCurrent, catCompare, catChg,
+      catPct !== null ? `${catPct >= 0 ? '+' : ''}${catPct.toFixed(1)}%` : '—',
+      '',
+    ], { bold: true, shade: true }));
+    rowIdx++;
+  }
+
+  const content: Content[] = [
+    {
+      text: `Compare: ${info.name}  vs.  ${comparePeriod.period_name}`,
+      fontSize: 9, color: '#555555', margin: [0, 0, 0, 8],
+    },
+    {
+      table: { headerRows: 1, widths, body: tableBody },
+      layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
+    },
+  ];
+
+  return svc.generateBuffer(svc.buildDocument({
+    title:      'Flux Analysis',
+    clientName: info.client_name,
+    ein:        info.ein ?? undefined,
+    periodName: `${info.name} vs. ${comparePeriod.period_name}`,
+    startDate:  fmtDate(info.start_date),
+    endDate:    fmtDate(info.end_date),
+    content,
   }));
 }

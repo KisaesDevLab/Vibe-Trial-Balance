@@ -2,6 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET ?? 'local-dev-secret-12345';
+if (!process.env.JWT_SECRET) {
+  console.warn('\n⚠️  WARNING: JWT_SECRET env var not set. Using insecure default — set JWT_SECRET before deploying.\n');
+}
 
 export interface AuthRequest extends Request {
   user?: { userId: number; username: string; role: string };

@@ -1,4 +1,9 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { evalAmountExpr } from '../utils/evalAmountExpr';
+import { CsvImportDialog } from '../components/CsvImportDialog';
+import { PdfImportDialog } from '../components/PdfImportDialog';
+import { VerificationPanel } from '../components/VerificationPanel';
+import { TransJEZoomModal } from '../components/TransJEZoomModal';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   useReactTable,
@@ -31,6 +36,8 @@ import {
   type Tickmark,
   type TBTickmarkMap,
 } from '../api/tickmarks';
+import { listImports, type DocumentImport } from '../api/pdfImport';
+import { downloadXlsx } from '../utils/downloadXlsx';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -39,6 +46,7 @@ type EditableColKey =
   | 'account_name'
   | 'unadjusted_debit'
   | 'unadjusted_credit'
+  | 'unaj_net'
   | 'category'
   | 'tax_line'
   | 'workpaper_ref';
@@ -48,6 +56,16 @@ const EDITABLE_COLS: EditableColKey[] = [
   'account_name',
   'unadjusted_debit',
   'unadjusted_credit',
+  'category',
+  'tax_line',
+  'workpaper_ref',
+];
+
+// Navigation cols for single-column mode (replaces the two debit/credit cols with unaj_net)
+const EDITABLE_COLS_SINGLE: EditableColKey[] = [
+  'account_number',
+  'account_name',
+  'unaj_net',
   'category',
   'tax_line',
   'workpaper_ref',
@@ -69,31 +87,43 @@ function fmtTotal(cents: number): string {
 }
 
 function parseCents(val: string): number {
-  const n = parseFloat(val.replace(/[^0-9.-]/g, ''));
+  const evaled = evalAmountExpr(val);
+  const n = parseFloat(evaled.replace(/[^0-9.-]/g, ''));
   return isNaN(n) ? 0 : Math.round(n * 100);
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  assets: 'bg-blue-50 text-blue-700',
-  liabilities: 'bg-orange-50 text-orange-700',
-  equity: 'bg-purple-50 text-purple-700',
-  revenue: 'bg-green-50 text-green-700',
-  expenses: 'bg-red-50 text-red-700',
+  assets: 'bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400',
+  liabilities: 'bg-orange-50 dark:bg-orange-900/40 text-orange-700 dark:text-orange-400',
+  equity: 'bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400',
+  revenue: 'bg-green-50 dark:bg-green-900/40 text-green-700 dark:text-green-400',
+  expenses: 'bg-red-50 dark:bg-red-900/40 text-red-700 dark:text-red-400',
 };
 
 // Column group styles keyed by column ID — works correctly regardless of visibility
 function colClass(columnId: string, isHeader = false): string {
-  const b  = isHeader ? 'border-gray-300' : 'border-gray-200';
+  const b  = isHeader ? 'border-gray-300 dark:border-gray-600' : 'border-gray-200 dark:border-gray-700';
   const br = `border-r ${b}`;
   switch (columnId) {
     case 'category':             return br;
     case 'unadjusted_credit':    return br;
+    // Trans JE columns (teal)
+    case 'trans_adj_debit':      return `bg-teal-50${isHeader ? '' : '/50'} dark:bg-teal-900/20`;
+    case 'trans_adj_credit':     return `bg-teal-50${isHeader ? '' : '/50'} dark:bg-teal-900/20 ${br}`;
     case 'book_adj_credit':      return br;
-    case 'book_adjusted_debit':  return `bg-blue-50${isHeader ? '' : '/50'}`;
-    case 'book_adjusted_credit': return `bg-blue-50${isHeader ? '' : '/50'} ${br}`;
+    case 'book_adjusted_debit':  return `bg-blue-50${isHeader ? '' : '/50'} dark:bg-blue-900/20`;
+    case 'book_adjusted_credit': return `bg-blue-50${isHeader ? '' : '/50'} dark:bg-blue-900/20 ${br}`;
     case 'tax_adj_credit':       return br;
-    case 'tax_adjusted_debit':   return `bg-purple-50${isHeader ? '' : '/50'}`;
-    case 'tax_adjusted_credit':  return `bg-purple-50${isHeader ? '' : '/50'} ${br}`;
+    case 'tax_adjusted_debit':   return `bg-purple-50${isHeader ? '' : '/50'} dark:bg-purple-900/20`;
+    case 'tax_adjusted_credit':  return `bg-purple-50${isHeader ? '' : '/50'} dark:bg-purple-900/20 ${br}`;
+    // Single-column view IDs
+    case 'unaj_balance':         return br;
+    case 'trans_adj_balance':    return br;
+    case 'post_trans_balance':   return `bg-teal-50${isHeader ? '' : '/50'} dark:bg-teal-900/20 ${br}`;
+    case 'book_adj_balance':     return br;
+    case 'book_balance':         return `bg-blue-50${isHeader ? '' : '/50'} dark:bg-blue-900/20 ${br}`;
+    case 'tax_adj_balance':      return br;
+    case 'tax_balance':          return `bg-purple-50${isHeader ? '' : '/50'} dark:bg-purple-900/20 ${br}`;
     default:                     return '';
   }
 }
@@ -104,6 +134,10 @@ function getCellDisplayValue(rowData: TBRow, col: EditableColKey): string {
     case 'account_name':      return rowData.account_name;
     case 'unadjusted_debit':  return rowData.unadjusted_debit === 0 ? '' : (rowData.unadjusted_debit / 100).toFixed(2);
     case 'unadjusted_credit': return rowData.unadjusted_credit === 0 ? '' : (rowData.unadjusted_credit / 100).toFixed(2);
+    case 'unaj_net': {
+      const net = rowData.unadjusted_debit - rowData.unadjusted_credit;
+      return net === 0 ? '' : (net / 100).toFixed(2);
+    }
     case 'category':          return rowData.category;
     case 'tax_line':          return rowData.tax_line ?? '';
     case 'workpaper_ref':     return rowData.workpaper_ref ?? '';
@@ -114,14 +148,6 @@ const columnHelper = createColumnHelper<TBRow>();
 
 // ─── Page component ───────────────────────────────────────────────────────────
 
-function downloadCsv(filename: string, rows: string[][]): void {
-  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
-
 export function TrialBalancePage() {
   const { selectedPeriodId, selectedClientId } = useUIStore();
   const qc = useQueryClient();
@@ -129,12 +155,16 @@ export function TrialBalancePage() {
   const [lastSyncMsg, setLastSyncMsg] = useState<string | null>(null);
   const [syncedUpToDate, setSyncedUpToDate] = useState(false);
   const [showTax, setShowTax] = useState(true);
+  const [singleColumn, setSingleColumn] = useState(false);
+  const [zoomAccount, setZoomAccount] = useState<{ accountId: number; accountName: string; accountNumber: string; entryType: 'trans' | 'book' | 'tax' } | null>(null);
   const [notesRow, setNotesRow] = useState<TBRow | null>(null);
   const [tickmarkRow, setTickmarkRow] = useState<TBRow | null>(null);
-  const [showImportModal, setShowImportModal] = useState(false);
   const [showPYImportModal, setShowPYImportModal] = useState(false);
+  const [showCsvImportDialog, setShowCsvImportDialog] = useState(false);
+  const [showPdfImportDialog, setShowPdfImportDialog] = useState(false);
   const [filterText, setFilterText] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('');
+  const [filterUnit, setFilterUnit] = useState<string>('');
 
   // Excel-like cell selection
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -218,6 +248,19 @@ export function TrialBalancePage() {
   const currentPeriod = periods?.find((p) => p.id === selectedPeriodId);
   const isPeriodLocked = !!(currentPeriod?.locked_at);
 
+  const { data: periodImports } = useQuery({
+    queryKey: ['period-imports', selectedPeriodId],
+    queryFn: async () => {
+      if (!selectedPeriodId) return [] as DocumentImport[];
+      const res = await listImports(selectedPeriodId);
+      if (res.error) return [] as DocumentImport[];
+      return res.data ?? ([] as DocumentImport[]);
+    },
+    enabled: selectedPeriodId !== null,
+  });
+
+  const firstImport = periodImports?.[0] ?? null;
+
   const { data: clients } = useQuery({
     queryKey: ['clients'],
     queryFn: async () => { const r = await listClients(); return r.data ?? []; },
@@ -226,25 +269,105 @@ export function TrialBalancePage() {
   const isTaxEntity = currentClient && ['1065', '1120', '1120S', '1040_C'].includes(currentClient.entity_type);
 
   const handleExportCsv = () => {
-    const rows = data ?? [];
-    if (!rows.length) return;
-    const header = [
-      'Account Number', 'Account Name', 'Category', 'Tax Line', 'Workpaper Ref',
-      'Unadj Debit', 'Unadj Credit',
-      'Book Adj Debit', 'Book Adj Credit',
-      'Book Adjusted Debit', 'Book Adjusted Credit',
-      'Tax Adj Debit', 'Tax Adj Credit',
-      'Tax Adjusted Debit', 'Tax Adjusted Credit',
-    ];
-    const dataRows = rows.map((r) => [
-      r.account_number, r.account_name, r.category, r.tax_line ?? '', r.workpaper_ref ?? '',
-      String(r.unadjusted_debit / 100), String(r.unadjusted_credit / 100),
-      String(r.book_adj_debit / 100), String(r.book_adj_credit / 100),
-      String(r.book_adjusted_debit / 100), String(r.book_adjusted_credit / 100),
-      String(r.tax_adj_debit / 100), String(r.tax_adj_credit / 100),
-      String(r.tax_adjusted_debit / 100), String(r.tax_adjusted_credit / 100),
-    ]);
-    downloadCsv(`trial-balance-${selectedPeriodId}.csv`, [header, ...dataRows]);
+    // notes are exported as cell comments, not a column
+    const SKIP_COLS = new Set(['notes']);
+
+    const getExportValue = (colId: string, r: TBRow): string => {
+      const cents = (v: number) => v === 0 ? '' : String(v / 100);
+      const netSigned = (d: number, c: number) => {
+        const net = d - c;
+        return net === 0 ? '' : String(net / 100);
+      };
+      const netDr = (d: number, c: number) => { const n = d - c; return n > 0 ? String(n / 100) : ''; };
+      const netCr = (d: number, c: number) => { const n = c - d; return n > 0 ? String(n / 100) : ''; };
+      switch (colId) {
+        case 'account_number':       return r.account_number;
+        case 'account_name':         return r.account_name;
+        case 'category':             return r.category;
+        case 'tax_line':             return r.tax_line ?? '';
+        case 'workpaper_ref':        return r.workpaper_ref ?? '';
+        case 'unadjusted_debit':     return cents(r.unadjusted_debit);
+        case 'unadjusted_credit':    return cents(r.unadjusted_credit);
+        case 'trans_adj_debit':      return cents(r.trans_adj_debit);
+        case 'trans_adj_credit':     return cents(r.trans_adj_credit);
+        case 'book_adj_debit':       return cents(r.book_adj_debit);
+        case 'book_adj_credit':      return cents(r.book_adj_credit);
+        case 'book_adjusted_debit':  return netDr(r.book_adjusted_debit, r.book_adjusted_credit);
+        case 'book_adjusted_credit': return netCr(r.book_adjusted_debit, r.book_adjusted_credit);
+        case 'tax_adj_debit':        return cents(r.tax_adj_debit);
+        case 'tax_adj_credit':       return cents(r.tax_adj_credit);
+        case 'tax_adjusted_debit':   return netDr(r.tax_adjusted_debit, r.tax_adjusted_credit);
+        case 'tax_adjusted_credit':  return netCr(r.tax_adjusted_debit, r.tax_adjusted_credit);
+        // Single-column signed-net balance columns
+        case 'unaj_balance':         return netSigned(r.unadjusted_debit, r.unadjusted_credit);
+        case 'trans_adj_balance':    return netSigned(r.trans_adj_debit, r.trans_adj_credit);
+        case 'post_trans_balance':   return netSigned(r.post_trans_debit, r.post_trans_credit);
+        case 'book_adj_balance':     return netSigned(r.book_adj_debit, r.book_adj_credit);
+        case 'book_balance':         return netSigned(r.book_adjusted_debit, r.book_adjusted_credit);
+        case 'tax_adj_balance':      return netSigned(r.tax_adj_debit, r.tax_adj_credit);
+        case 'tax_balance':          return netSigned(r.tax_adjusted_debit, r.tax_adjusted_credit);
+        case 'tickmarks': {
+          const marks = tbTickmarks?.[r.account_id] ?? [];
+          return marks.map((m) => m.symbol).join(' ');
+        }
+        default:                     return '';
+      }
+    };
+
+    // Column widths and numeric flags keyed by column ID
+    const COL_META: Record<string, { width: number; numeric?: boolean }> = {
+      account_number:       { width: 12 },
+      account_name:         { width: 36 },
+      category:             { width: 12 },
+      tax_line:             { width: 16 },
+      workpaper_ref:        { width: 10 },
+      unadjusted_debit:     { width: 14, numeric: true },
+      unadjusted_credit:    { width: 14, numeric: true },
+      trans_adj_debit:      { width: 13, numeric: true },
+      trans_adj_credit:     { width: 13, numeric: true },
+      book_adj_debit:       { width: 13, numeric: true },
+      book_adj_credit:      { width: 13, numeric: true },
+      book_adjusted_debit:  { width: 14, numeric: true },
+      book_adjusted_credit: { width: 14, numeric: true },
+      tax_adj_debit:        { width: 13, numeric: true },
+      tax_adj_credit:       { width: 13, numeric: true },
+      tax_adjusted_debit:   { width: 14, numeric: true },
+      tax_adjusted_credit:  { width: 14, numeric: true },
+      unaj_balance:         { width: 14, numeric: true },
+      trans_adj_balance:    { width: 13, numeric: true },
+      post_trans_balance:   { width: 13, numeric: true },
+      book_adj_balance:     { width: 13, numeric: true },
+      book_balance:         { width: 14, numeric: true },
+      tax_adj_balance:      { width: 13, numeric: true },
+      tax_balance:          { width: 14, numeric: true },
+      tickmarks:            { width: 8 },
+    };
+
+    const visibleCols = tableInstance.getVisibleLeafColumns().filter((c) => !SKIP_COLS.has(c.id));
+    const header = visibleCols.map((c) => (typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id));
+    const colMeta = visibleCols.map((c) => COL_META[c.id] ?? { width: 14 });
+    const exportRows = tableInstance.getRowModel().rows;
+    const dataRows = exportRows.map((row) => visibleCols.map((c) => getExportValue(c.id, row.original)));
+
+    // Attach preparer/reviewer notes as hidden cell comments on the W/P Ref column
+    const wpRefColIdx = visibleCols.findIndex((c) => c.id === 'workpaper_ref');
+    const commentColIdx = wpRefColIdx >= 0 ? wpRefColIdx : 0;
+    const comments = exportRows.flatMap((row, rowIdx) => {
+      const r = row.original;
+      const parts: string[] = [];
+      if (r.preparer_notes) parts.push(`Preparer: ${r.preparer_notes}`);
+      if (r.reviewer_notes) parts.push(`Reviewer: ${r.reviewer_notes}`);
+      if (!parts.length) return [];
+      return [{ row: rowIdx, col: commentColIdx, text: parts.join('\n\n') }];
+    });
+
+    const dateSuffix = currentPeriod?.end_date ? currentPeriod.end_date.slice(0, 10) : String(selectedPeriodId);
+    downloadXlsx(
+      `trial-balance-${dateSuffix}.xlsx`,
+      [header, ...dataRows],
+      comments.length ? comments : undefined,
+      colMeta,
+    );
   };
 
   const initMutation = useMutation({
@@ -275,10 +398,12 @@ export function TrialBalancePage() {
                 ...r,
                 unadjusted_debit: debit,
                 unadjusted_credit: credit,
-                book_adjusted_debit: debit + r.book_adj_debit,
-                book_adjusted_credit: credit + r.book_adj_credit,
-                tax_adjusted_debit: debit + r.book_adj_debit + r.tax_adj_debit,
-                tax_adjusted_credit: credit + r.book_adj_credit + r.tax_adj_credit,
+                post_trans_debit: debit + r.trans_adj_debit,
+                post_trans_credit: credit + r.trans_adj_credit,
+                book_adjusted_debit: debit + r.trans_adj_debit + r.book_adj_debit,
+                book_adjusted_credit: credit + r.trans_adj_credit + r.book_adj_credit,
+                tax_adjusted_debit: debit + r.trans_adj_debit + r.book_adj_debit + r.tax_adj_debit,
+                tax_adjusted_credit: credit + r.trans_adj_credit + r.book_adj_credit + r.tax_adj_credit,
               }
             : r,
         ),
@@ -305,6 +430,8 @@ export function TrialBalancePage() {
             ...(updates.category !== undefined ? { category: updates.category } : {}),
             ...(updates.taxLine !== undefined ? { tax_line: updates.taxLine || null } : {}),
             ...(updates.workpaperRef !== undefined ? { workpaper_ref: updates.workpaperRef || null } : {}),
+            ...(updates.preparerNotes !== undefined ? { preparer_notes: updates.preparerNotes || null } : {}),
+            ...(updates.reviewerNotes !== undefined ? { reviewer_notes: updates.reviewerNotes || null } : {}),
           };
         }),
       );
@@ -327,14 +454,23 @@ export function TrialBalancePage() {
 
   // ── Filter ────────────────────────────────────────────────────────────────
 
-  const filteredDataForNav = (data ?? []).filter((r) => {
-    if (filterCategory && r.category !== filterCategory) return false;
-    if (filterText) {
-      const q = filterText.toLowerCase();
-      return r.account_number.toLowerCase().includes(q) || r.account_name.toLowerCase().includes(q);
-    }
-    return true;
-  });
+  const availableUnits = useMemo(
+    () => [...new Set((data ?? []).map((r) => r.unit).filter((u): u is string => !!u))].sort(),
+    [data],
+  );
+
+  const filteredDataForNav = useMemo(
+    () => (data ?? []).filter((r) => {
+      if (filterCategory && r.category !== filterCategory) return false;
+      if (filterUnit && r.unit !== filterUnit) return false;
+      if (filterText) {
+        const q = filterText.toLowerCase();
+        return r.account_number.toLowerCase().includes(q) || r.account_name.toLowerCase().includes(q);
+      }
+      return true;
+    }),
+    [data, filterCategory, filterUnit, filterText],
+  );
 
   // ── Table (placeholder for navigation row count) ───────────────────────────
 
@@ -359,6 +495,15 @@ export function TrialBalancePage() {
       case 'unadjusted_credit':
         handleBalanceEdit(rowData, 'unadjusted_credit', parseCents(text));
         break;
+      case 'unaj_net': {
+        const net = parseCents(text);
+        balanceMutation.mutate({
+          accountId: rowData.account_id,
+          debit: net > 0 ? net : 0,
+          credit: net < 0 ? -net : 0,
+        });
+        break;
+      }
       case 'account_number':
         if (trimmed && trimmed !== rowData.account_number)
           accountMutation.mutate({ accountId: rowData.account_id, updates: { accountNumber: trimmed } });
@@ -391,7 +536,8 @@ export function TrialBalancePage() {
 
     const rows = table.getRowModel().rows;
     const rowCount = rows.length;
-    const colIdx = EDITABLE_COLS.indexOf(ac.col);
+    const activeCols = singleColumn ? EDITABLE_COLS_SINGLE : EDITABLE_COLS;
+    const colIdx = activeCols.indexOf(ac.col);
     let newRow = ac.row;
     let newColIdx = colIdx;
 
@@ -399,17 +545,17 @@ export function TrialBalancePage() {
       case 'up':    newRow = Math.max(0, ac.row - 1); break;
       case 'down':  newRow = Math.min(rowCount - 1, ac.row + 1); break;
       case 'left':  newColIdx = Math.max(0, colIdx - 1); break;
-      case 'right': newColIdx = Math.min(EDITABLE_COLS.length - 1, colIdx + 1); break;
+      case 'right': newColIdx = Math.min(activeCols.length - 1, colIdx + 1); break;
       case 'tab':
-        if (colIdx < EDITABLE_COLS.length - 1) { newColIdx = colIdx + 1; }
+        if (colIdx < activeCols.length - 1) { newColIdx = colIdx + 1; }
         else if (ac.row < rowCount - 1) { newColIdx = 0; newRow = ac.row + 1; }
         break;
       case 'shift-tab':
         if (colIdx > 0) { newColIdx = colIdx - 1; }
-        else if (ac.row > 0) { newColIdx = EDITABLE_COLS.length - 1; newRow = ac.row - 1; }
+        else if (ac.row > 0) { newColIdx = activeCols.length - 1; newRow = ac.row - 1; }
         break;
     }
-    setActiveCell({ row: newRow, col: EDITABLE_COLS[newColIdx] });
+    setActiveCell({ row: newRow, col: activeCols[newColIdx] });
   }
 
   function handleContainerKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
@@ -485,9 +631,10 @@ export function TrialBalancePage() {
 
   function renderCell(rowIndex: number, col: EditableColKey, rowData: TBRow) {
     const isActive = activeCell?.row === rowIndex && activeCell?.col === col;
-    const isNumber = col === 'unadjusted_debit' || col === 'unadjusted_credit';
+    const isNumber = col === 'unadjusted_debit' || col === 'unadjusted_credit' || col === 'unaj_net';
     const isSelect = col === 'category';
     const alignClass = isNumber ? 'text-right' : 'text-left';
+    const fontClass = isNumber ? 'font-mono tabular-nums' : col === 'account_number' ? 'font-mono' : '';
     const cellId = `${col}|${rowIndex}`;
 
     if (isActive && editing && !isPeriodLocked) {
@@ -499,7 +646,7 @@ export function TrialBalancePage() {
             onChange={(e) => setEditText(e.target.value)}
             onKeyDown={(e) => handleInputKeyDown(e, { row: rowIndex, col }, rowData)}
             onBlur={() => handleInputBlur({ row: rowIndex, col }, rowData)}
-            className="w-full text-sm bg-white outline-none px-1 py-0 border-0 capitalize"
+            className="w-full text-sm bg-white dark:bg-gray-800 dark:text-white outline-none px-1 py-0 border-0 capitalize"
           >
             {ACCOUNT_CATEGORIES.map((c) => (
               <option key={c} value={c}>{c}</option>
@@ -522,17 +669,24 @@ export function TrialBalancePage() {
               e.target.select();
             }
           }}
-          className={`w-full text-sm bg-white outline-none px-1 py-0 border-0 ${alignClass}`}
+          className={`w-full text-sm bg-white dark:bg-gray-800 dark:text-white outline-none px-1 py-0 border-0 ${alignClass} ${fontClass}`}
         />
       );
     }
 
     const rawDisplay = getCellDisplayValue(rowData, col);
     let display: React.ReactNode;
-    if (isNumber) {
+    if (col === 'unaj_net') {
+      const net = rowData.unadjusted_debit - rowData.unadjusted_credit;
+      display = net === 0
+        ? <span className="text-gray-300 dark:text-gray-600">—</span>
+        : net < 0
+          ? <span className="text-red-600 dark:text-red-400">({fmtTotal(Math.abs(net))})</span>
+          : <span>{fmtTotal(net)}</span>;
+    } else if (isNumber) {
       display = rawDisplay
         ? fmt(parseCents(rawDisplay) || 0)
-        : <span className="text-gray-300">—</span>;
+        : <span className="text-gray-300 dark:text-gray-600">—</span>;
     } else if (col === 'category') {
       display = (
         <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium capitalize ${CATEGORY_COLORS[rawDisplay]}`}>
@@ -540,14 +694,14 @@ export function TrialBalancePage() {
         </span>
       );
     } else {
-      display = rawDisplay || <span className="text-gray-300 italic text-xs">—</span>;
+      display = rawDisplay || <span className="text-gray-300 dark:text-gray-600 italic text-xs">—</span>;
     }
 
     if (isActive) {
       return (
         <div
           data-cell={cellId}
-          className={`w-full px-1 py-0.5 text-sm select-none ring-2 ring-blue-500 ring-inset bg-blue-50/80 rounded-sm ${alignClass}`}
+          className={`w-full px-1 py-0.5 text-sm select-none ring-2 ring-blue-500 ring-inset bg-blue-50/80 dark:bg-blue-900/30 rounded-sm ${alignClass} ${fontClass}`}
         >
           {display}
         </div>
@@ -565,7 +719,7 @@ export function TrialBalancePage() {
           setEditText(getCellDisplayValue(rowData, col));
           setEditing(true);
         }}
-        className={`w-full px-1 py-0.5 text-sm select-none ${isPeriodLocked ? 'cursor-not-allowed' : 'cursor-default hover:bg-gray-100'} ${alignClass}`}
+        className={`w-full px-1 py-0.5 text-sm select-none ${isPeriodLocked ? 'cursor-not-allowed' : 'cursor-default hover:bg-gray-100 dark:hover:bg-gray-700'} ${alignClass} ${fontClass}`}
       >
         {display}
       </div>
@@ -595,42 +749,80 @@ export function TrialBalancePage() {
       header: 'Unaj. Cr',
       cell: (i) => renderCell(i.row.index, 'unadjusted_credit', i.row.original),
     }),
+    columnHelper.accessor('trans_adj_debit', {
+      header: 'Trans Dr',
+      cell: (i) => {
+        const v = i.getValue();
+        const row = i.row.original;
+        const hasAny = row.trans_adj_debit !== 0 || row.trans_adj_credit !== 0;
+        return <span className={`text-right block text-sm font-mono tabular-nums ${v === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-teal-700 dark:text-teal-400 cursor-pointer underline decoration-dotted hover:text-teal-500'}`} onClick={hasAny ? () => setZoomAccount({ accountId: row.account_id, accountName: row.account_name, accountNumber: row.account_number, entryType: 'trans' }) : undefined}>{v === 0 ? '—' : fmt(v)}</span>;
+      },
+    }),
+    columnHelper.accessor('trans_adj_credit', {
+      header: 'Trans Cr',
+      cell: (i) => {
+        const v = i.getValue();
+        const row = i.row.original;
+        const hasAny = row.trans_adj_debit !== 0 || row.trans_adj_credit !== 0;
+        return <span className={`text-right block text-sm font-mono tabular-nums ${v === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-teal-700 dark:text-teal-400 cursor-pointer underline decoration-dotted hover:text-teal-500'}`} onClick={hasAny ? () => setZoomAccount({ accountId: row.account_id, accountName: row.account_name, accountNumber: row.account_number, entryType: 'trans' }) : undefined}>{v === 0 ? '—' : fmt(v)}</span>;
+      },
+    }),
     columnHelper.accessor('book_adj_debit', {
-      header: 'Bk Adj Dr',
-      cell: (i) => <span className="text-right block text-sm text-blue-700">{fmt(i.getValue())}</span>,
+      header: 'AJE Dr',
+      cell: (i) => {
+        const v = i.getValue();
+        const row = i.row.original;
+        const hasAny = row.book_adj_debit !== 0 || row.book_adj_credit !== 0;
+        return <span className={`text-right block text-sm font-mono tabular-nums ${v === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-blue-700 dark:text-blue-400 cursor-pointer underline decoration-dotted hover:text-blue-500'}`} onClick={hasAny ? () => setZoomAccount({ accountId: row.account_id, accountName: row.account_name, accountNumber: row.account_number, entryType: 'book' }) : undefined}>{v === 0 ? '—' : fmt(v)}</span>;
+      },
     }),
     columnHelper.accessor('book_adj_credit', {
-      header: 'Bk Adj Cr',
-      cell: (i) => <span className="text-right block text-sm text-blue-700">{fmt(i.getValue())}</span>,
+      header: 'AJE Cr',
+      cell: (i) => {
+        const v = i.getValue();
+        const row = i.row.original;
+        const hasAny = row.book_adj_debit !== 0 || row.book_adj_credit !== 0;
+        return <span className={`text-right block text-sm font-mono tabular-nums ${v === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-blue-700 dark:text-blue-400 cursor-pointer underline decoration-dotted hover:text-blue-500'}`} onClick={hasAny ? () => setZoomAccount({ accountId: row.account_id, accountName: row.account_name, accountNumber: row.account_number, entryType: 'book' }) : undefined}>{v === 0 ? '—' : fmt(v)}</span>;
+      },
     }),
     columnHelper.accessor('book_adjusted_debit', {
-      header: 'Bk Dr',
-      cell: (i) => <span className="text-right block text-sm font-semibold">{fmt(i.getValue())}</span>,
+      header: 'Adj Dr',
+      cell: (i) => { const net = i.row.original.book_adjusted_debit - i.row.original.book_adjusted_credit; return <span className={`text-right block text-sm font-mono font-semibold tabular-nums ${net <= 0 ? 'text-gray-300 dark:text-gray-600' : ''}`}>{net > 0 ? fmt(net) : '—'}</span>; },
     }),
     columnHelper.accessor('book_adjusted_credit', {
-      header: 'Bk Cr',
-      cell: (i) => <span className="text-right block text-sm font-semibold">{fmt(i.getValue())}</span>,
+      header: 'Adj Cr',
+      cell: (i) => { const net = i.row.original.book_adjusted_credit - i.row.original.book_adjusted_debit; return <span className={`text-right block text-sm font-mono font-semibold tabular-nums ${net <= 0 ? 'text-gray-300 dark:text-gray-600' : ''}`}>{net > 0 ? fmt(net) : '—'}</span>; },
     }),
     columnHelper.accessor('tax_adj_debit', {
       header: 'Tx Adj Dr',
-      cell: (i) => <span className="text-right block text-sm text-purple-700">{fmt(i.getValue())}</span>,
+      cell: (i) => {
+        const v = i.getValue();
+        const row = i.row.original;
+        const hasAny = row.tax_adj_debit !== 0 || row.tax_adj_credit !== 0;
+        return <span className={`text-right block text-sm font-mono tabular-nums ${v === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-purple-700 dark:text-purple-400 cursor-pointer underline decoration-dotted hover:text-purple-500'}`} onClick={hasAny ? () => setZoomAccount({ accountId: row.account_id, accountName: row.account_name, accountNumber: row.account_number, entryType: 'tax' }) : undefined}>{v === 0 ? '—' : fmt(v)}</span>;
+      },
     }),
     columnHelper.accessor('tax_adj_credit', {
       header: 'Tx Adj Cr',
-      cell: (i) => <span className="text-right block text-sm text-purple-700">{fmt(i.getValue())}</span>,
+      cell: (i) => {
+        const v = i.getValue();
+        const row = i.row.original;
+        const hasAny = row.tax_adj_debit !== 0 || row.tax_adj_credit !== 0;
+        return <span className={`text-right block text-sm font-mono tabular-nums ${v === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-purple-700 dark:text-purple-400 cursor-pointer underline decoration-dotted hover:text-purple-500'}`} onClick={hasAny ? () => setZoomAccount({ accountId: row.account_id, accountName: row.account_name, accountNumber: row.account_number, entryType: 'tax' }) : undefined}>{v === 0 ? '—' : fmt(v)}</span>;
+      },
     }),
     columnHelper.accessor('tax_adjusted_debit', {
       header: 'Tx Dr',
-      cell: (i) => <span className="text-right block text-sm font-semibold">{fmt(i.getValue())}</span>,
+      cell: (i) => { const net = i.row.original.tax_adjusted_debit - i.row.original.tax_adjusted_credit; return <span className={`text-right block text-sm font-mono font-semibold tabular-nums ${net <= 0 ? 'text-gray-300 dark:text-gray-600' : ''}`}>{net > 0 ? fmt(net) : '—'}</span>; },
     }),
     columnHelper.accessor('tax_adjusted_credit', {
       header: 'Tx Cr',
-      cell: (i) => <span className="text-right block text-sm font-semibold">{fmt(i.getValue())}</span>,
+      cell: (i) => { const net = i.row.original.tax_adjusted_credit - i.row.original.tax_adjusted_debit; return <span className={`text-right block text-sm font-mono font-semibold tabular-nums ${net <= 0 ? 'text-gray-300 dark:text-gray-600' : ''}`}>{net > 0 ? fmt(net) : '—'}</span>; },
     }),
-    columnHelper.accessor('tax_line', {
+    ...(showTax ? [columnHelper.accessor('tax_line', {
       header: 'Tax Code',
       cell: (i) => renderCell(i.row.index, 'tax_line', i.row.original),
-    }),
+    })] : []),
     columnHelper.accessor('workpaper_ref', {
       header: 'W/P Ref',
       cell: (i) => renderCell(i.row.index, 'workpaper_ref', i.row.original),
@@ -645,11 +837,10 @@ export function TrialBalancePage() {
             onClick={() => !isPeriodLocked && setNotesRow(row.original)}
             disabled={isPeriodLocked}
             title={isPeriodLocked ? 'Period is locked' : hasNotes ? 'View/edit notes' : 'Add notes'}
-            className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${isPeriodLocked ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-200'} ${hasNotes ? 'text-amber-600' : 'text-gray-300 hover:text-gray-500'}`}
+            className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${isPeriodLocked ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-200 dark:hover:bg-gray-700'} ${hasNotes ? 'text-amber-600 dark:text-amber-400' : 'text-gray-300 dark:text-gray-600 hover:text-gray-500'}`}
           >
-            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z"/>
-              <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd"/>
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M16.862 3.487a2.25 2.25 0 0 1 3.182 3.182L7.5 19.213 3 21l1.787-4.5L16.862 3.487z"/>
             </svg>
           </button>
         );
@@ -665,10 +856,167 @@ export function TrialBalancePage() {
             onClick={() => !isPeriodLocked && setTickmarkRow(row.original)}
             disabled={isPeriodLocked}
             title={isPeriodLocked ? 'Period is locked' : 'Assign tickmarks'}
-            className={`flex items-center gap-0.5 min-w-[2rem] h-6 px-1 rounded ${isPeriodLocked ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-200'}`}
+            className={`flex items-center gap-0.5 min-w-[2rem] h-6 px-1 rounded ${isPeriodLocked ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}`}
           >
             {marks.length === 0
-              ? <span className="text-gray-300 text-xs">—</span>
+              ? <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>
+              : marks.map((m) => (
+                  <span key={m.id} className={`inline-flex items-center justify-center w-5 h-5 rounded text-xs font-bold ${TICKMARK_COLOR_CLASSES[m.color]}`}>
+                    {m.symbol}
+                  </span>
+                ))
+            }
+          </button>
+        );
+      },
+    }),
+  ];
+
+  // Net balance helper: debit-positive, credit-negative
+  function fmtBal(dr: number, cr: number) {
+    const net = dr - cr;
+    if (net === 0) return <span className="text-gray-300 dark:text-gray-600">—</span>;
+    return (
+      <span className={net < 0 ? 'text-red-600' : ''}>
+        {net < 0 ? `(${fmtTotal(Math.abs(net))})` : fmtTotal(net)}
+      </span>
+    );
+  }
+
+  // Single-column variant: replaces each Dr+Cr pair with one net Balance column
+  const singleColumns = [
+    columnHelper.accessor('account_number', {
+      header: 'Acct #',
+      cell: (i) => renderCell(i.row.index, 'account_number', i.row.original),
+    }),
+    columnHelper.accessor('account_name', {
+      header: 'Account Name',
+      cell: (i) => renderCell(i.row.index, 'account_name', i.row.original),
+    }),
+    columnHelper.accessor('category', {
+      header: 'Cat.',
+      cell: (i) => renderCell(i.row.index, 'category', i.row.original),
+    }),
+    columnHelper.display({
+      id: 'unaj_balance',
+      header: 'Unadjusted',
+      cell: ({ row: r }) => renderCell(r.index, 'unaj_net', r.original),
+    }),
+    columnHelper.display({
+      id: 'trans_adj_balance',
+      header: 'Trans JEs',
+      cell: ({ row: r }) => {
+        const hasValue = r.original.trans_adj_debit !== 0 || r.original.trans_adj_credit !== 0;
+        return (
+          <span
+            className={`text-right block text-sm font-mono tabular-nums ${hasValue ? 'text-teal-700 dark:text-teal-400 cursor-pointer underline decoration-dotted hover:text-teal-500' : 'text-gray-300 dark:text-gray-600'}`}
+            onClick={hasValue ? () => setZoomAccount({ accountId: r.original.account_id, accountName: r.original.account_name, accountNumber: r.original.account_number, entryType: 'trans' }) : undefined}
+          >
+            {fmtBal(r.original.trans_adj_debit, r.original.trans_adj_credit)}
+          </span>
+        );
+      },
+    }),
+    columnHelper.display({
+      id: 'post_trans_balance',
+      header: 'Post-Trans',
+      cell: ({ row: r }) => (
+        <span className="text-right block text-sm font-mono tabular-nums">
+          {fmtBal(r.original.post_trans_debit, r.original.post_trans_credit)}
+        </span>
+      ),
+    }),
+    columnHelper.display({
+      id: 'book_adj_balance',
+      header: 'AJE',
+      cell: ({ row: r }) => {
+        const hasValue = r.original.book_adj_debit !== 0 || r.original.book_adj_credit !== 0;
+        return (
+          <span
+            className={`text-right block text-sm font-mono tabular-nums ${hasValue ? 'text-blue-700 dark:text-blue-400 cursor-pointer underline decoration-dotted hover:text-blue-500' : 'text-gray-300 dark:text-gray-600'}`}
+            onClick={hasValue ? () => setZoomAccount({ accountId: r.original.account_id, accountName: r.original.account_name, accountNumber: r.original.account_number, entryType: 'book' }) : undefined}
+          >
+            {fmtBal(r.original.book_adj_debit, r.original.book_adj_credit)}
+          </span>
+        );
+      },
+    }),
+    columnHelper.display({
+      id: 'book_balance',
+      header: 'Adjusted',
+      cell: ({ row: r }) => (
+        <span className="text-right block text-sm font-mono font-semibold tabular-nums">
+          {fmtBal(r.original.book_adjusted_debit, r.original.book_adjusted_credit)}
+        </span>
+      ),
+    }),
+    ...(showTax ? [
+      columnHelper.display({
+        id: 'tax_adj_balance',
+        header: 'Tx Adj',
+        cell: ({ row: r }) => {
+          const hasValue = r.original.tax_adj_debit !== 0 || r.original.tax_adj_credit !== 0;
+          return (
+            <span
+              className={`text-right block text-sm font-mono tabular-nums ${hasValue ? 'text-purple-700 dark:text-purple-400 cursor-pointer underline decoration-dotted hover:text-purple-500' : 'text-gray-300 dark:text-gray-600'}`}
+              onClick={hasValue ? () => setZoomAccount({ accountId: r.original.account_id, accountName: r.original.account_name, accountNumber: r.original.account_number, entryType: 'tax' }) : undefined}
+            >
+              {fmtBal(r.original.tax_adj_debit, r.original.tax_adj_credit)}
+            </span>
+          );
+        },
+      }),
+      columnHelper.display({
+        id: 'tax_balance',
+        header: 'Tx Balance',
+        cell: ({ row: r }) => (
+          <span className="text-right block text-sm font-mono font-semibold tabular-nums">
+            {fmtBal(r.original.tax_adjusted_debit, r.original.tax_adjusted_credit)}
+          </span>
+        ),
+      }),
+    ] : []),
+    ...(showTax ? [columnHelper.accessor('tax_line', {
+      header: 'Tax Code',
+      cell: (i) => renderCell(i.row.index, 'tax_line', i.row.original),
+    })] : []),
+    columnHelper.accessor('workpaper_ref', {
+      header: 'W/P Ref',
+      cell: (i) => renderCell(i.row.index, 'workpaper_ref', i.row.original),
+    }),
+    columnHelper.display({
+      id: 'notes',
+      header: 'Notes',
+      cell: ({ row }) => {
+        const hasNotes = !!(row.original.preparer_notes || row.original.reviewer_notes);
+        return (
+          <button
+            onClick={() => !isPeriodLocked && setNotesRow(row.original)}
+            disabled={isPeriodLocked}
+            title={isPeriodLocked ? 'Period is locked' : hasNotes ? 'View/edit notes' : 'Add notes'}
+            className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${isPeriodLocked ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-200 dark:hover:bg-gray-700'} ${hasNotes ? 'text-amber-600 dark:text-amber-400' : 'text-gray-300 dark:text-gray-600 hover:text-gray-500'}`}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M16.862 3.487a2.25 2.25 0 0 1 3.182 3.182L7.5 19.213 3 21l1.787-4.5L16.862 3.487z"/>
+            </svg>
+          </button>
+        );
+      },
+    }),
+    columnHelper.display({
+      id: 'tickmarks',
+      header: 'Marks',
+      cell: ({ row }) => {
+        const marks = tbTickmarks?.[row.original.account_id] ?? [];
+        return (
+          <button
+            onClick={() => !isPeriodLocked && setTickmarkRow(row.original)}
+            disabled={isPeriodLocked}
+            title={isPeriodLocked ? 'Period is locked' : 'Assign tickmarks'}
+            className={`flex items-center gap-0.5 min-w-[2rem] h-6 px-1 rounded ${isPeriodLocked ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}`}
+          >
+            {marks.length === 0
+              ? <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>
               : marks.map((m) => (
                   <span key={m.id} className={`inline-flex items-center justify-center w-5 h-5 rounded text-xs font-bold ${TICKMARK_COLOR_CLASSES[m.color]}`}>
                     {m.symbol}
@@ -690,8 +1038,8 @@ export function TrialBalancePage() {
 
   const tableInstance = useReactTable({
     data: filteredDataForNav,
-    columns,
-    state: { sorting, columnVisibility },
+    columns: singleColumn ? singleColumns : columns,
+    state: { sorting, columnVisibility: singleColumn ? {} : columnVisibility },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -702,6 +1050,11 @@ export function TrialBalancePage() {
 
   const rows = data ?? [];
   const colSum = (key: keyof TBRow) => rows.reduce((s, r) => s + (r[key] as number), 0);
+  // Net-side totals for adjusted columns: sum only the side that wins per row
+  const netDrSum = (dk: keyof TBRow, ck: keyof TBRow) =>
+    rows.reduce((s, r) => { const n = (r[dk] as number) - (r[ck] as number); return s + (n > 0 ? n : 0); }, 0);
+  const netCrSum = (dk: keyof TBRow, ck: keyof TBRow) =>
+    rows.reduce((s, r) => { const n = (r[ck] as number) - (r[dk] as number); return s + (n > 0 ? n : 0); }, 0);
   const calcNetIncome = (dk: keyof TBRow, ck: keyof TBRow) => {
     const revNet = rows
       .filter((r) => r.category === 'revenue')
@@ -712,15 +1065,16 @@ export function TrialBalancePage() {
     return revNet - expNet;
   };
 
-  const unajNetIncome = calcNetIncome('unadjusted_debit', 'unadjusted_credit');
-  const bkNetIncome   = calcNetIncome('book_adjusted_debit', 'book_adjusted_credit');
-  const txNetIncome   = calcNetIncome('tax_adjusted_debit', 'tax_adjusted_credit');
+  const unajNetIncome      = calcNetIncome('unadjusted_debit', 'unadjusted_credit');
+  const postTransNetIncome = calcNetIncome('post_trans_debit', 'post_trans_credit');
+  const bkNetIncome        = calcNetIncome('book_adjusted_debit', 'book_adjusted_credit');
+  const txNetIncome        = calcNetIncome('tax_adjusted_debit', 'tax_adjusted_credit');
 
   function fmtNet(n: number) {
     if (n === 0) return <span className="text-gray-400">—</span>;
     return n > 0
-      ? <span className="text-green-700">{fmtTotal(n)}</span>
-      : <span className="text-red-600">({fmtTotal(Math.abs(n))})</span>;
+      ? <span className="text-green-700 dark:text-green-400">{fmtTotal(n)}</span>
+      : <span className="text-red-600 dark:text-red-400">({fmtTotal(Math.abs(n))})</span>;
   }
 
   const isEmpty = !data || data.length === 0;
@@ -734,7 +1088,7 @@ export function TrialBalancePage() {
 
   if (!selectedPeriodId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
         <div className="text-center">
           <p className="text-lg font-medium">No period selected</p>
           <p className="text-sm mt-1">Choose a client and period from the sidebar.</p>
@@ -745,48 +1099,66 @@ export function TrialBalancePage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-white shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b dark:border-gray-700 bg-white dark:bg-gray-800 shrink-0">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Trial Balance</h2>
-          {data && <p className="text-xs text-gray-500">{data.length} accounts · click to select · double-click or F2 to edit · Tab/Enter/arrows to navigate</p>}
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Trial Balance</h2>
+          {data && <p className="text-xs text-gray-500 dark:text-gray-400">{data.length} accounts · click to select · double-click or F2 to edit · Tab/Enter/arrows to navigate</p>}
         </div>
         <div className="flex items-center gap-4">
+          {/* Single-column balance toggle */}
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={singleColumn}
+              onChange={(e) => setSingleColumn(e.target.checked)}
+              className="rounded border-gray-300 dark:border-gray-600 text-blue-600"
+            />
+            <span className="text-sm text-gray-600 dark:text-gray-400">Single</span>
+          </label>
           {/* Tax column toggle */}
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={showTax}
               onChange={(e) => setShowTax(e.target.checked)}
-              className="rounded border-gray-300 text-purple-600"
+              className="rounded border-gray-300 dark:border-gray-600 text-purple-600"
             />
-            <span className="text-sm text-gray-600">Tax</span>
+            <span className="text-sm text-gray-600 dark:text-gray-400">Tax</span>
           </label>
 
           {lastSyncMsg && (
-            <span className="text-xs text-gray-500">{lastSyncMsg}</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">{lastSyncMsg}</span>
           )}
           <button
             onClick={() => !isPeriodLocked && setShowPYImportModal(true)}
             disabled={isPeriodLocked}
             title={isPeriodLocked ? 'Period is locked — unlock to import' : undefined}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Import PY
           </button>
           <button
-            onClick={() => !isPeriodLocked && setShowImportModal(true)}
+            onClick={() => !isPeriodLocked && setShowCsvImportDialog(true)}
             disabled={isPeriodLocked}
             title={isPeriodLocked ? 'Period is locked — unlock to import' : undefined}
-            className="px-3 py-1.5 text-sm border border-indigo-300 text-indigo-700 rounded hover:bg-indigo-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 text-sm border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 rounded hover:bg-emerald-50 dark:hover:bg-emerald-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Import Balances
+            Import from CSV
+          </button>
+          <button
+            onClick={() => !isPeriodLocked && setShowPdfImportDialog(true)}
+            disabled={isPeriodLocked}
+            title={isPeriodLocked ? 'Period is locked — unlock to import' : undefined}
+            className="px-3 py-1.5 text-sm border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 rounded hover:bg-amber-50 dark:hover:bg-amber-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Import from PDF
           </button>
           <button
             onClick={handleExportCsv}
             disabled={!data?.length}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40"
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
           >
-            Export CSV
+            Export Excel
           </button>
           {showSyncButton && (
             <button
@@ -802,18 +1174,18 @@ export function TrialBalancePage() {
       </div>
 
       {/* Filter bar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50 shrink-0">
+      <div className="flex items-center gap-2 px-4 py-2 border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 shrink-0">
         <input
           type="text"
           value={filterText}
           onChange={(e) => { setFilterText(e.target.value); setActiveCell(null); }}
           placeholder="Search accounts…"
-          className="border border-gray-300 rounded px-2 py-1 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
         />
         <select
           value={filterCategory}
           onChange={(e) => { setFilterCategory(e.target.value); setActiveCell(null); }}
-          className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
         >
           <option value="">All categories</option>
           <option value="assets">Assets</option>
@@ -822,29 +1194,39 @@ export function TrialBalancePage() {
           <option value="revenue">Revenue</option>
           <option value="expenses">Expenses</option>
         </select>
-        {(filterText || filterCategory) && (
+        {availableUnits.length > 0 && (
+          <select
+            value={filterUnit}
+            onChange={(e) => { setFilterUnit(e.target.value); setActiveCell(null); }}
+            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All units</option>
+            {availableUnits.map((u) => <option key={u} value={u}>{u}</option>)}
+          </select>
+        )}
+        {(filterText || filterCategory || filterUnit) && (
           <button
-            onClick={() => { setFilterText(''); setFilterCategory(''); }}
-            className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200"
+            onClick={() => { setFilterText(''); setFilterCategory(''); setFilterUnit(''); }}
+            className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
           >
             Clear
           </button>
         )}
-        {(filterText || filterCategory) && data && (
-          <span className="text-xs text-gray-500 ml-1">
+        {(filterText || filterCategory || filterUnit) && data && (
+          <span className="text-xs text-gray-500 dark:text-gray-400 ml-1">
             {filteredDataForNav.length} of {data.length} accounts
           </span>
         )}
       </div>
 
       {error && (
-        <div className="bg-red-50 border-b border-red-200 text-red-700 px-4 py-2 text-sm shrink-0">
+        <div className="bg-red-50 dark:bg-red-900/30 border-b border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-2 text-sm shrink-0">
           {error.message}
         </div>
       )}
 
       {isPeriodLocked && (
-        <div className="bg-amber-50 border-b border-amber-200 text-amber-800 px-4 py-2 text-sm shrink-0 flex items-center gap-2">
+        <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-700 text-amber-800 dark:text-amber-400 px-4 py-2 text-sm shrink-0 flex items-center gap-2">
           <svg className="w-4 h-4 shrink-0 text-amber-600" fill="currentColor" viewBox="0 0 20 20">
             <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd"/>
           </svg>
@@ -853,14 +1235,14 @@ export function TrialBalancePage() {
       )}
 
       {uncodedTaxLines > 0 && (
-        <div className="bg-amber-50 border-b border-amber-200 text-amber-800 px-4 py-2 text-sm shrink-0 flex items-center gap-2">
+        <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-700 text-amber-800 dark:text-amber-400 px-4 py-2 text-sm shrink-0 flex items-center gap-2">
           <span className="font-semibold">{uncodedTaxLines} income/expense account{uncodedTaxLines !== 1 ? 's' : ''} missing tax line codes.</span>
           <span className="text-amber-600">Assign tax lines in the Tax Code column to complete your tax mapping.</span>
         </div>
       )}
 
       {isLoading ? (
-        <div className="flex items-center justify-center flex-1 text-gray-400">Loading...</div>
+        <div className="flex items-center justify-center flex-1 text-gray-400 dark:text-gray-500">Loading...</div>
       ) : (
         <div
           ref={containerRef}
@@ -872,28 +1254,46 @@ export function TrialBalancePage() {
           }}
         >
           <table className="w-full text-sm border-collapse">
-            <thead className="sticky top-0 z-10 bg-white">
+            <thead className="sticky top-0 z-10 bg-white dark:bg-gray-800">
               {/* Group header */}
-              <tr className="bg-gray-100 border-b border-gray-300">
-                <th colSpan={3} className="px-2 py-1 text-xs text-gray-500 border-r border-gray-300"></th>
-                <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-600 font-semibold border-r border-gray-300">Unadjusted</th>
-                <th colSpan={2} className="px-2 py-1 text-xs text-center text-blue-600 font-semibold border-r border-gray-300">Book Adj.</th>
-                <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 font-semibold bg-blue-50 border-r border-gray-300">Book Adjusted</th>
-                {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-purple-600 font-semibold border-r border-gray-300">Tax Adj.</th>}
-                {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 font-semibold bg-purple-50 border-r border-gray-300">Tax Adjusted</th>}
-                <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold border-r border-gray-300">Tax Code</th>
-                <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold border-r border-gray-300">W/P</th>
-                <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold"></th>
-                <th className="px-2 py-1 text-xs text-center text-gray-500 font-semibold">Marks</th>
-              </tr>
+              {singleColumn ? (
+                <tr className="bg-gray-100 dark:bg-gray-700 border-b border-gray-300 dark:border-gray-600">
+                  <th colSpan={3} className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600"></th>
+                  <th className="px-2 py-1 text-xs text-center text-gray-600 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Unadjusted</th>
+                  <th className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold border-r border-gray-300 dark:border-gray-600">Trans JEs</th>
+                  <th className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-teal-50 dark:bg-teal-900/20 border-r border-gray-300 dark:border-gray-600">Post-Trans</th>
+                  <th className="px-2 py-1 text-xs text-center text-blue-600 dark:text-blue-400 font-semibold border-r border-gray-300 dark:border-gray-600">AJE</th>
+                  <th className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600">Adjusted</th>
+                  {showTax && <th className="px-2 py-1 text-xs text-center text-purple-600 dark:text-purple-400 font-semibold border-r border-gray-300 dark:border-gray-600">Tax Adj.</th>}
+                  {showTax && <th className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-purple-50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600">Tax Adjusted</th>}
+                  {showTax && <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Tax Code</th>}
+                  <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">W/P</th>
+                  <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold"></th>
+                  <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold">Marks</th>
+                </tr>
+              ) : (
+                <tr className="bg-gray-100 dark:bg-gray-700 border-b border-gray-300 dark:border-gray-600">
+                  <th colSpan={3} className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600"></th>
+                  <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-600 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Unadjusted</th>
+                  <th colSpan={2} className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold bg-teal-50 dark:bg-teal-900/20 border-r border-gray-300 dark:border-gray-600">Trans JEs</th>
+                  <th colSpan={2} className="px-2 py-1 text-xs text-center text-blue-600 dark:text-blue-400 font-semibold border-r border-gray-300 dark:border-gray-600">AJE</th>
+                  <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600">Adjusted</th>
+                  {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-purple-600 dark:text-purple-400 font-semibold border-r border-gray-300 dark:border-gray-600">Tax Adj.</th>}
+                  {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-purple-50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600">Tax Adjusted</th>}
+                  {showTax && <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Tax Code</th>}
+                  <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">W/P</th>
+                  <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold"></th>
+                  <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold">Marks</th>
+                </tr>
+              )}
               {/* Column headers */}
               {tableInstance.getHeaderGroups().map((hg) => (
-                <tr key={hg.id} className="bg-gray-50 border-b border-gray-200">
+                <tr key={hg.id} className="bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
                   {hg.headers.map((header) => (
                     <th
                       key={header.id}
                       onClick={header.column.getToggleSortingHandler()}
-                      className={`px-2 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider cursor-pointer whitespace-nowrap select-none ${colClass(header.column.id, true)}`}
+                      className={`px-2 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider cursor-pointer whitespace-nowrap select-none ${colClass(header.column.id, true)}`}
                     >
                       {flexRender(header.column.columnDef.header, header.getContext())}
                       {header.column.getIsSorted() === 'asc' && ' ↑'}
@@ -903,32 +1303,32 @@ export function TrialBalancePage() {
                 </tr>
               ))}
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {tableInstance.getRowModel().rows.length === 0 ? (
                 <tr>
-                  <td colSpan={showTax ? 17 : 13} className="px-4 py-12 text-center text-gray-400">
+                  <td colSpan={tableInstance.getVisibleLeafColumns().length} className="px-4 py-12 text-center text-gray-400 dark:text-gray-500">
                     {!selectedPeriodId ? (
                       <span>Select a period to view the trial balance.</span>
-                    ) : (filterText || filterCategory) ? (
+                    ) : (filterText || filterCategory || filterUnit) ? (
                       <span>No accounts match the current filter.</span>
                     ) : isEmpty ? (
                       <span>
                         No active accounts.{' '}
-                        <span className="text-gray-500">Import a chart of accounts or activate accounts on the Chart of Accounts page.</span>
+                        <span className="text-gray-500 dark:text-gray-400">Import a chart of accounts or activate accounts on the Chart of Accounts page.</span>
                       </span>
                     ) : (
                       <span>
                         No active accounts match this view.{' '}
-                        <span className="text-gray-500">Import a chart of accounts or activate accounts on the Chart of Accounts page.</span>
+                        <span className="text-gray-500 dark:text-gray-400">Import a chart of accounts or activate accounts on the Chart of Accounts page.</span>
                       </span>
                     )}
                   </td>
                 </tr>
               ) : (
                 tableInstance.getRowModel().rows.map((row, rowIdx) => (
-                  <tr key={row.id} className={rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'}>
+                  <tr key={row.id} className={rowIdx % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-50/40 dark:bg-gray-700/20'}>
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className={`px-2 py-0.5 text-gray-700 ${colClass(cell.column.id)}`}>
+                      <td key={cell.id} className={`px-2 py-0.5 text-gray-700 dark:text-gray-300 ${colClass(cell.column.id)}`}>
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
@@ -938,56 +1338,115 @@ export function TrialBalancePage() {
             </tbody>
             {rows.length > 0 && (
               <tfoot className="sticky bottom-0 z-10">
-                {/* Column totals */}
-                <tr className="border-t-2 border-gray-400 bg-gray-100 font-semibold">
-                  <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-r border-gray-300">
-                    Totals
-                  </td>
-                  <td className="px-2 py-1.5 text-right text-sm border-r border-gray-200">{fmtTotal(colSum('unadjusted_debit'))}</td>
-                  <td className="px-2 py-1.5 text-right text-sm border-r border-gray-200">{fmtTotal(colSum('unadjusted_credit'))}</td>
-                  <td className="px-2 py-1.5 text-right text-sm text-blue-700">{fmtTotal(colSum('book_adj_debit'))}</td>
-                  <td className="px-2 py-1.5 text-right text-sm text-blue-700 border-r border-gray-200">{fmtTotal(colSum('book_adj_credit'))}</td>
-                  <td className="px-2 py-1.5 text-right text-sm font-semibold bg-blue-50/80">{fmtTotal(colSum('book_adjusted_debit'))}</td>
-                  <td className="px-2 py-1.5 text-right text-sm font-semibold bg-blue-50/80 border-r border-gray-200">{fmtTotal(colSum('book_adjusted_credit'))}</td>
-                  {showTax && <td className="px-2 py-1.5 text-right text-sm text-purple-700">{fmtTotal(colSum('tax_adj_debit'))}</td>}
-                  {showTax && <td className="px-2 py-1.5 text-right text-sm text-purple-700 border-r border-gray-200">{fmtTotal(colSum('tax_adj_credit'))}</td>}
-                  {showTax && <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80">{fmtTotal(colSum('tax_adjusted_debit'))}</td>}
-                  {showTax && <td className="px-2 py-1.5 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">{fmtTotal(colSum('tax_adjusted_credit'))}</td>}
-                  <td colSpan={4}></td>
-                </tr>
-                {/* Net income / (loss) */}
-                <tr className="border-t border-gray-300 bg-gray-50">
-                  <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-r border-gray-300">
-                    Net Income/(Loss)
-                  </td>
-                  <td colSpan={2} className="px-2 py-1 text-right text-sm font-semibold border-r border-gray-200">
-                    {fmtNet(unajNetIncome)}
-                  </td>
-                  <td colSpan={2} className="border-r border-gray-200"></td>
-                  <td colSpan={2} className="px-2 py-1 text-right text-sm font-semibold bg-blue-50/80 border-r border-gray-200">
-                    {fmtNet(bkNetIncome)}
-                  </td>
-                  {showTax && <td colSpan={2} className="border-r border-gray-200"></td>}
-                  {showTax && (
-                    <td colSpan={2} className="px-2 py-1 text-right text-sm font-semibold bg-purple-50/80 border-r border-gray-200">
-                      {fmtNet(txNetIncome)}
-                    </td>
-                  )}
-                  <td colSpan={4}></td>
-                </tr>
+                {singleColumn ? (
+                  <>
+                    {/* Single-column totals */}
+                    <tr className="border-t-2 border-gray-400 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 font-semibold">
+                      <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
+                        Totals
+                      </td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums border-r border-gray-200 dark:border-gray-700">
+                        {fmtBal(colSum('unadjusted_debit'), colSum('unadjusted_credit'))}
+                      </td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-teal-700 dark:text-teal-400 border-r border-gray-200 dark:border-gray-700">
+                        {fmtBal(colSum('trans_adj_debit'), colSum('trans_adj_credit'))}
+                      </td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-teal-50/80 dark:bg-teal-900/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtBal(colSum('post_trans_debit'), colSum('post_trans_credit'))}
+                      </td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-blue-700 dark:text-blue-400 border-r border-gray-200 dark:border-gray-700">
+                        {fmtBal(colSum('book_adj_debit'), colSum('book_adj_credit'))}
+                      </td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-blue-50/80 dark:bg-blue-900/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtBal(colSum('book_adjusted_debit'), colSum('book_adjusted_credit'))}
+                      </td>
+                      {showTax && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-purple-700 dark:text-purple-400 border-r border-gray-200 dark:border-gray-700">
+                        {fmtBal(colSum('tax_adj_debit'), colSum('tax_adj_credit'))}
+                      </td>}
+                      {showTax && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-purple-50/80 dark:bg-purple-900/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtBal(colSum('tax_adjusted_debit'), colSum('tax_adjusted_credit'))}
+                      </td>}
+                      <td colSpan={4}></td>
+                    </tr>
+                    {/* Net income in single-column mode */}
+                    <tr className="border-t border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">
+                      <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
+                        Net Income/(Loss)
+                      </td>
+                      <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums border-r border-gray-200 dark:border-gray-700">
+                        {fmtNet(unajNetIncome)}
+                      </td>
+                      <td className="border-r border-gray-200 dark:border-gray-700"></td>
+                      <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums bg-teal-50/80 dark:bg-teal-900/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtNet(postTransNetIncome)}
+                      </td>
+                      <td className="border-r border-gray-200 dark:border-gray-700"></td>
+                      <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums bg-blue-50/80 dark:bg-blue-900/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtNet(bkNetIncome)}
+                      </td>
+                      {showTax && <td className="border-r border-gray-200 dark:border-gray-700"></td>}
+                      {showTax && <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums bg-purple-50/80 dark:bg-purple-900/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtNet(txNetIncome)}
+                      </td>}
+                      <td colSpan={4}></td>
+                    </tr>
+                  </>
+                ) : (
+                  <>
+                    {/* Dr/Cr column totals */}
+                    <tr className="border-t-2 border-gray-400 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 font-semibold">
+                      <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
+                        Totals
+                      </td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('unadjusted_debit'))}</td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('unadjusted_credit'))}</td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-teal-700 dark:text-teal-400">{fmtTotal(colSum('trans_adj_debit'))}</td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-teal-700 dark:text-teal-400 border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('trans_adj_credit'))}</td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-blue-700 dark:text-blue-400">{fmtTotal(colSum('book_adj_debit'))}</td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-blue-700 dark:text-blue-400 border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('book_adj_credit'))}</td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-blue-50/80 dark:bg-blue-900/20">{fmtTotal(netDrSum('book_adjusted_debit', 'book_adjusted_credit'))}</td>
+                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-blue-50/80 dark:bg-blue-900/20 border-r border-gray-200 dark:border-gray-700">{fmtTotal(netCrSum('book_adjusted_debit', 'book_adjusted_credit'))}</td>
+                      {showTax && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-purple-700 dark:text-purple-400">{fmtTotal(colSum('tax_adj_debit'))}</td>}
+                      {showTax && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-purple-700 dark:text-purple-400 border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('tax_adj_credit'))}</td>}
+                      {showTax && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-purple-50/80 dark:bg-purple-900/20">{fmtTotal(netDrSum('tax_adjusted_debit', 'tax_adjusted_credit'))}</td>}
+                      {showTax && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-purple-50/80 dark:bg-purple-900/20 border-r border-gray-200 dark:border-gray-700">{fmtTotal(netCrSum('tax_adjusted_debit', 'tax_adjusted_credit'))}</td>}
+                      <td colSpan={4}></td>
+                    </tr>
+                    {/* Net income / (loss) */}
+                    <tr className="border-t border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">
+                      <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
+                        Net Income/(Loss)
+                      </td>
+                      <td colSpan={2} className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums border-r border-gray-200 dark:border-gray-700">
+                        {fmtNet(unajNetIncome)}
+                      </td>
+                      <td colSpan={2} className="border-r border-gray-200 dark:border-gray-700"></td>
+                      <td colSpan={2} className="border-r border-gray-200 dark:border-gray-700"></td>
+                      <td colSpan={2} className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums bg-blue-50/80 dark:bg-blue-900/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtNet(bkNetIncome)}
+                      </td>
+                      {showTax && <td colSpan={2} className="border-r border-gray-200 dark:border-gray-700"></td>}
+                      {showTax && (
+                        <td colSpan={2} className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums bg-purple-50/80 dark:bg-purple-900/20 border-r border-gray-200 dark:border-gray-700">
+                          {fmtNet(txNetIncome)}
+                        </td>
+                      )}
+                      <td colSpan={4}></td>
+                    </tr>
+                  </>
+                )}
               </tfoot>
             )}
           </table>
         </div>
       )}
 
-      {/* TB Balance Import modal */}
-      {showImportModal && selectedPeriodId && (
-        <TBImportModal
+      {/* Source Document Verification Panel */}
+      {firstImport && selectedPeriodId && (
+        <VerificationPanel
+          importRecord={firstImport}
           periodId={selectedPeriodId}
-          mode="current"
-          onClose={() => setShowImportModal(false)}
-          onSuccess={() => { setShowImportModal(false); qc.invalidateQueries({ queryKey }); }}
+          isPeriodLocked={isPeriodLocked}
         />
       )}
 
@@ -998,6 +1457,26 @@ export function TrialBalancePage() {
           mode="prior-year"
           onClose={() => setShowPYImportModal(false)}
           onSuccess={() => { setShowPYImportModal(false); qc.invalidateQueries({ queryKey }); }}
+        />
+      )}
+
+      {/* CSV Smart Import dialog */}
+      {showCsvImportDialog && selectedPeriodId && selectedClientId && (
+        <CsvImportDialog
+          periodId={selectedPeriodId}
+          clientId={selectedClientId}
+          onClose={() => setShowCsvImportDialog(false)}
+          onSuccess={() => { setShowCsvImportDialog(false); qc.invalidateQueries({ queryKey }); }}
+        />
+      )}
+
+      {/* PDF Smart Import dialog */}
+      {showPdfImportDialog && selectedPeriodId && selectedClientId && (
+        <PdfImportDialog
+          periodId={selectedPeriodId}
+          clientId={selectedClientId}
+          onClose={() => setShowPdfImportDialog(false)}
+          onSuccess={() => { setShowPdfImportDialog(false); qc.invalidateQueries({ queryKey }); }}
         />
       )}
 
@@ -1021,6 +1500,18 @@ export function TrialBalancePage() {
           assigned={tbTickmarks?.[tickmarkRow.account_id] ?? []}
           onClose={() => setTickmarkRow(null)}
           onToggle={(tickmarkId) => toggleTickmarkMut.mutate({ accountId: tickmarkRow.account_id, tickmarkId })}
+        />
+      )}
+
+      {/* Trans JE zoom modal */}
+      {zoomAccount && selectedPeriodId && (
+        <TransJEZoomModal
+          periodId={selectedPeriodId}
+          accountId={zoomAccount.accountId}
+          accountNumber={zoomAccount.accountNumber}
+          accountName={zoomAccount.accountName}
+          entryType={zoomAccount.entryType}
+          onClose={() => setZoomAccount(null)}
         />
       )}
     </div>
@@ -1136,16 +1627,16 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
   if (result) {
     return (
       <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-lg shadow-xl w-full max-w-sm">
-          <div className="px-5 py-4 border-b">
-            <h2 className="text-base font-semibold">{title} — Complete</h2>
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-sm">
+          <div className="px-5 py-4 border-b dark:border-gray-700">
+            <h2 className="text-base font-semibold dark:text-white">{title} — Complete</h2>
           </div>
-          <div className="px-5 py-4 space-y-2 text-sm">
+          <div className="px-5 py-4 space-y-2 text-sm dark:text-gray-300">
             <p><span className="font-medium">{result.upserted}</span> rows imported</p>
-            {result.skipped > 0 && <p className="text-amber-600"><span className="font-medium">{result.skipped}</span> rows skipped (account number not found in COA)</p>}
-            <p className="text-gray-500">Total in file: {result.total}</p>
+            {result.skipped > 0 && <p className="text-amber-600 dark:text-amber-400"><span className="font-medium">{result.skipped}</span> rows skipped (account number not found in COA)</p>}
+            <p className="text-gray-500 dark:text-gray-400">Total in file: {result.total}</p>
           </div>
-          <div className="px-5 py-3 border-t flex justify-end">
+          <div className="px-5 py-3 border-t dark:border-gray-700 flex justify-end">
             <button onClick={onSuccess} className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">Done</button>
           </div>
         </div>
@@ -1155,19 +1646,19 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
-        <div className="flex items-center justify-between px-5 py-4 border-b">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg">
+        <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <div>
-            <h2 className="text-base font-semibold">{title}</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Step {step} of 2 — {step === 1 ? 'Select CSV file' : 'Map columns'}</p>
+            <h2 className="text-base font-semibold dark:text-white">{title}</h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Step {step} of 2 — {step === 1 ? 'Select CSV file' : 'Map columns'}</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         <div className="px-5 py-4">
           {step === 1 && (
             <div className="space-y-3">
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
                 CSV must have columns for Account Number, Debit, and Credit (in dollars, not cents).
               </p>
               <label className="block">
@@ -1176,16 +1667,16 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
                   type="file"
                   accept=".csv,.txt"
                   onChange={handleFile}
-                  className="block w-full text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border file:border-gray-300 file:text-sm file:bg-gray-50 hover:file:bg-gray-100"
+                  className="block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border file:border-gray-300 dark:file:border-gray-600 file:text-sm file:bg-gray-50 dark:file:bg-gray-700 dark:file:text-gray-300 hover:file:bg-gray-100 dark:hover:file:bg-gray-600"
                 />
               </label>
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
             </div>
           )}
 
           {step === 2 && (
             <div className="space-y-4">
-              <p className="text-xs text-gray-500">{rawRows.length} data rows detected · {headers.length} columns</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">{rawRows.length} data rows detected · {headers.length} columns</p>
 
               <div className="space-y-2">
                 {([
@@ -1194,11 +1685,11 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
                   { label: 'Credit *', key: 'creditCol' as keyof TBMapping },
                 ] as Array<{ label: string; key: keyof TBMapping }>).map(({ label, key }) => (
                   <div key={key} className="flex items-center gap-3">
-                    <span className="text-xs text-gray-600 w-36 shrink-0">{label}</span>
+                    <span className="text-xs text-gray-600 dark:text-gray-400 w-36 shrink-0">{label}</span>
                     <select
                       value={mapping[key]}
                       onChange={(e) => setMapping((m) => ({ ...m, [key]: e.target.value }))}
-                      className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="flex-1 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
                     >
                       <option value="">— skip —</option>
                       {headers.map((h) => <option key={h} value={h}>{h}</option>)}
@@ -1208,25 +1699,25 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
               </div>
 
               {/* Preview */}
-              <div className="overflow-auto max-h-40 border border-gray-200 rounded">
+              <div className="overflow-auto max-h-40 border border-gray-200 dark:border-gray-700 rounded">
                 <table className="w-full text-xs">
-                  <thead className="bg-gray-50 sticky top-0">
+                  <thead className="bg-gray-50 dark:bg-gray-800/60 sticky top-0">
                     <tr>
-                      <th className="px-2 py-1 text-left font-medium text-gray-500">Acct #</th>
-                      <th className="px-2 py-1 text-right font-medium text-gray-500">Debit</th>
-                      <th className="px-2 py-1 text-right font-medium text-gray-500">Credit</th>
+                      <th className="px-2 py-1 text-left font-medium text-gray-500 dark:text-gray-400">Acct #</th>
+                      <th className="px-2 py-1 text-right font-medium text-gray-500 dark:text-gray-400">Debit</th>
+                      <th className="px-2 py-1 text-right font-medium text-gray-500 dark:text-gray-400">Credit</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                     {rawRows.slice(0, 50).map((row, i) => {
                       const acctIdx = headers.indexOf(mapping.accountNumberCol);
                       const drIdx = headers.indexOf(mapping.debitCol);
                       const crIdx = headers.indexOf(mapping.creditCol);
                       return (
-                        <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'}>
-                          <td className="px-2 py-0.5 text-gray-700">{acctIdx >= 0 ? row[acctIdx] : '—'}</td>
-                          <td className="px-2 py-0.5 text-right text-gray-700">{drIdx >= 0 ? row[drIdx] : '—'}</td>
-                          <td className="px-2 py-0.5 text-right text-gray-700">{crIdx >= 0 ? row[crIdx] : '—'}</td>
+                        <tr key={i} className={i % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-50/40 dark:bg-gray-700/20'}>
+                          <td className="px-2 py-0.5 text-gray-700 dark:text-gray-300">{acctIdx >= 0 ? row[acctIdx] : '—'}</td>
+                          <td className="px-2 py-0.5 text-right text-gray-700 dark:text-gray-300">{drIdx >= 0 ? row[drIdx] : '—'}</td>
+                          <td className="px-2 py-0.5 text-right text-gray-700 dark:text-gray-300">{crIdx >= 0 ? row[crIdx] : '—'}</td>
                         </tr>
                       );
                     })}
@@ -1234,16 +1725,16 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
                 </table>
               </div>
 
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
             </div>
           )}
         </div>
 
         {step === 2 && (
-          <div className="px-5 py-3 border-t flex justify-between items-center">
-            <button onClick={() => setStep(1)} className="text-sm text-gray-500 hover:text-gray-700">← Back</button>
+          <div className="px-5 py-3 border-t dark:border-gray-700 flex justify-between items-center">
+            <button onClick={() => setStep(1)} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">← Back</button>
             <div className="flex gap-2">
-              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
               <button
                 onClick={handleImport}
                 disabled={importing}
@@ -1272,17 +1763,17 @@ function TickmarkModal({ row, library, assigned, onClose, onToggle }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-sm">
-        <div className="flex items-center justify-between px-5 py-4 border-b">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-sm">
+        <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <div>
-            <h2 className="text-base font-semibold">{row.account_number} — {row.account_name}</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Assign Tickmarks</p>
+            <h2 className="text-base font-semibold dark:text-white">{row.account_number} — {row.account_name}</h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Assign Tickmarks</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-3 space-y-1 max-h-80 overflow-y-auto">
           {library.length === 0 ? (
-            <p className="text-sm text-gray-400 py-4 text-center">No tickmarks defined for this client.</p>
+            <p className="text-sm text-gray-400 dark:text-gray-500 py-4 text-center">No tickmarks defined for this client.</p>
           ) : (
             library.map((tm) => {
               const isOn = assignedIds.has(tm.id);
@@ -1291,13 +1782,13 @@ function TickmarkModal({ row, library, assigned, onClose, onToggle }: {
                   key={tm.id}
                   onClick={() => onToggle(tm.id)}
                   className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg border text-left transition-colors ${
-                    isOn ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
+                    isOn ? 'border-blue-400 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                 >
                   <span className={`inline-flex items-center justify-center w-7 h-7 rounded text-sm font-bold shrink-0 ${TICKMARK_COLOR_CLASSES[tm.color]}`}>
                     {tm.symbol}
                   </span>
-                  <span className="text-sm text-gray-700 flex-1">{tm.description}</span>
+                  <span className="text-sm text-gray-700 dark:text-gray-300 flex-1">{tm.description}</span>
                   {isOn && (
                     <svg className="w-4 h-4 text-blue-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
@@ -1308,8 +1799,8 @@ function TickmarkModal({ row, library, assigned, onClose, onToggle }: {
             })
           )}
         </div>
-        <div className="px-5 py-3 border-t flex justify-end">
-          <button onClick={onClose} className="px-4 py-1.5 bg-gray-100 text-gray-700 text-sm rounded hover:bg-gray-200">Done</button>
+        <div className="px-5 py-3 border-t dark:border-gray-700 flex justify-end">
+          <button onClick={onClose} className="px-4 py-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm rounded hover:bg-gray-200 dark:hover:bg-gray-600">Done</button>
         </div>
       </div>
     </div>
@@ -1328,38 +1819,38 @@ function NotesModal({ row, onClose, onSave }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
-        <div className="flex items-center justify-between px-5 py-4 border-b">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg">
+        <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <div>
-            <h2 className="text-base font-semibold">{row.account_number} — {row.account_name}</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Workpaper Notes</p>
+            <h2 className="text-base font-semibold dark:text-white">{row.account_number} — {row.account_name}</h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Workpaper Notes</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4 space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Preparer Notes</label>
+            <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Preparer Notes</label>
             <textarea
               value={preparer}
               onChange={(e) => setPreparer(e.target.value)}
               rows={4}
               autoFocus
               placeholder="Enter preparer notes, tick marks, or references…"
-              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
             />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Reviewer Notes</label>
+            <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Reviewer Notes</label>
             <textarea
               value={reviewer}
               onChange={(e) => setReviewer(e.target.value)}
               rows={3}
               placeholder="Enter reviewer comments or sign-off…"
-              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
             />
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+            <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
             <button
               onClick={() => onSave(row.account_id, preparer, reviewer)}
               className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"

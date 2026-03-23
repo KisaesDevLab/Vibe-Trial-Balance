@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { assertPeriodUnlocked } from '../lib/periodGuard';
 
 export const tbPeriodRouter = Router({ mergeParams: true });
 tbPeriodRouter.use(authMiddleware);
@@ -11,6 +12,8 @@ function parseBigInts(row: Record<string, unknown>): Record<string, unknown> {
   const bigintFields = [
     'unadjusted_debit', 'unadjusted_credit',
     'prior_year_debit', 'prior_year_credit',
+    'trans_adj_debit', 'trans_adj_credit',
+    'post_trans_debit', 'post_trans_credit',
     'book_adj_debit', 'book_adj_credit',
     'tax_adj_debit', 'tax_adj_credit',
     'book_adjusted_debit', 'book_adjusted_credit',
@@ -35,7 +38,7 @@ tbPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
   try {
     const rows = await db('v_adjusted_trial_balance')
       .where({ period_id: periodId, is_active: true })
-      .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'account_number', order: 'asc' }]);
+      .orderBy('account_number', 'asc');
     res.json({ data: rows.map(parseBigInts), error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -52,6 +55,7 @@ tbPeriodRouter.post('/initialize', async (req: AuthRequest, res: Response): Prom
     return;
   }
   try {
+    await assertPeriodUnlocked(periodId);
     const period = await db('periods').where({ id: periodId }).first('client_id');
     if (!period) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
@@ -126,6 +130,7 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
     return;
   }
   try {
+    await assertPeriodUnlocked(periodId);
     const period = await db('periods').where({ id: periodId }).first('client_id');
     if (!period) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
@@ -138,22 +143,24 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
 
     let upserted = 0;
     let skipped = 0;
-    for (const row of result.data.rows) {
-      const accountId = accountMap.get(row.accountNumber);
-      if (!accountId) { skipped++; continue; }
-      await db('trial_balance')
-        .insert({
-          period_id: periodId,
-          account_id: accountId,
-          unadjusted_debit: row.debit,
-          unadjusted_credit: row.credit,
-          updated_by: req.user!.userId,
-          updated_at: db.fn.now(),
-        })
-        .onConflict(['period_id', 'account_id'])
-        .merge(['unadjusted_debit', 'unadjusted_credit', 'updated_by', 'updated_at']);
-      upserted++;
-    }
+    await db.transaction(async (trx) => {
+      for (const row of result.data.rows) {
+        const accountId = accountMap.get(row.accountNumber);
+        if (!accountId) { skipped++; continue; }
+        await trx('trial_balance')
+          .insert({
+            period_id: periodId,
+            account_id: accountId,
+            unadjusted_debit: row.debit,
+            unadjusted_credit: row.credit,
+            updated_by: req.user!.userId,
+            updated_at: db.fn.now(),
+          })
+          .onConflict(['period_id', 'account_id'])
+          .merge(['unadjusted_debit', 'unadjusted_credit', 'updated_by', 'updated_at']);
+        upserted++;
+      }
+    });
     res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -181,6 +188,7 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
     return;
   }
   try {
+    await assertPeriodUnlocked(periodId);
     const period = await db('periods').where({ id: periodId }).first('client_id');
     if (!period) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
@@ -193,24 +201,26 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
 
     let upserted = 0;
     let skipped = 0;
-    for (const row of result.data.rows) {
-      const accountId = accountMap.get(row.accountNumber);
-      if (!accountId) { skipped++; continue; }
-      await db('trial_balance')
-        .insert({
-          period_id: periodId,
-          account_id: accountId,
-          unadjusted_debit: 0,
-          unadjusted_credit: 0,
-          prior_year_debit: row.debit,
-          prior_year_credit: row.credit,
-          updated_by: req.user!.userId,
-          updated_at: db.fn.now(),
-        })
-        .onConflict(['period_id', 'account_id'])
-        .merge(['prior_year_debit', 'prior_year_credit', 'updated_by', 'updated_at']);
-      upserted++;
-    }
+    await db.transaction(async (trx) => {
+      for (const row of result.data.rows) {
+        const accountId = accountMap.get(row.accountNumber);
+        if (!accountId) { skipped++; continue; }
+        await trx('trial_balance')
+          .insert({
+            period_id: periodId,
+            account_id: accountId,
+            unadjusted_debit: 0,
+            unadjusted_credit: 0,
+            prior_year_debit: row.debit,
+            prior_year_credit: row.credit,
+            updated_by: req.user!.userId,
+            updated_at: db.fn.now(),
+          })
+          .onConflict(['period_id', 'account_id'])
+          .merge(['prior_year_debit', 'prior_year_credit', 'updated_by', 'updated_at']);
+        upserted++;
+      }
+    });
     res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -239,6 +249,7 @@ tbPeriodRouter.put('/:accountId', async (req: AuthRequest, res: Response): Promi
   const { unadjustedDebit, unadjustedCredit } = result.data;
 
   try {
+    await assertPeriodUnlocked(periodId);
     await db('trial_balance')
       .insert({
         period_id: periodId,
@@ -253,6 +264,11 @@ tbPeriodRouter.put('/:accountId', async (req: AuthRequest, res: Response): Promi
 
     res.json({ data: { periodId, accountId, unadjustedDebit, unadjustedCredit }, error: null });
   } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked' } });
+      return;
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
   }

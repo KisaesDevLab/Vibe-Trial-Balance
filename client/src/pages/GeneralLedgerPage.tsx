@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getGeneralLedger, type GLAccount, type GLLine } from '../api/generalLedger';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
+import { downloadXlsx } from '../utils/downloadXlsx';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -15,19 +16,11 @@ function fmtDate(d: string): string {
   return `${m}/${day}/${y}`;
 }
 
-function downloadCsv(filename: string, rows: string[][]): void {
-  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
-
 const TYPE_LABEL: Record<string, string> = { book: 'Book AJE', tax: 'Tax AJE', trans: 'Trans' };
 const TYPE_CLASS: Record<string, string> = {
-  book: 'bg-blue-100 text-blue-700',
-  tax: 'bg-purple-100 text-purple-700',
-  trans: 'bg-green-100 text-green-700',
+  book: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400',
+  tax: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400',
+  trans: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400',
 };
 
 function runningBalance(normalBalance: string, tbDr: number, tbCr: number, lines: GLLine[], upTo: number): number {
@@ -53,66 +46,66 @@ function AccountSection({ acct, typeFilter }: { acct: GLAccount; typeFilter: str
   return (
     <div className="mb-6">
       {/* Account header */}
-      <div className="bg-gray-100 border border-gray-300 rounded-t px-3 py-1.5 flex items-center gap-3">
-        <span className="text-sm font-bold text-gray-800">{acct.account_number} – {acct.account_name}</span>
-        <span className="text-xs text-gray-500 capitalize">{acct.category}</span>
+      <div className="bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-t px-3 py-1.5 flex items-center gap-3">
+        <span className="text-sm font-bold text-gray-800 dark:text-gray-200">{acct.account_number} – {acct.account_name}</span>
+        <span className="text-xs text-gray-500 dark:text-gray-400 capitalize">{acct.category}</span>
       </div>
 
-      <div className="border border-t-0 border-gray-300 rounded-b overflow-hidden">
+      <div className="border border-t-0 border-gray-300 dark:border-gray-600 rounded-b overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-gray-50 border-b border-gray-200">
-              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600 w-28">Date</th>
-              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600 w-16">Type</th>
-              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600 w-16">#</th>
-              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600">Description</th>
-              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600 w-28">Debit</th>
-              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600 w-28">Credit</th>
-              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600 w-32">Balance</th>
+            <tr className="bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
+              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-28">Date</th>
+              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-16">Type</th>
+              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-16">#</th>
+              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400">Description</th>
+              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 w-28">Debit</th>
+              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 w-28">Credit</th>
+              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 w-32">Balance</th>
             </tr>
           </thead>
           <tbody>
             {/* Per-books opening row */}
-            <tr className="bg-blue-50/40 border-b border-gray-200">
-              <td className="px-3 py-1 text-xs text-gray-500 italic">Per books</td>
-              <td colSpan={3} className="px-3 py-1 text-xs text-gray-500 italic">Unadjusted balance</td>
-              <td className="px-3 py-1 text-right text-sm font-mono text-gray-700">{fmt(acct.unadjusted_debit)}</td>
-              <td className="px-3 py-1 text-right text-sm font-mono text-gray-700">{fmt(acct.unadjusted_credit)}</td>
-              <td className="px-3 py-1 text-right text-sm font-mono text-gray-600">
+            <tr className="bg-blue-50/40 dark:bg-blue-900/10 border-b border-gray-200 dark:border-gray-700">
+              <td className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 italic">Per books</td>
+              <td colSpan={3} className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 italic">Unadjusted balance</td>
+              <td className="px-3 py-1 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(acct.unadjusted_debit)}</td>
+              <td className="px-3 py-1 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(acct.unadjusted_credit)}</td>
+              <td className="px-3 py-1 text-right text-sm font-mono text-gray-600 dark:text-gray-400">
                 {fmt(acct.normal_balance === 'debit' ? acct.unadjusted_debit - acct.unadjusted_credit : acct.unadjusted_credit - acct.unadjusted_debit)}
               </td>
             </tr>
 
             {/* JE lines */}
             {lines.length === 0 ? (
-              <tr><td colSpan={7} className="px-3 py-2 text-xs text-gray-400 italic">No adjusting entries for this account.</td></tr>
+              <tr><td colSpan={7} className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500 italic">No adjusting entries for this account.</td></tr>
             ) : (
               lines.map((line, idx) => {
                 const bal = runningBalance(acct.normal_balance, acct.unadjusted_debit, acct.unadjusted_credit, lines, idx);
                 return (
-                  <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
-                    <td className="px-3 py-1 text-sm text-gray-600 whitespace-nowrap">{fmtDate(line.entry_date)}</td>
+                  <tr key={idx} className="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">{fmtDate(line.entry_date)}</td>
                     <td className="px-3 py-1">
-                      <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${TYPE_CLASS[line.entry_type] ?? 'bg-gray-100 text-gray-600'}`}>
+                      <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${TYPE_CLASS[line.entry_type] ?? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'}`}>
                         {TYPE_LABEL[line.entry_type] ?? line.entry_type.toUpperCase()}
                       </span>
                     </td>
-                    <td className="px-3 py-1 text-sm text-gray-500">#{line.entry_number}</td>
-                    <td className="px-3 py-1 text-sm text-gray-700 max-w-xs truncate">{line.description ?? '—'}</td>
-                    <td className="px-3 py-1 text-right text-sm font-mono text-gray-700">{fmt(line.debit)}</td>
-                    <td className="px-3 py-1 text-right text-sm font-mono text-gray-700">{fmt(line.credit)}</td>
-                    <td className="px-3 py-1 text-right text-sm font-mono text-gray-600">{fmt(bal)}</td>
+                    <td className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">#{line.entry_number}</td>
+                    <td className="px-3 py-1 text-sm text-gray-700 dark:text-gray-300 max-w-xs truncate">{line.description ?? '—'}</td>
+                    <td className="px-3 py-1 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(line.debit)}</td>
+                    <td className="px-3 py-1 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(line.credit)}</td>
+                    <td className="px-3 py-1 text-right text-sm font-mono text-gray-600 dark:text-gray-400">{fmt(bal)}</td>
                   </tr>
                 );
               })
             )}
 
             {/* Closing / adjusted balance */}
-            <tr className="border-t-2 border-gray-400 bg-gray-50">
-              <td colSpan={4} className="px-3 py-1.5 text-xs font-semibold text-gray-700">Adjusted Balance</td>
-              <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800">{fmt(closingDr)}</td>
-              <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800">{fmt(closingCr)}</td>
-              <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800">
+            <tr className="border-t-2 border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/60">
+              <td colSpan={4} className="px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300">Adjusted Balance</td>
+              <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">{fmt(closingDr)}</td>
+              <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">{fmt(closingCr)}</td>
+              <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">
                 {fmt(acct.normal_balance === 'debit' ? closingDr - closingCr : closingCr - closingDr)}
               </td>
             </tr>
@@ -189,12 +182,12 @@ export function GeneralLedgerPage() {
         rows.push([acct.account_number, acct.account_name, acct.category, l.entry_date.slice(0, 10), l.entry_type, String(l.entry_number), l.description ?? '', String(l.debit / 100), String(l.credit / 100)]);
       }
     }
-    downloadCsv(`general-ledger-${selectedPeriodId}.csv`, [header, ...rows]);
+    downloadXlsx(`general-ledger-${selectedPeriodId}.xlsx`, [header, ...rows]);
   };
 
   if (!selectedPeriodId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
         <div className="text-center">
           <p className="text-lg font-medium">No period selected</p>
           <p className="text-sm mt-1">Choose a client and period from the sidebar.</p>
@@ -206,27 +199,27 @@ export function GeneralLedgerPage() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900">General Ledger</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">General Ledger</h2>
         <div className="flex items-center gap-2">
           <select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
           >
             <option value="all">All entry types</option>
             <option value="book">Book AJE</option>
             <option value="tax">Tax AJE</option>
             <option value="trans">Trans</option>
           </select>
-          <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer">
-            <input type="checkbox" checked={showZero} onChange={(e) => setShowZero(e.target.checked)} className="rounded border-gray-300" />
+          <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            <input type="checkbox" checked={showZero} onChange={(e) => setShowZero(e.target.checked)} className="rounded border-gray-300 dark:border-gray-600" />
             Show zero-balance
           </label>
-          <button onClick={handleExport} disabled={!accounts.length} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40">Export CSV</button>
+          <button onClick={handleExport} disabled={!accounts.length} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40">Export Excel</button>
           <button
             onClick={handlePreview}
             disabled={pdfLoading}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
           >
             {pdfLoading ? 'Generating…' : '↗ Preview PDF'}
           </button>
@@ -241,16 +234,16 @@ export function GeneralLedgerPage() {
       </div>
 
       {pdfError && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded mt-2 mb-2">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 text-sm px-3 py-2 rounded mt-2 mb-2">
           {pdfError}
         </div>
       )}
-      {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">{(error as Error).message}</div>}
+      {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm mb-4">{(error as Error).message}</div>}
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-12 text-gray-400">Loading…</div>
+        <div className="flex items-center justify-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
       ) : accounts.length === 0 ? (
-        <div className="bg-white rounded-lg border border-gray-200 px-4 py-10 text-center text-gray-400">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-10 text-center text-gray-400 dark:text-gray-500">
           No general ledger data for this period.
         </div>
       ) : (

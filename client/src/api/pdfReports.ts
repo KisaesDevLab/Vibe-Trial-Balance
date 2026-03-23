@@ -6,7 +6,15 @@
 
 export async function openPdfPreview(url: string, token: string): Promise<void> {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error('PDF generation failed');
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.text();
+      const parsed = JSON.parse(body);
+      detail = parsed?.error?.message ?? body.slice(0, 200);
+    } catch { /* ignore */ }
+    throw new Error(`HTTP ${res.status}${detail ? ': ' + detail : ''}`);
+  }
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
   window.open(objectUrl, '_blank');
@@ -14,7 +22,15 @@ export async function openPdfPreview(url: string, token: string): Promise<void> 
 
 export async function downloadPdf(url: string, filename: string, token: string): Promise<void> {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error('PDF generation failed');
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.text();
+      const parsed = JSON.parse(body);
+      detail = parsed?.error?.message ?? body.slice(0, 200);
+    } catch { /* ignore */ }
+    throw new Error(`HTTP ${res.status}${detail ? ': ' + detail : ''}`);
+  }
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
   const a = document.createElement('a');

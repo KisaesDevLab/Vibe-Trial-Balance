@@ -35,11 +35,12 @@ export interface ClassificationRule {
   account_number: string;
 }
 
-export const listBankTransactions = (clientId: number, params?: { periodId?: number; status?: string; sourceAccountId?: number }) => {
+export const listBankTransactions = (clientId: number, params?: { periodId?: number; status?: string; sourceAccountId?: number; excludeEntrySource?: string }) => {
   const qs = new URLSearchParams();
   if (params?.periodId) qs.set('periodId', String(params.periodId));
   if (params?.status) qs.set('status', params.status);
   if (params?.sourceAccountId) qs.set('sourceAccountId', String(params.sourceAccountId));
+  if (params?.excludeEntrySource) qs.set('excludeEntrySource', params.excludeEntrySource);
   const q = qs.toString();
   return apiFetch<BankTransaction[]>(`/clients/${clientId}/bank-transactions${q ? `?${q}` : ''}`);
 };
@@ -99,6 +100,24 @@ export const classifyTransaction = (
     body: JSON.stringify(data),
   });
 
+export const updateBankTransaction = (
+  clientId: number,
+  id: number,
+  data: {
+    transactionDate?: string;
+    description?: string | null;
+    amount?: number;
+    checkNumber?: string | null;
+    accountId?: number | null;
+    sourceAccountId?: number | null;
+    periodId?: number | null;
+  },
+) =>
+  apiFetch<BankTransaction>(`/clients/${clientId}/bank-transactions/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+
 export const deleteBankTransaction = (clientId: number, id: number) =>
   apiFetch<{ deleted: number }>(`/clients/${clientId}/bank-transactions/${id}`, { method: 'DELETE' });
 
@@ -145,6 +164,52 @@ export const aiClassifyTransactions = (clientId: number, ids: number[]) =>
   apiFetch<{ classified: number; results: Array<{ id: number; accountId: number; confidence: number; reasoning: string }> }>(
     `/clients/${clientId}/bank-transactions/ai-classify`,
     { method: 'POST', body: JSON.stringify({ ids }) },
+  );
+
+// ---- Payees API ----
+
+export interface Payee {
+  payee: string;
+  totalTransactions: number;
+  lastUsed: string | null;
+  hasRule: boolean;
+  ruleAccountId: number | null;
+  ruleAccountName: string | null;
+  categories: Array<{ accountId: number; accountNumber: string; accountName: string; count: number }>;
+}
+
+export const listPayees = (clientId: number) =>
+  apiFetch<Payee[]>(`/clients/${clientId}/payees`);
+
+export const searchPayees = (clientId: number, q: string) =>
+  apiFetch<Payee[]>(`/clients/${clientId}/payees/search?q=${encodeURIComponent(q)}`);
+
+export const getPayeeCategories = (clientId: number, payee: string) =>
+  apiFetch<Array<{ accountId: number; accountNumber: string; accountName: string; count: number }>>(
+    `/clients/${clientId}/payees/${encodeURIComponent(payee)}/categories`,
+  );
+
+export interface ManualTransaction {
+  transactionDate: string;
+  description: string;
+  amount: number;
+  checkNumber?: string;
+  accountId: number;
+  sourceAccountId?: number;
+  createRule?: boolean;
+}
+
+export const createManualTransactions = (
+  clientId: number,
+  periodId: number | null,
+  transactions: ManualTransaction[],
+) =>
+  apiFetch<{ created: number; ids: number[]; rulesUpdated: number }>(
+    `/clients/${clientId}/bank-transactions/manual`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ periodId: periodId ?? undefined, transactions }),
+    },
   );
 
 export const listClassificationRules = (clientId: number) =>

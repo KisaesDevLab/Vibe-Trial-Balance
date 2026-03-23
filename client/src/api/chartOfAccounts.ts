@@ -12,11 +12,12 @@ export interface Account {
   workpaper_ref: string | null;
   preparer_notes: string | null;
   reviewer_notes: string | null;
-  sort_order: number;
+  unit: string | null;
   tax_code_id: number | null;
   tax_line_source: 'manual' | 'ai' | 'import' | 'rule' | null;
   tax_line_confidence: number | null;
   cash_flow_category: 'operating' | 'investing' | 'financing' | 'non_cash' | 'cash' | null;
+  import_aliases: string[];
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -33,8 +34,9 @@ export interface AccountInput {
   workpaperRef?: string;
   preparerNotes?: string;
   reviewerNotes?: string;
-  sortOrder?: number;
+  unit?: string | null;
   cashFlowCategory?: 'operating' | 'investing' | 'financing' | 'non_cash' | 'cash' | null;
+  importAliases?: string[];
 }
 
 export const listAccounts = (clientId: number) =>

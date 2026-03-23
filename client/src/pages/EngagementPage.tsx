@@ -21,11 +21,11 @@ import {
 // ── Status helpers ────────────────────────────────────────────────────────────
 
 const STATUS_COLORS: Record<TaskStatus, string> = {
-  open:        'bg-gray-100 text-gray-700',
-  in_progress: 'bg-blue-100 text-blue-700',
-  review:      'bg-amber-100 text-amber-700',
-  completed:   'bg-green-100 text-green-700',
-  n_a:         'bg-gray-100 text-gray-400',
+  open:        'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
+  in_progress: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400',
+  review:      'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400',
+  completed:   'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400',
+  n_a:         'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500',
 };
 
 const STATUS_ORDER: TaskStatus[] = ['open', 'in_progress', 'review', 'completed', 'n_a'];
@@ -68,13 +68,13 @@ function TaskModal({ initial, userOptions, onClose, onSave, isPending = false }:
     });
   }
 
-  const inputCls = 'w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500';
-  const labelCls = 'block text-xs font-medium text-gray-600 mb-1';
+  const inputCls = 'w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500 dark:bg-gray-700 dark:text-white';
+  const labelCls = 'block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1';
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 space-y-4">
-        <h2 className="text-base font-semibold">{initial ? 'Edit Task' : 'Add Task'}</h2>
+      <form onSubmit={handleSubmit} className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg p-6 space-y-4">
+        <h2 className="text-base font-semibold dark:text-white">{initial ? 'Edit Task' : 'Add Task'}</h2>
 
         <div>
           <label className={labelCls}>Title *</label>
@@ -117,7 +117,7 @@ function TaskModal({ initial, userOptions, onClose, onSave, isPending = false }:
 
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onClose} disabled={isPending}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50">
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50">
             Cancel
           </button>
           <button type="submit" disabled={isPending}
@@ -154,25 +154,25 @@ function TemplatesModal({ onClose, onAdd }: { onClose: () => void; onAdd: (items
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
-        <h2 className="text-base font-semibold">Add from Templates</h2>
-        <p className="text-xs text-gray-500">Select the tasks to add to this period&apos;s checklist.</p>
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
+        <h2 className="text-base font-semibold dark:text-white">Add from Templates</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Select the tasks to add to this period&apos;s checklist.</p>
         <div className="space-y-2 max-h-72 overflow-y-auto">
           {TASK_TEMPLATES.map((t, i) => (
             <label key={i} className="flex items-center gap-3 cursor-pointer group">
               <input type="checkbox" checked={selected.has(i)} onChange={() => toggle(i)}
-                className="rounded border-gray-300 text-teal-600 focus:ring-teal-500" />
-              <span className="text-sm text-gray-800 group-hover:text-teal-700">{t.title}</span>
-              <span className="ml-auto text-xs text-gray-400">{t.category}</span>
+                className="rounded border-gray-300 dark:border-gray-600 text-teal-600 focus:ring-teal-500" />
+              <span className="text-sm text-gray-800 dark:text-gray-200 group-hover:text-teal-700 dark:group-hover:text-teal-400">{t.title}</span>
+              <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">{t.category}</span>
             </label>
           ))}
         </div>
         <div className="flex justify-between items-center pt-1">
           <button onClick={() => setSelected(new Set(TASK_TEMPLATES.map((_, i) => i)))}
-            className="text-xs text-teal-600 hover:underline">Select all</button>
+            className="text-xs text-teal-600 hover:underline dark:text-teal-400">Select all</button>
           <div className="flex gap-2">
             <button onClick={onClose}
-              className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">
               Cancel
             </button>
             <button onClick={handleAdd} disabled={selected.size === 0}
@@ -241,8 +241,8 @@ function ChecklistTab({ periodId }: { periodId: number }) {
     onSuccess: () => invalidate(),
   });
 
-  const thCls = 'px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-200';
-  const tdCls = 'px-3 py-2 text-sm align-top';
+  const thCls = 'px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700';
+  const tdCls = 'px-3 py-2 text-sm align-top dark:text-gray-300';
 
   // Quick status cycle on click
   function cycleStatus(task: EngagementTask) {
@@ -261,7 +261,7 @@ function ChecklistTab({ periodId }: { periodId: number }) {
               className={`px-2.5 py-1 text-xs rounded-full font-medium transition-colors ${
                 filterStatus === s
                   ? 'bg-teal-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}>
               {s === 'all' ? `All (${tasks.length})` : `${TASK_STATUS_LABELS[s]} (${counts[s]})`}
             </button>
@@ -285,11 +285,11 @@ function ChecklistTab({ periodId }: { periodId: number }) {
         const pct  = Math.round((done / tasks.length) * 100);
         return (
           <div>
-            <div className="flex justify-between text-xs text-gray-500 mb-1">
+            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
               <span>{done} of {tasks.length} complete</span>
               <span>{pct}%</span>
             </div>
-            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
               <div className="h-full bg-teal-500 transition-all" style={{ width: `${pct}%` }} />
             </div>
           </div>
@@ -297,9 +297,9 @@ function ChecklistTab({ periodId }: { periodId: number }) {
       })()}
 
       {/* Table */}
-      <div className="border border-gray-200 rounded-lg overflow-hidden">
+      <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50">
+          <thead className="bg-gray-50 dark:bg-gray-800/60">
             <tr>
               <th className={thCls} style={{ width: 32 }}></th>
               <th className={thCls}>Task</th>
@@ -312,7 +312,7 @@ function ChecklistTab({ periodId }: { periodId: number }) {
           <tbody>
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-8 text-center text-sm text-gray-400">
+                <td colSpan={6} className="px-3 py-8 text-center text-sm text-gray-400 dark:text-gray-500">
                   {tasks.length === 0
                     ? 'No tasks yet — click "Add Task" or "From Templates" to get started'
                     : 'No tasks match the selected filter'}
@@ -321,7 +321,7 @@ function ChecklistTab({ periodId }: { periodId: number }) {
             )}
             {filtered.map(task => (
               <tr key={task.id}
-                className={`border-t border-gray-100 ${task.status === 'completed' || task.status === 'n_a' ? 'opacity-60' : ''}`}>
+                className={`border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${task.status === 'completed' || task.status === 'n_a' ? 'opacity-60' : ''}`}>
                 {/* Checkbox-style status toggle */}
                 <td className="px-3 py-2 text-center">
                   <button onClick={() => cycleStatus(task)} title="Click to advance status"
@@ -329,8 +329,8 @@ function ChecklistTab({ periodId }: { periodId: number }) {
                       task.status === 'completed'
                         ? 'bg-teal-500 border-teal-500 text-white'
                         : task.status === 'n_a'
-                        ? 'bg-gray-300 border-gray-300 text-white'
-                        : 'border-gray-300 hover:border-teal-400'
+                        ? 'bg-gray-300 dark:bg-gray-600 border-gray-300 dark:border-gray-600 text-white'
+                        : 'border-gray-300 dark:border-gray-600 hover:border-teal-400'
                     }`}>
                     {(task.status === 'completed' || task.status === 'n_a') && (
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -340,20 +340,20 @@ function ChecklistTab({ periodId }: { periodId: number }) {
                   </button>
                 </td>
                 <td className={tdCls}>
-                  <div className={task.status === 'completed' ? 'line-through text-gray-400' : 'font-medium'}>
+                  <div className={task.status === 'completed' ? 'line-through text-gray-400 dark:text-gray-500' : 'font-medium'}>
                     {task.title}
                   </div>
-                  {task.description && <div className="text-xs text-gray-400 mt-0.5">{task.description}</div>}
-                  {task.notes       && <div className="text-xs text-gray-400 mt-0.5 italic">{task.notes}</div>}
+                  {task.description && <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{task.description}</div>}
+                  {task.notes       && <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 italic">{task.notes}</div>}
                   {task.completed_by_name && task.completed_at && (
-                    <div className="text-xs text-gray-400 mt-0.5">
+                    <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
                       Completed by {task.completed_by_name} · {new Date(task.completed_at).toLocaleDateString()}
                     </div>
                   )}
                 </td>
                 <td className={tdCls}>
                   {task.category && (
-                    <span className="inline-block px-2 py-0.5 text-xs bg-gray-100 rounded-full">{task.category}</span>
+                    <span className="inline-block px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-full">{task.category}</span>
                   )}
                 </td>
                 <td className={tdCls}>
@@ -361,14 +361,14 @@ function ChecklistTab({ periodId }: { periodId: number }) {
                 </td>
                 <td className={tdCls}>
                   {task.assignee_name
-                    ? <span className="text-gray-700">{task.assignee_name}</span>
-                    : <span className="text-gray-400 text-xs">Unassigned</span>}
+                    ? <span className="text-gray-700 dark:text-gray-300">{task.assignee_name}</span>
+                    : <span className="text-gray-400 dark:text-gray-500 text-xs">Unassigned</span>}
                 </td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
                   <button onClick={() => setModal(task)}
-                    className="text-xs text-teal-600 hover:text-teal-800 mr-3">Edit</button>
+                    className="text-xs text-teal-600 hover:text-teal-800 dark:text-teal-400 dark:hover:text-teal-300 mr-3">Edit</button>
                   <button onClick={() => { if (confirm('Delete this task?')) deleteMut.mutate(task.id); }}
-                    className="text-xs text-red-500 hover:text-red-700">Delete</button>
+                    className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Delete</button>
                 </td>
               </tr>
             ))}
@@ -422,7 +422,7 @@ function OpenItemsTab({ onViewChecklist }: OpenItemsTabProps) {
 
   if (items.length === 0) {
     return (
-      <div className="py-12 text-center text-gray-400 text-sm">
+      <div className="py-12 text-center text-gray-400 dark:text-gray-500 text-sm">
         No open items across any client — all caught up!
       </div>
     );
@@ -430,31 +430,31 @@ function OpenItemsTab({ onViewChecklist }: OpenItemsTabProps) {
 
   return (
     <div className="space-y-6">
-      <p className="text-xs text-gray-500">{items.length} open item{items.length !== 1 ? 's' : ''} across all clients</p>
+      <p className="text-xs text-gray-500 dark:text-gray-400">{items.length} open item{items.length !== 1 ? 's' : ''} across all clients</p>
       {Object.entries(byClient).map(([clientId, { client_name, periods }]) => (
         <div key={clientId} className="space-y-3">
-          <h3 className="text-sm font-bold text-gray-800 border-b border-gray-200 pb-1">{client_name}</h3>
+          <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-200 dark:border-gray-700 pb-1">{client_name}</h3>
           {Object.entries(periods).map(([periodId, { period_name, tasks }]) => (
             <div key={periodId} className="pl-3 space-y-1">
               <div className="flex items-center justify-between mb-2">
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{period_name}</div>
+                <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">{period_name}</div>
                 <button
                   onClick={() => onViewChecklist(Number(clientId), Number(periodId))}
-                  className="text-xs text-teal-600 hover:text-teal-800 hover:underline font-medium flex items-center gap-0.5">
+                  className="text-xs text-teal-600 hover:text-teal-800 hover:underline dark:text-teal-400 dark:hover:text-teal-300 font-medium flex items-center gap-0.5">
                   View Checklist →
                 </button>
               </div>
               {tasks.map(task => (
-                <div key={task.id} className="flex items-start gap-3 py-1.5 border-b border-gray-100">
+                <div key={task.id} className="flex items-start gap-3 py-1.5 border-b border-gray-100 dark:border-gray-700">
                   <StatusBadge status={task.status} />
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm text-gray-800">{task.title}</span>
+                    <span className="text-sm text-gray-800 dark:text-gray-200">{task.title}</span>
                     {task.category && (
-                      <span className="ml-2 text-xs text-gray-400">{task.category}</span>
+                      <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">{task.category}</span>
                     )}
                   </div>
                   {task.assignee_name && (
-                    <span className="text-xs text-gray-500 shrink-0">{task.assignee_name}</span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">{task.assignee_name}</span>
                   )}
                 </div>
               ))}
@@ -493,19 +493,19 @@ export function EngagementPage() {
     `px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
       tab === t
         ? 'border-teal-600 text-teal-700'
-        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+        : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
     }`;
 
   return (
     <div className="p-6 space-y-4 max-w-5xl">
       <div>
-        <h1 className="text-lg font-bold text-gray-800">Engagement</h1>
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Engagement</h1>
         {tab === 'checklist' && period && (
-          <p className="text-sm text-gray-500 mt-0.5">{period.period_name} checklist</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{period.period_name} checklist</p>
         )}
       </div>
 
-      <div className="border-b border-gray-200 flex gap-1">
+      <div className="border-b border-gray-200 dark:border-gray-700 flex gap-1">
         <button className={tabBtn('checklist')}  onClick={() => setTab('checklist')}>
           Period Checklist
         </button>
@@ -517,7 +517,7 @@ export function EngagementPage() {
       {tab === 'checklist' && (
         selectedPeriodId
           ? <ChecklistTab periodId={selectedPeriodId} />
-          : <div className="py-8 text-center text-gray-400 text-sm">Select a client and period to view the checklist.</div>
+          : <div className="py-8 text-center text-gray-400 dark:text-gray-500 text-sm">Select a client and period to view the checklist.</div>
       )}
       {tab === 'open-items' && <OpenItemsTab onViewChecklist={handleViewChecklist} />}
     </div>

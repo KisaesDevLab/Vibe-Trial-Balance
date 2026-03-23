@@ -33,8 +33,11 @@ export interface JEInput {
   lines: { accountId: number; debit: number; credit: number }[];
 }
 
-export const listJournalEntries = (periodId: number, type?: 'book' | 'tax' | 'trans') => {
-  const qs = type ? `?type=${type}` : '';
+export const listJournalEntries = (periodId: number, type?: 'book' | 'tax' | 'trans', accountId?: number) => {
+  const params = new URLSearchParams();
+  if (type) params.set('type', type);
+  if (accountId !== undefined) params.set('accountId', String(accountId));
+  const qs = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<JournalEntry[]>(`/periods/${periodId}/journal-entries${qs}`);
 };
 

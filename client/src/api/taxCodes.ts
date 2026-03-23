@@ -17,6 +17,7 @@ export interface TaxCode {
   sort_order: number;
   is_system: boolean;
   is_active: boolean;
+  is_m1_adjustment: boolean;
   notes?: string;
   maps?: SoftwareMap[];
   software_code?: string; // populated by /available endpoint
@@ -30,6 +31,7 @@ export interface TaxCodeInput {
   sortOrder?: number;
   notes?: string;
   isActive?: boolean;
+  isM1Adjustment?: boolean;
 }
 
 export interface ImportPreviewRow {

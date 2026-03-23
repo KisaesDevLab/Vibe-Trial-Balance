@@ -1,106 +1,102 @@
 <#
-  Trial Balance App - Daily Start Script
-  Run: .\start.ps1
+  Vibe Trial Balance - Start Script
+  Run from PowerShell or double-click via Launch.bat
 #>
 
+Set-ExecutionPolicy Bypass -Scope Process -Force
 $ErrorActionPreference = "Continue"
-$PROJECT_DIR = $PSScriptRoot
+Set-Location $PSScriptRoot
 
-function Write-OK($message) { Write-Host "  [OK] $message" -ForegroundColor Green }
-function Write-Info($message) { Write-Host "  $message" -ForegroundColor Gray }
-function Write-Fail($message) { Write-Host "  [FAIL] $message" -ForegroundColor Red }
+function Write-OK($msg)   { Write-Host "  [OK]  $msg" -ForegroundColor Green  }
+function Write-Info($msg) { Write-Host "  [...] $msg" -ForegroundColor Gray   }
+function Write-Warn($msg) { Write-Host "  [!]   $msg" -ForegroundColor Yellow }
+function Write-Fail($msg) { Write-Host "  [ERR] $msg" -ForegroundColor Red    }
 
-Write-Host ""
-Write-Host "Starting Trial Balance App..." -ForegroundColor Cyan
-Write-Host ""
-
-Set-Location $PROJECT_DIR
-
-# 1. Check Docker is running
-Write-Info "Checking Docker..."
-docker info 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "Docker Desktop is not running!"
-    Write-Host "  Start Docker Desktop from the Start Menu and wait for it to load." -ForegroundColor Yellow
-    Write-Host "  Then run this script again." -ForegroundColor Yellow
+function Stop-WithError {
+    Write-Host ""
+    Write-Host "  Press any key to close..." -ForegroundColor Yellow
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
+}
+
+Clear-Host
+Write-Host ""
+Write-Host "  ============================================" -ForegroundColor Cyan
+Write-Host "    Vibe Trial Balance - Starting Up"           -ForegroundColor Cyan
+Write-Host "  ============================================" -ForegroundColor Cyan
+Write-Host ""
+
+# ── 1. Docker Desktop ────────────────────────────────────────────────────────
+
+Write-Info "Checking Docker Desktop..."
+docker info 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Warn "Docker is not running. Please open Docker Desktop and wait for it to fully start."
+    Write-Warn "Then run this script again."
+    Stop-WithError
 }
 Write-OK "Docker is running"
 
-# 2. Start database
-Write-Info "Starting PostgreSQL..."
-$dbRunning = docker ps --filter "name=trialbalance-db" --format "{{.Names}}" 2>$null
-if ($dbRunning -eq "trialbalance-db") {
-    Write-OK "PostgreSQL already running"
-}
-else {
-    docker compose up -d db 2>$null
-    for ($i = 0; $i -lt 15; $i++) {
-        docker exec trialbalance-db pg_isready -U trialbalance 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) { break }
-        Start-Sleep -Seconds 1
-    }
-    Write-OK "PostgreSQL started"
+# ── 2. PostgreSQL container ───────────────────────────────────────────────────
+
+Write-Info "Starting PostgreSQL container..."
+docker compose up -d db 2>&1 | Out-Null
+
+$dbReady = $false
+for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Seconds 1
+    docker exec vibe-tb-db pg_isready -U vibetb 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { $dbReady = $true; break }
 }
 
-# 3. Start pgAdmin
-$pgRunning = docker ps --filter "name=trialbalance-pgadmin" --format "{{.Names}}" 2>$null
-if ($pgRunning -ne "trialbalance-pgadmin") {
-    docker compose up -d pgadmin 2>$null
+if (-not $dbReady) {
+    Write-Fail "PostgreSQL did not become ready. Check Docker Desktop logs."
+    Stop-WithError
+}
+Write-OK "PostgreSQL is ready"
+
+# ── 3. Install dependencies ───────────────────────────────────────────────────
+
+Write-Info "Installing dependencies..."
+npm install --silent 2>&1 | Out-Null
+Push-Location server; npm install --silent 2>&1 | Out-Null; Pop-Location
+Push-Location client; npm install --silent 2>&1 | Out-Null; Pop-Location
+Write-OK "Dependencies installed"
+
+# ── 4. Run migrations ─────────────────────────────────────────────────────────
+
+Write-Info "Running database migrations..."
+Push-Location server
+$migOut = npx tsx ./node_modules/knex/bin/cli.js migrate:latest --knexfile knexfile.ts 2>&1
+$migExit = $LASTEXITCODE
+Pop-Location
+
+if ($migExit -ne 0) {
+    Write-Fail "Migration failed:"
+    Write-Host ($migOut | Out-String) -ForegroundColor Red
+    Stop-WithError
+}
+Write-OK "Database schema is up to date"
+
+# ── 5. Open browser (delayed) ─────────────────────────────────────────────────
+
+$null = Start-Job {
+    Start-Sleep -Seconds 5
+    Start-Process "http://localhost:5173"
 }
 
-# 4. Pull latest code
-Write-Info "Pulling latest code..."
-$branch = git branch --show-current 2>$null
-if ($branch) {
-    git pull origin $branch 2>$null
-    Write-OK "On branch: $branch (pulled latest)"
-}
-else {
-    Write-Info "Not on a branch or no remote - skipping pull"
-}
+# ── 6. Start servers ──────────────────────────────────────────────────────────
 
-# 5. Install dependencies if needed
-Write-Info "Checking dependencies..."
-if (Test-Path "server\package.json") {
-    Push-Location server
-    npm install --silent 2>$null
-    Pop-Location
-}
-if (Test-Path "client\package.json") {
-    Push-Location client
-    npm install --silent 2>$null
-    Pop-Location
-}
-npm install --silent 2>$null
-Write-OK "Dependencies up to date"
-
-# 6. Run any pending migrations
-if (Test-Path "server\migrations") {
-    Write-Info "Checking for new migrations..."
-    Push-Location server
-    $migrationOutput = npx knex migrate:latest --knexfile knexfile.ts 2>&1
-    Pop-Location
-    if ($migrationOutput -match "already up to date") {
-        Write-OK "Database schema up to date"
-    }
-    else {
-        Write-OK "New migrations applied"
-    }
-}
-
-# 7. Start both servers
 Write-Host ""
-Write-Host "================================================" -ForegroundColor Green
-Write-Host "  Ready! Starting servers..." -ForegroundColor Green
-Write-Host "================================================" -ForegroundColor Green
+Write-Host "  ============================================" -ForegroundColor Green
+Write-Host "    All systems go!  Starting servers..."      -ForegroundColor Green
+Write-Host "  ============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Backend:   http://localhost:3001" -ForegroundColor White
-Write-Host "  Frontend:  http://localhost:5173" -ForegroundColor White
-Write-Host "  pgAdmin:   http://localhost:5050" -ForegroundColor White
-Write-Host "  Health:    http://localhost:3001/api/v1/health" -ForegroundColor Gray
+Write-Host "  Frontend : http://localhost:5173" -ForegroundColor White
+Write-Host "  Backend  : http://localhost:3001" -ForegroundColor White
+Write-Host "  Login    : admin / admin"         -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Press Ctrl+C to stop both servers." -ForegroundColor Yellow
+Write-Host "  Press Ctrl+C to stop." -ForegroundColor Yellow
 Write-Host ""
 
 npm run dev

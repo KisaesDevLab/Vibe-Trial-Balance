@@ -6,6 +6,12 @@ import { listPeriods, type Period } from '../api/periods';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listAccounts, updateAccount, type Account } from '../api/chartOfAccounts';
 import { getAvailableTaxCodes, type TaxCode } from '../api/taxCodes';
+import {
+  autoAssignTaxLines,
+  bulkConfirmTaxLines,
+  type AssignmentSuggestion,
+} from '../api/taxLineAssignment';
+import { AssignmentPreviewModal } from '../components/AssignmentPreviewModal';
 
 // ---- Types ----
 
@@ -112,45 +118,45 @@ function TaxCodeDropdown({ accountId: _accountId, currentCodeId, taxCodes, onSel
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         className={`w-full text-left px-2 py-1 border rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 ${
-          disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed border-gray-200' : 'bg-white border-gray-300 hover:border-blue-400'
-        } ${currentCodeId ? '' : 'text-gray-400 italic'}`}
+          disabled ? 'bg-gray-50 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed border-gray-200 dark:border-gray-600' : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:text-gray-300'
+        } ${currentCodeId ? '' : 'text-gray-400 dark:text-gray-500 italic'}`}
       >
         {current
-          ? <span><span className="font-mono font-medium text-gray-900">{current.sort_order}: {current.tax_code}</span> — {current.description}</span>
+          ? <span><span className="font-mono font-medium text-gray-900 dark:text-white">{current.sort_order}: {current.tax_code}</span> — {current.description}</span>
           : <span>— unassigned —</span>}
       </button>
 
       {open && (
-        <div className="absolute z-30 mt-1 w-80 bg-white border border-gray-200 rounded-lg shadow-lg">
-          <div className="p-2 border-b">
+        <div className="absolute z-30 mt-1 w-80 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
+          <div className="p-2 border-b dark:border-gray-700">
             <input
               autoFocus
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search code or description…"
-              className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
             />
           </div>
           <div className="max-h-56 overflow-y-auto">
             <button
               type="button"
               onClick={() => selectCode(null)}
-              className="w-full text-left px-3 py-1.5 text-xs text-gray-400 italic hover:bg-gray-50 border-b"
+              className="w-full text-left px-3 py-1.5 text-xs text-gray-400 dark:text-gray-500 italic hover:bg-gray-50 dark:hover:bg-gray-700/50 border-b dark:border-gray-700"
             >
               — unassigned —
             </button>
             {filtered.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-gray-400">No matching codes</p>
+              <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">No matching codes</p>
             ) : (
               filtered.map((c) => (
                 <button
                   key={c.id}
                   type="button"
                   onClick={() => selectCode(c)}
-                  className={`w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 ${currentCodeId === c.id ? 'bg-blue-50 font-medium' : ''}`}
+                  className={`w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 ${currentCodeId === c.id ? 'bg-blue-50 dark:bg-blue-900/20 font-medium' : ''}`}
                 >
-                  <span className="font-mono font-medium text-gray-900">{c.sort_order}: {c.tax_code}</span>
-                  <span className="text-gray-500 ml-1">— {c.description}</span>
+                  <span className="font-mono font-medium text-gray-900 dark:text-white">{c.sort_order}: {c.tax_code}</span>
+                  <span className="text-gray-500 dark:text-gray-400 ml-1">— {c.description}</span>
                 </button>
               ))
             )}
@@ -168,6 +174,10 @@ export function TaxMappingPage() {
   const qc = useQueryClient();
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [flashIds, setFlashIds] = useState<Set<number>>(new Set());
+  const [autoAssignOpen, setAutoAssignOpen] = useState(false);
+  const [autoAssignLoading, setAutoAssignLoading] = useState(false);
+  const [autoAssignSuggestions, setAutoAssignSuggestions] = useState<AssignmentSuggestion[]>([]);
+  const [autoAssignError, setAutoAssignError] = useState<string | null>(null);
 
   // Data fetches
   const { data: clientsData } = useQuery({
@@ -310,12 +320,74 @@ export function TaxMappingPage() {
     updateMutation.mutate({ id: account.id, taxCodeId: codeId });
   };
 
+  // Auto-assign handlers
+  const handleAutoAssignOpen = async () => {
+    if (!selectedClientId) return;
+    setAutoAssignLoading(true);
+    setAutoAssignError(null);
+    setAutoAssignSuggestions([]);
+    try {
+      const res = await autoAssignTaxLines(selectedClientId, { includeAll: true });
+      if (res.error) {
+        setAutoAssignError(res.error.message);
+        return;
+      }
+      // Set suggestions first, then open modal so useState initializer sees real data
+      setAutoAssignSuggestions(res.data?.suggestions ?? []);
+      setAutoAssignOpen(true);
+    } catch (err: unknown) {
+      setAutoAssignError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setAutoAssignLoading(false);
+    }
+  };
+
+  const handleAutoAssignConfirm = async (confirmed: AssignmentSuggestion[]) => {
+    if (!selectedClientId) return;
+    const assignments = confirmed
+      .filter((s) => s.source !== 'existing')
+      .map((s) => ({
+        accountId: s.accountId,
+        taxCodeId: s.overrideTaxCodeId !== undefined ? s.overrideTaxCodeId : s.suggestedTaxCodeId,
+        source: s.source === 'ai' ? 'ai' : s.source === 'prior_period' ? 'prior_period' : s.source === 'cross_client' ? 'cross_client' : 'manual',
+        confidence: s.confidence,
+      }));
+
+    if (assignments.length === 0) {
+      setAutoAssignOpen(false);
+      return;
+    }
+
+    try {
+      const res = await bulkConfirmTaxLines(selectedClientId, assignments);
+      if (res.error) {
+        setAutoAssignError(res.error.message);
+        return;
+      }
+      setAutoAssignOpen(false);
+      // Refresh accounts
+      qc.invalidateQueries({ queryKey: ['chart-of-accounts', selectedClientId] });
+      // Flash all updated rows
+      const updatedIds = new Set(assignments.map((a) => a.accountId));
+      setFlashIds((prev) => new Set([...prev, ...updatedIds]));
+      setTimeout(() => {
+        setFlashIds((prev) => {
+          const next = new Set(prev);
+          updatedIds.forEach((id) => next.delete(id));
+          return next;
+        });
+      }, 1200);
+    } catch (err: unknown) {
+      setAutoAssignError(err instanceof Error ? err.message : 'Unknown error');
+    }
+  };
+
   // Guards
   if (!selectedClientId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
         <div className="text-center">
-          <p className="text-lg font-medium text-gray-700">No client selected</p>
+          <p className="text-lg font-medium text-gray-700 dark:text-gray-300">No client selected</p>
           <p className="text-sm mt-1">Choose a client from the sidebar to use Tax Mapping.</p>
         </div>
       </div>
@@ -324,9 +396,9 @@ export function TaxMappingPage() {
 
   if (!selectedPeriodId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
         <div className="text-center">
-          <p className="text-lg font-medium text-gray-700">No period selected</p>
+          <p className="text-lg font-medium text-gray-700 dark:text-gray-300">No period selected</p>
           <p className="text-sm mt-1">Choose a period from the sidebar to use Tax Mapping.</p>
         </div>
       </div>
@@ -337,28 +409,55 @@ export function TaxMappingPage() {
 
   return (
     <div className="p-6">
+      {/* Auto-assign modal */}
+      {autoAssignOpen && (
+        <AssignmentPreviewModal
+          suggestions={autoAssignSuggestions}
+          taxCodes={taxCodes}
+          isLoading={autoAssignLoading}
+          onConfirm={handleAutoAssignConfirm}
+          onCancel={() => setAutoAssignOpen(false)}
+        />
+      )}
+      {autoAssignError && (
+        <div className="mb-4 px-4 py-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 rounded-lg text-sm text-red-700 dark:text-red-400">
+          Auto-assign error: {autoAssignError}
+          <button
+            type="button"
+            onClick={() => setAutoAssignError(null)}
+            className="ml-3 text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 font-medium"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-start justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">Tax Mapping</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Mapping</h2>
           {selectedClient && (
             <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <span className="text-sm text-gray-700 font-medium">{selectedClient.name}</span>
+              <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">{selectedClient.name}</span>
               <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${ENTITY_BADGE[selectedClient.entity_type] ?? 'bg-gray-100 text-gray-600'}`}>
                 {selectedClient.entity_type}
               </span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 capitalize">
+                {(selectedClient.activity_type ?? 'business').replace('_', ' ')}
+              </span>
               {selectedPeriod && (
-                <span className="text-xs text-gray-500">{selectedPeriod.period_name}</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">{selectedPeriod.period_name}</span>
               )}
             </div>
           )}
         </div>
-        <div title="Coming in Phase 11: AI Tax Assignment">
+        <div>
           <button
-            disabled
-            className="px-3 py-1.5 text-sm border border-gray-200 rounded text-gray-400 cursor-not-allowed"
+            onClick={handleAutoAssignOpen}
+            disabled={isLoading || autoAssignLoading || !selectedClientId}
+            className="px-3 py-1.5 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            Auto-assign (Coming Soon)
+            {autoAssignLoading ? 'Analyzing…' : 'Auto-assign Tax Codes'}
           </button>
         </div>
       </div>
@@ -370,7 +469,7 @@ export function TaxMappingPage() {
             {mappedAccounts} of {totalAccounts} accounts mapped ({mappedPct}%)
           </span>
         </div>
-        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${progressColor}`}
             style={{ width: `${mappedPct}%` }}
@@ -387,7 +486,7 @@ export function TaxMappingPage() {
             className={`px-3 py-1.5 text-sm rounded border transition-colors ${
               filterMode === mode
                 ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700/50'
             }`}
           >
             {mode === 'all' ? 'Show All' : mode === 'unmapped' ? 'Unmapped Only' : 'Mapped Only'}
@@ -396,22 +495,22 @@ export function TaxMappingPage() {
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-12 text-gray-400">Loading…</div>
+        <div className="flex items-center justify-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-24">Acct #</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Account Name</th>
-                  <th className="px-3 py-2.5 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider w-32">Balance</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-72">Tax Code</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-24">Source</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-20">Confidence</th>
+                <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider w-24">Acct #</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Account Name</th>
+                  <th className="px-3 py-2.5 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider w-32">Balance</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider w-72">Tax Code</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider w-24">Source</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider w-20">Confidence</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {CATEGORY_ORDER.map((cat) => {
                   const catRows = rowsByCategory.get(cat) ?? [];
                   const catTotal = totalsByCategory.get(cat) ?? 0;
@@ -421,8 +520,8 @@ export function TaxMappingPage() {
 
                   return [
                     // Category header
-                    <tr key={`header-${cat}`} className="bg-gray-100">
-                      <td colSpan={COLS} className="px-3 py-2 text-xs font-bold text-gray-700 uppercase tracking-wider">
+                    <tr key={`header-${cat}`} className="bg-gray-100 dark:bg-gray-700">
+                      <td colSpan={COLS} className="px-3 py-2 text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
                         {CATEGORY_LABELS[cat]}
                       </td>
                     </tr>,
@@ -439,15 +538,15 @@ export function TaxMappingPage() {
                           key={row.account.id}
                           className={`transition-colors ${
                             isFlashing
-                              ? 'bg-green-50'
+                              ? 'bg-green-50 dark:bg-green-900/20'
                               : isUnmapped
-                              ? 'border-l-2 border-l-amber-400 bg-amber-50/30 hover:bg-amber-50/60'
-                              : 'hover:bg-gray-50'
+                              ? 'border-l-2 border-l-amber-400 bg-amber-50/30 dark:bg-amber-900/10 hover:bg-amber-50/60 dark:hover:bg-amber-900/20'
+                              : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                           }`}
                         >
-                          <td className="px-3 py-2 font-mono text-xs text-gray-600">{row.account.account_number}</td>
-                          <td className="px-3 py-2 text-gray-800 font-medium">{row.account.account_name}</td>
-                          <td className={`px-3 py-2 text-right font-mono text-xs ${balance < 0 ? 'text-red-600' : 'text-gray-700'}`}>
+                          <td className="px-3 py-2 font-mono text-sm text-gray-600 dark:text-gray-400">{row.account.account_number}</td>
+                          <td className="px-3 py-2 text-gray-800 dark:text-gray-200 font-medium">{row.account.account_name}</td>
+                          <td className={`px-3 py-2 text-right text-sm font-mono tabular-nums ${balance < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'}`}>
                             {fmtCents(balance)}
                           </td>
                           <td className="px-3 py-2">
@@ -475,11 +574,11 @@ export function TaxMappingPage() {
                     }),
 
                     // Category subtotal
-                    <tr key={`subtotal-${cat}`} className="bg-gray-50 border-t border-gray-200">
-                      <td colSpan={2} className="px-3 py-2 text-xs font-bold text-gray-700 text-right pr-6">
+                    <tr key={`subtotal-${cat}`} className="bg-gray-50 dark:bg-gray-800/60 border-t border-gray-200 dark:border-gray-700">
+                      <td colSpan={2} className="px-3 py-2 text-sm font-bold text-gray-700 dark:text-gray-300 text-right pr-6">
                         Total {CATEGORY_LABELS[cat]}
                       </td>
-                      <td className={`px-3 py-2 text-right font-mono text-xs font-bold ${catTotal < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                      <td className={`px-3 py-2 text-right text-sm font-mono font-bold tabular-nums ${catTotal < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-white'}`}>
                         {fmtCents(catTotal)}
                       </td>
                       <td colSpan={3} />
@@ -488,24 +587,24 @@ export function TaxMappingPage() {
                 })}
 
                 {/* Net Income */}
-                <tr className="border-t-2 border-gray-300 bg-white">
-                  <td colSpan={2} className="px-3 py-2.5 text-sm font-bold text-gray-900 text-right pr-6">
+                <tr className="border-t-2 border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800">
+                  <td colSpan={2} className="px-3 py-2.5 text-sm font-bold text-gray-900 dark:text-white text-right pr-6">
                     Net Income (Loss)
                   </td>
-                  <td className={`px-3 py-2.5 text-right font-mono text-sm font-bold ${netIncome < 0 ? 'text-red-600' : netIncome > 0 ? 'text-green-700' : 'text-gray-700'}`}>
+                  <td className={`px-3 py-2.5 text-right font-mono text-sm font-bold ${netIncome < 0 ? 'text-red-600 dark:text-red-400' : netIncome > 0 ? 'text-green-700 dark:text-green-400' : 'text-gray-700 dark:text-gray-300'}`}>
                     {fmtCents(netIncome)}
                   </td>
                   <td colSpan={3} />
                 </tr>
 
                 {/* Balance Sheet Check */}
-                <tr className={`border-t border-gray-200 ${bsBalanced ? 'bg-green-50' : 'bg-red-50'}`}>
-                  <td colSpan={2} className="px-3 py-2 text-xs font-bold text-right pr-6">
-                    <span className={bsBalanced ? 'text-green-700' : 'text-red-600'}>
+                <tr className={`border-t border-gray-200 dark:border-gray-700 ${bsBalanced ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'}`}>
+                  <td colSpan={2} className="px-3 py-2 text-sm font-bold text-right pr-6">
+                    <span className={bsBalanced ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
                       Assets = Liabilities + Equity
                     </span>
                   </td>
-                  <td className={`px-3 py-2 text-right font-mono text-xs font-bold ${bsBalanced ? 'text-green-700' : 'text-red-600'}`}>
+                  <td className={`px-3 py-2 text-right text-sm font-mono font-bold tabular-nums ${bsBalanced ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                     {bsBalanced
                       ? '✓ Balanced'
                       : `✗ Off by ${fmtCents(Math.abs(bsBalance))}`}

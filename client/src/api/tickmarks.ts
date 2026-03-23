@@ -57,3 +57,36 @@ export const toggleTBTickmark = (periodId: number, accountId: number, tickmarkId
     method: 'POST',
     body: JSON.stringify({ accountId, tickmarkId }),
   });
+
+// System-default tickmarks (admin)
+export interface SystemTickmark {
+  id: number;
+  symbol: string;
+  description: string;
+  color: TickmarkColor;
+  sort_order: number;
+  created_at: string;
+}
+
+export const listSystemTickmarks = () =>
+  apiFetch<SystemTickmark[]>('/system-tickmarks');
+
+export const createSystemTickmark = (input: TickmarkInput) =>
+  apiFetch<SystemTickmark>('/system-tickmarks', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export const updateSystemTickmark = (id: number, input: Partial<TickmarkInput>) =>
+  apiFetch<SystemTickmark>(`/system-tickmarks/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+
+export const deleteSystemTickmark = (id: number) =>
+  apiFetch<{ id: number }>(`/system-tickmarks/${id}`, { method: 'DELETE' });
+
+export const applySystemTickmarksToClient = (clientId: number) =>
+  apiFetch<{ applied: number; skipped: number }>(`/system-tickmarks/apply/${clientId}`, {
+    method: 'POST',
+  });

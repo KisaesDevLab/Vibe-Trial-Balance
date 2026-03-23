@@ -9,7 +9,7 @@ export interface TBRow {
   normal_balance: 'debit' | 'credit';
   tax_line: string | null;
   workpaper_ref: string | null;
-  sort_order: number;
+  unit: string | null;
   is_active: boolean;
   preparer_notes: string | null;
   reviewer_notes: string | null;
@@ -17,6 +17,10 @@ export interface TBRow {
   unadjusted_credit: number;
   prior_year_debit: number;
   prior_year_credit: number;
+  trans_adj_debit: number;
+  trans_adj_credit: number;
+  post_trans_debit: number;
+  post_trans_credit: number;
   book_adj_debit: number;
   book_adj_credit: number;
   tax_adj_debit: number;

@@ -1,5 +1,5 @@
 <#
-  Trial Balance App - One-Time Dev Environment Setup
+  Vibe Trial Balance - One-Time Dev Environment Setup
 
   Run in PowerShell as Administrator:
     Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -11,12 +11,12 @@ $ErrorActionPreference = "Stop"
 # ============================================================
 # CONFIG - Edit these before running
 # ============================================================
-$GITHUB_REPO = "https://github.com/YOUR_USERNAME/trial-balance-app.git"
-$PROJECT_DIR = "$env:USERPROFILE\Projects\trial-balance-app"
+$GITHUB_REPO = "https://github.com/YOUR_USERNAME/vibe-tb.git"
+$PROJECT_DIR = "$env:USERPROFILE\Projects\vibe-tb"
 
-$DB_USER = "trialbalance"
+$DB_USER = "vibetb"
 $DB_PASS = "localdev123"
-$DB_NAME = "trialbalance_db"
+$DB_NAME = "vibe_tb_db"
 $DB_PORT = "5432"
 
 # ============================================================
@@ -67,7 +67,7 @@ function Refresh-Path {
 
 Write-Host ""
 Write-Host "================================================" -ForegroundColor White
-Write-Host "  Trial Balance App - Dev Environment Setup" -ForegroundColor White
+Write-Host "  Vibe Trial Balance - Dev Environment Setup" -ForegroundColor White
 Write-Host "================================================" -ForegroundColor White
 Write-Host ""
 
@@ -279,13 +279,13 @@ else {
 
 Write-Step "6/7" "Starting PostgreSQL database"
 
-$dbRunning = docker ps --filter "name=trialbalance-db" --format "{{.Names}}" 2>$null
-if ($dbRunning -eq "trialbalance-db") {
+$dbRunning = docker ps --filter "name=vibe-tb-db" --format "{{.Names}}" 2>$null
+if ($dbRunning -eq "vibe-tb-db") {
     Write-Skip "PostgreSQL container is already running"
 }
 else {
-    $dbExists = docker ps -a --filter "name=trialbalance-db" --format "{{.Names}}" 2>$null
-    if ($dbExists -eq "trialbalance-db") {
+    $dbExists = docker ps -a --filter "name=vibe-tb-db" --format "{{.Names}}" 2>$null
+    if ($dbExists -eq "vibe-tb-db") {
         Write-Info "Starting existing PostgreSQL container..."
         docker compose start db
     }
@@ -297,7 +297,7 @@ else {
     Write-Info "Waiting for PostgreSQL to accept connections..."
     $ready = $false
     for ($i = 0; $i -lt 30; $i++) {
-        docker exec trialbalance-db pg_isready -U $DB_USER 2>$null | Out-Null
+        docker exec vibe-tb-db pg_isready -U $DB_USER 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $ready = $true
             break
@@ -314,7 +314,7 @@ else {
     }
 }
 
-$testQuery = docker exec trialbalance-db psql -U $DB_USER -d $DB_NAME -c "SELECT 1 AS connected;" -t 2>$null
+$testQuery = docker exec vibe-tb-db psql -U $DB_USER -d $DB_NAME -c "SELECT 1 AS connected;" -t 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-OK "Database connection verified"
 }
@@ -323,8 +323,8 @@ else {
     exit 1
 }
 
-$pgAdminRunning = docker ps --filter "name=trialbalance-pgadmin" --format "{{.Names}}" 2>$null
-if ($pgAdminRunning -ne "trialbalance-pgadmin") {
+$pgAdminRunning = docker ps --filter "name=vibe-tb-pgadmin" --format "{{.Names}}" 2>$null
+if ($pgAdminRunning -ne "vibe-tb-pgadmin") {
     Write-Info "Starting pgAdmin (database browser)..."
     docker compose up -d pgadmin 2>$null
     Write-OK "pgAdmin available at http://localhost:5050 (admin@local.dev / admin)"
@@ -370,7 +370,7 @@ if (Test-Path "server\package.json") {
         Pop-Location
         Write-OK "Database migrations complete"
 
-        $tableCount = docker exec trialbalance-db psql -U $DB_USER -d $DB_NAME -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';" 2>$null
+        $tableCount = docker exec vibe-tb-db psql -U $DB_USER -d $DB_NAME -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';" 2>$null
         $tableCount = $tableCount.Trim()
         Write-OK "$tableCount tables created"
     }

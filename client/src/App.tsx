@@ -28,6 +28,17 @@ import { TaxCodesPage } from './pages/TaxCodesPage';
 import { TaxMappingPage } from './pages/TaxMappingPage';
 import { TaxBasisPlPage } from './pages/TaxBasisPlPage';
 import { TaxReturnOrderPage } from './pages/TaxReturnOrderPage';
+import { MultiPeriodPage } from './pages/MultiPeriodPage';
+import { ExportsPage } from './pages/ExportsPage';
+import { DocumentsPage } from './pages/DocumentsPage';
+import { BackupPage } from './pages/BackupPage';
+import { AuditLogPage } from './pages/AuditLogPage';
+import { AiUsageLogPage } from './pages/AiUsageLogPage';
+import { SupportPage } from './pages/SupportPage';
+import { CoaTemplatesPage } from './pages/CoaTemplatesPage';
+import { SystemTickmarksPage } from './pages/SystemTickmarksPage';
+import { TransactionEntryPage } from './pages/TransactionEntryPage';
+import { UnitsPage } from './pages/UnitsPage';
 import { useAuthStore } from './store/uiStore';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -76,7 +87,18 @@ export default function App() {
           <Route path="tax-basis-pl" element={<TaxBasisPlPage />} />
           <Route path="tax-return-order" element={<TaxReturnOrderPage />} />
           <Route path="tax-codes" element={<TaxCodesPage />} />
+          <Route path="multi-period" element={<MultiPeriodPage />} />
+          <Route path="exports" element={<ExportsPage />} />
+          <Route path="documents" element={<DocumentsPage />} />
+          <Route path="backup" element={<BackupPage />} />
+          <Route path="audit-log" element={<AuditLogPage />} />
+          <Route path="ai-usage-log" element={<AiUsageLogPage />} />
+          <Route path="support" element={<SupportPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="coa-templates" element={<CoaTemplatesPage />} />
+          <Route path="system-tickmarks" element={<SystemTickmarksPage />} />
+          <Route path="transaction-entry" element={<TransactionEntryPage />} />
+          <Route path="units" element={<UnitsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -5,6 +5,7 @@ import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
+import { downloadXlsx } from '../utils/downloadXlsx';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -37,21 +38,12 @@ function netBalance(row: TBRow, colSet: ColSet): number {
   return row.normal_balance === 'debit' ? dr - cr : cr - dr;
 }
 
-function downloadCsv(filename: string, rows: string[][]): void {
-  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
-
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 function SectionHeader({ title }: { title: string }) {
   return (
-    <tr className="bg-gray-100">
-      <td colSpan={4} className="px-4 py-1.5 text-xs font-bold text-gray-700 uppercase tracking-wide">
+    <tr className="bg-gray-100 dark:bg-gray-700">
+      <td colSpan={4} className="px-4 py-1.5 text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">
         {title}
       </td>
     </tr>
@@ -64,11 +56,11 @@ function AccountRow({ label, cents, priorCents }: { label: string; cents: number
     ? fmt(changeCents)
     : '—';
   return (
-    <tr className="border-t border-gray-100 hover:bg-gray-50">
-      <td className="px-6 py-1.5 text-sm text-gray-700">{label}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-700 w-36">{fmt(cents)}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-400 w-36">{priorCents !== undefined ? fmt(priorCents) : ''}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-400 w-36">{priorCents !== undefined ? changeStr : ''}</td>
+    <tr className="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+      <td className="px-6 py-1.5 text-sm text-gray-700 dark:text-gray-300">{label}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-700 dark:text-gray-300 w-36">{fmt(cents)}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-400 dark:text-gray-500 w-36">{priorCents !== undefined ? fmt(priorCents) : ''}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-400 dark:text-gray-500 w-36">{priorCents !== undefined ? changeStr : ''}</td>
     </tr>
   );
 }
@@ -76,24 +68,24 @@ function AccountRow({ label, cents, priorCents }: { label: string; cents: number
 function SubtotalRow({ label, cents, priorCents, indent = false }: { label: string; cents: number; priorCents?: number; indent?: boolean }) {
   const changeCents = priorCents !== undefined ? cents - priorCents : undefined;
   return (
-    <tr className="border-t border-gray-300">
-      <td className={`px-4 py-1.5 text-sm font-semibold text-gray-800 ${indent ? 'pl-6' : ''}`}>{label}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 w-36 border-t border-gray-400">{fmtTotal(cents)}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-400 w-36 border-t border-gray-300">{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-400 w-36 border-t border-gray-300">{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
+    <tr className="border-t border-gray-300 dark:border-gray-600">
+      <td className={`px-4 py-1.5 text-sm font-semibold text-gray-800 dark:text-gray-200 ${indent ? 'pl-6' : ''}`}>{label}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-36 border-t border-gray-400 dark:border-gray-500">{fmtTotal(cents)}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-400 dark:text-gray-500 w-36 border-t border-gray-300 dark:border-gray-600">{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-400 dark:text-gray-500 w-36 border-t border-gray-300 dark:border-gray-600">{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
     </tr>
   );
 }
 
 function TotalRow({ label, cents, priorCents, double: isDouble = false }: { label: string; cents: number; priorCents?: number; double?: boolean }) {
-  const color = cents < 0 ? 'text-red-700' : 'text-gray-900';
+  const color = cents < 0 ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-white';
   const changeCents = priorCents !== undefined ? cents - priorCents : undefined;
   return (
-    <tr className="border-t-2 border-gray-700">
+    <tr className="border-t-2 border-gray-700 dark:border-gray-500">
       <td className={`px-4 py-2 text-sm font-bold ${color}`}>{label}</td>
-      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-36 ${color} ${isDouble ? 'border-b-4 border-double border-gray-700' : 'border-b-2 border-gray-700'}`}>{fmtTotal(cents)}</td>
-      <td className="px-4 py-2 text-sm text-right font-mono font-bold w-36 text-gray-400">{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
-      <td className="px-4 py-2 text-sm text-right font-mono font-bold w-36 text-gray-400">{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
+      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-36 ${color} ${isDouble ? 'border-b-4 border-double border-gray-700 dark:border-gray-500' : 'border-b-2 border-gray-700 dark:border-gray-500'}`}>{fmtTotal(cents)}</td>
+      <td className="px-4 py-2 text-sm text-right font-mono font-bold w-36 text-gray-400 dark:text-gray-500">{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
+      <td className="px-4 py-2 text-sm text-right font-mono font-bold w-36 text-gray-400 dark:text-gray-500">{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
     </tr>
   );
 }
@@ -101,8 +93,8 @@ function TotalRow({ label, cents, priorCents, double: isDouble = false }: { labe
 // ─── Income Statement ─────────────────────────────────────────────────────────
 
 function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
-  const revenue = rows.filter((r) => r.category === 'revenue').sort((a, b) => a.sort_order - b.sort_order);
-  const expenses = rows.filter((r) => r.category === 'expenses').sort((a, b) => a.sort_order - b.sort_order);
+  const revenue = rows.filter((r) => r.category === 'revenue').sort((a, b) => a.account_number.localeCompare(b.account_number));
+  const expenses = rows.filter((r) => r.category === 'expenses').sort((a, b) => a.account_number.localeCompare(b.account_number));
 
   const totalRevenue = revenue.reduce((s, r) => s + netBalance(r, colSet), 0);
   const totalExpenses = expenses.reduce((s, r) => s + netBalance(r, colSet), 0);
@@ -113,14 +105,14 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
   const pyNetIncome = pyRevenue - pyExpenses;
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
       <table className="w-full">
         <thead>
-          <tr className="border-b border-gray-200 bg-gray-50">
-            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500"></th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 w-36">Current</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 w-36">Prior Year</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 w-36">Change</th>
+          <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
+            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400"></th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-36">Current</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Prior Year</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Change</th>
           </tr>
         </thead>
         <tbody>
@@ -155,9 +147,9 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 // ─── Balance Sheet ────────────────────────────────────────────────────────────
 
 function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
-  const assets = rows.filter((r) => r.category === 'assets').sort((a, b) => a.sort_order - b.sort_order);
-  const liabilities = rows.filter((r) => r.category === 'liabilities').sort((a, b) => a.sort_order - b.sort_order);
-  const equity = rows.filter((r) => r.category === 'equity').sort((a, b) => a.sort_order - b.sort_order);
+  const assets = rows.filter((r) => r.category === 'assets').sort((a, b) => a.account_number.localeCompare(b.account_number));
+  const liabilities = rows.filter((r) => r.category === 'liabilities').sort((a, b) => a.account_number.localeCompare(b.account_number));
+  const equity = rows.filter((r) => r.category === 'equity').sort((a, b) => a.account_number.localeCompare(b.account_number));
 
   const revenue = rows.filter((r) => r.category === 'revenue');
   const expenses = rows.filter((r) => r.category === 'expenses');
@@ -178,14 +170,14 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
   const pyTotalLE = pyTotalLiabilities + pyTotalEquity;
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
       <table className="w-full">
         <thead>
-          <tr className="border-b border-gray-200 bg-gray-50">
-            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500"></th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 w-36">Current</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 w-36">Prior Year</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 w-36">Change</th>
+          <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
+            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400"></th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-36">Current</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Prior Year</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Change</th>
           </tr>
         </thead>
         <tbody>
@@ -225,8 +217,8 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           <TotalRow label="Total Liabilities + Equity" cents={totalLE} priorCents={pyTotalLE} double />
 
           {!balanced && (
-            <tr className="bg-red-50">
-              <td colSpan={4} className="px-4 py-2 text-xs text-red-700 font-medium">
+            <tr className="bg-red-50 dark:bg-red-900/30">
+              <td colSpan={4} className="px-4 py-2 text-xs text-red-700 dark:text-red-400 font-medium">
                 ⚠ Balance sheet is out of balance by {fmtTotal(Math.abs(totalAssets - totalLE))}
               </td>
             </tr>
@@ -240,7 +232,7 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 // ─── Statement of Equity ──────────────────────────────────────────────────────
 
 function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
-  const equity = rows.filter((r) => r.category === 'equity').sort((a, b) => a.sort_order - b.sort_order);
+  const equity = rows.filter((r) => r.category === 'equity').sort((a, b) => a.account_number.localeCompare(b.account_number));
   const revenue = rows.filter((r) => r.category === 'revenue');
   const expenses = rows.filter((r) => r.category === 'expenses');
 
@@ -254,14 +246,14 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
   const pyClosing = openingEquity + pyNetIncome;
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
       <table className="w-full">
         <thead>
-          <tr className="border-b border-gray-200 bg-gray-50">
-            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500"></th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 w-36">Current</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 w-36">Prior Year</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 w-36">Change</th>
+          <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
+            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400"></th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-36">Current</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Prior Year</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Change</th>
           </tr>
         </thead>
         <tbody>
@@ -371,19 +363,19 @@ export function FinancialStatementsPage() {
       .sort((a, b) => {
         const catOrder = ['assets','liabilities','equity','revenue','expenses'];
         const ci = catOrder.indexOf(a.category) - catOrder.indexOf(b.category);
-        return ci !== 0 ? ci : a.sort_order - b.sort_order;
+        return ci !== 0 ? ci : a.account_number.localeCompare(b.account_number);
       })
       .map((r) => {
         const stmt = (r.category === 'revenue' || r.category === 'expenses') ? 'Income Statement' : 'Balance Sheet';
         return [stmt, r.account_number, r.account_name, r.category, String(netBalance(r, colSet) / 100)];
       });
     dataRows.push(['Income Statement', '', 'Net Income', '', String(netIncome / 100)]);
-    downloadCsv(`financial-statements-${colSet}.csv`, [header, ...dataRows]);
+    downloadXlsx(`financial-statements-${colSet}.xlsx`, [header, ...dataRows]);
   };
 
   if (!selectedPeriodId || !selectedClientId) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
         <div className="text-center">
           <p className="text-lg font-medium">No period selected</p>
           <p className="text-sm mt-1">Choose a client and period from the sidebar.</p>
@@ -396,13 +388,13 @@ export function FinancialStatementsPage() {
     <div className="p-6 max-w-2xl">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900">Financial Statements</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Financial Statements</h2>
         <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-600 font-medium">View</label>
+          <label className="text-sm text-gray-600 dark:text-gray-400 font-medium">View</label>
           <select
             value={colSet}
             onChange={(e) => setColSet(e.target.value as ColSet)}
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
           >
             <option value="unadjusted">Unadjusted</option>
             <option value="book">Book Adjusted</option>
@@ -411,16 +403,16 @@ export function FinancialStatementsPage() {
           <button
             onClick={handleExport}
             disabled={!rows.length}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40"
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
           >
-            Export CSV
+            Export Excel
           </button>
           {tab === 'income' && selectedPeriodId && (
             <>
               <button
                 onClick={() => handlePreview(pdfReports.incomeStatement(selectedPeriodId))}
                 disabled={pdfLoading}
-                className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
               >
                 {pdfLoading ? 'Generating…' : '↗ Preview PDF'}
               </button>
@@ -438,7 +430,7 @@ export function FinancialStatementsPage() {
               <button
                 onClick={() => handlePreview(pdfReports.balanceSheet(selectedPeriodId))}
                 disabled={pdfLoading}
-                className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
               >
                 {pdfLoading ? 'Generating…' : '↗ Preview PDF'}
               </button>
@@ -455,13 +447,13 @@ export function FinancialStatementsPage() {
       </div>
 
       {pdfError && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded mt-2 mb-2">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 text-sm px-3 py-2 rounded mt-2 mb-2">
           {pdfError}
         </div>
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-gray-200 mb-4">
+      <div className="flex border-b border-gray-200 dark:border-gray-700 mb-4">
         {(['income', 'balance', 'equity'] as const).map((t) => (
           <button
             key={t}
@@ -469,7 +461,7 @@ export function FinancialStatementsPage() {
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               tab === t
                 ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
             }`}
           >
             {t === 'income' ? 'Income Statement' : t === 'balance' ? 'Balance Sheet' : 'Statement of Equity'}
@@ -479,20 +471,20 @@ export function FinancialStatementsPage() {
 
       {/* Report header */}
       {(clientsLoading || periodsLoading) ? (
-        <div className="animate-pulse space-y-2 mb-4 bg-white rounded-lg border border-gray-200 px-5 py-3">
-          <div className="h-5 bg-gray-200 rounded w-48" />
-          <div className="h-4 bg-gray-200 rounded w-32" />
+        <div className="animate-pulse space-y-2 mb-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-5 py-3">
+          <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-48" />
+          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32" />
         </div>
       ) : client ? (
-        <div className="bg-white rounded-lg border border-gray-200 px-5 py-3 mb-4 text-sm">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-5 py-3 mb-4 text-sm">
           <div className="flex items-start justify-between">
             <div>
-              <p className="font-semibold text-gray-900 text-base">{client.name}</p>
-              <p className="text-gray-500 text-xs mt-0.5">{client.entity_type}{client.tax_id ? ` · EIN: ${client.tax_id}` : ''}</p>
+              <p className="font-semibold text-gray-900 dark:text-white text-base">{client.name}</p>
+              <p className="text-gray-500 dark:text-gray-400 text-xs mt-0.5">{client.entity_type}{client.tax_id ? ` · EIN: ${client.tax_id}` : ''}</p>
             </div>
             {period && (
-              <div className="text-right text-xs text-gray-500">
-                <p className="font-medium text-gray-700">{period.period_name}</p>
+              <div className="text-right text-xs text-gray-500 dark:text-gray-400">
+                <p className="font-medium text-gray-700 dark:text-gray-300">{period.period_name}</p>
                 {period.start_date && period.end_date && (
                   <p>{period.start_date} – {period.end_date}</p>
                 )}
@@ -503,13 +495,13 @@ export function FinancialStatementsPage() {
       ) : null}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm mb-4">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm mb-4">
           {(error as Error).message}
         </div>
       )}
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-12 text-gray-400">Loading…</div>
+        <div className="flex items-center justify-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
       ) : tab === 'income' ? (
         <IncomeStatement rows={rows} colSet={colSet} />
       ) : tab === 'balance' ? (
