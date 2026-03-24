@@ -1,10 +1,59 @@
 import { Router, Response } from 'express';
 import multer from 'multer';
+import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAiUsage } from '../lib/aiUsage';
 import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
+
+// ── Excel → CSV conversion ──────────────────────────────────────────────────
+
+const EXCEL_EXTENSIONS = ['.xlsx', '.xls', '.xlsm', '.xlsb'];
+
+function isExcelFile(filename: string): boolean {
+  const ext = filename.toLowerCase().slice(filename.lastIndexOf('.'));
+  return EXCEL_EXTENSIONS.includes(ext);
+}
+
+/**
+ * Read an Excel buffer and convert the first worksheet to CSV text.
+ * Preserves numbers as-is (no JS floating-point formatting issues) and
+ * quotes fields that contain commas or quotes.
+ */
+async function excelBufferToCsv(buffer: Buffer): Promise<string> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) throw new Error('Excel file has no worksheets');
+
+  const lines: string[] = [];
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    const cells: string[] = [];
+    for (let col = 1; col <= (row.cellCount || 0); col++) {
+      const cell = row.getCell(col);
+      let val = '';
+      if (cell.value !== null && cell.value !== undefined) {
+        const v = cell.value as unknown;
+        if (typeof v === 'object' && v !== null && 'result' in (v as Record<string, unknown>)) {
+          // Formula cell — use the cached result
+          val = String((v as { result: unknown }).result ?? '');
+        } else if (v instanceof Date) {
+          val = v.toISOString().slice(0, 10);
+        } else {
+          val = String(v);
+        }
+      }
+      // CSV-escape
+      if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+        val = '"' + val.replace(/"/g, '""') + '"';
+      }
+      cells.push(val);
+    }
+    lines.push(cells.join(','));
+  });
+  return lines.join('\n');
+}
 
 export const csvImportRouter = Router();
 csvImportRouter.use(authMiddleware);
@@ -228,8 +277,13 @@ csvImportRouter.post(
         return;
       }
 
-      // Read file content
-      const rawCsv = req.file.buffer.toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      // Read file content — convert Excel to CSV if needed
+      let rawCsv: string;
+      if (isExcelFile(req.file.originalname)) {
+        rawCsv = await excelBufferToCsv(req.file.buffer);
+      } else {
+        rawCsv = req.file.buffer.toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      }
       const allLines = rawCsv.split('\n');
       const first30Lines = allLines.slice(0, 30);
 

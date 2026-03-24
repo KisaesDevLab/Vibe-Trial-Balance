@@ -264,20 +264,20 @@ export function TaxReturnOrderPage() {
                   </tr>
                   {grp.rows.map((r, i) => (
                     <tr key={r.account_id} className={`border-t border-gray-100 dark:border-gray-700 ${i % 2 === 1 ? 'bg-gray-50/50 dark:bg-gray-800/30' : ''}`}>
-                      <td className="px-3 py-1.5 text-right text-xs font-mono text-gray-300 dark:text-gray-600 tabular-nums">
+                      <td className="px-3 py-1.5 text-right text-sm font-mono text-gray-300 dark:text-gray-600 tabular-nums">
                         {grp.sortOrder < 99999 ? grp.sortOrder : ''}
                       </td>
-                      <td className="px-3 py-1.5 text-xs font-mono text-gray-400 dark:text-gray-500">{grp.taxCode === 'Unassigned' ? '—' : grp.taxCode}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-gray-400 dark:text-gray-500">{grp.taxCode === 'Unassigned' ? '—' : grp.taxCode}</td>
                       <td className="px-3 py-1.5 text-sm font-mono text-gray-600 dark:text-gray-400">{r.account_number}</td>
-                      <td className="px-3 py-1.5 text-gray-900 dark:text-gray-200">{r.account_name}</td>
-                      <td className="px-3 py-1.5 text-xs text-gray-500 dark:text-gray-400 capitalize">{r.category}</td>
+                      <td className="px-3 py-1.5 text-sm text-gray-900 dark:text-gray-200">{r.account_name}</td>
+                      <td className="px-3 py-1.5 text-sm text-gray-500 dark:text-gray-400 capitalize">{r.category}</td>
                       <td className={`px-3 py-1.5 text-right font-mono tabular-nums text-sm ${taxNet(r) < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-200'}`}>
                         {fmt(taxNet(r))}
                       </td>
                     </tr>
                   ))}
                   <tr key={`sub-${grp.taxCode}`} className="bg-gray-50 dark:bg-gray-800/60 border-t border-gray-300 dark:border-gray-600">
-                    <td colSpan={5} className="px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300 text-right pr-4">
+                    <td colSpan={5} className="px-3 py-1.5 text-sm font-semibold text-gray-700 dark:text-gray-300 text-right pr-4">
                       Total {grp.taxCode}
                     </td>
                     <td className={`px-3 py-1.5 text-right font-mono font-semibold tabular-nums text-sm ${grp.net < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-white'}`}>

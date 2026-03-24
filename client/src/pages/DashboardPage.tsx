@@ -30,7 +30,7 @@ const ACTION_BADGE: Record<string, { label: string; cls: string }> = {
 };
 
 function AuditRow({ entry }: { entry: AuditEntry }) {
-  const badge = ACTION_BADGE[entry.action] ?? { label: entry.action, cls: 'bg-gray-100 text-gray-600' };
+  const badge = ACTION_BADGE[entry.action] ?? { label: entry.action, cls: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300' };
   return (
     <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
       <td className="px-4 py-2 whitespace-nowrap">

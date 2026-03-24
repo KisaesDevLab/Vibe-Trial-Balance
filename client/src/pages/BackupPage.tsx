@@ -31,7 +31,7 @@ function fmtBytes(bytes: number | null): string {
 }
 
 function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleString();
+  return new Date(iso).toLocaleDateString();
 }
 
 function badgeClass(status: string): string {

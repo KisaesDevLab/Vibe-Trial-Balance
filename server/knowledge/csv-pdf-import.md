@@ -1,11 +1,11 @@
-# CSV and PDF Import
+# File Import (CSV, Excel, and PDF)
 
-## Smart CSV Import (AI Column Mapping)
-The app can import trial balance data from virtually any CSV format using AI column mapping.
+## Smart File Import (AI Column Mapping)
+The app can import trial balance data from CSV, Excel (.xlsx/.xls), and text files using AI column mapping.
 
 ### How It Works
-1. Go to **Trial Balance** and click **Import TB**
-2. Upload your CSV file
+1. Go to **Trial Balance** and click **Import File**
+2. Upload your file (supports .xlsx, .xls, .csv, .txt, .tsv)
 3. The AI analyzes the column headers and a sample of the data
 4. A **column mapping panel** appears showing which CSV column maps to which TB field
 5. Review the suggested mappings — most common cases are automatic
@@ -19,8 +19,13 @@ The import looks for:
 - **Debit** and/or **Credit** (or a single **Balance** column)
 - **Prior Year Debit/Credit** (optional)
 
-### Consent Dialog
-Before confirming an import, you'll see a confirmation dialog summarizing:
+### AI Data Disclosure
+Before AI analysis begins, a **data disclosure popup** shows exactly what data will be sent to the AI provider:
+- Uploaded file content (first 30 rows for column analysis)
+- Chart of accounts data for matching
+
+### Confirmation Dialog
+Before confirming an import, you'll see a summary showing:
 - Number of accounts matched
 - Number of accounts not found in COA (will be skipped)
 - Whether existing balances will be overwritten

@@ -190,7 +190,7 @@ export function AccountSearchDropdown({
               </button>
             )}
             {filtered.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-gray-400">No matching accounts</p>
+              <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">No matching accounts</p>
             ) : (
               filtered.map((a) => (
                 <button

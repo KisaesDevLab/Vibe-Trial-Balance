@@ -7,8 +7,10 @@ The AI Diagnostics page uses the configured AI provider to automatically analyze
 1. Select your client and period in the sidebar
 2. Go to **Tools > AI Diagnostics**
 3. Click **Run Diagnostics**
-4. Wait 10–30 seconds while the AI analyzes the data (local models may take longer)
-5. Results appear as a list of observations with severity ratings
+4. A **data disclosure popup** shows what data will be sent to the AI (account names, balances, entity type — client name is NOT sent)
+5. Click **Confirm & Proceed** to continue
+6. Wait 10–30 seconds while the AI analyzes the data (local models may take longer)
+7. Results appear as a list of observations with severity ratings
 
 ## Observation Types
 Each observation has:

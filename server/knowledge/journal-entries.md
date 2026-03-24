@@ -7,13 +7,20 @@ There are three types of journal entries:
 - **Trans JEs** (`entry_type = 'trans'`): Reclassification or transactional entries.
 
 ## Creating a Journal Entry
-1. Go to **Trial Balance > AJE Listing** or **Bookkeeping > Journal Entries**
-2. Click **New Entry**
-3. Select entry type (Book/Tax/Trans)
-4. Enter a description, date, and workpaper reference
-5. Add line items: select account, enter debit or credit amount
-6. The system validates that debits equal credits before saving
-7. If the entry doesn't balance, you'll see an error showing the out-of-balance amount
+You can create journal entries from multiple places:
+1. **Trial Balance > AJE Listing** or **Bookkeeping > Journal Entries** — click **New Entry**
+2. **Trial Balance grid** — click the **New JE** button in the toolbar
+3. Select entry type (Book AJE or Tax AJE)
+4. Enter a description, date, and debit/credit line items with account search
+5. The system validates that debits equal credits before saving
+6. If the entry doesn't balance, you'll see an error showing the out-of-balance amount
+7. When a JE is created, the system automatically ensures trial balance rows exist for all referenced accounts
+
+## Editing Journal Entries
+- From the **General Ledger** view: click any JE row to open the edit dialog
+- From the **Trial Balance** grid: click an AJE amount cell to see the JE list, then click any entry to edit
+- For **transaction-type entries** (linked to bank transactions): editing the date, description, or amounts automatically syncs changes to the linked bank transaction
+- The edit dialog supports adding/removing lines, changing accounts, and deleting the entry
 
 ## Balance Validation
 - Every journal entry must balance (total debits = total credits)

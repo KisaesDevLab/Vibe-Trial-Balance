@@ -14,18 +14,26 @@ function stripFences(raw: string): string {
 
 /** Extract and parse the first JSON object ({...}) from AI text */
 export function extractJsonObject<T = unknown>(raw: string): T | null {
-  const cleaned = stripFences(raw.trim());
-  const match = cleaned.match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  return JSON.parse(match[0]) as T;
+  try {
+    const cleaned = stripFences(raw.trim());
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    return JSON.parse(match[0]) as T;
+  } catch {
+    return null;
+  }
 }
 
 /** Extract and parse the first JSON array ([...]) from AI text */
 export function extractJsonArray<T = unknown>(raw: string): T[] | null {
-  const cleaned = stripFences(raw.trim());
-  const match = cleaned.match(/\[[\s\S]*\]/);
-  if (!match) return null;
-  const parsed = JSON.parse(match[0]);
-  if (!Array.isArray(parsed)) return null;
-  return parsed as T[];
+  try {
+    const cleaned = stripFences(raw.trim());
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (!match) return null;
+    const parsed = JSON.parse(match[0]);
+    if (!Array.isArray(parsed)) return null;
+    return parsed as T[];
+  } catch {
+    return null;
+  }
 }

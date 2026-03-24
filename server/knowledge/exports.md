@@ -31,6 +31,15 @@ Each software expects a specific format:
 - **GoSystem**: XML or CSV depending on version
 - **Generic**: standard CSV with account number, name, tax line, and balance columns
 
+## Bookkeeper Letter
+A professional PDF letter summarizing proposed book adjusting journal entries.
+- Click **Download (PDF)** to save the letter
+- Click **Preview** to view it in a new browser tab
+- The letter includes all book AJEs for the selected period formatted as a client-ready document
+
+## Working Trial Balance Export
+Downloads a comprehensive Excel workbook with all TB columns, suitable for workpaper documentation.
+
 ## Validation Errors
 - "X accounts are unmapped" — go to Tax Mapping and assign codes first
 - "Trial balance is out of balance by $X" — post correcting JEs or have an admin override

@@ -11,6 +11,7 @@ import {
   type PdfChatMessage,
 } from '../api/pdfImport';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
+import { AiConsentDialog, AI_PII } from './AiConsentDialog';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -153,6 +154,7 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
   const [stage, setStage] = useState<Stage>('consent');
   const [dragOver, setDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [showPiiConsent, setShowPiiConsent] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<PdfAnalysisResult | null>(null);
@@ -498,7 +500,7 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
               <div className="flex justify-end gap-2">
                 <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
                 <button
-                  onClick={handleAnalyze}
+                  onClick={() => setShowPiiConsent(true)}
                   disabled={!selectedFile || analyzing}
                   className="px-4 py-2 text-sm bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -510,6 +512,14 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                   ) : 'Analyze PDF'}
                 </button>
               </div>
+              {showPiiConsent && (
+                <AiConsentDialog
+                  feature="AI PDF Import Analysis"
+                  piiItems={AI_PII.pdfImport}
+                  onCancel={() => setShowPiiConsent(false)}
+                  onConfirm={() => { setShowPiiConsent(false); handleAnalyze(); }}
+                />
+              )}
             </div>
           </>
         )}

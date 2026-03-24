@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { runDiagnostics, type DiagnosticObservation } from '../api/diagnostics';
 import { useUIStore } from '../store/uiStore';
 import { Spinner } from '../components/Spinner';
+import { AiConsentDialog, AI_PII } from '../components/AiConsentDialog';
 
 const SEVERITY_STYLES: Record<string, { badge: string; row: string; icon: string }> = {
   error:   { badge: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-700',    row: 'bg-red-50/60 dark:bg-red-900/20',     icon: '✕' },
@@ -15,6 +16,7 @@ export function DiagnosticsPage() {
   const [error, setError] = useState<string | null>(null);
   const [observations, setObservations] = useState<DiagnosticObservation[] | null>(null);
   const [filter, setFilter] = useState<'all' | 'error' | 'warning' | 'info'>('all');
+  const [showConsent, setShowConsent] = useState(false);
 
   async function handleRun() {
     if (!selectedPeriodId) return;
@@ -65,7 +67,7 @@ export function DiagnosticsPage() {
           </p>
         </div>
         <button
-          onClick={handleRun}
+          onClick={() => setShowConsent(true)}
           disabled={loading}
           title={loading ? 'AI diagnostics are running…' : undefined}
           className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
@@ -173,6 +175,14 @@ export function DiagnosticsPage() {
             AI analysis is for review assistance only. Always verify findings independently.
           </p>
         </>
+      )}
+      {showConsent && (
+        <AiConsentDialog
+          feature="AI Diagnostics"
+          piiItems={AI_PII.diagnostics}
+          onCancel={() => setShowConsent(false)}
+          onConfirm={() => { setShowConsent(false); handleRun(); }}
+        />
       )}
     </div>
   );

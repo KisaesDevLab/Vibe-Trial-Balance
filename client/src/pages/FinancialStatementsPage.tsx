@@ -22,6 +22,14 @@ function fmtTotal(cents: number): string {
   return cents < 0 ? `(${str})` : str;
 }
 
+function fmtPct(current: number, prior: number): string {
+  if (prior === 0 && current === 0) return '—';
+  if (prior === 0) return 'N/A';
+  const pct = ((current - prior) / Math.abs(prior)) * 100;
+  const s = Math.abs(pct).toFixed(1);
+  return pct < 0 ? `(${s}%)` : `${s}%`;
+}
+
 type ColSet = 'unadjusted' | 'book' | 'tax' | 'prior-year';
 
 function netBalance(row: TBRow, colSet: ColSet): number {
@@ -43,7 +51,7 @@ function netBalance(row: TBRow, colSet: ColSet): number {
 function SectionHeader({ title }: { title: string }) {
   return (
     <tr className="bg-gray-100 dark:bg-gray-700">
-      <td colSpan={4} className="px-4 py-1.5 text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">
+      <td colSpan={5} className="px-4 py-1.5 text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">
         {title}
       </td>
     </tr>
@@ -59,8 +67,9 @@ function AccountRow({ label, cents, priorCents }: { label: string; cents: number
     <tr className="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
       <td className="px-6 py-1.5 text-sm text-gray-700 dark:text-gray-300">{label}</td>
       <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-700 dark:text-gray-300 w-36">{fmt(cents)}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-400 dark:text-gray-500 w-36">{priorCents !== undefined ? fmt(priorCents) : ''}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-400 dark:text-gray-500 w-36">{priorCents !== undefined ? changeStr : ''}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-700 dark:text-gray-300 w-36">{priorCents !== undefined ? fmt(priorCents) : ''}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-700 dark:text-gray-300 w-32">{priorCents !== undefined ? changeStr : ''}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono text-gray-700 dark:text-gray-300 w-20">{priorCents !== undefined ? fmtPct(cents, priorCents) : ''}</td>
     </tr>
   );
 }
@@ -71,8 +80,9 @@ function SubtotalRow({ label, cents, priorCents, indent = false }: { label: stri
     <tr className="border-t border-gray-300 dark:border-gray-600">
       <td className={`px-4 py-1.5 text-sm font-semibold text-gray-800 dark:text-gray-200 ${indent ? 'pl-6' : ''}`}>{label}</td>
       <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-36 border-t border-gray-400 dark:border-gray-500">{fmtTotal(cents)}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-400 dark:text-gray-500 w-36 border-t border-gray-300 dark:border-gray-600">{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-400 dark:text-gray-500 w-36 border-t border-gray-300 dark:border-gray-600">{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-36 border-t border-gray-300 dark:border-gray-600">{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-32 border-t border-gray-300 dark:border-gray-600">{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
+      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-20 border-t border-gray-300 dark:border-gray-600">{priorCents !== undefined ? fmtPct(cents, priorCents) : ''}</td>
     </tr>
   );
 }
@@ -84,8 +94,9 @@ function TotalRow({ label, cents, priorCents, double: isDouble = false }: { labe
     <tr className="border-t-2 border-gray-700 dark:border-gray-500">
       <td className={`px-4 py-2 text-sm font-bold ${color}`}>{label}</td>
       <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-36 ${color} ${isDouble ? 'border-b-4 border-double border-gray-700 dark:border-gray-500' : 'border-b-2 border-gray-700 dark:border-gray-500'}`}>{fmtTotal(cents)}</td>
-      <td className="px-4 py-2 text-sm text-right font-mono font-bold w-36 text-gray-400 dark:text-gray-500">{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
-      <td className="px-4 py-2 text-sm text-right font-mono font-bold w-36 text-gray-400 dark:text-gray-500">{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
+      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-36 ${color}`}>{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
+      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-32 ${color}`}>{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
+      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-20 ${color}`}>{priorCents !== undefined ? fmtPct(cents, priorCents) : ''}</td>
     </tr>
   );
 }
@@ -111,8 +122,9 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
             <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400"></th>
             <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-36">Current</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Prior Year</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Change</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-36">Prior Year</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-32">Change</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-20">%</th>
           </tr>
         </thead>
         <tbody>
@@ -121,22 +133,22 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
             <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
           ))}
           {revenue.length === 0 && (
-            <tr><td colSpan={4} className="px-6 py-2 text-sm text-gray-400 italic">No revenue accounts found. Add revenue accounts to the Chart of Accounts page.</td></tr>
+            <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No revenue accounts found. Add revenue accounts to the Chart of Accounts page.</td></tr>
           )}
           <SubtotalRow label="Total Revenue" cents={totalRevenue} priorCents={pyRevenue} />
 
-          <tr><td colSpan={4} className="py-1" /></tr>
+          <tr><td colSpan={5} className="py-1" /></tr>
 
           <SectionHeader title="Expenses" />
           {expenses.map((r) => (
             <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
           ))}
           {expenses.length === 0 && (
-            <tr><td colSpan={4} className="px-6 py-2 text-sm text-gray-400 italic">No expense accounts found. Add expense accounts to the Chart of Accounts page.</td></tr>
+            <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No expense accounts found. Add expense accounts to the Chart of Accounts page.</td></tr>
           )}
           <SubtotalRow label="Total Expenses" cents={totalExpenses} priorCents={pyExpenses} />
 
-          <tr><td colSpan={4} className="py-1" /></tr>
+          <tr><td colSpan={5} className="py-1" /></tr>
           <TotalRow label={netIncome >= 0 ? 'Net Income' : 'Net Loss'} cents={netIncome} priorCents={pyNetIncome} double />
         </tbody>
       </table>
@@ -176,8 +188,9 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
             <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400"></th>
             <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-36">Current</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Prior Year</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Change</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-36">Prior Year</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-32">Change</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-20">%</th>
           </tr>
         </thead>
         <tbody>
@@ -186,39 +199,39 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
             <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
           ))}
           {assets.length === 0 && (
-            <tr><td colSpan={4} className="px-6 py-2 text-sm text-gray-400 italic">No asset accounts found. Add asset accounts to the Chart of Accounts page.</td></tr>
+            <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No asset accounts found. Add asset accounts to the Chart of Accounts page.</td></tr>
           )}
           <TotalRow label="Total Assets" cents={totalAssets} priorCents={pyTotalAssets} double />
 
-          <tr><td colSpan={4} className="py-2" /></tr>
+          <tr><td colSpan={5} className="py-2" /></tr>
 
           <SectionHeader title="Liabilities" />
           {liabilities.map((r) => (
             <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
           ))}
           {liabilities.length === 0 && (
-            <tr><td colSpan={4} className="px-6 py-2 text-sm text-gray-400 italic">No liability accounts found. Add liability accounts to the Chart of Accounts page.</td></tr>
+            <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No liability accounts found. Add liability accounts to the Chart of Accounts page.</td></tr>
           )}
           <SubtotalRow label="Total Liabilities" cents={totalLiabilities} priorCents={pyTotalLiabilities} />
 
-          <tr><td colSpan={4} className="py-1" /></tr>
+          <tr><td colSpan={5} className="py-1" /></tr>
 
           <SectionHeader title="Equity" />
           {equity.map((r) => (
             <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
           ))}
           {equity.length === 0 && (
-            <tr><td colSpan={4} className="px-6 py-2 text-sm text-gray-400 italic">No equity accounts found. Add equity accounts to the Chart of Accounts page.</td></tr>
+            <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No equity accounts found. Add equity accounts to the Chart of Accounts page.</td></tr>
           )}
           <AccountRow label="Net Income (current period)" cents={netIncome} priorCents={pyNetIncome} />
           <SubtotalRow label="Total Equity" cents={totalEquity} priorCents={pyTotalEquity} />
 
-          <tr><td colSpan={4} className="py-1" /></tr>
+          <tr><td colSpan={5} className="py-1" /></tr>
           <TotalRow label="Total Liabilities + Equity" cents={totalLE} priorCents={pyTotalLE} double />
 
           {!balanced && (
             <tr className="bg-red-50 dark:bg-red-900/30">
-              <td colSpan={4} className="px-4 py-2 text-xs text-red-700 dark:text-red-400 font-medium">
+              <td colSpan={5} className="px-4 py-2 text-xs text-red-700 dark:text-red-400 font-medium">
                 ⚠ Balance sheet is out of balance by {fmtTotal(Math.abs(totalAssets - totalLE))}
               </td>
             </tr>
@@ -252,8 +265,9 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
             <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400"></th>
             <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-36">Current</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Prior Year</th>
-            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-400 dark:text-gray-500 w-36">Change</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-36">Prior Year</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-32">Change</th>
+            <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 w-20">%</th>
           </tr>
         </thead>
         <tbody>
@@ -263,12 +277,12 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           ))}
           <SubtotalRow label="Total Opening Equity" cents={openingEquity} />
 
-          <tr><td colSpan={4} className="py-1" /></tr>
+          <tr><td colSpan={5} className="py-1" /></tr>
 
           <SectionHeader title="Current Period Activity" />
           <AccountRow label="Net Income / (Loss)" cents={netIncome} priorCents={pyNetIncome} />
 
-          <tr><td colSpan={4} className="py-1" /></tr>
+          <tr><td colSpan={5} className="py-1" /></tr>
 
           <SectionHeader title="Ending Equity Balance" />
           {equity.map((r) => (
@@ -385,7 +399,7 @@ export function FinancialStatementsPage() {
   }
 
   return (
-    <div className="p-6 max-w-2xl">
+    <div className="p-6 max-w-4xl">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Financial Statements</h2>
@@ -460,7 +474,7 @@ export function FinancialStatementsPage() {
             onClick={() => setTab(t)}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               tab === t
-                ? 'border-blue-600 text-blue-600'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
             }`}
           >
@@ -486,7 +500,7 @@ export function FinancialStatementsPage() {
               <div className="text-right text-xs text-gray-500 dark:text-gray-400">
                 <p className="font-medium text-gray-700 dark:text-gray-300">{period.period_name}</p>
                 {period.start_date && period.end_date && (
-                  <p>{period.start_date} – {period.end_date}</p>
+                  <p>{period.start_date.slice(0, 10)} – {period.end_date.slice(0, 10)}</p>
                 )}
               </div>
             )}

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
+import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 
 export const rollForwardRouter = Router();
 rollForwardRouter.use(authMiddleware);
@@ -116,6 +117,9 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
               credit: Number(l.credit),
             })),
           );
+
+          // Ensure trial_balance rows exist for all referenced accounts
+          await ensureTrialBalanceRows(trx, period.id, lines.map((l: { account_id: number }) => l.account_id));
           jeCopied++;
         }
       }

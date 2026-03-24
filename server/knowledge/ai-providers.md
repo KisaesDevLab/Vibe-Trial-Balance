@@ -92,6 +92,32 @@ Every AI call goes through the same abstraction. The provider you choose affects
 ## Switching Providers
 You can switch providers at any time in Settings. The change takes effect immediately for the next AI request. No data migration is needed — the provider abstraction handles all differences in API format, message structure, and streaming protocol.
 
+## Data Privacy & PII Protection
+
+The app applies privacy safeguards before sending data to any AI provider (cloud or local):
+
+### What is NOT sent to AI
+- **Client names** — removed from all AI prompts; only entity type (e.g., 1120S, 1065) is sent
+- **Full bank account numbers** — masked to show only the last 4 digits (e.g., `XXXXXX7890`)
+- **EIN / Tax ID numbers** — never included in AI prompts
+- **User names, passwords, or email addresses** — never sent
+- **Client addresses or contact information** — never sent
+- **Social Security Numbers** — never sent
+
+### What IS sent to AI (required for functionality)
+- **Account names and balances** — needed for diagnostics, tax code assignment, and import matching
+- **Transaction descriptions** — contain payee/merchant names; needed for AI classification accuracy
+- **Entity type and activity type** — needed for correct tax code assignment
+- **Uploaded file content** — CSV/PDF/Excel files are sent for AI-powered import analysis
+- **Bank statement content** — text or page images sent for transaction extraction; account numbers are masked in text mode, and the AI is instructed to return only the last 4 digits
+
+### Using a local LLM for maximum privacy
+When configured with **Ollama** (self-hosted), no data leaves your network. All AI processing happens locally on your server. This is the recommended option for clients with strict data privacy requirements.
+
+### Cloud provider data policies
+- **Anthropic (Claude)**: API data is not used for model training. See Anthropic's data processing terms.
+- **OpenAI-compatible**: Depends on the specific provider. Check your provider's data retention and training policies.
+
 ## Troubleshooting
 - **"Ollama base URL not configured"**: Go to Settings and enter the URL
 - **"Claude API key not configured"**: Add your Anthropic API key in Settings

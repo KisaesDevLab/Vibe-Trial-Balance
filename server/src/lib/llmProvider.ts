@@ -72,11 +72,12 @@ export class ClaudeProvider implements LLMProvider {
   constructor(private readonly client: Anthropic) {}
 
   async complete(params: LLMParams): Promise<LLMResult> {
+    const validStops = params.stopSequences?.filter((s) => s.trim().length > 0);
     const msg = await this.client.messages.create({
       model: params.model,
       max_tokens: params.maxTokens ?? 4096,
       ...(params.system ? { system: params.system } : {}),
-      ...(params.stopSequences?.length ? { stop_sequences: params.stopSequences } : {}),
+      ...(validStops?.length ? { stop_sequences: validStops } : {}),
       messages: params.messages.map(toAnthropicMessage),
     });
     return {
@@ -178,11 +179,12 @@ export class OpenAICompatProvider implements LLMProvider {
 
   async complete(params: LLMParams): Promise<LLMResult> {
     const messages = buildOpenAIMessages(params);
+    const validStops = params.stopSequences?.filter((s) => s.trim().length > 0);
     const res = await this.client.chat.completions.create({
       model: params.model,
       max_tokens: params.maxTokens ?? 4096,
       messages,
-      ...(params.stopSequences?.length ? { stop: params.stopSequences } : {}),
+      ...(validStops?.length ? { stop: validStops } : {}),
     });
     const text = res.choices[0]?.message?.content ?? '';
     return {

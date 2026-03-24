@@ -1,5 +1,6 @@
 import { db } from '../../db';
 import { assertPeriodUnlocked, logAudit } from '../../lib/periodGuard';
+import { ensureTrialBalanceRows } from '../../lib/ensureTrialBalanceRows';
 
 export interface JELine {
   accountId: number;
@@ -94,6 +95,9 @@ export async function createJournalEntry(data: CreateJEInput, userId: number): P
           credit: l.credit,
         })),
       );
+
+      // Ensure trial_balance rows exist for all referenced accounts
+      await ensureTrialBalanceRows(trx, data.periodId, data.lines.map((l) => l.accountId));
 
       await logAudit({
         userId,

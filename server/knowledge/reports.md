@@ -8,17 +8,21 @@ All standard reports use server-side pdfmake for professional, branded PDFs with
 ---
 
 ### Trial Balance Report
-- Lists all accounts with unadjusted, book-adjusted, and tax-adjusted balance columns
+- Lists all accounts with configurable column groups: Prior Year, Unadjusted, Book AJE, Book Adjusted, Tax AJE, Tax Adjusted, and CY vs PY variance
+- Use the **column checkboxes** at the top to show/hide column groups — the selection applies to the on-screen view, Excel export, and PDF download
 - Includes workpaper references (WP Ref) and tickmark superscripts
 - Tickmark legend appears at the bottom of the report
 - Inline variance notes are editable directly on the report page
+- PDF column widths adjust dynamically based on the number of visible columns
 - Access: **Reports > TB Report**
 
 ---
 
 ### Financial Statements
-Three statements on one page: Income Statement, Balance Sheet, and Statement of Equity.
-- Current year and prior year comparative columns with a change column
+Three statements on tabbed pages: Income Statement, Balance Sheet, and Statement of Equity.
+- Current year and prior year comparative columns with $ Change and % Variance columns
+- All columns use consistent font colors for readability
+- Select the balance basis at the top: Unadjusted, Book Adjusted, or Tax Adjusted
 - The prior year column comes from the prior year balances imported via **Import PY**
 - Access: **Reports > Financial Statements**
 
@@ -35,7 +39,9 @@ Three statements on one page: Income Statement, Balance Sheet, and Statement of 
 ### General Ledger
 - Full transaction-level detail for all accounts in the period
 - Shows every bank transaction and journal entry line that hit each account
-- Filter by a specific account using the account dropdown at the top
+- **Click any journal entry row** to open an edit dialog — modify dates, descriptions, and line amounts directly from the GL view
+- For transaction-type entries, edits sync automatically to the linked bank transaction
+- Filter by entry type (All, Book AJE, Tax AJE, Trans) using the dropdown
 - Access: **Reports > General Ledger**
 
 ---

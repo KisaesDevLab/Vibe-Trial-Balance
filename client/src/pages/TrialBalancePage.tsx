@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { evalAmountExpr } from '../utils/evalAmountExpr';
 import { CsvImportDialog } from '../components/CsvImportDialog';
 import { PdfImportDialog } from '../components/PdfImportDialog';
+import { JournalEntryDialog } from '../components/JournalEntryDialog';
+import { JournalEntryEditDialog } from '../components/JournalEntryEditDialog';
 import { VerificationPanel } from '../components/VerificationPanel';
 import { TransJEZoomModal } from '../components/TransJEZoomModal';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -48,7 +50,6 @@ type EditableColKey =
   | 'unadjusted_credit'
   | 'unaj_net'
   | 'category'
-  | 'tax_line'
   | 'workpaper_ref';
 
 const EDITABLE_COLS: EditableColKey[] = [
@@ -57,7 +58,6 @@ const EDITABLE_COLS: EditableColKey[] = [
   'unadjusted_debit',
   'unadjusted_credit',
   'category',
-  'tax_line',
   'workpaper_ref',
 ];
 
@@ -67,7 +67,6 @@ const EDITABLE_COLS_SINGLE: EditableColKey[] = [
   'account_name',
   'unaj_net',
   'category',
-  'tax_line',
   'workpaper_ref',
 ];
 
@@ -139,7 +138,6 @@ function getCellDisplayValue(rowData: TBRow, col: EditableColKey): string {
       return net === 0 ? '' : (net / 100).toFixed(2);
     }
     case 'category':          return rowData.category;
-    case 'tax_line':          return rowData.tax_line ?? '';
     case 'workpaper_ref':     return rowData.workpaper_ref ?? '';
   }
 }
@@ -162,6 +160,8 @@ export function TrialBalancePage() {
   const [showPYImportModal, setShowPYImportModal] = useState(false);
   const [showCsvImportDialog, setShowCsvImportDialog] = useState(false);
   const [showPdfImportDialog, setShowPdfImportDialog] = useState(false);
+  const [showJEDialog, setShowJEDialog] = useState(false);
+  const [editJeId, setEditJeId] = useState<number | null>(null);
   const [filterText, setFilterText] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('');
   const [filterUnit, setFilterUnit] = useState<string>('');
@@ -428,7 +428,6 @@ export function TrialBalancePage() {
             ...(updates.accountNumber !== undefined ? { account_number: updates.accountNumber } : {}),
             ...(updates.accountName !== undefined ? { account_name: updates.accountName } : {}),
             ...(updates.category !== undefined ? { category: updates.category } : {}),
-            ...(updates.taxLine !== undefined ? { tax_line: updates.taxLine || null } : {}),
             ...(updates.workpaperRef !== undefined ? { workpaper_ref: updates.workpaperRef || null } : {}),
             ...(updates.preparerNotes !== undefined ? { preparer_notes: updates.preparerNotes || null } : {}),
             ...(updates.reviewerNotes !== undefined ? { reviewer_notes: updates.reviewerNotes || null } : {}),
@@ -515,10 +514,6 @@ export function TrialBalancePage() {
       case 'category':
         if (ACCOUNT_CATEGORIES.includes(trimmed as TBRow['category']) && trimmed !== rowData.category)
           accountMutation.mutate({ accountId: rowData.account_id, updates: { category: trimmed as TBRow['category'] } });
-        break;
-      case 'tax_line':
-        if (trimmed !== (rowData.tax_line ?? ''))
-          accountMutation.mutate({ accountId: rowData.account_id, updates: { taxLine: trimmed || undefined } });
         break;
       case 'workpaper_ref':
         accountMutation.mutate({ accountId: rowData.account_id, updates: { workpaperRef: trimmed || undefined } });
@@ -821,7 +816,7 @@ export function TrialBalancePage() {
     }),
     ...(showTax ? [columnHelper.accessor('tax_line', {
       header: 'Tax Code',
-      cell: (i) => renderCell(i.row.index, 'tax_line', i.row.original),
+      cell: (i) => <span className="text-sm text-gray-600 dark:text-gray-400">{i.getValue() ?? ''}</span>,
     })] : []),
     columnHelper.accessor('workpaper_ref', {
       header: 'W/P Ref',
@@ -978,7 +973,7 @@ export function TrialBalancePage() {
     ] : []),
     ...(showTax ? [columnHelper.accessor('tax_line', {
       header: 'Tax Code',
-      cell: (i) => renderCell(i.row.index, 'tax_line', i.row.original),
+      cell: (i) => <span className="text-sm text-gray-600 dark:text-gray-400">{i.getValue() ?? ''}</span>,
     })] : []),
     columnHelper.accessor('workpaper_ref', {
       header: 'W/P Ref',
@@ -1105,6 +1100,14 @@ export function TrialBalancePage() {
           {data && <p className="text-xs text-gray-500 dark:text-gray-400">{data.length} accounts · click to select · double-click or F2 to edit · Tab/Enter/arrows to navigate</p>}
         </div>
         <div className="flex items-center gap-4">
+          <button
+            onClick={() => !isPeriodLocked && setShowJEDialog(true)}
+            disabled={isPeriodLocked}
+            title={isPeriodLocked ? 'Period is locked' : 'Create a new journal entry'}
+            className="px-3 py-1.5 text-sm border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            New JE
+          </button>
           {/* Single-column balance toggle */}
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
             <input
@@ -1143,7 +1146,7 @@ export function TrialBalancePage() {
             title={isPeriodLocked ? 'Period is locked — unlock to import' : undefined}
             className="px-3 py-1.5 text-sm border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 rounded hover:bg-emerald-50 dark:hover:bg-emerald-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Import from CSV
+            Import File
           </button>
           <button
             onClick={() => !isPeriodLocked && setShowPdfImportDialog(true)}
@@ -1480,6 +1483,16 @@ export function TrialBalancePage() {
         />
       )}
 
+      {/* Journal Entry dialog */}
+      {showJEDialog && selectedPeriodId && selectedClientId && (
+        <JournalEntryDialog
+          periodId={selectedPeriodId}
+          clientId={selectedClientId}
+          onClose={() => setShowJEDialog(false)}
+          onSuccess={() => { setShowJEDialog(false); qc.invalidateQueries({ queryKey }); }}
+        />
+      )}
+
       {/* Notes modal */}
       {notesRow && (
         <NotesModal
@@ -1512,6 +1525,17 @@ export function TrialBalancePage() {
           accountName={zoomAccount.accountName}
           entryType={zoomAccount.entryType}
           onClose={() => setZoomAccount(null)}
+          onEditJE={(jeId) => { setZoomAccount(null); setEditJeId(jeId); }}
+        />
+      )}
+
+      {/* JE edit dialog */}
+      {editJeId !== null && selectedClientId && (
+        <JournalEntryEditDialog
+          journalEntryId={editJeId}
+          clientId={selectedClientId}
+          onClose={() => setEditJeId(null)}
+          onSaved={() => { setEditJeId(null); qc.invalidateQueries({ queryKey }); }}
         />
       )}
     </div>

@@ -2,14 +2,16 @@
 
 ## Importing Transactions
 1. Go to **Bookkeeping > Bank Transactions**
-2. Click **Import** and select your file format:
-   - **OFX**: standard bank export format (most banks support this)
-   - **CSV**: comma-separated file; the AI will map columns automatically
-3. Select the source account (the bank account in your COA)
+2. Click **Import Transactions** for OFX/CSV files, or **Import from PDF** for bank statement PDFs:
+   - **OFX / QFX / QBO**: standard bank export format (most banks support this)
+   - **CSV**: comma-separated file; the app will map columns automatically
+   - **PDF Bank Statement**: AI extracts transactions from bank statement PDFs, including reading payee names from check images (vision mode). Account numbers are masked before sending to AI.
+3. Select the source account (the bank account in your COA) — required for all import types
 4. Upload the file — duplicate transactions are automatically detected using SHA-256 hash deduplication; duplicates are skipped silently
 
 ## AI Classification
-- After import, click **Classify with AI** to have Claude suggest account assignments for unclassified transactions
+- After import, select transactions and click **AI Classify** to have AI suggest account assignments
+- A data disclosure popup will show exactly what data is sent to the AI provider before processing
 - Each suggestion includes a **confidence score** (0–100%)
 - High-confidence matches (>85%) are highlighted in green
 - Review and confirm each classification, or use **Bulk Confirm** to accept all high-confidence matches at once

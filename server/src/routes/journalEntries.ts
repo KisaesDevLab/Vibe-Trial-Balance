@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
+import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 
 export const jeCollectionRouter = Router({ mergeParams: true });
 jeCollectionRouter.use(authMiddleware);
@@ -135,6 +136,10 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
         })),
       );
 
+      // Ensure trial_balance rows exist for all referenced accounts so the
+      // v_adjusted_trial_balance view can pick up the JE aggregates
+      await ensureTrialBalanceRows(trx, periodId, lines.map((l) => l.accountId));
+
       await logAudit({ userId: req.user!.userId, periodId, entityType: 'journal_entry', entityId: entry.id, action: 'create', description: `Created ${entryType} AJE #${entryNumber}${description ? ': ' + description : ''}` }, trx);
       res.status(201).json({ data: { ...entry, lines }, error: null });
     });
@@ -212,6 +217,9 @@ jeItemRouter.put('/:id/lines', async (req: AuthRequest, res: Response): Promise<
           credit: l.credit,
         })),
       );
+
+      // Ensure trial_balance rows exist for all referenced accounts
+      await ensureTrialBalanceRows(trx, je.period_id, lines.map((l) => l.accountId));
     });
     res.json({ data: { id, lines }, error: null });
   } catch (err: unknown) {
@@ -292,6 +300,9 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
         await trx('journal_entry_lines').insert(
           lines.map((l) => ({ journal_entry_id: id, account_id: l.accountId, debit: l.debit, credit: l.credit })),
         );
+
+        // Ensure trial_balance rows exist for all referenced accounts
+        await ensureTrialBalanceRows(trx, entry.period_id, lines.map((l) => l.accountId));
       }
 
       // Sync changes back to the linked bank transaction

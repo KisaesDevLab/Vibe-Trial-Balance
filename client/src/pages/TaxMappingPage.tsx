@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { AiConsentDialog, AI_PII } from '../components/AiConsentDialog';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useUIStore } from '../store/uiStore';
 import { listClients, type Client } from '../api/clients';
@@ -40,10 +41,10 @@ const CATEGORY_LABELS: Record<AccountCategory, string> = {
 };
 
 const SOURCE_CLASSES: Record<string, string> = {
-  manual: 'bg-gray-100 text-gray-600',
-  ai: 'bg-blue-50 text-blue-700',
-  pattern: 'bg-purple-50 text-purple-700',
-  prior_year: 'bg-green-50 text-green-700',
+  manual: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300',
+  ai: 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400',
+  pattern: 'bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400',
+  prior_year: 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400',
 };
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -175,6 +176,7 @@ export function TaxMappingPage() {
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [flashIds, setFlashIds] = useState<Set<number>>(new Set());
   const [autoAssignOpen, setAutoAssignOpen] = useState(false);
+  const [showAutoAssignConsent, setShowAutoAssignConsent] = useState(false);
   const [autoAssignLoading, setAutoAssignLoading] = useState(false);
   const [autoAssignSuggestions, setAutoAssignSuggestions] = useState<AssignmentSuggestion[]>([]);
   const [autoAssignError, setAutoAssignError] = useState<string | null>(null);
@@ -439,7 +441,7 @@ export function TaxMappingPage() {
           {selectedClient && (
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">{selectedClient.name}</span>
-              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${ENTITY_BADGE[selectedClient.entity_type] ?? 'bg-gray-100 text-gray-600'}`}>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${ENTITY_BADGE[selectedClient.entity_type] ?? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'}`}>
                 {selectedClient.entity_type}
               </span>
               <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 capitalize">
@@ -453,7 +455,7 @@ export function TaxMappingPage() {
         </div>
         <div>
           <button
-            onClick={handleAutoAssignOpen}
+            onClick={() => setShowAutoAssignConsent(true)}
             disabled={isLoading || autoAssignLoading || !selectedClientId}
             className="px-3 py-1.5 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
@@ -559,7 +561,7 @@ export function TaxMappingPage() {
                           </td>
                           <td className="px-3 py-2">
                             {source ? (
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${SOURCE_CLASSES[source] ?? 'bg-gray-100 text-gray-500'}`}>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${SOURCE_CLASSES[source] ?? 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
                                 {SOURCE_LABELS[source] ?? source}
                               </span>
                             ) : (
@@ -615,6 +617,15 @@ export function TaxMappingPage() {
             </table>
           </div>
         </div>
+      )}
+
+      {showAutoAssignConsent && (
+        <AiConsentDialog
+          feature="AI Tax Code Auto-Assignment"
+          piiItems={AI_PII.taxAutoAssign}
+          onCancel={() => setShowAutoAssignConsent(false)}
+          onConfirm={() => { setShowAutoAssignConsent(false); handleAutoAssignOpen(); }}
+        />
       )}
     </div>
   );

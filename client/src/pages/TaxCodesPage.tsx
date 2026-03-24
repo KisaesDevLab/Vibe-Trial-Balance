@@ -68,10 +68,10 @@ const BADGE_ACTIVITY: Record<string, string> = {
 };
 
 const PREVIEW_STATUS_CLASSES: Record<string, string> = {
-  new: 'bg-green-50',
-  update: 'bg-yellow-50',
-  duplicate: 'bg-gray-50',
-  error: 'bg-red-50',
+  new: 'bg-green-50 dark:bg-green-900/20',
+  update: 'bg-yellow-50 dark:bg-yellow-900/20',
+  duplicate: 'bg-gray-50 dark:bg-gray-800/30',
+  error: 'bg-red-50 dark:bg-red-900/20',
 };
 
 const PREVIEW_STATUS_LABELS: Record<string, string> = {
@@ -812,10 +812,10 @@ export function TaxCodesPage() {
                       onClick={() => { setEditId(code.id); setShowCreate(false); setPanelError(null); }}
                     >
                       <td className="px-3 py-2.5">
-                        <Badge label={RETURN_FORM_LABELS[code.return_form] ?? code.return_form} colorClass={BADGE_FORM[code.return_form] ?? 'bg-gray-100 text-gray-600'} />
+                        <Badge label={RETURN_FORM_LABELS[code.return_form] ?? code.return_form} colorClass={BADGE_FORM[code.return_form] ?? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'} />
                       </td>
                       <td className="px-3 py-2.5">
-                        <Badge label={ACTIVITY_TYPE_LABELS[code.activity_type] ?? code.activity_type} colorClass={BADGE_ACTIVITY[code.activity_type] ?? 'bg-gray-100 text-gray-600'} />
+                        <Badge label={ACTIVITY_TYPE_LABELS[code.activity_type] ?? code.activity_type} colorClass={BADGE_ACTIVITY[code.activity_type] ?? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'} />
                       </td>
                       <td className="px-3 py-2.5">
                         <span className="font-mono font-bold text-gray-900 dark:text-white">{code.tax_code}</span>

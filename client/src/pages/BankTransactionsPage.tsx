@@ -19,6 +19,8 @@ import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { useUIStore } from '../store/uiStore';
 import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 import { downloadXlsx } from '../utils/downloadXlsx';
+import { BankStatementPdfImportDialog } from '../components/BankStatementPdfImportDialog';
+import { AiConsentDialog, AI_PII } from '../components/AiConsentDialog';
 
 function fmt(cents: number): string {
   const abs = Math.abs(cents);
@@ -70,6 +72,8 @@ export function BankTransactionsPage() {
   const [batchSourceAccountId, setBatchSourceAccountId] = useState<number | ''>('');
   const [importSourceAccountId, setImportSourceAccountId] = useState<number | ''>('');
   const [showImport, setShowImport] = useState(false);
+  const [showPdfImport, setShowPdfImport] = useState(false);
+  const [showAiConsent, setShowAiConsent] = useState(false);
   const [importStep, setImportStep] = useState<'file' | 'mapping'>('file');
   const [showRules, setShowRules] = useState(false);
   const [aiStatus, setAiStatus] = useState<string | null>(null);
@@ -343,13 +347,13 @@ export function BankTransactionsPage() {
           <button
             onClick={() => {
               if (!transactions.length) return;
-              const header = ['Date', 'Description', 'Amount', 'Check #', 'Source Account', 'Category', 'Status'];
+              const header = ['Source Account', 'Date', 'Description', 'Amount', 'Check #', 'Account', 'Status'];
               const rows = transactions.map((t) => [
+                t.source_account_number ? `${t.source_account_number} – ${t.source_account_name}` : '',
                 fmtDate(t.transaction_date),
                 t.description ?? '',
                 String(t.amount / 100),
                 t.check_number ?? '',
-                t.source_account_number ? `${t.source_account_number} – ${t.source_account_name}` : '',
                 t.account_number ? `${t.account_number} – ${t.account_name}` : '',
                 t.classification_status,
               ]);
@@ -371,6 +375,12 @@ export function BankTransactionsPage() {
             className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300"
           >
             Import Transactions
+          </button>
+          <button
+            onClick={() => setShowPdfImport(true)}
+            className="px-3 py-1.5 text-sm border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 rounded hover:bg-amber-50 dark:hover:bg-amber-900/20"
+          >
+            Import from PDF
           </button>
           {selected.size > 0 && (
             <div className="flex items-center gap-2">
@@ -419,7 +429,7 @@ export function BankTransactionsPage() {
                 </button>
               )}
               <button
-                onClick={() => aiMutation.mutate([...selected])}
+                onClick={() => setShowAiConsent(true)}
                 disabled={aiMutation.isPending}
                 className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
               >
@@ -434,7 +444,7 @@ export function BankTransactionsPage() {
       {aiStatus && (
         <div className="mb-3 text-sm text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded px-3 py-2 flex justify-between">
           <span>{aiStatus}</span>
-          <button onClick={() => setAiStatus(null)} className="text-purple-400 hover:text-purple-600">&times;</button>
+          <button onClick={() => setAiStatus(null)} className="text-purple-400 hover:text-purple-600 dark:text-purple-500 dark:hover:text-purple-300">&times;</button>
         </div>
       )}
 
@@ -527,12 +537,12 @@ export function BankTransactionsPage() {
                 <input type="checkbox" checked={allSelected} onChange={toggleAll} className="rounded border-gray-300 dark:border-gray-600" />
               </th>
               {([
+                { col: 'source_account', label: 'Source Account', cls: 'w-36 text-left' },
                 { col: 'transaction_date', label: 'Date', cls: 'w-28 text-left' },
                 { col: 'description', label: 'Description', cls: 'text-left' },
                 { col: 'amount', label: 'Amount', cls: 'w-28 text-right' },
                 { col: 'check_number', label: 'Check #', cls: 'w-20 text-left' },
-                { col: 'source_account', label: 'Source Account', cls: 'w-36 text-left' },
-                { col: 'category', label: 'Category', cls: 'text-left' },
+                { col: 'category', label: 'Account', cls: 'text-left' },
                 { col: 'status', label: 'Status', cls: 'w-28 text-left' },
               ] as { col: string; label: string; cls: string }[]).map(({ col, label, cls }) => (
                 <th
@@ -567,6 +577,9 @@ export function BankTransactionsPage() {
                     onChange={() => toggleOne(tx.id)}
                     className="rounded border-gray-300 dark:border-gray-600"
                   />
+                </td>
+                <td className="px-3 py-2 text-gray-600 dark:text-gray-400">
+                  {tx.source_account_number ? `${tx.source_account_number} – ${tx.source_account_name}` : <span className="text-gray-300 dark:text-gray-600">—</span>}
                 </td>
                 <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">{fmtDate(tx.transaction_date)}</td>
                 <td className="px-3 py-2 max-w-xs">
@@ -603,9 +616,6 @@ export function BankTransactionsPage() {
                   {fmt(tx.amount)}
                 </td>
                 <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{tx.check_number ?? ''}</td>
-                <td className="px-3 py-2 text-gray-600 dark:text-gray-400">
-                  {tx.source_account_number ? `${tx.source_account_number} – ${tx.source_account_name}` : <span className="text-gray-300 dark:text-gray-600">—</span>}
-                </td>
                 <td className="px-3 py-2">
                   <AccountCell
                     tx={tx}
@@ -770,6 +780,25 @@ export function BankTransactionsPage() {
           </div>
         </div>
       )}
+
+      {showAiConsent && (
+        <AiConsentDialog
+          feature="AI Bank Transaction Classification"
+          piiItems={AI_PII.bankClassify}
+          onCancel={() => setShowAiConsent(false)}
+          onConfirm={() => { setShowAiConsent(false); aiMutation.mutate([...selected]); }}
+        />
+      )}
+
+      {/* Bank Statement PDF Import */}
+      {showPdfImport && clientId && (
+        <BankStatementPdfImportDialog
+          clientId={clientId}
+          periodId={selectedPeriodId}
+          onClose={() => setShowPdfImport(false)}
+          onSuccess={() => { setShowPdfImport(false); invalidate(); }}
+        />
+      )}
     </div>
   );
 }
@@ -785,11 +814,11 @@ function ColMapRow({
 }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="text-xs font-medium text-gray-700 w-28 shrink-0">{label}</span>
+      <span className="text-xs font-medium text-gray-700 dark:text-gray-300 w-28 shrink-0">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="flex-1 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
       >
         <option value="">{optional ? '— skip —' : 'Select column…'}</option>
         {headers.map((h) => (
@@ -816,7 +845,7 @@ function AccountCell({
   if (tx.classification_status === 'ai_suggested' && tx.ai_suggested_account_id && !editing) {
     return (
       <div className="flex items-center gap-1.5">
-        <span className="text-gray-700 text-sm">
+        <span className="text-gray-700 dark:text-white text-sm">
           {tx.ai_suggested_account_number} – {tx.ai_suggested_account_name}
           {tx.ai_confidence !== null && (
             <span className="text-purple-500 ml-1">({Math.round(tx.ai_confidence * 100)}%)</span>
@@ -837,7 +866,7 @@ function AccountCell({
   if ((tx.classification_status === 'confirmed' || tx.classification_status === 'manual') && tx.account_id && !editing) {
     return (
       <div className="flex items-center gap-1.5">
-        <span className="text-gray-700 text-sm"><span className="font-mono">{tx.account_number}</span> – {tx.account_name}</span>
+        <span className="text-gray-700 dark:text-white text-sm"><span className="font-mono">{tx.account_number}</span> – {tx.account_name}</span>
         <button onClick={() => setEditing(true)} className="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Edit</button>
       </div>
     );

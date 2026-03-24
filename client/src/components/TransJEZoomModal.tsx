@@ -10,6 +10,7 @@ interface Props {
   accountName: string;
   entryType: EntryType;
   onClose: () => void;
+  onEditJE?: (jeId: number) => void;
 }
 
 const LABELS: Record<EntryType, { title: string; color: string }> = {
@@ -20,7 +21,7 @@ const LABELS: Record<EntryType, { title: string; color: string }> = {
 
 const fmt = (cents: number) => (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export function TransJEZoomModal({ periodId, accountId, accountNumber, accountName, entryType, onClose }: Props) {
+export function TransJEZoomModal({ periodId, accountId, accountNumber, accountName, entryType, onClose, onEditJE }: Props) {
   const { data, isLoading, error } = useQuery({
     queryKey: ['journal-entries-zoom', periodId, accountId, entryType],
     queryFn: () => listJournalEntries(periodId, entryType, accountId),
@@ -85,7 +86,8 @@ export function TransJEZoomModal({ periodId, accountId, accountNumber, accountNa
                 {rows.map(({ je, line }, i) => (
                   <tr
                     key={`${je.id}-${line.id}`}
-                    className={`border-t border-gray-100 dark:border-gray-700 ${i % 2 === 1 ? 'bg-gray-50/50 dark:bg-gray-800/30' : ''}`}
+                    onClick={() => onEditJE?.(je.id)}
+                    className={`border-t border-gray-100 dark:border-gray-700 ${i % 2 === 1 ? 'bg-gray-50/50 dark:bg-gray-800/30' : ''} ${onEditJE ? 'cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20' : ''}`}
                   >
                     <td className="px-4 py-1.5 text-gray-600 dark:text-gray-400 font-mono text-xs">
                       {je.entry_date ? je.entry_date.slice(0, 10) : '—'}

@@ -87,7 +87,8 @@ pdfReportsRouter.get('/periods/:periodId/trial-balance', async (req: AuthRequest
     return;
   }
   try {
-    const buffer = await generateTrialBalancePdf(db, periodId);
+    const columns = typeof req.query.columns === 'string' ? req.query.columns.split(',') : undefined;
+    const buffer = await generateTrialBalancePdf(db, periodId, columns);
     sendPdf(res, buffer, `trial-balance-${periodId}.pdf`, isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };

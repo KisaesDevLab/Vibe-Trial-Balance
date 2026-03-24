@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getGeneralLedger, type GLAccount, type GLLine } from '../api/generalLedger';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
+import { JournalEntryEditDialog } from '../components/JournalEntryEditDialog';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -35,7 +36,7 @@ function runningBalance(normalBalance: string, tbDr: number, tbCr: number, lines
   return tbNet + adj;
 }
 
-function AccountSection({ acct, typeFilter }: { acct: GLAccount; typeFilter: string }) {
+function AccountSection({ acct, typeFilter, onClickLine }: { acct: GLAccount; typeFilter: string; onClickLine: (jeId: number) => void }) {
   const lines = typeFilter === 'all' ? acct.lines : acct.lines.filter((l) => l.entry_type === typeFilter);
 
   const adjDr = lines.reduce((s, l) => s + l.debit, 0);
@@ -67,8 +68,8 @@ function AccountSection({ acct, typeFilter }: { acct: GLAccount; typeFilter: str
           <tbody>
             {/* Per-books opening row */}
             <tr className="bg-blue-50/40 dark:bg-blue-900/10 border-b border-gray-200 dark:border-gray-700">
-              <td className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 italic">Per books</td>
-              <td colSpan={3} className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 italic">Unadjusted balance</td>
+              <td className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400 italic">Per books</td>
+              <td colSpan={3} className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400 italic">Unadjusted balance</td>
               <td className="px-3 py-1 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(acct.unadjusted_debit)}</td>
               <td className="px-3 py-1 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(acct.unadjusted_credit)}</td>
               <td className="px-3 py-1 text-right text-sm font-mono text-gray-600 dark:text-gray-400">
@@ -83,7 +84,7 @@ function AccountSection({ acct, typeFilter }: { acct: GLAccount; typeFilter: str
               lines.map((line, idx) => {
                 const bal = runningBalance(acct.normal_balance, acct.unadjusted_debit, acct.unadjusted_credit, lines, idx);
                 return (
-                  <tr key={idx} className="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                  <tr key={idx} onClick={() => onClickLine(line.journal_entry_id)} className="border-t border-gray-100 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer">
                     <td className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">{fmtDate(line.entry_date)}</td>
                     <td className="px-3 py-1">
                       <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${TYPE_CLASS[line.entry_type] ?? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'}`}>
@@ -102,7 +103,7 @@ function AccountSection({ acct, typeFilter }: { acct: GLAccount; typeFilter: str
 
             {/* Closing / adjusted balance */}
             <tr className="border-t-2 border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/60">
-              <td colSpan={4} className="px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300">Adjusted Balance</td>
+              <td colSpan={4} className="px-3 py-1.5 text-sm font-semibold text-gray-700 dark:text-gray-300">Adjusted Balance</td>
               <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">{fmt(closingDr)}</td>
               <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">{fmt(closingCr)}</td>
               <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">
@@ -117,12 +118,14 @@ function AccountSection({ acct, typeFilter }: { acct: GLAccount; typeFilter: str
 }
 
 export function GeneralLedgerPage() {
-  const { selectedPeriodId } = useUIStore();
+  const { selectedPeriodId, selectedClientId } = useUIStore();
   const token = useAuthStore((s) => s.token);
+  const qc = useQueryClient();
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [showZero, setShowZero] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [editJeId, setEditJeId] = useState<number | null>(null);
 
   const handlePreview = async () => {
     if (!selectedPeriodId || !token) return;
@@ -247,7 +250,16 @@ export function GeneralLedgerPage() {
           No general ledger data for this period.
         </div>
       ) : (
-        <div>{accounts.map((a) => <AccountSection key={a.account_id} acct={a} typeFilter={typeFilter} />)}</div>
+        <div>{accounts.map((a) => <AccountSection key={a.account_id} acct={a} typeFilter={typeFilter} onClickLine={(jeId) => setEditJeId(jeId)} />)}</div>
+      )}
+
+      {editJeId !== null && selectedClientId && (
+        <JournalEntryEditDialog
+          journalEntryId={editJeId}
+          clientId={selectedClientId}
+          onClose={() => setEditJeId(null)}
+          onSaved={() => { setEditJeId(null); qc.invalidateQueries({ queryKey: ['general-ledger', selectedPeriodId] }); }}
+        />
       )}
     </div>
   );

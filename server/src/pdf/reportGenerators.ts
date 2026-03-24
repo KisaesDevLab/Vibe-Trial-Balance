@@ -49,7 +49,7 @@ function fmtDate(d: string | null | undefined): string {
 
 const TB_CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'];
 
-export async function generateTrialBalancePdf(db: Knex, periodId: number): Promise<Buffer> {
+export async function generateTrialBalancePdf(db: Knex, periodId: number, visibleGroups?: string[]): Promise<Buffer> {
   const svc  = await PdfTemplateService.fromDb(db);
   const info = await getPeriodInfo(db, periodId);
 
@@ -57,20 +57,39 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number): Promi
     .where({ period_id: periodId, is_active: true })
     .orderBy('account_number', 'asc');
 
-  const cols = [
-    'Acct #', 'Account Name',
-    'Unadj DR', 'Unadj CR',
-    'Book Adj DR', 'Book Adj CR',
-    'Tax Adj DR', 'Tax Adj CR',
-    'Book DR', 'Book CR',
-    'Tax DR', 'Tax CR',
-  ];
-  const widths = [45, '*', 52, 52, 52, 52, 52, 52, 52, 52, 52, 52];
+  const showGroup = (g: string) => !visibleGroups || visibleGroups.includes(g);
+
+  const cols: string[] = ['Acct #', 'Account Name'];
+  const numericColCount =
+    (showGroup('priorYear') ? 2 : 0) +
+    (showGroup('unadjusted') ? 2 : 0) +
+    (showGroup('bookAje') ? 2 : 0) +
+    (showGroup('bookAdjusted') ? 2 : 0) +
+    (showGroup('taxAje') ? 2 : 0) +
+    (showGroup('taxAdjusted') ? 2 : 0);
+
+  // Landscape A4 usable width ≈ 770pt (842 - 2×36 margin).
+  // Reserve 45pt for Acct # and flexible space for Account Name.
+  // Distribute remaining space evenly across numeric columns, capped at 70pt.
+  const acctNumWidth = 45;
+  const availableForNumbers = 770 - acctNumWidth - 120; // 120pt min for Account Name
+  const numColWidth = numericColCount > 0
+    ? Math.min(70, Math.max(42, Math.floor(availableForNumbers / numericColCount)))
+    : 52;
+
+  const widths: (number | string)[] = [acctNumWidth, '*'];
+  if (showGroup('priorYear'))    { cols.push('PY DR', 'PY CR'); widths.push(numColWidth, numColWidth); }
+  if (showGroup('unadjusted'))   { cols.push('Unadj DR', 'Unadj CR'); widths.push(numColWidth, numColWidth); }
+  if (showGroup('bookAje'))      { cols.push('Book Adj DR', 'Book Adj CR'); widths.push(numColWidth, numColWidth); }
+  if (showGroup('bookAdjusted')) { cols.push('Book DR', 'Book CR'); widths.push(numColWidth, numColWidth); }
+  if (showGroup('taxAje'))       { cols.push('Tax Adj DR', 'Tax Adj CR'); widths.push(numColWidth, numColWidth); }
+  if (showGroup('taxAdjusted'))  { cols.push('Tax DR', 'Tax CR'); widths.push(numColWidth, numColWidth); }
 
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
 
   // Totals accumulators
   const totals = {
+    py_dr: 0, py_cr: 0,
     unadj_dr: 0, unadj_cr: 0,
     book_adj_dr: 0, book_adj_cr: 0,
     tax_adj_dr: 0, tax_adj_cr: 0,
@@ -88,47 +107,51 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number): Promi
     tableBody.push(svc.sectionHeaderRow(category, cols.length));
 
     for (const r of catRows as Record<string, unknown>[]) {
-      const cells = [
+      const cells: (string | number)[] = [
         r.account_number as string,
         r.account_name   as string,
-        Number(r.unadjusted_debit   ?? 0),
-        Number(r.unadjusted_credit  ?? 0),
-        Number(r.book_adj_debit     ?? 0),
-        Number(r.book_adj_credit    ?? 0),
-        Number(r.tax_adj_debit      ?? 0),
-        Number(r.tax_adj_credit     ?? 0),
-        Number(r.book_adjusted_debit  ?? 0),
-        Number(r.book_adjusted_credit ?? 0),
-        Number(r.tax_adjusted_debit   ?? 0),
-        Number(r.tax_adjusted_credit  ?? 0),
       ];
+      const pyDr = Number(r.prior_year_debit ?? 0);
+      const pyCr = Number(r.prior_year_credit ?? 0);
+      const uDr = Number(r.unadjusted_debit ?? 0);
+      const uCr = Number(r.unadjusted_credit ?? 0);
+      const baDr = Number(r.book_adj_debit ?? 0);
+      const baCr = Number(r.book_adj_credit ?? 0);
+      const bDr = Number(r.book_adjusted_debit ?? 0);
+      const bCr = Number(r.book_adjusted_credit ?? 0);
+      const taDr = Number(r.tax_adj_debit ?? 0);
+      const taCr = Number(r.tax_adj_credit ?? 0);
+      const tDr = Number(r.tax_adjusted_debit ?? 0);
+      const tCr = Number(r.tax_adjusted_credit ?? 0);
+
+      if (showGroup('priorYear'))    { cells.push(pyDr, pyCr); }
+      if (showGroup('unadjusted'))   { cells.push(uDr, uCr); }
+      if (showGroup('bookAje'))      { cells.push(baDr, baCr); }
+      if (showGroup('bookAdjusted')) { cells.push(bDr, bCr); }
+      if (showGroup('taxAje'))       { cells.push(taDr, taCr); }
+      if (showGroup('taxAdjusted'))  { cells.push(tDr, tCr); }
+
       tableBody.push(svc.dataRow(cells, { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
 
-      totals.unadj_dr   += cells[2]  as number;
-      totals.unadj_cr   += cells[3]  as number;
-      totals.book_adj_dr += cells[4] as number;
-      totals.book_adj_cr += cells[5] as number;
-      totals.tax_adj_dr  += cells[6] as number;
-      totals.tax_adj_cr  += cells[7] as number;
-      totals.book_dr     += cells[8] as number;
-      totals.book_cr     += cells[9] as number;
-      totals.tax_dr      += cells[10] as number;
-      totals.tax_cr      += cells[11] as number;
+      totals.py_dr += pyDr; totals.py_cr += pyCr;
+      totals.unadj_dr += uDr; totals.unadj_cr += uCr;
+      totals.book_adj_dr += baDr; totals.book_adj_cr += baCr;
+      totals.book_dr += bDr; totals.book_cr += bCr;
+      totals.tax_adj_dr += taDr; totals.tax_adj_cr += taCr;
+      totals.tax_dr += tDr; totals.tax_cr += tCr;
     }
   }
 
   // Grand totals row
-  tableBody.push(
-    svc.dataRow([
-      '', 'TOTALS',
-      totals.unadj_dr, totals.unadj_cr,
-      totals.book_adj_dr, totals.book_adj_cr,
-      totals.tax_adj_dr, totals.tax_adj_cr,
-      totals.book_dr, totals.book_cr,
-      totals.tax_dr, totals.tax_cr,
-    ], { bold: true, shade: true }),
-  );
+  const grandCells: (string | number)[] = ['', 'TOTALS'];
+  if (showGroup('priorYear'))    { grandCells.push(totals.py_dr, totals.py_cr); }
+  if (showGroup('unadjusted'))   { grandCells.push(totals.unadj_dr, totals.unadj_cr); }
+  if (showGroup('bookAje'))      { grandCells.push(totals.book_adj_dr, totals.book_adj_cr); }
+  if (showGroup('bookAdjusted')) { grandCells.push(totals.book_dr, totals.book_cr); }
+  if (showGroup('taxAje'))       { grandCells.push(totals.tax_adj_dr, totals.tax_adj_cr); }
+  if (showGroup('taxAdjusted'))  { grandCells.push(totals.tax_dr, totals.tax_cr); }
+  tableBody.push(svc.dataRow(grandCells, { bold: true, shade: true }));
 
   const balanced = totals.unadj_dr === totals.unadj_cr;
 

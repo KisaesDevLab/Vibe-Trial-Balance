@@ -9,6 +9,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { logAiUsage } from '../lib/aiUsage';
+import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonArray } from '../lib/aiJsonExtract';
 
@@ -66,6 +67,9 @@ async function syncTxJE(
     { journal_entry_id: je.id, account_id: debitAccountId,  debit: absAmount, credit: 0 },
     { journal_entry_id: je.id, account_id: creditAccountId, debit: 0, credit: absAmount },
   ]);
+
+  // Ensure trial_balance rows exist for both accounts
+  await ensureTrialBalanceRows(trx, tx.period_id, [debitAccountId, creditAccountId]);
 
   await trx('bank_transactions').where({ id: txId }).update({ journal_entry_id: je.id });
 }
@@ -731,7 +735,6 @@ Respond with a JSON array and nothing else. Each element: { "id": number, "accou
     const aiResult = await provider.complete({
       model: fastModel,
       maxTokens: 8192,
-      stopSequences: ['\n\n\n'],
       messages: [{ role: 'user', content: prompt }],
     });
     logAiUsage({ endpoint: 'bank/classify', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });

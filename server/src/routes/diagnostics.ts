@@ -75,7 +75,7 @@ diagnosticsRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
 
     const prompt = `You are a tax and accounting reviewer. Analyze this trial balance period and return a JSON array of diagnostic observations.
 
-Client: ${period.client_name} (${period.entity_type})
+Entity type: ${period.entity_type}
 Period: ${period.period_name}${period.start_date ? ` (${period.start_date} to ${period.end_date})` : ''}
 Period locked: ${period.locked_at ? 'Yes' : 'No'}
 

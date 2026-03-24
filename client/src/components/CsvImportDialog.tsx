@@ -11,6 +11,7 @@ import {
   type ChatMessage,
 } from '../api/csvImport';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
+import { AiConsentDialog, AI_PII } from './AiConsentDialog';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -128,6 +129,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
   const [dragOver, setDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [showConsent, setShowConsent] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<CsvAnalysisResult | null>(null);
   const [matches, setMatches] = useState<EditableMatch[]>([]);
@@ -413,7 +415,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Import from CSV</h2>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Import File</h2>
             {stage === 'chat' && (
               <p className="text-xs text-amber-600 mt-0.5">AI found issues — review before importing</p>
             )}
@@ -439,7 +441,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv,.txt,.tsv"
+                accept=".csv,.txt,.tsv,.xlsx,.xls,.xlsm"
                 onChange={handleFileInput}
                 className="hidden"
               />
@@ -451,8 +453,8 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                 </div>
               ) : (
                 <div>
-                  <p className="text-gray-600 dark:text-gray-400 font-medium">Drop a CSV file here, or click to browse</p>
-                  <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Supports .csv, .txt, .tsv — comma, tab, or semicolon delimited</p>
+                  <p className="text-gray-600 dark:text-gray-400 font-medium">Drop a file here, or click to browse</p>
+                  <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Supports .xlsx, .xls, .csv, .txt, .tsv</p>
                 </div>
               )}
             </div>
@@ -466,7 +468,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
             <div className="flex justify-end gap-2">
               <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
               <button
-                onClick={handleAnalyze}
+                onClick={() => setShowConsent(true)}
                 disabled={!selectedFile || analyzing}
                 className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -478,6 +480,14 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                 ) : 'Analyze'}
               </button>
             </div>
+            {showConsent && (
+              <AiConsentDialog
+                feature="AI File Import Analysis"
+                piiItems={AI_PII.csvImport}
+                onCancel={() => setShowConsent(false)}
+                onConfirm={() => { setShowConsent(false); handleAnalyze(); }}
+              />
+            )}
           </div>
         )}
 

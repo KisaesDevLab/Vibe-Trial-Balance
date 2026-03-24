@@ -25,7 +25,9 @@ A computed Net Income row appears at the bottom of the Income/Expense section sh
 The balance sheet check verifies that Assets = Liabilities + Equity. If the balance sheet is out of balance, a red warning banner appears. Fix the imbalance in the TB grid before proceeding.
 
 ## Auto-Assign (AI Feature)
-The **Auto-Assign Tax Codes** button triggers a 5-step waterfall that suggests tax codes for all unmapped accounts:
+The **Auto-Assign Tax Codes** button triggers AI-powered tax code suggestions. Before processing, a **data disclosure popup** shows what data will be sent to the AI provider (account names/numbers, entity type, available tax codes — client name is NOT sent).
+
+The assignment uses a 5-step waterfall that suggests tax codes for all unmapped accounts:
 
 1. **Existing mapping**: If the account already has a tax code, it's confirmed at 100% confidence
 2. **Prior-period mapping**: Looks for the same account number mapped in an earlier period for this client (95% confidence)

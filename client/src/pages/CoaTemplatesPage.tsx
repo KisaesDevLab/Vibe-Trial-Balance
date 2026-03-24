@@ -656,22 +656,22 @@ function ImportModal({
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Template Name</label>
+                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Template Name</label>
                     <input
                       value={templateName}
                       onChange={(e) => setTemplateName(e.target.value)}
                       placeholder="New template name…"
-                      className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Business Type</label>
+                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Business Type</label>
                     <input
                       type="text"
                       value={businessType}
                       onChange={(e) => setBusinessType(e.target.value)}
                       placeholder="e.g. retail, restaurant, farm"
-                      className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                     />
                   </div>
                 </div>
@@ -679,13 +679,13 @@ function ImportModal({
             )}
 
             {importMutation.data?.error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm">
+              <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-sm">
                 {importMutation.data.error.message}
               </div>
             )}
 
             <div className="flex justify-end gap-2">
-              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">
+              <button onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">
                 Cancel
               </button>
               <button

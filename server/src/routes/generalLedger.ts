@@ -42,6 +42,7 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
         'coa.account_name',
         'coa.category',
         'coa.normal_balance',
+        'je.id as journal_entry_id',
         'je.entry_date',
         'je.entry_number',
         'je.entry_type',
@@ -53,7 +54,7 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
 
     // Index TB rows by account_id
     interface TBRow { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; unadjusted_debit: unknown; unadjusted_credit: unknown; }
-    interface JELine { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; entry_date: string; entry_number: number; entry_type: string; description: string | null; debit: unknown; credit: unknown; }
+    interface JELine { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; journal_entry_id: number; entry_date: string; entry_number: number; entry_type: string; description: string | null; debit: unknown; credit: unknown; }
 
     const tbMap = new Map<number, TBRow>();
     for (const row of tbRows as TBRow[]) tbMap.set(row.account_id, row);
@@ -83,6 +84,7 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
     const result = accounts.map((acct) => {
       const tb = tbMap.get(acct.account_id);
       const lines = (linesByAccount.get(acct.account_id) ?? []).map((l) => ({
+        journal_entry_id: l.journal_entry_id,
         entry_date: l.entry_date,
         entry_number: l.entry_number,
         entry_type: l.entry_type,

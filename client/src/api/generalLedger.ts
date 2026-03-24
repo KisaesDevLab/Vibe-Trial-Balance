@@ -1,6 +1,7 @@
 import { apiFetch } from './client';
 
 export interface GLLine {
+  journal_entry_id: number;
   entry_date: string;
   entry_number: number;
   entry_type: string;

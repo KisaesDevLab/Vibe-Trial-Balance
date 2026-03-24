@@ -25,7 +25,7 @@ const TYPE_BADGE: Record<string, { label: string; cls: string }> = {
 function EntryCard({ entry }: { entry: JournalEntry }) {
   const totalDebit  = entry.lines.reduce((s, l) => s + l.debit, 0);
   const totalCredit = entry.lines.reduce((s, l) => s + l.credit, 0);
-  const badge = TYPE_BADGE[entry.entry_type] ?? { label: entry.entry_type.toUpperCase(), cls: 'bg-gray-100 text-gray-600' };
+  const badge = TYPE_BADGE[entry.entry_type] ?? { label: entry.entry_type.toUpperCase(), cls: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300' };
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -53,7 +53,7 @@ function EntryCard({ entry }: { entry: JournalEntry }) {
         </tbody>
         <tfoot>
           <tr className="border-t border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">
-            <td colSpan={2} className="px-4 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400">Total</td>
+            <td colSpan={2} className="px-4 py-1.5 text-sm font-semibold text-gray-500 dark:text-gray-400">Total</td>
             <td className="px-4 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200 border-t border-gray-400 dark:border-gray-500">{fmt(totalDebit)}</td>
             <td className="px-4 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200 border-t border-gray-400 dark:border-gray-500 pl-8">{fmt(totalCredit)}</td>
           </tr>

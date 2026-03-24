@@ -7,7 +7,7 @@ import { DateInput } from '../components/DateInput';
 const LIMIT = 50;
 
 function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleString();
+  return new Date(iso).toLocaleDateString();
 }
 
 function actionBadgeClass(action: string): string {

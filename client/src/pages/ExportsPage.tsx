@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, useAuthStore } from '../store/uiStore';
+import { openPdfPreview } from '../api/pdfReports';
 import {
   validateExport,
   downloadExport,
@@ -43,6 +44,7 @@ function StatusBadge({ ok }: { ok: boolean }) {
 
 export function ExportsPage() {
   const { selectedPeriodId } = useUIStore();
+  const token = useAuthStore((s) => s.token);
   const [software, setSoftware] = useState<TaxSoftware>('ultratax');
   const [downloading, setDownloading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -354,18 +356,24 @@ export function ExportsPage() {
                 )}
                 Download (PDF)
               </button>
-              <a
-                href={`/api/v1${bookkeeperLetterUrl(selectedPeriodId, true).replace('/api/v1', '')}`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded text-sm font-medium border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+              <button
+                disabled={!!downloading}
+                onClick={async () => {
+                  if (!token) return;
+                  try {
+                    await openPdfPreview(bookkeeperLetterUrl(selectedPeriodId, true), token);
+                  } catch (e) {
+                    setError((e as Error).message);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded text-sm font-medium border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-50 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                 </svg>
                 Preview
-              </a>
+              </button>
             </div>
           </div>
 

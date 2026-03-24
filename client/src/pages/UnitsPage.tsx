@@ -247,11 +247,11 @@ function AccountDrawer({
 const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'] as const;
 
 const CATEGORY_BUTTON_STYLES: Record<string, { active: string; inactive: string }> = {
-  assets:      { active: 'bg-blue-600 text-white border-blue-600',     inactive: 'bg-white text-blue-700 border-blue-300 hover:bg-blue-50' },
-  liabilities: { active: 'bg-orange-600 text-white border-orange-600', inactive: 'bg-white text-orange-700 border-orange-300 hover:bg-orange-50' },
-  equity:      { active: 'bg-purple-600 text-white border-purple-600', inactive: 'bg-white text-purple-700 border-purple-300 hover:bg-purple-50' },
-  revenue:     { active: 'bg-green-600 text-white border-green-600',   inactive: 'bg-white text-green-700 border-green-300 hover:bg-green-50' },
-  expenses:    { active: 'bg-red-600 text-white border-red-600',       inactive: 'bg-white text-red-700 border-red-300 hover:bg-red-50' },
+  assets:      { active: 'bg-blue-600 text-white border-blue-600',     inactive: 'bg-white dark:bg-gray-700 text-blue-700 dark:text-blue-400 border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20' },
+  liabilities: { active: 'bg-orange-600 text-white border-orange-600', inactive: 'bg-white dark:bg-gray-700 text-orange-700 dark:text-orange-400 border-orange-300 dark:border-orange-700 hover:bg-orange-50 dark:hover:bg-orange-900/20' },
+  equity:      { active: 'bg-purple-600 text-white border-purple-600', inactive: 'bg-white dark:bg-gray-700 text-purple-700 dark:text-purple-400 border-purple-300 dark:border-purple-700 hover:bg-purple-50 dark:hover:bg-purple-900/20' },
+  revenue:     { active: 'bg-green-600 text-white border-green-600',   inactive: 'bg-white dark:bg-gray-700 text-green-700 dark:text-green-400 border-green-300 dark:border-green-700 hover:bg-green-50 dark:hover:bg-green-900/20' },
+  expenses:    { active: 'bg-red-600 text-white border-red-600',       inactive: 'bg-white dark:bg-gray-700 text-red-700 dark:text-red-400 border-red-300 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/20' },
 };
 
 // ─── Create Unit Modal ─────────────────────────────────────────────────────────

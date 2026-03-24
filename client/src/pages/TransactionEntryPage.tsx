@@ -23,8 +23,8 @@ function fmt(cents: number): string {
 }
 
 function fmtColor(cents: number): string {
-  if (cents === 0) return 'text-gray-400';
-  return cents < 0 ? 'text-red-600' : 'text-green-700';
+  if (cents === 0) return 'text-gray-400 dark:text-gray-500';
+  return cents < 0 ? 'text-red-600 dark:text-red-400' : 'text-green-700 dark:text-green-400';
 }
 
 // Parse dollar input like "1234.56" or "-1234.56" (or expressions like "94+4") to cents

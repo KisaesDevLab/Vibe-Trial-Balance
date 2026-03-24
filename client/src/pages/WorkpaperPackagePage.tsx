@@ -94,7 +94,7 @@ function TBSection({ rows, tickmarkMap, library }: {
             const catRows = rows.filter(r => r.category === cat);
             if (!catRows.length) return null;
             return [
-              <tr key={`${cat}-hdr`} className="bg-gray-100">
+              <tr key={`${cat}-hdr`} className="bg-gray-100 dark:bg-gray-700">
                 <td colSpan={7} className="px-2 py-0.5 text-xs font-bold uppercase tracking-wide">{CAT_LABEL[cat]}</td>
               </tr>,
               ...catRows.map(r => {
@@ -155,7 +155,7 @@ function BalanceSheetSection({ rows }: { rows: TBRow[] }) {
             if (!catRows.length) return null;
             const total = catRows.reduce((s, r) => s + bookNet(r), 0);
             return [
-              <tr key={`${cat}-hdr`} className="bg-gray-100">
+              <tr key={`${cat}-hdr`} className="bg-gray-100 dark:bg-gray-700">
                 <td colSpan={3} className="px-2 py-0.5 text-xs font-bold uppercase tracking-wide">{CAT_LABEL[cat]}</td>
               </tr>,
               ...catRows.map(r => (
@@ -203,7 +203,7 @@ function IncomeStatementSection({ rows }: { rows: TBRow[] }) {
             if (!catRows.length) return null;
             const total = catRows.reduce((s, r) => s + bookNet(r), 0);
             return [
-              <tr key={`${cat}-hdr`} className="bg-gray-100">
+              <tr key={`${cat}-hdr`} className="bg-gray-100 dark:bg-gray-700">
                 <td colSpan={3} className="px-2 py-0.5 text-xs font-bold uppercase tracking-wide">{CAT_LABEL[cat]}</td>
               </tr>,
               ...catRows.map(r => (
@@ -219,7 +219,7 @@ function IncomeStatementSection({ rows }: { rows: TBRow[] }) {
               </tr>,
             ];
           })}
-          <tr className="border-t-2 border-gray-400 bg-gray-50">
+          <tr className="border-t-2 border-gray-400 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">
             <td colSpan={2} className="px-2 py-1 text-xs font-bold">Net Income / (Loss)</td>
             <td className={`${tdR} font-bold ${netIncome < 0 ? 'text-red-700' : 'text-green-700'}`}>
               {netIncome < 0 ? `(${fmtD(-netIncome)})` : fmtD(netIncome)}
@@ -250,21 +250,21 @@ function CashFlowSection({ periodId }: { periodId: number }) {
       <h2 className="text-base font-bold mb-3 border-b border-gray-400 pb-1">Statement of Cash Flows (Indirect Method)</h2>
       <table className="w-full text-xs border-collapse">
         <tbody>
-          <tr className="bg-gray-100"><td colSpan={2} className="px-2 py-0.5 text-xs font-bold uppercase">Operating Activities</td></tr>
+          <tr className="bg-gray-100 dark:bg-gray-700"><td colSpan={2} className="px-2 py-0.5 text-xs font-bold uppercase">Operating Activities</td></tr>
           <tr><td className={`${tdL} pl-6`}>Net Income</td><td className={tdR}>{fmtS(cf.operating.netIncome)}</td></tr>
           {cf.operating.nonCashItems.map(i => <tr key={i.account_id}><td className={`${tdL} pl-8`}>{i.account_name}</td><td className={tdR}>{fmtS(i.amount)}</td></tr>)}
           {cf.operating.workingCapital.map(i => <tr key={i.account_id}><td className={`${tdL} pl-8`}>{i.account_name}</td><td className={tdR}>{fmtS(i.amount)}</td></tr>)}
           <tr className="border-t border-gray-300 font-semibold"><td className={tdL}>Net Cash from Operating</td><td className={tdR}>{fmtS(cf.operating.total)}</td></tr>
 
-          <tr className="bg-gray-100"><td colSpan={2} className="px-2 py-0.5 text-xs font-bold uppercase">Investing Activities</td></tr>
+          <tr className="bg-gray-100 dark:bg-gray-700"><td colSpan={2} className="px-2 py-0.5 text-xs font-bold uppercase">Investing Activities</td></tr>
           {cf.investing.items.map(i => <tr key={i.account_id}><td className={`${tdL} pl-8`}>{i.account_name}</td><td className={tdR}>{fmtS(i.amount)}</td></tr>)}
           <tr className="border-t border-gray-300 font-semibold"><td className={tdL}>Net Cash from Investing</td><td className={tdR}>{fmtS(cf.investing.total)}</td></tr>
 
-          <tr className="bg-gray-100"><td colSpan={2} className="px-2 py-0.5 text-xs font-bold uppercase">Financing Activities</td></tr>
+          <tr className="bg-gray-100 dark:bg-gray-700"><td colSpan={2} className="px-2 py-0.5 text-xs font-bold uppercase">Financing Activities</td></tr>
           {cf.financing.items.map(i => <tr key={i.account_id}><td className={`${tdL} pl-8`}>{i.account_name}</td><td className={tdR}>{fmtS(i.amount)}</td></tr>)}
           <tr className="border-t border-gray-300 font-semibold"><td className={tdL}>Net Cash from Financing</td><td className={tdR}>{fmtS(cf.financing.total)}</td></tr>
 
-          <tr className="border-t-2 border-gray-400 bg-gray-50 font-bold">
+          <tr className="border-t-2 border-gray-400 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60 font-bold">
             <td className={tdL}>Net Change in Cash</td><td className={tdR}>{fmtS(cf.netChange)}</td>
           </tr>
         </tbody>
@@ -481,7 +481,7 @@ export function WorkpaperPackagePage() {
 
       {/* Preview overlay */}
       {showPreview && (
-        <div className="fixed inset-0 bg-white z-50 overflow-auto">
+        <div className="fixed inset-0 bg-white dark:bg-gray-900 z-50 overflow-auto">
           {/* Print toolbar */}
           <div className="sticky top-0 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 px-6 py-2 flex items-center justify-between print:hidden">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -520,7 +520,7 @@ export function WorkpaperPackagePage() {
               clientName={client?.name ?? ''}
               ein={client?.tax_id ?? ''}
               periodName={period?.period_name ?? ''}
-              endDate={period?.end_date ?? ''}
+              endDate={(period?.end_date ?? '').slice(0, 10)}
               preparedBy={preparedBy}
               reviewedBy={reviewedBy}
             />

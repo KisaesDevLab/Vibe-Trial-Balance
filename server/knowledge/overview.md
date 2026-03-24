@@ -1,7 +1,10 @@
 # Vibe Trial Balance — Overview
 
 ## What the App Does
-Vibe Trial Balance is a full-featured tax preparation and accounting management suite for small accounting firms. It manages clients, chart of accounts, trial balances, journal entries, bank transactions, tax codes, financial statements, PDF reports, and exports to major tax software. It also supports AI-powered features including bank transaction classification, tax code auto-assignment, AI diagnostics, and direct integration with Claude Desktop via MCP (Model Context Protocol).
+Vibe Trial Balance is a full-featured tax preparation and accounting management suite for small accounting firms. It manages clients, chart of accounts, trial balances, journal entries, bank transactions, tax codes, financial statements, PDF reports, and exports to major tax software. It also supports AI-powered features including bank transaction classification, bank statement PDF import, tax code auto-assignment, AI diagnostics, and direct integration with Claude Desktop via MCP (Model Context Protocol).
+
+## Data Privacy
+All AI features show a **data disclosure popup** before processing, listing exactly what data will be sent to the AI provider. Client names are never sent to AI. Bank account numbers are masked to show only the last 4 digits. Use a local LLM (Ollama) for maximum privacy — see the AI Providers article for details.
 
 ## Navigation Overview
 The sidebar contains these main sections:
