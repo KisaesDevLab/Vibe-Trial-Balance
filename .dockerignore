@@ -1,0 +1,14 @@
+node_modules
+.git
+.env
+*.md
+.vscode
+.idea
+server/dist
+server/uploads/*
+server/backups/*
+client/dist
+deploy/setup-pi.sh
+deploy/deploy.sh
+setup.ps1
+setup.sh
