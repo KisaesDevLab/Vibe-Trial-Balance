@@ -9,6 +9,7 @@ import {
   batchClassifyTransactions,
   batchUpdateSourceAccount,
   aiClassifyTransactions,
+  batchConfirmAiSuggestions,
   listClassificationRules,
   deleteClassificationRule,
   type BankTransaction,
@@ -88,25 +89,32 @@ export function BankTransactionsPage() {
   const [editingDescValue, setEditingDescValue] = useState('');
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
   const [showSourceAccountRequired, setShowSourceAccountRequired] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
 
   const clientId = selectedClientId;
-  const txQueryKey = ['bank-transactions', clientId, filterStatus, filterPeriod ? selectedPeriodId : null, filterSourceAccount];
+  const txQueryKey = ['bank-transactions', clientId, filterStatus, filterPeriod ? selectedPeriodId : null, filterSourceAccount, page, pageSize];
 
-  const { data: txData, isLoading } = useQuery({
+  const { data: txResult, isLoading } = useQuery({
     queryKey: txQueryKey,
     queryFn: async () => {
-      if (!clientId) return [];
+      if (!clientId) return { rows: [] as BankTransaction[], meta: { total: 0, page: 1, pageSize: 100, pages: 1 } };
       const res = await listBankTransactions(clientId, {
         status: filterStatus || undefined,
         periodId: filterPeriod && selectedPeriodId ? selectedPeriodId : undefined,
         sourceAccountId: filterSourceAccount ? Number(filterSourceAccount) : undefined,
         excludeEntrySource: 'manual',
+        page,
+        pageSize,
       });
       if (res.error) throw new Error(res.error.message);
-      return res.data ?? [];
+      return { rows: res.data ?? [], meta: res.meta ?? { total: 0, page: 1, pageSize: 100, pages: 1 } };
     },
     enabled: clientId !== null,
+    placeholderData: (prev) => prev,
   });
+  const txData = txResult?.rows;
+  const paginationMeta = txResult?.meta;
 
   const { data: accountsData } = useQuery({
     queryKey: ['chart-of-accounts', clientId],
@@ -271,6 +279,16 @@ export function BankTransactionsPage() {
     },
   });
 
+  const confirmAiMutation = useMutation({
+    mutationFn: (ids: number[]) => batchConfirmAiSuggestions(clientId!, ids),
+    onSuccess: (res) => {
+      invalidate();
+      const n = (res as { data?: { confirmed?: number } })?.data?.confirmed ?? 0;
+      showBatchMessage(`Confirmed ${n} AI suggestion(s) — journal entries created.`);
+      setSelected(new Set());
+    },
+  });
+
   const updateDescMutation = useMutation({
     mutationFn: ({ id, description }: { id: number; description: string | null }) =>
       classifyTransaction(clientId!, id, { description }),
@@ -340,7 +358,8 @@ export function BankTransactionsPage() {
         <div>
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Bank Transactions</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-            {transactions.length} total · {unclassifiedCount} unclassified · {aiSuggestedCount} AI suggested
+            {paginationMeta?.total ?? transactions.length} total · {unclassifiedCount} unclassified · {aiSuggestedCount} AI suggested
+            {paginationMeta && paginationMeta.pages > 1 && ` · Page ${paginationMeta.page} of ${paginationMeta.pages}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -382,6 +401,19 @@ export function BankTransactionsPage() {
           >
             Import from PDF
           </button>
+          {aiSuggestedCount > 0 && (
+            <button
+              onClick={() => {
+                const aiIds = transactions.filter((t) => t.classification_status === 'ai_suggested').map((t) => t.id);
+                if (!confirm(`Confirm all ${aiIds.length} AI suggestion(s) on this page? This will create journal entries and update the trial balance.`)) return;
+                confirmAiMutation.mutate(aiIds);
+              }}
+              disabled={confirmAiMutation.isPending}
+              className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+            >
+              {confirmAiMutation.isPending ? 'Confirming…' : `Confirm All AI (${aiSuggestedCount})`}
+            </button>
+          )}
           {selected.size > 0 && (
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-500 dark:text-gray-400">{selected.size} selected</span>
@@ -435,6 +467,19 @@ export function BankTransactionsPage() {
               >
                 {aiMutation.isPending ? 'Classifying…' : 'AI Classify'}
               </button>
+              {transactions.some((t) => selected.has(t.id) && t.classification_status === 'ai_suggested') && (
+                <button
+                  onClick={() => {
+                    const aiIds = transactions.filter((t) => selected.has(t.id) && t.classification_status === 'ai_suggested').map((t) => t.id);
+                    if (!confirm(`Confirm ${aiIds.length} AI suggestion(s)? This will create journal entries and update the trial balance.`)) return;
+                    confirmAiMutation.mutate(aiIds);
+                  }}
+                  disabled={confirmAiMutation.isPending}
+                  className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                >
+                  {confirmAiMutation.isPending ? 'Confirming…' : 'Confirm AI'}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -452,7 +497,7 @@ export function BankTransactionsPage() {
       <div className="flex items-center gap-3 mb-3 flex-wrap">
         <select
           value={filterSourceAccount}
-          onChange={(e) => setFilterSourceAccount(e.target.value)}
+          onChange={(e) => { setFilterSourceAccount(e.target.value); setPage(1); }}
           className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
         >
           <option value="">All accounts</option>
@@ -462,7 +507,7 @@ export function BankTransactionsPage() {
         </select>
         <select
           value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
+          onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }}
           className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
         >
           <option value="">All statuses</option>
@@ -476,7 +521,7 @@ export function BankTransactionsPage() {
             <input
               type="checkbox"
               checked={filterPeriod}
-              onChange={(e) => setFilterPeriod(e.target.checked)}
+              onChange={(e) => { setFilterPeriod(e.target.checked); setPage(1); }}
               className="rounded border-gray-300"
             />
             Current period only
@@ -640,6 +685,52 @@ export function BankTransactionsPage() {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {paginationMeta && paginationMeta.pages > 1 && (
+        <div className="flex items-center justify-between mt-3">
+          <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+            <span>Rows per page:</span>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+              className="border border-gray-300 dark:border-gray-600 rounded px-1.5 py-1 text-sm dark:bg-gray-700 dark:text-white"
+            >
+              {[50, 100, 200, 500].map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+            <span className="ml-2">
+              {((paginationMeta.page - 1) * paginationMeta.pageSize) + 1}–{Math.min(paginationMeta.page * paginationMeta.pageSize, paginationMeta.total)} of {paginationMeta.total}
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(1)}
+              disabled={page <= 1}
+              className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
+            >First</button>
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
+            >Prev</button>
+            <span className="px-3 py-1 text-sm text-gray-700 dark:text-gray-300">
+              Page {paginationMeta.page} of {paginationMeta.pages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(paginationMeta.pages, p + 1))}
+              disabled={page >= paginationMeta.pages}
+              className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
+            >Next</button>
+            <button
+              onClick={() => setPage(paginationMeta.pages)}
+              disabled={page >= paginationMeta.pages}
+              className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
+            >Last</button>
+          </div>
+        </div>
+      )}
 
       {/* Import Modal */}
       {showImport && (

@@ -199,6 +199,9 @@ export function SettingsPage() {
     openaiCompatFastModel: '',
     openaiCompatVisionOverride: '',
     timeoutMs: 120000,
+    maxTokensDefault: 4096,
+    maxTokensBankStatement: 32768,
+    chunkCharLimit: 30000,
     ...(llmData ?? {}),
     ...(llmEdits ?? {}),
   };
@@ -444,6 +447,43 @@ export function SettingsPage() {
                 className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
               />
               <span className="text-xs text-gray-400">Default: 120000 (2 min)</span>
+            </div>
+
+            {/* AI Token Limits */}
+            <div className="mb-4">
+              <p className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">AI Output Token Limits</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Default Max Tokens</label>
+                  <input
+                    type="number"
+                    value={effectiveLlm.maxTokensDefault}
+                    onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), maxTokensDefault: Number(e.target.value) || 4096 }))}
+                    className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                  />
+                  <span className="text-xs text-gray-400">General AI calls (default: 4096)</span>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Bank Statement Max Tokens</label>
+                  <input
+                    type="number"
+                    value={effectiveLlm.maxTokensBankStatement}
+                    onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), maxTokensBankStatement: Number(e.target.value) || 16384 }))}
+                    className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                  />
+                  <span className="text-xs text-gray-400">Per-chunk for large PDFs (default: 32768)</span>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Chunk Char Limit</label>
+                  <input
+                    type="number"
+                    value={effectiveLlm.chunkCharLimit}
+                    onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), chunkCharLimit: Number(e.target.value) || 30000 }))}
+                    className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                  />
+                  <span className="text-xs text-gray-400">Split threshold for large docs (default: 30000)</span>
+                </div>
+              </div>
             </div>
 
             {/* Actions */}

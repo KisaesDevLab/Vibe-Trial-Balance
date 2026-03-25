@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2024–2026 [Project Author]
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import {
@@ -25,6 +25,138 @@ function fmtDate(d: string): string {
   if (!d || d.length < 10) return d;
   const [y, m, day] = d.slice(0, 10).split('-');
   return `${m}/${day}/${y}`;
+}
+
+// ── Editable cell ────────────────────────────────────────────────────────────
+
+function EditableCell({
+  value,
+  display,
+  onCommit,
+  className = '',
+  inputClassName = '',
+  type = 'text',
+}: {
+  value: string;
+  display: React.ReactNode;
+  onCommit: (v: string) => void;
+  className?: string;
+  inputClassName?: string;
+  type?: 'text' | 'date' | 'number';
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEdit = () => {
+    setDraft(value);
+    setEditing(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  };
+
+  const commit = () => {
+    setEditing(false);
+    if (draft !== value) onCommit(draft);
+  };
+
+  const cancel = () => { setEditing(false); setDraft(value); };
+
+  if (editing) {
+    return (
+      <td className={className}>
+        <input
+          ref={inputRef}
+          type={type}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commit(); }
+            if (e.key === 'Escape') cancel();
+          }}
+          autoFocus
+          className={`w-full bg-white dark:bg-gray-700 border border-blue-400 dark:border-blue-500 rounded px-1.5 py-0.5 text-sm outline-none focus:ring-1 focus:ring-blue-400 ${inputClassName}`}
+        />
+      </td>
+    );
+  }
+
+  return (
+    <td className={`${className} cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20`} onClick={startEdit}>
+      {display}
+    </td>
+  );
+}
+
+// ── Editable row ─────────────────────────────────────────────────────────────
+
+function EditableTransactionRow({
+  tx,
+  idx,
+  onToggleSkip,
+  onUpdate,
+}: {
+  tx: BankStatementTransaction & { skip?: boolean };
+  idx: number;
+  onToggleSkip: (idx: number) => void;
+  onUpdate: (idx: number, field: keyof BankStatementTransaction, value: string | number | null) => void;
+}) {
+  return (
+    <tr className={`${tx.skip ? 'opacity-40' : ''} hover:bg-gray-50 dark:hover:bg-gray-700/50`}>
+      <td className="px-3 py-1.5 text-center">
+        <input
+          type="checkbox"
+          checked={!tx.skip}
+          onChange={() => onToggleSkip(idx)}
+          className="rounded border-gray-300 dark:border-gray-600"
+        />
+      </td>
+      <EditableCell
+        value={tx.date}
+        display={<span className="text-gray-600 dark:text-gray-400 whitespace-nowrap">{fmtDate(tx.date)}</span>}
+        onCommit={(v) => onUpdate(idx, 'date', v)}
+        className="px-3 py-1.5"
+        type="date"
+      />
+      <EditableCell
+        value={tx.description}
+        display={<span className="text-gray-700 dark:text-gray-300 truncate block max-w-xs" title={tx.description}>{tx.description}</span>}
+        onCommit={(v) => onUpdate(idx, 'description', v)}
+        className="px-3 py-1.5"
+      />
+      <EditableCell
+        value={tx.checkNumber ?? ''}
+        display={<span className="text-gray-500 dark:text-gray-400 font-mono">{tx.checkNumber ?? ''}</span>}
+        onCommit={(v) => onUpdate(idx, 'checkNumber', v || null)}
+        className="px-3 py-1.5"
+      />
+      <EditableCell
+        value={tx.payeeName ?? ''}
+        display={
+          tx.payeeName
+            ? <span className="text-gray-600 dark:text-gray-400 truncate block max-w-[9rem]" title={tx.payeeName}>{tx.payeeName}</span>
+            : <span className="text-gray-300 dark:text-gray-600">—</span>
+        }
+        onCommit={(v) => onUpdate(idx, 'payeeName', v || null)}
+        className="px-3 py-1.5"
+      />
+      <EditableCell
+        value={(tx.amount / 100).toFixed(2)}
+        display={
+          <span className={`font-mono tabular-nums whitespace-nowrap ${tx.amount < 0 ? 'text-red-600 dark:text-red-400' : 'text-green-700 dark:text-green-400'}`}>
+            {fmt(tx.amount)}
+          </span>
+        }
+        onCommit={(v) => {
+          const parsed = Math.round(parseFloat(v) * 100);
+          if (!isNaN(parsed)) onUpdate(idx, 'amount', parsed);
+        }}
+        className="px-3 py-1.5 text-right"
+        inputClassName="text-right font-mono"
+        type="number"
+      />
+    </tr>
+  );
 }
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -132,6 +264,10 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
   const toggleSkip = (idx: number) => {
     setTransactions((prev) => prev.map((t, i) => (i === idx ? { ...t, skip: !t.skip } : t)));
   };
+
+  const updateTxn = useCallback((idx: number, field: keyof BankStatementTransaction, value: string | number | null) => {
+    setTransactions((prev) => prev.map((t, i) => (i === idx ? { ...t, [field]: value } : t)));
+  }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -277,13 +413,14 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
                 </div>
               )}
 
-              {/* Transaction table */}
+              {/* Transaction table — click any cell to edit */}
+              <p className="text-xs text-gray-500 dark:text-gray-400">Click any cell to edit. Press Enter or Tab to save, Escape to cancel.</p>
               <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
                       <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-8"></th>
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-24">Date</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-28">Date</th>
                       <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400">Description</th>
                       <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-20">Check #</th>
                       <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-36">Payee</th>
@@ -292,28 +429,13 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                     {transactions.map((tx, idx) => (
-                      <tr
+                      <EditableTransactionRow
                         key={idx}
-                        className={`${tx.skip ? 'opacity-40' : ''} hover:bg-gray-50 dark:hover:bg-gray-700/50`}
-                      >
-                        <td className="px-3 py-1.5 text-center">
-                          <input
-                            type="checkbox"
-                            checked={!tx.skip}
-                            onChange={() => toggleSkip(idx)}
-                            className="rounded border-gray-300 dark:border-gray-600"
-                          />
-                        </td>
-                        <td className="px-3 py-1.5 text-gray-600 dark:text-gray-400 whitespace-nowrap">{fmtDate(tx.date)}</td>
-                        <td className="px-3 py-1.5 text-gray-700 dark:text-gray-300 truncate max-w-xs" title={tx.description}>{tx.description}</td>
-                        <td className="px-3 py-1.5 text-gray-500 dark:text-gray-400 font-mono">{tx.checkNumber ?? ''}</td>
-                        <td className="px-3 py-1.5 text-gray-600 dark:text-gray-400 truncate max-w-[9rem]" title={tx.payeeName ?? ''}>
-                          {tx.payeeName ?? <span className="text-gray-300 dark:text-gray-600">—</span>}
-                        </td>
-                        <td className={`px-3 py-1.5 text-right font-mono tabular-nums whitespace-nowrap ${tx.amount < 0 ? 'text-red-600 dark:text-red-400' : 'text-green-700 dark:text-green-400'}`}>
-                          {fmt(tx.amount)}
-                        </td>
-                      </tr>
+                        tx={tx}
+                        idx={idx}
+                        onToggleSkip={toggleSkip}
+                        onUpdate={updateTxn}
+                      />
                     ))}
                   </tbody>
                 </table>

@@ -39,6 +39,12 @@ export interface LLMProviderSettings {
   /** 'true'/'false' to override vision detection; '' = auto-detect from model name */
   openaiCompatVisionOverride: string;
   timeoutMs: number;
+  /** Max output tokens for general AI calls (default: 4096) */
+  maxTokensDefault: number;
+  /** Max output tokens for bank statement PDF extraction (default: 16384) */
+  maxTokensBankStatement: number;
+  /** Max characters per chunk for large statement processing (default: 40000) */
+  chunkCharLimit: number;
 }
 
 export const getLLMProviderSettings = () =>

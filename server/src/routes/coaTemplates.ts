@@ -332,7 +332,7 @@ coaTemplatesRouter.post('/from-client/:clientId', async (req: AuthRequest, res: 
 
     const sourceAccounts = await db('chart_of_accounts')
       .where({ client_id: clientId, is_active: true })
-      .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'account_number', order: 'asc' }]);
+      .orderBy([{ column: 'account_number', order: 'asc' }]);
 
     let template: Record<string, unknown>;
     await db.transaction(async (trx) => {
@@ -360,7 +360,7 @@ coaTemplatesRouter.post('/from-client/:clientId', async (req: AuthRequest, res: 
             tax_line: a.tax_line ?? null,
             unit: a.unit ?? null,
             workpaper_ref: a.workpaper_ref ?? null,
-            sort_order: a.sort_order ?? i * 10,
+            sort_order: i * 10,
             is_active: true,
           }))
         );
@@ -410,12 +410,12 @@ coaTemplatesRouter.post('/:id/apply/:clientId', async (req: AuthRequest, res: Re
       .orderBy([{ column: 'sort_order', order: 'asc' }]);
 
     if (mode === 'replace') {
-      // Check for TB data — any trial_balance_entries linked to this client
+      // Check for TB data — any trial_balance rows linked to this client
       const periods = await db('periods').where({ client_id: clientId }).select('id');
       const periodIds = periods.map((p: { id: number }) => p.id);
 
       if (periodIds.length > 0) {
-        const tbCount = await db('trial_balance_entries')
+        const tbCount = await db('trial_balance')
           .whereIn('period_id', periodIds)
           .count('id as cnt')
           .first();
@@ -460,7 +460,6 @@ coaTemplatesRouter.post('/:id/apply/:clientId', async (req: AuthRequest, res: Re
           tax_line: ta.tax_line ?? null,
           unit: ta.unit ?? null,
           workpaper_ref: ta.workpaper_ref ?? null,
-          sort_order: ta.sort_order ?? 0,
           is_active: true,
         });
         added++;

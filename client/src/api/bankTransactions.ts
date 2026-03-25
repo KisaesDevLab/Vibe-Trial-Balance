@@ -35,14 +35,20 @@ export interface ClassificationRule {
   account_number: string;
 }
 
-export const listBankTransactions = (clientId: number, params?: { periodId?: number; status?: string; sourceAccountId?: number; excludeEntrySource?: string }) => {
+export interface PaginationMeta { total: number; page: number; pageSize: number; pages: number }
+
+export const listBankTransactions = (clientId: number, params?: { periodId?: number; status?: string; sourceAccountId?: number; excludeEntrySource?: string; page?: number; pageSize?: number }) => {
   const qs = new URLSearchParams();
   if (params?.periodId) qs.set('periodId', String(params.periodId));
   if (params?.status) qs.set('status', params.status);
   if (params?.sourceAccountId) qs.set('sourceAccountId', String(params.sourceAccountId));
   if (params?.excludeEntrySource) qs.set('excludeEntrySource', params.excludeEntrySource);
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.pageSize) qs.set('pageSize', String(params.pageSize));
   const q = qs.toString();
-  return apiFetch<BankTransaction[]>(`/clients/${clientId}/bank-transactions${q ? `?${q}` : ''}`);
+  return apiFetch<BankTransaction[]>(`/clients/${clientId}/bank-transactions${q ? `?${q}` : ''}`) as Promise<
+    { data: BankTransaction[]; error: null; meta: PaginationMeta } | { data: null; error: { code: string; message: string } }
+  >;
 };
 
 export interface CsvMapping {
@@ -164,6 +170,14 @@ export const aiClassifyTransactions = (clientId: number, ids: number[]) =>
   apiFetch<{ classified: number; results: Array<{ id: number; accountId: number; confidence: number; reasoning: string }> }>(
     `/clients/${clientId}/bank-transactions/ai-classify`,
     { method: 'POST', body: JSON.stringify({ ids }) },
+  );
+
+export const batchConfirmAiSuggestions = (clientId: number, ids: number[]) =>
+  chunked(ids, (chunk) =>
+    apiFetch<{ confirmed: number }>(`/clients/${clientId}/bank-transactions/batch-confirm-ai`, {
+      method: 'POST',
+      body: JSON.stringify({ ids: chunk }),
+    }),
   );
 
 // ---- Payees API ----

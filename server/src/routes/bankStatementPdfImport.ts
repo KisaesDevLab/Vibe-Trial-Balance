@@ -8,7 +8,7 @@ import { createHash } from 'crypto';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAiUsage } from '../lib/aiUsage';
-import { getLLMProvider } from '../lib/aiClient';
+import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
 import { extractJsonObject } from '../lib/aiJsonExtract';
@@ -103,19 +103,20 @@ Rules:
 - warnings: note any issues (e.g., "Page 3 was partially unreadable", "Some check images were too blurry to read payee")
 - accountNumberLast4: return ONLY the last 4 digits of any bank account number — do NOT return the full account number`;
 
-function buildTextPrompt(text: string): string {
-  // Mask account numbers and truncate to first ~50k chars
-  const masked = maskAccountNumbers(text);
-  const truncated = masked.slice(0, 50000);
-  return `You are an expert accountant. Extract bank transactions from this bank statement.
+const TEXT_RULES = `Rules:
+- All amounts in integer CENTS (multiply dollars by 100, round to nearest cent)
+- Deposits/credits are POSITIVE amounts
+- Withdrawals/debits/checks are NEGATIVE amounts
+- date format: YYYY-MM-DD
+- checkNumber: extract check numbers from descriptions like "CHECK #1234", "CHK 1234"
+- payeeName: extract the merchant/payee from the transaction description
+- category: your best guess (e.g., "utilities", "payroll", "office supplies", "transfer", "deposit", "interest")
+- openingBalance and closingBalance in cents from the statement header/footer
+- Skip headers, footers, subtotals, daily balance rows — only include actual transactions
+- warnings: note any issues
+- accountNumberLast4: return ONLY the last 4 digits of any bank account number — do NOT return the full account number`;
 
-BANK STATEMENT TEXT:
-\`\`\`
-${truncated}
-\`\`\`
-
-Return ONLY a valid JSON object (no prose, no markdown fences, no code blocks):
-{
+const JSON_EXAMPLE = `{
   "bankName": "First National Bank",
   "accountNumberLast4": "1234",
   "statementPeriod": { "start": "2024-01-01", "end": "2024-01-31" },
@@ -132,20 +133,98 @@ Return ONLY a valid JSON object (no prose, no markdown fences, no code blocks):
     }
   ],
   "warnings": []
+}`;
+
+function buildTextPrompt(text: string): string {
+  const masked = maskAccountNumbers(text);
+  return `You are an expert accountant. Extract bank transactions from this bank statement.
+
+BANK STATEMENT TEXT:
+\`\`\`
+${masked}
+\`\`\`
+
+Return ONLY a valid JSON object (no prose, no markdown fences, no code blocks):
+${JSON_EXAMPLE}
+
+${TEXT_RULES}`;
 }
 
-Rules:
-- All amounts in integer CENTS (multiply dollars by 100, round to nearest cent)
-- Deposits/credits are POSITIVE amounts
-- Withdrawals/debits/checks are NEGATIVE amounts
-- date format: YYYY-MM-DD
-- checkNumber: extract check numbers from descriptions like "CHECK #1234", "CHK 1234"
-- payeeName: extract the merchant/payee from the transaction description
-- category: your best guess (e.g., "utilities", "payroll", "office supplies", "transfer", "deposit", "interest")
-- openingBalance and closingBalance in cents from the statement header/footer
-- Skip headers, footers, subtotals, daily balance rows — only include actual transactions
-- warnings: note any issues
-- accountNumberLast4: return ONLY the last 4 digits of any bank account number — do NOT return the full account number`;
+/** Build prompt for a chunk of a large statement (transactions only, no metadata) */
+function buildChunkPrompt(text: string, chunkIndex: number, totalChunks: number): string {
+  const masked = maskAccountNumbers(text);
+  return `You are an expert accountant. Extract bank transactions from this SECTION of a bank statement (part ${chunkIndex + 1} of ${totalChunks}).
+
+BANK STATEMENT TEXT (partial):
+\`\`\`
+${masked}
+\`\`\`
+
+Return ONLY a valid JSON object with just the transactions found in this section:
+{
+  "transactions": [
+    {
+      "date": "2024-01-05",
+      "description": "CHECK #1234",
+      "amount": -50000,
+      "checkNumber": "1234",
+      "payeeName": "ABC Vendor Inc",
+      "category": "vendor payment"
+    }
+  ],
+  "warnings": []
+}
+
+${TEXT_RULES}
+- This is a partial section — only extract transactions visible in this text.`;
+}
+
+/**
+ * Split large text into chunks, each under the given char limit.
+ * Tries progressively finer split points to avoid cutting mid-transaction:
+ *   1. Form-feed characters (page breaks in PDFs)
+ *   2. Double-newlines (section breaks)
+ *   3. Single newlines (line-by-line, last resort)
+ */
+function splitTextIntoChunks(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return [text];
+
+  // Try split strategies in order of preference
+  const separators = [/\f/, /\n{2,}/, /\n/];
+  for (const sep of separators) {
+    const sections = text.split(sep);
+    if (sections.length <= 1) continue;
+
+    const chunks: string[] = [];
+    let current = '';
+    for (const section of sections) {
+      if (current.length + section.length + 2 > maxChars && current.length > 0) {
+        chunks.push(current);
+        current = section;
+      } else {
+        current += (current ? '\n\n' : '') + section;
+      }
+    }
+    if (current) chunks.push(current);
+
+    // Only use this strategy if it actually produced multiple chunks
+    if (chunks.length > 1) return chunks;
+  }
+
+  // Absolute fallback: hard-split at maxChars boundaries on newlines
+  const chunks: string[] = [];
+  const lines = text.split('\n');
+  let current = '';
+  for (const line of lines) {
+    if (current.length + line.length + 1 > maxChars && current.length > 0) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current += (current ? '\n' : '') + line;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 // ── POST /api/v1/import/bank-statement-pdf/analyze ──────────────────────────
@@ -234,15 +313,108 @@ bankStatementPdfRouter.post(
         messageContent = buildTextPrompt(extractedText);
       }
 
-      // Use primaryModel for bank statements — they can be long
-      const aiResult = await provider.complete({
-        model: primaryModel,
-        maxTokens: 8192,
-        messages: [{ role: 'user', content: messageContent! }],
-      });
-      logAiUsage({ endpoint: 'bank-statement-pdf/analyze', model: primaryModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
+      // Read configurable token limits from settings
+      const tokenSettings = await getAiTokenSettings();
+      const needsChunking = !useVision && extractedText.length > tokenSettings.chunkCharLimit;
 
-      const analysisResult = extractJsonObject<BankStatementAnalysisResult>(aiResult.text);
+      let analysisResult: BankStatementAnalysisResult | null = null;
+
+      if (needsChunking) {
+        // ── Chunked processing for large statements ──
+        const chunks = splitTextIntoChunks(extractedText, tokenSettings.chunkCharLimit);
+        const allTransactions: BankStatementTransaction[] = [];
+        const allWarnings: string[] = [`Statement processed in ${chunks.length} chunks due to size (${Math.round(extractedText.length / 1024)}KB text).`];
+        console.log(`[bank-pdf] Chunked: ${chunks.length} chunks from ${extractedText.length} chars (limit: ${tokenSettings.chunkCharLimit}). Chunk sizes: ${chunks.map((c) => c.length).join(', ')}`);
+
+        // Process all chunks — first gets full prompt (metadata + transactions),
+        // rest get transaction-only prompt
+        for (let i = 0; i < chunks.length; i++) {
+          const prompt = i === 0
+            ? buildTextPrompt(chunks[i])
+            : buildChunkPrompt(chunks[i], i, chunks.length);
+
+          const chunkResult = await provider.complete({
+            model: primaryModel,
+            maxTokens: tokenSettings.maxTokensBankStatement,
+            messages: [{ role: 'user', content: prompt }],
+          });
+          logAiUsage({ endpoint: 'bank-statement-pdf/analyze', model: primaryModel, inputTokens: chunkResult.inputTokens, outputTokens: chunkResult.outputTokens, userId: req.user?.userId, clientId });
+
+          const hitTokenLimit = chunkResult.outputTokens >= tokenSettings.maxTokensBankStatement - 10;
+          console.log(`[bank-pdf] Chunk ${i + 1}/${chunks.length}: ${chunkResult.outputTokens} output tokens${hitTokenLimit ? ' (HIT LIMIT — output likely truncated!)' : ''}`);
+
+          const parsed = extractJsonObject<BankStatementAnalysisResult & { transactions?: BankStatementTransaction[]; warnings?: string[] }>(chunkResult.text);
+
+          if (!parsed && hitTokenLimit) {
+            // Output was truncated — re-split this chunk and retry with smaller pieces
+            allWarnings.push(`Chunk ${i + 1} exceeded token limit and was re-split.`);
+            const subChunks = splitTextIntoChunks(chunks[i], Math.floor(tokenSettings.chunkCharLimit / 2));
+            console.log(`[bank-pdf] Re-splitting chunk ${i + 1} into ${subChunks.length} sub-chunks`);
+            for (let j = 0; j < subChunks.length; j++) {
+              const subPrompt = buildChunkPrompt(subChunks[j], j, subChunks.length);
+              const subResult = await provider.complete({
+                model: primaryModel,
+                maxTokens: tokenSettings.maxTokensBankStatement,
+                messages: [{ role: 'user', content: subPrompt }],
+              });
+              logAiUsage({ endpoint: 'bank-statement-pdf/analyze', model: primaryModel, inputTokens: subResult.inputTokens, outputTokens: subResult.outputTokens, userId: req.user?.userId, clientId });
+              console.log(`[bank-pdf] Sub-chunk ${j + 1}/${subChunks.length}: ${subResult.outputTokens} output tokens`);
+              const subParsed = extractJsonObject<{ transactions?: BankStatementTransaction[]; warnings?: string[] }>(subResult.text);
+              if (subParsed?.transactions) allTransactions.push(...subParsed.transactions);
+              if (subParsed?.warnings) allWarnings.push(...subParsed.warnings);
+            }
+            continue;
+          }
+
+          if (parsed) {
+            if (i === 0 && !analysisResult) {
+              // First chunk — extract metadata
+              analysisResult = { ...parsed, transactions: [], warnings: [] };
+            }
+            if (parsed.transactions) {
+              allTransactions.push(...parsed.transactions);
+              console.log(`[bank-pdf] Chunk ${i + 1}: extracted ${parsed.transactions.length} transactions`);
+            }
+            if (parsed.warnings) allWarnings.push(...parsed.warnings);
+          } else {
+            allWarnings.push(`Chunk ${i + 1} failed to parse — some transactions may be missing.`);
+            console.warn(`[bank-pdf] Chunk ${i + 1} failed to parse. Raw output (first 500 chars): ${chunkResult.text.slice(0, 500)}`);
+          }
+        }
+
+        console.log(`[bank-pdf] Total extracted: ${allTransactions.length} transactions from ${chunks.length} chunks`);
+
+        // Merge into final result
+        if (!analysisResult) {
+          analysisResult = {
+            bankName: null,
+            accountNumberLast4: null,
+            statementPeriod: null,
+            openingBalance: null,
+            closingBalance: null,
+            transactions: allTransactions,
+            warnings: allWarnings,
+          };
+        } else {
+          analysisResult.transactions = allTransactions;
+          analysisResult.warnings = allWarnings;
+        }
+      } else {
+        // ── Single-call processing (vision or small text) ──
+        // Estimate maxTokens: ~80 tokens per transaction in output, capped by settings
+        const estimatedTxns = useVision ? 400 : Math.ceil(extractedText.length / 200);
+        const maxTokens = Math.max(tokenSettings.maxTokensDefault, Math.min(tokenSettings.maxTokensBankStatement * 4, estimatedTxns * 80));
+
+        const aiResult = await provider.complete({
+          model: primaryModel,
+          maxTokens,
+          messages: [{ role: 'user', content: messageContent! }],
+        });
+        logAiUsage({ endpoint: 'bank-statement-pdf/analyze', model: primaryModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
+
+        analysisResult = extractJsonObject<BankStatementAnalysisResult>(aiResult.text);
+      }
+
       if (!analysisResult) {
         res.status(500).json({ data: null, error: { code: 'AI_ERROR', message: 'AI returned invalid format. Please try again.' } });
         return;

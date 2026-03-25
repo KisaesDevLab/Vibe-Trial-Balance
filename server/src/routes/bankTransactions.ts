@@ -655,6 +655,68 @@ btCollectionRouter.post('/batch-update-source', async (req: AuthRequest, res: Re
   }
 });
 
+// POST /api/v1/clients/:clientId/bank-transactions/batch-confirm-ai
+const batchConfirmAiSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1),
+});
+
+btCollectionRouter.post('/batch-confirm-ai', async (req: AuthRequest, res: Response): Promise<void> => {
+  const clientId = Number(req.params.clientId);
+  if (isNaN(clientId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } });
+    return;
+  }
+  const result = batchConfirmAiSchema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  try {
+    // Only confirm transactions that have an AI suggestion and haven't been manually classified
+    const eligible = await db('bank_transactions')
+      .where({ client_id: clientId, classification_status: 'ai_suggested' })
+      .whereIn('id', result.data.ids)
+      .whereNotNull('ai_suggested_account_id')
+      .select('id', 'ai_suggested_account_id', 'description');
+
+    if (eligible.length === 0) {
+      res.json({ data: { confirmed: 0 }, error: null });
+      return;
+    }
+
+    let confirmed = 0;
+    await db.transaction(async (trx) => {
+      for (const tx of eligible) {
+        await trx('bank_transactions')
+          .where({ id: tx.id, client_id: clientId })
+          .update({
+            account_id: tx.ai_suggested_account_id,
+            classification_status: 'confirmed',
+            classified_by: req.user!.userId,
+          });
+
+        // Upsert classification rule
+        const pattern = (tx.description as string | null)?.trim();
+        if (pattern) {
+          await trx('classification_rules')
+            .insert({ client_id: clientId, payee_pattern: pattern, account_id: tx.ai_suggested_account_id, times_confirmed: 1 })
+            .onConflict(['client_id', 'payee_pattern'])
+            .merge({ account_id: tx.ai_suggested_account_id, times_confirmed: db.raw('classification_rules.times_confirmed + 1'), updated_at: db.fn.now() });
+        }
+
+        // Create journal entry
+        await syncTxJE(trx, tx.id as number, clientId, req.user!.userId);
+        confirmed++;
+      }
+    });
+
+    res.json({ data: { confirmed }, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+  }
+});
+
 // POST /api/v1/clients/:clientId/bank-transactions/ai-classify
 const aiClassifySchema = z.object({
   ids: z.array(z.number().int().positive()).min(1).max(100),

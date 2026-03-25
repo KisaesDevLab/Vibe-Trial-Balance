@@ -403,6 +403,7 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
     'llm.openai_compat_base_url', 'llm.openai_compat_api_key',
     'llm.openai_compat_model', 'llm.openai_compat_fast_model',
     'llm.openai_compat_vision_override', 'llm.timeout_ms',
+    'ai.max_tokens_default', 'ai.max_tokens_bank_statement', 'ai.chunk_char_limit',
   ];
   try {
     const rows = await db('settings').whereIn('key', LLM_KEYS).select('key', 'value');
@@ -421,6 +422,9 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
         openaiCompatFastModel:       s['llm.openai_compat_fast_model']        || '',
         openaiCompatVisionOverride:  s['llm.openai_compat_vision_override']   || '',
         timeoutMs:                   Number(s['llm.timeout_ms'])              || 120000,
+        maxTokensDefault:            Number(s['ai.max_tokens_default'])       || 4096,
+        maxTokensBankStatement:      Number(s['ai.max_tokens_bank_statement'])|| 32768,
+        chunkCharLimit:              Number(s['ai.chunk_char_limit'])         || 30000,
       },
       error: null,
     });
@@ -448,6 +452,9 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     openaiCompatFastModel:      z.string().max(200).optional(),
     openaiCompatVisionOverride: visionOverrideEnum,
     timeoutMs:                  z.number().int().min(1000).max(600000).optional(),
+    maxTokensDefault:           z.number().int().min(512).max(200000).optional(),
+    maxTokensBankStatement:     z.number().int().min(1024).max(200000).optional(),
+    chunkCharLimit:             z.number().int().min(5000).max(200000).optional(),
   });
   const result = schema.safeParse(req.body);
   if (!result.success) {
@@ -505,6 +512,9 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     'llm.openai_compat_fast_model':      d.openaiCompatFastModel,
     'llm.openai_compat_vision_override': d.openaiCompatVisionOverride,
     'llm.timeout_ms':                    d.timeoutMs !== undefined ? String(d.timeoutMs) : undefined,
+    'ai.max_tokens_default':             d.maxTokensDefault !== undefined ? String(d.maxTokensDefault) : undefined,
+    'ai.max_tokens_bank_statement':      d.maxTokensBankStatement !== undefined ? String(d.maxTokensBankStatement) : undefined,
+    'ai.chunk_char_limit':               d.chunkCharLimit !== undefined ? String(d.chunkCharLimit) : undefined,
   };
   try {
     const ops = Object.entries(keyMap)

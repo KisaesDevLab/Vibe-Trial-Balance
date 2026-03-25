@@ -10,6 +10,32 @@ import {
 export const DEFAULT_FAST_MODEL    = 'claude-haiku-4-5-20251001';
 export const DEFAULT_PRIMARY_MODEL = 'claude-sonnet-4-6';
 
+// ── AI token limit settings ─────────────────────────────────────────────────
+
+export interface AiTokenSettings {
+  maxTokensDefault: number;
+  maxTokensBankStatement: number;
+  chunkCharLimit: number;
+}
+
+const AI_TOKEN_DEFAULTS: AiTokenSettings = {
+  maxTokensDefault: 4096,
+  maxTokensBankStatement: 32768,
+  chunkCharLimit: 30000,
+};
+
+export async function getAiTokenSettings(): Promise<AiTokenSettings> {
+  const keys = ['ai.max_tokens_default', 'ai.max_tokens_bank_statement', 'ai.chunk_char_limit'];
+  const rows = await db('settings').whereIn('key', keys).select('key', 'value');
+  const s: Record<string, string> = {};
+  for (const r of rows) s[r.key as string] = r.value as string;
+  return {
+    maxTokensDefault:       Number(s['ai.max_tokens_default'])        || AI_TOKEN_DEFAULTS.maxTokensDefault,
+    maxTokensBankStatement: Number(s['ai.max_tokens_bank_statement']) || AI_TOKEN_DEFAULTS.maxTokensBankStatement,
+    chunkCharLimit:         Number(s['ai.chunk_char_limit'])          || AI_TOKEN_DEFAULTS.chunkCharLimit,
+  };
+}
+
 // ── New provider-agnostic entry point ─────────────────────────────────────────
 
 /**
