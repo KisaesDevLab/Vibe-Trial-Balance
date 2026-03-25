@@ -73,9 +73,15 @@ Create a `.env` file in `server/` (or set these as system environment variables)
 
 ---
 
-## Development Setup (Windows)
+## Development Setup
 
-### Quick start
+### One-line install (Linux / macOS / Git Bash)
+```bash
+git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git && cd Vibe-Trial-Balance && bash setup.sh
+```
+Clones the repo, installs all dependencies, starts PostgreSQL via Docker, runs migrations, and seeds demo data.
+
+### Quick start (Windows PowerShell)
 ```powershell
 # PowerShell as Administrator
 Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -87,6 +93,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 ```bash
 # Prerequisites: Node.js 20+, Docker Desktop
 docker compose up -d                         # Start PostgreSQL + pgAdmin
+npm install                                  # Root dependencies
 cd server && npm install && cd ..
 cd client && npm install && cd ..
 npm run migrate                              # Run all migrations
