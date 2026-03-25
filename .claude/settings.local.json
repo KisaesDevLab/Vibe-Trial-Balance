@@ -109,7 +109,14 @@
       "Bash(ls /c/Users/kwkcp/Projects/trial-balance-app/server/knowledge/*.md)",
       "Bash(docker ps:*)",
       "Bash(git push:*)",
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)",
+      "Bash(git checkout:*)",
+      "Bash(wmic process:*)",
+      "Bash(powershell.exe -Command \"Get-CimInstance Win32_Process -Filter \"\"name=''''node.exe''''\"\" | Select-Object ProcessId, CommandLine | Format-List\")",
+      "Bash(powershell.exe -Command \"Get-NetTCPConnection -State Listen | Where-Object {$_calPort -in 3000,3001,4000,5000,5173} | Select-Object LocalPort,OwningProcess\")",
+      "Bash(powershell.exe -Command \"Stop-Process -Id 68084 -Force\" 2>&1)"
     ]
   }
 }
