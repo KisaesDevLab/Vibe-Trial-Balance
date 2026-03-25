@@ -252,7 +252,7 @@ export function Sidebar() {
           <p className="text-[9px] text-gray-600 leading-tight">
             AGPL-3.0 &middot;{' '}
             <a
-              href="https://github.com/kwkcp/vibe-tb"
+              href="https://github.com/KisaesDevLab/Vibe-Trial-Balance"
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-500 hover:text-gray-300 underline underline-offset-2"
