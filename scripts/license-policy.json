@@ -1,0 +1,39 @@
+{
+  "allowed": [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "BlueOak-1.0.0",
+    "Unlicense",
+    "AGPL-3.0",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "0BSD",
+    "CC0-1.0",
+    "Python-2.0",
+    "CC-BY-4.0",
+    "CC-BY-3.0"
+  ],
+  "reviewRequired": [
+    "LGPL-2.1",
+    "LGPL-3.0",
+    "LGPL-2.1-only",
+    "LGPL-3.0-only",
+    "MPL-2.0",
+    "GPL-3.0-or-later"
+  ],
+  "denied": [
+    "GPL-2.0-only",
+    "SSPL-1.0",
+    "BUSL-1.1"
+  ],
+  "knownIssues": {
+    "buffers@0.1.1": {
+      "license": "UNKNOWN",
+      "reason": "No license field in package.json. Transitive dependency via exceljs. Low risk — tiny buffer utility.",
+      "action": "Accepted. Monitor for license addition in future versions."
+    }
+  }
+}

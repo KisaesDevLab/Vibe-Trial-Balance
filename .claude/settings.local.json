@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(npx license-checker:*)",
+      "Bash(chmod:*)",
+      "Bash(bash /c/Users/kwkcp/Projects/trial-balance-app/scripts/license-audit.sh)",
+      "Bash(bash scripts/license-audit.sh)",
+      "Bash(bash ./scripts/license-audit.sh)"
     ]
   }
 }
