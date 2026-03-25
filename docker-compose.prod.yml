@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vibetb
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: vibe_tb_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vibetb -d vibe_tb_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 3001
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: vibe_tb_db
+      DB_USER: vibetb
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      JWT_EXPIRY: ${JWT_EXPIRY:-8h}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - uploads:/app/server/uploads
+      - backups:/app/server/backups
+    ports:
+      - "3001:3001"
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "80:80"
+
+volumes:
+  pgdata:
+  uploads:
+  backups:

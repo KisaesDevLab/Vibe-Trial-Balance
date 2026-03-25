@@ -1,0 +1,10 @@
+﻿node_modules/
+.env
+.env.local
+client/dist/
+server/dist/
+*.log
+Thumbs.db
+uploads/
+server/backups/
+coverage/

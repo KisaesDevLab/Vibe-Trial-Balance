@@ -1,0 +1,21 @@
+{
+  "name": "vibe-tb",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev:client": "cd client && npm run dev",
+    "dev:server": "cd server && npm run dev",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "migrate": "cd server && npx tsx ./node_modules/knex/bin/cli.js migrate:latest --knexfile knexfile.ts",
+    "seed": "cd server && npx knex seed:run --knexfile knexfile.ts",
+    "db:start": "docker compose up -d",
+    "db:stop": "docker compose down",
+    "db:reset": "cd server && npx knex migrate:rollback --all --knexfile knexfile.ts && npx knex migrate:latest --knexfile knexfile.ts && npx knex seed:run --knexfile knexfile.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "concurrently": "^8.2.2"
+  }
+}

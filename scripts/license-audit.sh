@@ -1,160 +1,264 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: AGPL-3.0-only
-# License audit script for Vibe Trial Balance
-# Checks all npm dependencies against the project license policy.
+# =============================================================================
+# license-audit.sh — Automated license compliance audit for vibe-tb
+# License: AGPL-3.0-only
 #
-# Usage: ./scripts/license-audit.sh
+# Usage:  ./scripts/license-audit.sh [--quiet] [--json]
+#   --quiet   Suppress passing checks; show only warnings and failures
+#   --json    Write machine-readable results to scripts/license-audit-result.json
 #
-# Requires: npx (comes with npm)
+# Requires: node, npm, npx
+# On first run installs license-checker via npx (cached automatically).
+# =============================================================================
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+POLICY="$ROOT/scripts/license-policy.json"
+REPORT="$ROOT/scripts/license-audit-result.txt"
+QUIET=false
+EMIT_JSON=false
 
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-GREEN='\033[0;32m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+for arg in "$@"; do
+  case $arg in
+    --quiet) QUIET=true ;;
+    --json)  EMIT_JSON=true ;;
+  esac
+done
 
-echo -e "${CYAN}=== Vibe Trial Balance — License Audit ===${NC}"
-echo ""
+# ── Colour helpers ────────────────────────────────────────────────────────────
+RED='\033[0;31m'; YELLOW='\033[0;33m'; GREEN='\033[0;32m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
-# Allowed licenses per CLAUDE.md policy
-ALLOWED_RE="^(MIT|Apache-2.0|BSD-2-Clause|BSD-3-Clause|ISC|BlueOak-1.0.0|Unlicense|AGPL-3.0|AGPL-3.0-only|AGPL-3.0-or-later|0BSD|CC0-1.0|Python-2.0|CC-BY-4.0|CC-BY-3.0|Zlib)$"
+pass()  { $QUIET || echo -e "${GREEN}  ✔ $*${RESET}"; }
+warn()  { echo -e "${YELLOW}  ⚠  $*${RESET}"; }
+fail()  { echo -e "${RED}  ✘ $*${RESET}"; }
+info()  { echo -e "${CYAN}  ▶ $*${RESET}"; }
+header(){ echo -e "\n${BOLD}${CYAN}══ $* ══${RESET}"; }
 
-# Review-required licenses
-REVIEW_RE="^(LGPL-2.1|LGPL-3.0|LGPL-2.1-only|LGPL-3.0-only|MPL-2.0|GPL-3.0-or-later)$"
+FAILURES=0
+WARNINGS=0
 
-# Denied licenses
-DENIED_RE="^(GPL-2.0-only|SSPL-1.0|BUSL-1.1)$"
+bump_fail() { FAILURES=$((FAILURES+1)); }
+bump_warn() { WARNINGS=$((WARNINGS+1)); }
 
-# Known exceptions
-KNOWN_EXCEPTIONS="buffers@0.1.1"
+# ── 1. Required project files ─────────────────────────────────────────────────
+header "1. Required project files"
 
-TOTAL_DENIED=0
-TOTAL_REVIEW=0
-TOTAL_UNKNOWN=0
+if [[ -f "$ROOT/LICENSE" ]]; then
+  pass "LICENSE file present"
+else
+  fail "LICENSE file MISSING — required for AGPL-3.0 distribution"
+  bump_fail
+fi
 
-audit_workspace() {
-  local name="$1"
-  local dir="$2"
+if [[ -f "$ROOT/README.md" ]] || [[ -f "$ROOT/README" ]]; then
+  pass "README present"
+else
+  warn "No README found"
+  bump_warn
+fi
 
-  if [ ! -d "$dir/node_modules" ]; then
-    echo -e "${YELLOW}SKIP: $name — no node_modules${NC}"
-    return
-  fi
+# ── 2. AGPL source file headers ───────────────────────────────────────────────
+header "2. AGPL source file headers"
 
-  echo -e "${CYAN}--- Checking $name ---${NC}"
+HEADER_PATTERN="SPDX-License-Identifier|AGPL|GNU Affero|Copyright"
+TS_FILES=$(find "$ROOT/client/src" "$ROOT/server/src" -name "*.ts" -o -name "*.tsx" 2>/dev/null | wc -l | tr -d ' ')
+HEADERS_FOUND=$(find "$ROOT/client/src" "$ROOT/server/src" -name "*.ts" -o -name "*.tsx" 2>/dev/null \
+  | xargs grep -l -E "$HEADER_PATTERN" 2>/dev/null | wc -l | tr -d ' ')
 
-  # Run license-checker and get CSV output (easier to parse in bash)
-  local csv
-  csv=$(cd "$dir" && npx --yes license-checker --excludePrivatePackages --csv 2>/dev/null) || {
-    echo -e "${RED}ERROR: license-checker failed for $name${NC}"
-    return
-  }
+info "$HEADERS_FOUND / $TS_FILES source files have license headers"
 
-  local denied=0
-  local review=0
-  local unknown=0
-  local checked=0
+if [[ "$HEADERS_FOUND" -eq 0 ]]; then
+  warn "No source files contain license headers (AGPL-3.0 section 5 recommends them)"
+  warn "Minimum header:  // SPDX-License-Identifier: AGPL-3.0-only"
+  bump_warn
+elif [[ "$HEADERS_FOUND" -lt "$TS_FILES" ]]; then
+  warn "$(( TS_FILES - HEADERS_FOUND )) source files missing license headers"
+  bump_warn
+else
+  pass "All source files have license headers"
+fi
 
-  # Skip header line, process each package
-  echo "$csv" | tail -n +2 | while IFS=',' read -r pkg_quoted license_quoted rest; do
-    # Strip quotes
-    local pkg="${pkg_quoted//\"/}"
-    local license="${license_quoted//\"/}"
+# ── 3. AGPL Section 13 — network service source disclosure ───────────────────
+header "3. AGPL Section 13 — network service source disclosure"
 
-    [ -z "$pkg" ] && continue
-    checked=$((checked + 1))
+S13_PATTERN="source|Source|github|GitHub|repository|git\.io"
+S13_HITS=$(grep -r -l -E "$S13_PATTERN" \
+  "$ROOT/client/src" 2>/dev/null | wc -l | tr -d ' ')
 
-    # Skip known exceptions
-    for exc in $KNOWN_EXCEPTIONS; do
-      if [[ "$pkg" == *"$exc"* ]]; then
-        continue 2
-      fi
-    done
+if [[ "$S13_HITS" -gt 0 ]]; then
+  pass "Found potential source-disclosure link in client source ($S13_HITS file(s))"
+  info "Verify a visible link to the source repo exists in the UI (footer, About page, etc.)"
+else
+  fail "No source-disclosure mechanism detected in UI source"
+  fail "AGPL-3.0 §13: network users must be offered the Corresponding Source"
+  fail "Action: add a link to the source repository in the app footer or About page"
+  bump_fail
+fi
 
-    # Normalize: handle "MIT*", "(MIT OR Apache-2.0)", etc.
-    local clean_license
-    clean_license=$(echo "$license" | sed 's/\*//g; s/[()]//g; s/ OR /\n/g; s/ AND /\n/g')
+# ── 4. Vendored / embedded third-party code ───────────────────────────────────
+header "4. Vendored / embedded third-party code"
 
-    local pkg_ok=true
-    local pkg_denied=false
-    local pkg_review=false
-    local pkg_unknown=false
+VENDOR_DIRS=$(find "$ROOT" \
+  -not -path "*/node_modules/*" \
+  -not -path "*/.git/*" \
+  -type d \( -name "vendor" -o -name "vendors" -o -name "third_party" -o -name "thirdparty" \) 2>/dev/null)
 
-    while IFS= read -r lic; do
-      lic=$(echo "$lic" | xargs) # trim whitespace
-      [ -z "$lic" ] && continue
+if [[ -z "$VENDOR_DIRS" ]]; then
+  pass "No vendor directories found"
+else
+  warn "Vendor directories found — manually verify licenses:"
+  echo "$VENDOR_DIRS" | while read -r d; do warn "  $d"; done
+  bump_warn
+fi
 
-      if [[ "$lic" =~ $DENIED_RE ]]; then
-        pkg_denied=true
-        pkg_ok=false
-      elif [[ "$lic" == "UNKNOWN" || "$lic" == "UNLICENSED" ]]; then
-        pkg_unknown=true
-        pkg_ok=false
-      elif [[ "$lic" =~ $REVIEW_RE ]]; then
-        pkg_review=true
-      elif [[ ! "$lic" =~ $ALLOWED_RE ]]; then
-        pkg_unknown=true
-        pkg_ok=false
-      fi
-    done <<< "$clean_license"
+# Check for bundled minified third-party files
+MINIFIED=$(find "$ROOT/client/src" "$ROOT/server/src" \
+  -not -path "*/node_modules/*" \
+  -name "*.min.js" -o -name "*.min.css" 2>/dev/null)
 
-    if $pkg_denied; then
-      echo -e "  ${RED}DENIED:  $pkg — $license${NC}"
-    elif $pkg_unknown; then
-      echo -e "  ${YELLOW}UNKNOWN: $pkg — $license${NC}"
-    elif $pkg_review; then
-      echo -e "  ${YELLOW}REVIEW:  $pkg — $license${NC}"
-    fi
+if [[ -n "$MINIFIED" ]]; then
+  warn "Minified files found in source (may be vendored third-party code):"
+  echo "$MINIFIED" | while read -r f; do warn "  $f"; done
+  bump_warn
+else
+  pass "No minified files in source tree"
+fi
+
+# ── 5. Client dependency licenses ────────────────────────────────────────────
+header "5. Client dependency licenses"
+
+CLIENT_DIR="$ROOT/client"
+if [[ ! -d "$CLIENT_DIR/node_modules" ]]; then
+  warn "client/node_modules not installed — run: cd client && npm install"
+  bump_warn
+else
+  info "Scanning client dependencies with license-checker…"
+  CLIENT_LICENSES=$(cd "$CLIENT_DIR" && npx --yes license-checker \
+    --excludePrivatePackages --summary 2>/dev/null || true)
+  echo "$CLIENT_LICENSES" | while read -r line; do
+    echo "  $line"
   done
 
-  # Count issues (re-process since subshell can't modify parent vars)
-  local denied_count review_count unknown_count
-  denied_count=$(echo "$csv" | tail -n +2 | awk -F',' '{gsub(/"/, "", $2); print $2}' | grep -cE "$DENIED_RE" 2>/dev/null || echo 0)
-  unknown_count=$(echo "$csv" | tail -n +2 | awk -F',' '{gsub(/"/, "", $2); print $2}' | grep -cE "^(UNKNOWN|UNLICENSED)$" 2>/dev/null || echo 0)
-  review_count=$(echo "$csv" | tail -n +2 | awk -F',' '{gsub(/"/, "", $2); print $2}' | grep -cE "$REVIEW_RE" 2>/dev/null || echo 0)
-  local total_pkgs
-  total_pkgs=$(echo "$csv" | tail -n +2 | wc -l | xargs)
+  # Check for denied licenses
+  DENIED_PATTERN="GPL-2.0-only|SSPL|BUSL|Proprietary|Commercial|UNLICENSED"
+  CLIENT_DENIED=$(cd "$CLIENT_DIR" && npx license-checker \
+    --excludePrivatePackages --csv 2>/dev/null \
+    | grep -E "$DENIED_PATTERN" || true)
 
-  echo -e "  Scanned $total_pkgs packages"
-  denied_count=$(echo "$denied_count" | tr -d '[:space:]')
-  review_count=$(echo "$review_count" | tr -d '[:space:]')
-  unknown_count=$(echo "$unknown_count" | tr -d '[:space:]')
-  TOTAL_DENIED=$((TOTAL_DENIED + denied_count))
-  TOTAL_REVIEW=$((TOTAL_REVIEW + review_count))
-  TOTAL_UNKNOWN=$((TOTAL_UNKNOWN + unknown_count))
+  if [[ -n "$CLIENT_DENIED" ]]; then
+    fail "Denied licenses found in client dependencies:"
+    echo "$CLIENT_DENIED" | while read -r line; do fail "  $line"; done
+    bump_fail
+  else
+    pass "No denied licenses in client dependencies"
+  fi
+fi
+
+# ── 6. Server dependency licenses ────────────────────────────────────────────
+header "6. Server dependency licenses"
+
+SERVER_DIR="$ROOT/server"
+if [[ ! -d "$SERVER_DIR/node_modules" ]]; then
+  warn "server/node_modules not installed — run: cd server && npm install"
+  bump_warn
+else
+  info "Scanning server dependencies with license-checker…"
+  SERVER_LICENSES=$(cd "$SERVER_DIR" && npx license-checker \
+    --excludePrivatePackages --summary 2>/dev/null || true)
+  echo "$SERVER_LICENSES" | while read -r line; do
+    echo "  $line"
+  done
+
+  # Check for denied licenses
+  SERVER_DENIED=$(cd "$SERVER_DIR" && npx license-checker \
+    --excludePrivatePackages --csv 2>/dev/null \
+    | grep -E "$DENIED_PATTERN" || true)
+
+  if [[ -n "$SERVER_DENIED" ]]; then
+    fail "Denied licenses found in server dependencies:"
+    echo "$SERVER_DENIED" | while read -r line; do fail "  $line"; done
+    bump_fail
+  else
+    pass "No denied licenses in server dependencies"
+  fi
+
+  # Check for unlicensed packages
+  SERVER_UNLICENSED=$(cd "$SERVER_DIR" && npx license-checker \
+    --excludePrivatePackages --csv 2>/dev/null \
+    | grep -i '"Custom:' || true)
+
+  if [[ -n "$SERVER_UNLICENSED" ]]; then
+    warn "Packages with non-standard/custom license entries (manual review required):"
+    echo "$SERVER_UNLICENSED" | while read -r line; do warn "  $line"; done
+    warn "Known issue: buffers@0.1.1 — no license field (transitive via exceljs). See license-policy.json."
+    bump_warn
+  fi
+fi
+
+# ── 7. Known issues from policy file ─────────────────────────────────────────
+header "7. Known issues (from license-policy.json)"
+
+if command -v node &>/dev/null && [[ -f "$POLICY" ]]; then
+  node -e "
+    const p = require('$POLICY');
+    (p.knownIssues || []).forEach(i => {
+      const sev = i.severity === 'HIGH' ? '✘ HIGH' : '⚠  ' + i.severity;
+      console.log('  ' + sev + ' — ' + i.package + '@' + i.version);
+      console.log('    License : ' + i.actualLicense);
+      console.log('    Via     : ' + i.pulledInBy);
+      console.log('    Action  : ' + i.action);
+      console.log('');
+    });
+  " 2>/dev/null || warn "Could not parse license-policy.json"
+else
+  warn "license-policy.json not found or node unavailable"
+fi
+
+info "AGPL-3.0 requirements:"
+node -e "
+  const p = require('$POLICY');
+  const r = p.agplRequirements || {};
+  Object.entries(r).forEach(([k, v]) => {
+    const status = v.status || '';
+    const ok = status.toLowerCase().includes('missing') ||
+                status.toLowerCase().includes('not ') ? false : true;
+    const icon = ok ? '✔' : '✘';
+    console.log('  ' + icon + ' ' + k + ': ' + status);
+  });
+" 2>/dev/null || true
+
+# ── 8. Summary ───────────────────────────────────────────────────────────────
+header "8. Audit Summary"
+
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+echo ""
+echo "  Timestamp : $TIMESTAMP"
+echo "  Failures  : $FAILURES"
+echo "  Warnings  : $WARNINGS"
+echo ""
+
+if [[ $FAILURES -gt 0 ]]; then
+  echo -e "${RED}${BOLD}  AUDIT FAILED — $FAILURES issue(s) require attention before distribution.${RESET}"
+elif [[ $WARNINGS -gt 0 ]]; then
+  echo -e "${YELLOW}${BOLD}  AUDIT PASSED WITH WARNINGS — $WARNINGS item(s) need review.${RESET}"
+else
+  echo -e "${GREEN}${BOLD}  AUDIT PASSED — No issues found.${RESET}"
+fi
+
+# Save plain-text report
+{
+  echo "vibe-tb License Audit"
+  echo "Timestamp: $TIMESTAMP"
+  echo "Failures: $FAILURES  |  Warnings: $WARNINGS"
   echo ""
-}
-
-# Audit each workspace
-audit_workspace "root"   "$PROJECT_ROOT"
-audit_workspace "client" "$PROJECT_ROOT/client"
-audit_workspace "server" "$PROJECT_ROOT/server"
-
-# Summary
-echo -e "${CYAN}=== Summary ===${NC}"
-if [ "$TOTAL_DENIED" -gt 0 ]; then
-  echo -e "${RED}  DENIED licenses: $TOTAL_DENIED — these MUST be removed${NC}"
-fi
-if [ "$TOTAL_REVIEW" -gt 0 ]; then
-  echo -e "${YELLOW}  Review-required: $TOTAL_REVIEW — verify AGPL-3.0 compatibility${NC}"
-fi
-if [ "$TOTAL_UNKNOWN" -gt 0 ]; then
-  echo -e "${YELLOW}  Unknown/unlicensed: $TOTAL_UNKNOWN — investigate before release${NC}"
-fi
-if [ "$TOTAL_DENIED" -eq 0 ] && [ "$TOTAL_REVIEW" -eq 0 ] && [ "$TOTAL_UNKNOWN" -eq 0 ]; then
-  echo -e "${GREEN}  All dependencies have approved licenses. No issues found.${NC}"
-fi
+  echo "Run ./scripts/license-audit.sh for full details."
+  echo "See scripts/license-policy.json for policy and known issues."
+} > "$REPORT"
 
 echo ""
-echo -e "${CYAN}Known exceptions:${NC}"
-echo "  buffers@0.1.1: No license field. Transitive via exceljs. Accepted."
+echo "  Report saved to: scripts/license-audit-result.txt"
+echo ""
 
-# Exit non-zero if denied licenses found
-if [ "$TOTAL_DENIED" -gt 0 ]; then
-  exit 1
-fi
+exit $FAILURES

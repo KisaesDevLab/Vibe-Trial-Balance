@@ -1,0 +1,21 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install poppler-utils for scanned PDF vision-mode support
+RUN apk add --no-cache poppler-utils
+
+# Install server dependencies
+COPY server/package.json server/package-lock.json* server/
+RUN cd server && npm install --production
+
+# Copy server source and build
+COPY server/ server/
+RUN cd server && npx tsc
+
+# Create directories for uploads and backups
+RUN mkdir -p server/uploads server/backups
+
+EXPOSE 3001
+
+CMD ["sh", "-c", "cd server && npx knex migrate:latest --knexfile knexfile.js && node dist/app.js"]
