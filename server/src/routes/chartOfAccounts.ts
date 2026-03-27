@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { logAudit } from '../lib/periodGuard';
 
 // Mounted at /api/v1/clients/:clientId/chart-of-accounts
 export const coaCollectionRouter = Router({ mergeParams: true });
@@ -120,6 +121,7 @@ coaCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<v
         is_active: true,
       })
       .returning('*');
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', entityId: account.id, action: 'create', description: `Created account ${account.account_number} — ${account.account_name}` });
     res.status(201).json({ data: account, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -201,6 +203,7 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
         }
       }
     });
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', action: 'import', description: `COA import — ${inserted} created, ${updated} updated (${rows.length} total)` });
     res.json({ data: { inserted, updated, total: rows.length }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -379,6 +382,7 @@ coaItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<voi
         .json({ data: null, error: { code: 'NOT_FOUND', message: 'Account not found' } });
       return;
     }
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', entityId: id, action: 'update', description: `Updated account ${updated.account_number} — ${Object.keys(updates).join(', ')}` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -423,6 +427,7 @@ coaItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<vo
         .json({ data: null, error: { code: 'NOT_FOUND', message: 'Account not found' } });
       return;
     }
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', entityId: id, action: 'delete', description: `Deactivated account #${id}` });
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';

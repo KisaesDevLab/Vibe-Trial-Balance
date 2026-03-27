@@ -39,6 +39,8 @@ import { CoaTemplatesPage } from './pages/CoaTemplatesPage';
 import { SystemTickmarksPage } from './pages/SystemTickmarksPage';
 import { TransactionEntryPage } from './pages/TransactionEntryPage';
 import { UnitsPage } from './pages/UnitsPage';
+import { PyTieOutPage } from './pages/PyTieOutPage';
+import { TBPopoutPage } from './pages/TBPopoutPage';
 import { useAuthStore } from './store/uiStore';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -66,6 +68,7 @@ export default function App() {
           <Route path="chart-of-accounts" element={<ChartOfAccountsPage />} />
           <Route path="periods" element={<PeriodsPage />} />
           <Route path="trial-balance" element={<TrialBalancePage />} />
+          <Route path="py-tieout" element={<PyTieOutPage />} />
           <Route path="journal-entries" element={<JournalEntriesPage />} />
           <Route path="bank-transactions" element={<BankTransactionsPage />} />
           <Route path="financial-statements" element={<FinancialStatementsPage />} />
@@ -100,6 +103,7 @@ export default function App() {
           <Route path="transaction-entry" element={<TransactionEntryPage />} />
           <Route path="units" element={<UnitsPage />} />
         </Route>
+        <Route path="/tb-popout" element={<ProtectedRoute><TBPopoutPage /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

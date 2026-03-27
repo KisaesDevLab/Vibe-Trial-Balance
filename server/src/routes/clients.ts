@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { logAudit } from '../lib/periodGuard';
 
 const router = Router();
 router.use(authMiddleware);
@@ -49,6 +50,7 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
         is_active: true,
       })
       .returning('*');
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'client', entityId: client.id, action: 'create', description: `Created client "${client.name}"` });
     res.status(201).json({ data: client, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -113,6 +115,7 @@ router.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
         .json({ data: null, error: { code: 'NOT_FOUND', message: 'Client not found' } });
       return;
     }
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'client', entityId: id, action: 'update', description: `Updated client "${updated.name}"` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -138,6 +141,7 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => 
         .json({ data: null, error: { code: 'NOT_FOUND', message: 'Client not found' } });
       return;
     }
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'client', entityId: id, action: 'delete', description: `Deactivated client #${id}` });
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';

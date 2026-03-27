@@ -40,6 +40,7 @@ import {
 } from '../api/tickmarks';
 import { listImports, type DocumentImport } from '../api/pdfImport';
 import { downloadXlsx } from '../utils/downloadXlsx';
+import { openTBPopout } from './TBPopoutPage';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -105,6 +106,9 @@ function colClass(columnId: string, isHeader = false): string {
   const br = `border-r ${b}`;
   switch (columnId) {
     case 'category':             return br;
+    case 'prior_year_debit':     return `bg-gray-100${isHeader ? '' : '/60'} dark:bg-gray-600/20`;
+    case 'prior_year_credit':    return `bg-gray-100${isHeader ? '' : '/60'} dark:bg-gray-600/20 ${br}`;
+    case 'py_balance':           return `bg-gray-100${isHeader ? '' : '/60'} dark:bg-gray-600/20 ${br}`;
     case 'unadjusted_credit':    return br;
     // Trans JE columns (teal)
     case 'trans_adj_debit':      return `bg-teal-50${isHeader ? '' : '/50'} dark:bg-teal-900/20`;
@@ -153,6 +157,7 @@ export function TrialBalancePage() {
   const [lastSyncMsg, setLastSyncMsg] = useState<string | null>(null);
   const [syncedUpToDate, setSyncedUpToDate] = useState(false);
   const [showTax, setShowTax] = useState(true);
+  const [showPY, setShowPY] = useState(false);
   const [singleColumn, setSingleColumn] = useState(false);
   const [zoomAccount, setZoomAccount] = useState<{ accountId: number; accountName: string; accountNumber: string; entryType: 'trans' | 'book' | 'tax' } | null>(null);
   const [notesRow, setNotesRow] = useState<TBRow | null>(null);
@@ -165,6 +170,7 @@ export function TrialBalancePage() {
   const [filterText, setFilterText] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('');
   const [filterUnit, setFilterUnit] = useState<string>('');
+  const [hideZeroBalances, setHideZeroBalances] = useState(false);
 
   // Excel-like cell selection
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -286,6 +292,8 @@ export function TrialBalancePage() {
         case 'category':             return r.category;
         case 'tax_line':             return r.tax_line ?? '';
         case 'workpaper_ref':        return r.workpaper_ref ?? '';
+        case 'prior_year_debit':     return cents(r.prior_year_debit);
+        case 'prior_year_credit':    return cents(r.prior_year_credit);
         case 'unadjusted_debit':     return cents(r.unadjusted_debit);
         case 'unadjusted_credit':    return cents(r.unadjusted_credit);
         case 'trans_adj_debit':      return cents(r.trans_adj_debit);
@@ -299,6 +307,7 @@ export function TrialBalancePage() {
         case 'tax_adjusted_debit':   return netDr(r.tax_adjusted_debit, r.tax_adjusted_credit);
         case 'tax_adjusted_credit':  return netCr(r.tax_adjusted_debit, r.tax_adjusted_credit);
         // Single-column signed-net balance columns
+        case 'py_balance':           return netSigned(r.prior_year_debit, r.prior_year_credit);
         case 'unaj_balance':         return netSigned(r.unadjusted_debit, r.unadjusted_credit);
         case 'trans_adj_balance':    return netSigned(r.trans_adj_debit, r.trans_adj_credit);
         case 'post_trans_balance':   return netSigned(r.post_trans_debit, r.post_trans_credit);
@@ -321,6 +330,9 @@ export function TrialBalancePage() {
       category:             { width: 12 },
       tax_line:             { width: 16 },
       workpaper_ref:        { width: 10 },
+      prior_year_debit:     { width: 14, numeric: true },
+      prior_year_credit:    { width: 14, numeric: true },
+      py_balance:           { width: 14, numeric: true },
       unadjusted_debit:     { width: 14, numeric: true },
       unadjusted_credit:    { width: 14, numeric: true },
       trans_adj_debit:      { width: 13, numeric: true },
@@ -464,11 +476,18 @@ export function TrialBalancePage() {
       if (filterUnit && r.unit !== filterUnit) return false;
       if (filterText) {
         const q = filterText.toLowerCase();
-        return r.account_number.toLowerCase().includes(q) || r.account_name.toLowerCase().includes(q);
+        if (!r.account_number.toLowerCase().includes(q) && !r.account_name.toLowerCase().includes(q)) return false;
+      }
+      if (hideZeroBalances) {
+        const hasBalance = r.unadjusted_debit !== 0 || r.unadjusted_credit !== 0
+          || r.book_adjusted_debit !== 0 || r.book_adjusted_credit !== 0
+          || r.tax_adjusted_debit !== 0 || r.tax_adjusted_credit !== 0
+          || r.prior_year_debit !== 0 || r.prior_year_credit !== 0;
+        if (!hasBalance) return false;
       }
       return true;
     }),
-    [data, filterCategory, filterUnit, filterText],
+    [data, filterCategory, filterUnit, filterText, hideZeroBalances],
   );
 
   // ── Table (placeholder for navigation row count) ───────────────────────────
@@ -736,6 +755,14 @@ export function TrialBalancePage() {
       header: 'Cat.',
       cell: (i) => renderCell(i.row.index, 'category', i.row.original),
     }),
+    columnHelper.accessor('prior_year_debit', {
+      header: 'PY Dr',
+      cell: (i) => { const v = i.getValue(); return <span className={`text-right block text-sm font-mono tabular-nums ${v === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-gray-500 dark:text-gray-400'}`}>{v === 0 ? '—' : fmt(v)}</span>; },
+    }),
+    columnHelper.accessor('prior_year_credit', {
+      header: 'PY Cr',
+      cell: (i) => { const v = i.getValue(); return <span className={`text-right block text-sm font-mono tabular-nums ${v === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-gray-500 dark:text-gray-400'}`}>{v === 0 ? '—' : fmt(v)}</span>; },
+    }),
     columnHelper.accessor('unadjusted_debit', {
       header: 'Unaj. Dr',
       cell: (i) => renderCell(i.row.index, 'unadjusted_debit', i.row.original),
@@ -893,6 +920,15 @@ export function TrialBalancePage() {
       cell: (i) => renderCell(i.row.index, 'category', i.row.original),
     }),
     columnHelper.display({
+      id: 'py_balance',
+      header: 'Prior Year',
+      cell: ({ row: r }) => (
+        <span className="text-right block text-sm font-mono tabular-nums text-gray-500 dark:text-gray-400">
+          {fmtBal(r.original.prior_year_debit, r.original.prior_year_credit)}
+        </span>
+      ),
+    }),
+    columnHelper.display({
       id: 'unaj_balance',
       header: 'Unadjusted',
       cell: ({ row: r }) => renderCell(r.index, 'unaj_net', r.original),
@@ -1024,7 +1060,19 @@ export function TrialBalancePage() {
     }),
   ];
 
+  const hasTrans = useMemo(
+    () => (data ?? []).some((r) => r.trans_adj_debit !== 0 || r.trans_adj_credit !== 0),
+    [data],
+  );
+
   const columnVisibility: VisibilityState = {
+    prior_year_debit:    showPY,
+    prior_year_credit:   showPY,
+    py_balance:          showPY,
+    trans_adj_debit:     hasTrans,
+    trans_adj_credit:    hasTrans,
+    trans_adj_balance:   hasTrans,
+    post_trans_balance:  hasTrans,
     tax_adj_debit:       showTax,
     tax_adj_credit:      showTax,
     tax_adjusted_debit:  showTax,
@@ -1034,7 +1082,7 @@ export function TrialBalancePage() {
   const tableInstance = useReactTable({
     data: filteredDataForNav,
     columns: singleColumn ? singleColumns : columns,
-    state: { sorting, columnVisibility: singleColumn ? {} : columnVisibility },
+    state: { sorting, columnVisibility },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -1060,6 +1108,7 @@ export function TrialBalancePage() {
     return revNet - expNet;
   };
 
+  const pyNetIncome         = calcNetIncome('prior_year_debit', 'prior_year_credit');
   const unajNetIncome      = calcNetIncome('unadjusted_debit', 'unadjusted_credit');
   const postTransNetIncome = calcNetIncome('post_trans_debit', 'post_trans_credit');
   const bkNetIncome        = calcNetIncome('book_adjusted_debit', 'book_adjusted_credit');
@@ -1118,6 +1167,16 @@ export function TrialBalancePage() {
             />
             <span className="text-sm text-gray-600 dark:text-gray-400">Single</span>
           </label>
+          {/* Prior Year column toggle */}
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showPY}
+              onChange={(e) => setShowPY(e.target.checked)}
+              className="rounded border-gray-300 dark:border-gray-600 text-gray-500"
+            />
+            <span className="text-sm text-gray-600 dark:text-gray-400">PY</span>
+          </label>
           {/* Tax column toggle */}
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
             <input
@@ -1163,6 +1222,14 @@ export function TrialBalancePage() {
           >
             Export Excel
           </button>
+          <button
+            onClick={() => selectedPeriodId && openTBPopout(selectedPeriodId, currentPeriod?.period_name)}
+            disabled={!data?.length}
+            title="Open trial balance in a separate window"
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
+          >
+            Pop Out
+          </button>
           {showSyncButton && (
             <button
               onClick={() => initMutation.mutate()}
@@ -1207,15 +1274,24 @@ export function TrialBalancePage() {
             {availableUnits.map((u) => <option key={u} value={u}>{u}</option>)}
           </select>
         )}
-        {(filterText || filterCategory || filterUnit) && (
+        <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={hideZeroBalances}
+            onChange={(e) => { setHideZeroBalances(e.target.checked); setActiveCell(null); }}
+            className="rounded border-gray-300 dark:border-gray-600"
+          />
+          Non-zero only
+        </label>
+        {(filterText || filterCategory || filterUnit || hideZeroBalances) && (
           <button
-            onClick={() => { setFilterText(''); setFilterCategory(''); setFilterUnit(''); }}
+            onClick={() => { setFilterText(''); setFilterCategory(''); setFilterUnit(''); setHideZeroBalances(false); }}
             className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
           >
             Clear
           </button>
         )}
-        {(filterText || filterCategory || filterUnit) && data && (
+        {(filterText || filterCategory || filterUnit || hideZeroBalances) && data && (
           <span className="text-xs text-gray-500 dark:text-gray-400 ml-1">
             {filteredDataForNav.length} of {data.length} accounts
           </span>
@@ -1262,9 +1338,10 @@ export function TrialBalancePage() {
               {singleColumn ? (
                 <tr className="bg-gray-100 dark:bg-gray-700 border-b border-gray-300 dark:border-gray-600">
                   <th colSpan={3} className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600"></th>
+                  {showPY && <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold bg-gray-100 dark:bg-gray-600/20 border-r border-gray-300 dark:border-gray-600">Prior Year</th>}
                   <th className="px-2 py-1 text-xs text-center text-gray-600 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Unadjusted</th>
-                  <th className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold border-r border-gray-300 dark:border-gray-600">Trans JEs</th>
-                  <th className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-teal-50 dark:bg-teal-900/20 border-r border-gray-300 dark:border-gray-600">Post-Trans</th>
+                  {hasTrans && <th className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold border-r border-gray-300 dark:border-gray-600">Trans JEs</th>}
+                  {hasTrans && <th className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-teal-50 dark:bg-teal-900/20 border-r border-gray-300 dark:border-gray-600">Post-Trans</th>}
                   <th className="px-2 py-1 text-xs text-center text-blue-600 dark:text-blue-400 font-semibold border-r border-gray-300 dark:border-gray-600">AJE</th>
                   <th className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600">Adjusted</th>
                   {showTax && <th className="px-2 py-1 text-xs text-center text-purple-600 dark:text-purple-400 font-semibold border-r border-gray-300 dark:border-gray-600">Tax Adj.</th>}
@@ -1277,8 +1354,9 @@ export function TrialBalancePage() {
               ) : (
                 <tr className="bg-gray-100 dark:bg-gray-700 border-b border-gray-300 dark:border-gray-600">
                   <th colSpan={3} className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600"></th>
+                  {showPY && <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold bg-gray-100 dark:bg-gray-600/20 border-r border-gray-300 dark:border-gray-600">Prior Year</th>}
                   <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-600 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Unadjusted</th>
-                  <th colSpan={2} className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold bg-teal-50 dark:bg-teal-900/20 border-r border-gray-300 dark:border-gray-600">Trans JEs</th>
+                  {hasTrans && <th colSpan={2} className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold bg-teal-50 dark:bg-teal-900/20 border-r border-gray-300 dark:border-gray-600">Trans JEs</th>}
                   <th colSpan={2} className="px-2 py-1 text-xs text-center text-blue-600 dark:text-blue-400 font-semibold border-r border-gray-300 dark:border-gray-600">AJE</th>
                   <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600">Adjusted</th>
                   {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-purple-600 dark:text-purple-400 font-semibold border-r border-gray-300 dark:border-gray-600">Tax Adj.</th>}
@@ -1312,7 +1390,7 @@ export function TrialBalancePage() {
                   <td colSpan={tableInstance.getVisibleLeafColumns().length} className="px-4 py-12 text-center text-gray-400 dark:text-gray-500">
                     {!selectedPeriodId ? (
                       <span>Select a period to view the trial balance.</span>
-                    ) : (filterText || filterCategory || filterUnit) ? (
+                    ) : (filterText || filterCategory || filterUnit || hideZeroBalances) ? (
                       <span>No accounts match the current filter.</span>
                     ) : isEmpty ? (
                       <span>
@@ -1348,15 +1426,18 @@ export function TrialBalancePage() {
                       <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
                         Totals
                       </td>
+                      {showPY && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-gray-500 dark:text-gray-400 bg-gray-100/60 dark:bg-gray-600/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtBal(colSum('prior_year_debit'), colSum('prior_year_credit'))}
+                      </td>}
                       <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums border-r border-gray-200 dark:border-gray-700">
                         {fmtBal(colSum('unadjusted_debit'), colSum('unadjusted_credit'))}
                       </td>
-                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-teal-700 dark:text-teal-400 border-r border-gray-200 dark:border-gray-700">
+                      {hasTrans && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-teal-700 dark:text-teal-400 border-r border-gray-200 dark:border-gray-700">
                         {fmtBal(colSum('trans_adj_debit'), colSum('trans_adj_credit'))}
-                      </td>
-                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-teal-50/80 dark:bg-teal-900/20 border-r border-gray-200 dark:border-gray-700">
+                      </td>}
+                      {hasTrans && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-teal-50/80 dark:bg-teal-900/20 border-r border-gray-200 dark:border-gray-700">
                         {fmtBal(colSum('post_trans_debit'), colSum('post_trans_credit'))}
-                      </td>
+                      </td>}
                       <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-blue-700 dark:text-blue-400 border-r border-gray-200 dark:border-gray-700">
                         {fmtBal(colSum('book_adj_debit'), colSum('book_adj_credit'))}
                       </td>
@@ -1376,13 +1457,16 @@ export function TrialBalancePage() {
                       <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
                         Net Income/(Loss)
                       </td>
+                      {showPY && <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums text-gray-500 dark:text-gray-400 bg-gray-100/60 dark:bg-gray-600/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtNet(pyNetIncome)}
+                      </td>}
                       <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums border-r border-gray-200 dark:border-gray-700">
                         {fmtNet(unajNetIncome)}
                       </td>
-                      <td className="border-r border-gray-200 dark:border-gray-700"></td>
-                      <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums bg-teal-50/80 dark:bg-teal-900/20 border-r border-gray-200 dark:border-gray-700">
+                      {hasTrans && <td className="border-r border-gray-200 dark:border-gray-700"></td>}
+                      {hasTrans && <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums bg-teal-50/80 dark:bg-teal-900/20 border-r border-gray-200 dark:border-gray-700">
                         {fmtNet(postTransNetIncome)}
-                      </td>
+                      </td>}
                       <td className="border-r border-gray-200 dark:border-gray-700"></td>
                       <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums bg-blue-50/80 dark:bg-blue-900/20 border-r border-gray-200 dark:border-gray-700">
                         {fmtNet(bkNetIncome)}
@@ -1401,10 +1485,12 @@ export function TrialBalancePage() {
                       <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
                         Totals
                       </td>
+                      {showPY && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-gray-500 dark:text-gray-400 bg-gray-100/60 dark:bg-gray-600/20">{fmtTotal(colSum('prior_year_debit'))}</td>}
+                      {showPY && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-gray-500 dark:text-gray-400 bg-gray-100/60 dark:bg-gray-600/20 border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('prior_year_credit'))}</td>}
                       <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('unadjusted_debit'))}</td>
                       <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('unadjusted_credit'))}</td>
-                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-teal-700 dark:text-teal-400">{fmtTotal(colSum('trans_adj_debit'))}</td>
-                      <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-teal-700 dark:text-teal-400 border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('trans_adj_credit'))}</td>
+                      {hasTrans && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-teal-700 dark:text-teal-400">{fmtTotal(colSum('trans_adj_debit'))}</td>}
+                      {hasTrans && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-teal-700 dark:text-teal-400 border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('trans_adj_credit'))}</td>}
                       <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-blue-700 dark:text-blue-400">{fmtTotal(colSum('book_adj_debit'))}</td>
                       <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-blue-700 dark:text-blue-400 border-r border-gray-200 dark:border-gray-700">{fmtTotal(colSum('book_adj_credit'))}</td>
                       <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums font-semibold bg-blue-50/80 dark:bg-blue-900/20">{fmtTotal(netDrSum('book_adjusted_debit', 'book_adjusted_credit'))}</td>
@@ -1420,10 +1506,13 @@ export function TrialBalancePage() {
                       <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
                         Net Income/(Loss)
                       </td>
+                      {showPY && <td colSpan={2} className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums text-gray-500 dark:text-gray-400 bg-gray-100/60 dark:bg-gray-600/20 border-r border-gray-200 dark:border-gray-700">
+                        {fmtNet(pyNetIncome)}
+                      </td>}
                       <td colSpan={2} className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums border-r border-gray-200 dark:border-gray-700">
                         {fmtNet(unajNetIncome)}
                       </td>
-                      <td colSpan={2} className="border-r border-gray-200 dark:border-gray-700"></td>
+                      {hasTrans && <td colSpan={2} className="border-r border-gray-200 dark:border-gray-700"></td>}
                       <td colSpan={2} className="border-r border-gray-200 dark:border-gray-700"></td>
                       <td colSpan={2} className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums bg-blue-50/80 dark:bg-blue-900/20 border-r border-gray-200 dark:border-gray-700">
                         {fmtNet(bkNetIncome)}
@@ -1546,6 +1635,7 @@ export function TrialBalancePage() {
 
 interface TBMapping {
   accountNumberCol: string;
+  accountNameCol: string;
   debitCol: string;
   creditCol: string;
 }
@@ -1576,6 +1666,7 @@ function bestTBMatch(headers: string[], candidates: string[]): string {
 function autoDetectTBMapping(headers: string[]): TBMapping {
   return {
     accountNumberCol: bestTBMatch(headers, ['accountnumber', 'account_number', 'acct#', 'acctno', 'acct', 'number', 'code']),
+    accountNameCol: bestTBMatch(headers, ['accountname', 'account_name', 'description', 'name', 'accountdescription', 'account_description', 'account']),
     debitCol: bestTBMatch(headers, ['debit', 'dr', 'debitamount', 'debit_amount']),
     creditCol: bestTBMatch(headers, ['credit', 'cr', 'creditamount', 'credit_amount']),
   };
@@ -1590,7 +1681,7 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
   const [step, setStep] = useState<1 | 2>(1);
   const [headers, setHeaders] = useState<string[]>([]);
   const [rawRows, setRawRows] = useState<string[][]>([]);
-  const [mapping, setMapping] = useState<TBMapping>({ accountNumberCol: '', debitCol: '', creditCol: '' });
+  const [mapping, setMapping] = useState<TBMapping>({ accountNumberCol: '', accountNameCol: '', debitCol: '', creditCol: '' });
   const [error, setError] = useState('');
   const [result, setResult] = useState<{ upserted: number; skipped: number; total: number } | null>(null);
   const [importing, setImporting] = useState(false);
@@ -1622,6 +1713,7 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
     if (!mapping.creditCol) { setError('Credit column is required.'); return; }
 
     const acctIdx = headers.indexOf(mapping.accountNumberCol);
+    const nameIdx = mapping.accountNameCol ? headers.indexOf(mapping.accountNameCol) : -1;
     const drIdx = headers.indexOf(mapping.debitCol);
     const crIdx = headers.indexOf(mapping.creditCol);
 
@@ -1629,6 +1721,7 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
       .filter((r) => r[acctIdx]?.trim())
       .map((r) => ({
         accountNumber: r[acctIdx]?.trim() ?? '',
+        ...(nameIdx >= 0 && r[nameIdx]?.trim() ? { accountName: r[nameIdx].trim() } : {}),
         debit: Math.round((parseFloat(r[drIdx]?.replace(/[^0-9.-]/g, '') || '0') || 0) * 100),
         credit: Math.round((parseFloat(r[crIdx]?.replace(/[^0-9.-]/g, '') || '0') || 0) * 100),
       }));
@@ -1705,6 +1798,7 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
               <div className="space-y-2">
                 {([
                   { label: 'Account Number *', key: 'accountNumberCol' as keyof TBMapping },
+                  { label: 'Account Name', key: 'accountNameCol' as keyof TBMapping },
                   { label: 'Debit *', key: 'debitCol' as keyof TBMapping },
                   { label: 'Credit *', key: 'creditCol' as keyof TBMapping },
                 ] as Array<{ label: string; key: keyof TBMapping }>).map(({ label, key }) => (
@@ -1728,6 +1822,7 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
                   <thead className="bg-gray-50 dark:bg-gray-800/60 sticky top-0">
                     <tr>
                       <th className="px-2 py-1 text-left font-medium text-gray-500 dark:text-gray-400">Acct #</th>
+                      {mapping.accountNameCol && <th className="px-2 py-1 text-left font-medium text-gray-500 dark:text-gray-400">Name</th>}
                       <th className="px-2 py-1 text-right font-medium text-gray-500 dark:text-gray-400">Debit</th>
                       <th className="px-2 py-1 text-right font-medium text-gray-500 dark:text-gray-400">Credit</th>
                     </tr>
@@ -1735,11 +1830,13 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                     {rawRows.slice(0, 50).map((row, i) => {
                       const acctIdx = headers.indexOf(mapping.accountNumberCol);
+                      const nameIdx = headers.indexOf(mapping.accountNameCol);
                       const drIdx = headers.indexOf(mapping.debitCol);
                       const crIdx = headers.indexOf(mapping.creditCol);
                       return (
                         <tr key={i} className={i % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-50/40 dark:bg-gray-700/20'}>
                           <td className="px-2 py-0.5 text-gray-700 dark:text-gray-300">{acctIdx >= 0 ? row[acctIdx] : '—'}</td>
+                          {mapping.accountNameCol && <td className="px-2 py-0.5 text-gray-700 dark:text-gray-300 truncate max-w-[10rem]">{nameIdx >= 0 ? row[nameIdx] : '—'}</td>}
                           <td className="px-2 py-0.5 text-right text-gray-700 dark:text-gray-300">{drIdx >= 0 ? row[drIdx] : '—'}</td>
                           <td className="px-2 py-0.5 text-right text-gray-700 dark:text-gray-300">{crIdx >= 0 ? row[crIdx] : '—'}</td>
                         </tr>

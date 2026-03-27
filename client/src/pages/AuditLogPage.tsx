@@ -48,14 +48,17 @@ function DescriptionCell({ entry }: { entry: AuditLogEntry }) {
 const ENTITY_TYPE_OPTIONS = [
   '',
   'journal_entry',
+  'trial_balance',
   'bank_transaction',
   'period',
   'chart_of_accounts',
+  'py_comparison',
   'reconciliation',
   'engagement_task',
   'client',
   'user',
   'backup',
+  'mcp_tool',
 ];
 
 export function AuditLogPage() {

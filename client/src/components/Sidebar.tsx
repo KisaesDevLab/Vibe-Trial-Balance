@@ -47,6 +47,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: 'Trial Balance',
     items: [
       { to: '/trial-balance',  label: 'Trial Balance' },
+      { to: '/py-tieout',      label: 'PY Tie-Out' },
       { to: '/journal-entries', label: 'Journal Entries' },
       { to: '/aje-listing',    label: 'AJE Listing' },
       { to: '/tickmarks',      label: 'Tickmarks' },

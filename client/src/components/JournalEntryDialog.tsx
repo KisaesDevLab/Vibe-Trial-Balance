@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createJournalEntry, type JEInput } from '../api/journalEntries';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
+import { QuickAddAccountModal } from './QuickAddAccountModal';
 import { DateInput } from './DateInput';
 import { evalAndFormatAmount } from '../utils/evalAmountExpr';
 
@@ -44,6 +45,7 @@ export function JournalEntryDialog({ periodId, clientId, onClose, onSuccess }: P
     { accountId: '', debit: '', credit: '' },
   ]);
   const [error, setError] = useState<string | null>(null);
+  const [quickAddLineIdx, setQuickAddLineIdx] = useState<number | null>(null);
 
   const { data: accountsData } = useQuery({
     queryKey: ['chart-of-accounts', clientId],
@@ -96,7 +98,7 @@ export function JournalEntryDialog({ periodId, clientId, onClose, onSuccess }: P
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+      <div role="dialog" aria-modal="true" className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-visible">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700 shrink-0">
           <h2 className="text-base font-semibold dark:text-white">New Journal Entry</h2>
           <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
@@ -155,6 +157,7 @@ export function JournalEntryDialog({ periodId, clientId, onClose, onSuccess }: P
                           accounts={accounts}
                           value={line.accountId}
                           onChange={(accountId) => setLine(idx, 'accountId', accountId)}
+                          onCreateNew={() => setQuickAddLineIdx(idx)}
                         />
                       </td>
                       <td className="px-1 py-1">
@@ -221,6 +224,16 @@ export function JournalEntryDialog({ periodId, clientId, onClose, onSuccess }: P
           </form>
         </div>
       </div>
+      {quickAddLineIdx !== null && (
+        <QuickAddAccountModal
+          clientId={clientId}
+          onClose={() => setQuickAddLineIdx(null)}
+          onCreated={(accountId) => {
+            setLine(quickAddLineIdx, 'accountId', accountId);
+            setQuickAddLineIdx(null);
+          }}
+        />
+      )}
     </div>
   );
 }

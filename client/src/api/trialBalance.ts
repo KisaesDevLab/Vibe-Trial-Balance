@@ -41,6 +41,7 @@ export const initializeTrialBalance = (periodId: number) =>
 
 export interface TBImportRow {
   accountNumber: string;
+  accountName?: string;
   debit: number;
   credit: number;
 }

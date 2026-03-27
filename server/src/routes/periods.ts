@@ -63,6 +63,7 @@ periodCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promis
           is_current: isCurrent ?? false,
         })
         .returning('*');
+      await logAudit({ userId: req.user!.userId, periodId: period.id, entityType: 'period', entityId: period.id, action: 'create', description: `Created period "${periodName}"` }, trx);
       res.status(201).json({ data: period, error: null });
     });
   } catch (err: unknown) {
@@ -104,6 +105,7 @@ periodItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<
         res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
         return;
       }
+      await logAudit({ userId: req.user!.userId, periodId: id, entityType: 'period', entityId: id, action: 'update', description: `Updated period "${updated.period_name}" — ${Object.keys(updates).join(', ')}` }, trx);
       res.json({ data: updated, error: null });
     });
   } catch (err: unknown) {
@@ -183,7 +185,7 @@ periodItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise
     return;
   }
   try {
-    const period = await db('periods').where({ id }).first('id', 'locked_at');
+    const period = await db('periods').where({ id }).first('id', 'locked_at', 'period_name');
     if (!period) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
       return;
@@ -192,6 +194,8 @@ periodItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: 'Cannot delete a locked period. Ask an admin to unlock it first.' } });
       return;
     }
+    // Log before delete (period_id will CASCADE)
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'period', entityId: id, action: 'delete', description: `Deleted period "${period.period_name ?? id}"` });
     const [deleted] = await db('periods').where({ id }).delete().returning('id');
     if (!deleted) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });

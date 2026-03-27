@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { assertPeriodUnlocked } from '../lib/periodGuard';
+import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 
 export const tbPeriodRouter = Router({ mergeParams: true });
 tbPeriodRouter.use(authMiddleware);
@@ -102,6 +102,7 @@ tbPeriodRouter.post('/initialize', async (req: AuthRequest, res: Response): Prom
         .delete();
     }
 
+    await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'create', description: `Initialized TB from COA — ${toInsert.length} rows created, ${removed} inactive removed` });
     res.json({ data: { initialized: toInsert.length, removed }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -113,10 +114,17 @@ tbPeriodRouter.post('/initialize', async (req: AuthRequest, res: Response): Prom
 // Bulk upsert unadjusted balances matched by account_number
 const importRowSchema = z.object({
   accountNumber: z.string().min(1),
+  accountName: z.string().optional(),
   debit: z.number().int().min(0),
   credit: z.number().int().min(0),
 });
 const importSchema = z.object({ rows: z.array(importRowSchema).min(1) });
+
+function parseAliases(val: unknown): string[] {
+  if (Array.isArray(val)) return val as string[];
+  if (typeof val === 'string') { try { return JSON.parse(val); } catch { return []; } }
+  return [];
+}
 
 tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<void> => {
   const periodId = Number(req.params.periodId);
@@ -143,6 +151,7 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
 
     let upserted = 0;
     let skipped = 0;
+    const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
     await db.transaction(async (trx) => {
       for (const row of result.data.rows) {
         const accountId = accountMap.get(row.accountNumber);
@@ -159,8 +168,33 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
           .onConflict(['period_id', 'account_id'])
           .merge(['unadjusted_debit', 'unadjusted_credit', 'updated_by', 'updated_at']);
         upserted++;
+        if (row.accountName?.trim()) {
+          aliasUpdates.push({ accountId, importName: row.accountName.trim() });
+        }
+      }
+
+      // Store imported account names as aliases for future matching
+      if (aliasUpdates.length > 0) {
+        const uniqueIds = [...new Set(aliasUpdates.map((u) => u.accountId))];
+        const currentAliasData = await trx('chart_of_accounts')
+          .whereIn('id', uniqueIds)
+          .select('id', 'account_name', 'import_aliases');
+        const aliasMap = new Map(currentAliasData.map((a: { id: number; account_name: string; import_aliases: unknown }) => [
+          a.id, { accountName: a.account_name, aliases: parseAliases(a.import_aliases) },
+        ]));
+        for (const { accountId, importName } of aliasUpdates) {
+          const data = aliasMap.get(accountId);
+          if (!data) continue;
+          if (importName.toLowerCase() !== data.accountName.toLowerCase() && !data.aliases.some((a) => a.toLowerCase() === importName.toLowerCase())) {
+            data.aliases.push(importName);
+            await trx('chart_of_accounts')
+              .where({ id: accountId })
+              .update({ import_aliases: JSON.stringify(data.aliases), updated_at: trx.fn.now() });
+          }
+        }
       }
     });
+    await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported unadjusted balances — ${upserted} upserted, ${skipped} skipped` });
     res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -171,6 +205,7 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
 // POST /api/v1/periods/:periodId/trial-balance/import-prior-year
 const priorYearRowSchema = z.object({
   accountNumber: z.string().min(1),
+  accountName: z.string().optional(),
   debit: z.number().int().min(0),
   credit: z.number().int().min(0),
 });
@@ -201,6 +236,7 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
 
     let upserted = 0;
     let skipped = 0;
+    const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
     await db.transaction(async (trx) => {
       for (const row of result.data.rows) {
         const accountId = accountMap.get(row.accountNumber);
@@ -219,8 +255,33 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
           .onConflict(['period_id', 'account_id'])
           .merge(['prior_year_debit', 'prior_year_credit', 'updated_by', 'updated_at']);
         upserted++;
+        if (row.accountName?.trim()) {
+          aliasUpdates.push({ accountId, importName: row.accountName.trim() });
+        }
+      }
+
+      // Store imported account names as aliases for future matching
+      if (aliasUpdates.length > 0) {
+        const uniqueIds = [...new Set(aliasUpdates.map((u) => u.accountId))];
+        const currentAliasData = await trx('chart_of_accounts')
+          .whereIn('id', uniqueIds)
+          .select('id', 'account_name', 'import_aliases');
+        const aliasMap = new Map(currentAliasData.map((a: { id: number; account_name: string; import_aliases: unknown }) => [
+          a.id, { accountName: a.account_name, aliases: parseAliases(a.import_aliases) },
+        ]));
+        for (const { accountId, importName } of aliasUpdates) {
+          const data = aliasMap.get(accountId);
+          if (!data) continue;
+          if (importName.toLowerCase() !== data.accountName.toLowerCase() && !data.aliases.some((a) => a.toLowerCase() === importName.toLowerCase())) {
+            data.aliases.push(importName);
+            await trx('chart_of_accounts')
+              .where({ id: accountId })
+              .update({ import_aliases: JSON.stringify(data.aliases), updated_at: trx.fn.now() });
+          }
+        }
       }
     });
+    await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported prior year balances — ${upserted} upserted, ${skipped} skipped` });
     res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -262,6 +323,7 @@ tbPeriodRouter.put('/:accountId', async (req: AuthRequest, res: Response): Promi
       .onConflict(['period_id', 'account_id'])
       .merge(['unadjusted_debit', 'unadjusted_credit', 'updated_by', 'updated_at']);
 
+    await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: accountId, action: 'update', description: `Updated balance — Dr: ${unadjustedDebit} Cr: ${unadjustedCredit}` });
     res.json({ data: { periodId, accountId, unadjustedDebit, unadjustedCredit }, error: null });
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };

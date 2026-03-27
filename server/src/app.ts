@@ -36,6 +36,7 @@ import { supportRouter } from './routes/support';
 import { coaTemplatesRouter } from './routes/coaTemplates';
 import { payeesRouter } from './routes/payees';
 import { unitsRouter } from './routes/units';
+import { pyComparisonRouter } from './routes/pyComparison';
 import { mcpRouter } from './routes/mcpHttp';
 import { db } from './db';
 
@@ -111,6 +112,7 @@ app.use('/api/v1/support', supportRouter);
 app.use('/api/v1/coa-templates', coaTemplatesRouter);
 app.use('/api/v1/clients/:clientId/payees', payeesRouter);
 app.use('/api/v1/clients/:clientId/units', unitsRouter);
+app.use('/api/v1/periods/:periodId/py-comparison', pyComparisonRouter);
 app.use('/mcp', mcpRouter);
 
 app.listen(PORT, () => {

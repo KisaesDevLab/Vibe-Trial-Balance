@@ -3,6 +3,7 @@ import { z } from 'zod';
 import bcrypt from 'bcrypt';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { logAudit } from '../lib/periodGuard';
 
 export const usersRouter = Router();
 usersRouter.use(authMiddleware);
@@ -54,6 +55,7 @@ usersRouter.post('/', adminOnly, async (req: AuthRequest, res: Response): Promis
       is_active: true,
     }).returning(['id', 'username', 'display_name', 'role', 'is_active', 'created_at']);
 
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: user.id, action: 'create', description: `Created user "${username}" (role: ${role})` });
     res.status(201).json({ data: user, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -103,6 +105,9 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'User not found' } });
       return;
     }
+    const changedFields = Object.keys(updates).filter(k => k !== 'updated_at');
+    const hasPasswordChange = changedFields.includes('password_hash');
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: id, action: 'update', description: `Updated user "${updated.username}" — ${hasPasswordChange ? 'password changed' : changedFields.join(', ')}` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -129,6 +134,7 @@ usersRouter.delete('/:id', adminOnly, async (req: AuthRequest, res: Response): P
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'User not found' } });
       return;
     }
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: id, action: 'delete', description: `Deactivated user "${updated.username}"` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
