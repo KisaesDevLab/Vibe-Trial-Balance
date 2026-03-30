@@ -1226,9 +1226,13 @@ export function TrialBalancePage() {
             onClick={() => selectedPeriodId && openTBPopout(selectedPeriodId, currentPeriod?.period_name)}
             disabled={!data?.length}
             title="Open trial balance in a separate window"
-            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
+            className="p-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
           >
-            Pop Out
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="21" y1="3" x2="14" y2="10" />
+              <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+            </svg>
           </button>
           {showSyncButton && (
             <button

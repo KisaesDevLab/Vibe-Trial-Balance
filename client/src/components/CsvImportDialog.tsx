@@ -295,11 +295,13 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
         setNumberChoice('ai');
         return;
       }
-      // Apply suggestions — match by csvRow (stable) with csvAccountName fallback
+      // Apply suggestions — match by csvRow (stable) with case-insensitive name fallback
       setMatches((prev) => prev.map((m) => {
+        if (m.action !== 'create_new' && m.action !== 'match') return m;
+        const nameLower = m.csvAccountName?.toLowerCase() ?? '';
         const suggestion =
           suggestions.find((s) => s.csvRow === m.csvRow) ??
-          (m.csvAccountName ? suggestions.find((s) => s.csvAccountName === m.csvAccountName) : undefined);
+          (nameLower ? suggestions.find((s) => s.csvAccountName?.toLowerCase() === nameLower) : undefined);
         if (!suggestion) return m;
         return {
           ...m,
@@ -410,7 +412,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-2xl flex flex-col ${dialogWidth}`}>
+      <div role="dialog" aria-modal="true" className={`bg-white dark:bg-gray-800 rounded-xl shadow-2xl flex flex-col ${dialogWidth}`}>
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
@@ -731,6 +733,20 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                 >
                   Back
                 </button>
+                {matches.some((m) => m.action === 'create_new' && !m.newAccountNumber?.trim() && !m.csvAccountNumber?.trim()) && (
+                  <button
+                    onClick={handleAiAssignNumbers}
+                    disabled={suggestingNumbers}
+                    className="px-4 py-2 text-sm border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 disabled:opacity-50"
+                  >
+                    {suggestingNumbers ? (
+                      <span className="flex items-center gap-1.5">
+                        <span className="inline-block w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                        Suggesting…
+                      </span>
+                    ) : 'AI Assign Account Numbers'}
+                  </button>
+                )}
                 <button
                   onClick={handleConfirm}
                   disabled={confirming || totalActive === 0}

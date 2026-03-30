@@ -8,10 +8,11 @@ accepting external contributions, or after adding multiple dependencies.
 
 ## AUDIT INSTRUCTIONS
 
-You are performing a comprehensive AGPL-3.0 license compliance audit of
+You are performing a comprehensive license compliance audit of
 **vibe-tb** — a self-hosted accounting/tax-workpaper application
 served over a network (Raspberry Pi 5, Nginx). The project license is
-**AGPL-3.0-only**. Work through all 10 sections below. For each section,
+**BSL-1.1** (Business Source License 1.1), converting to **Apache-2.0** on
+**2030-03-30**. Work through all 10 sections below. For each section,
 report findings with severity (CRITICAL / HIGH / MEDIUM / LOW / PASS).
 
 Reference file: `scripts/license-policy.json` — the authoritative policy.
@@ -21,11 +22,12 @@ Reference file: `scripts/license-policy.json` — the authoritative policy.
 ### Section 1 — LICENSE File
 
 1. Check whether `LICENSE` exists in the project root.
-2. Confirm it contains the full AGPL-3.0 text (not just a reference).
-3. Confirm the copyright year and holder are correct.
+2. Confirm it contains the full BSL-1.1 text with correct parameters
+   (Licensor, Licensed Work, Additional Use Grant, Change Date, Change License).
+3. Confirm the copyright year and holder are correct (Kisaes LLC).
 
-**Expected result:** `LICENSE` exists, contains full AGPL-3.0 text, has a
-current copyright year.
+**Expected result:** `LICENSE` exists, contains full BSL-1.1 text with all
+parameters filled in correctly.
 
 ---
 
@@ -35,8 +37,8 @@ current copyright year.
 2. For each file, check for a license header comment at the top.
    Minimum acceptable header:
    ```
-   // SPDX-License-Identifier: AGPL-3.0-only
-   // Copyright (C) <YEAR> <HOLDER>
+   // SPDX-License-Identifier: BUSL-1.1
+   // Copyright (C) <YEAR> Kisaes LLC
    ```
 3. List any files missing headers.
 4. Note: generated files (e.g. Vite build output, migration auto-generators)
@@ -46,24 +48,18 @@ current copyright year.
 
 ---
 
-### Section 3 — AGPL Section 13 — Network Use / Source Disclosure
+### Section 3 — Source Code Visibility
 
-This is the most critical AGPL-specific requirement for this project.
+BSL-1.1 requires conspicuous display of the License on each copy of the
+Licensed Work.
 
-1. Confirm the application is accessed over a network (not just locally).
-2. Search `client/src/` for any UI component, page, or footer that links to
+1. Search `client/src/` for any UI component, page, or footer that links to
    the source code repository (GitHub, etc.).
-3. Check whether the server exposes a `/source` or similar endpoint.
-4. Check `CLAUDE.md` and `README.md` for any documented compliance plan.
+2. Check whether the LICENSE text is accessible to users of the application.
+3. Check `CLAUDE.md` and `README.md` for documented compliance.
 
-**Why this matters:** AGPL-3.0 §13 requires that if users interact with the
-software over a network, they must be offered the Corresponding Source. A
-visible link in the UI footer or an About page satisfies this requirement.
-Failure to provide this is a license violation even if all other requirements
-are met.
-
-**Expected result:** A visible, functional link to the source code repo exists
-in the application UI and is accessible to end users without needing to log in.
+**Expected result:** A visible link to the source code repo exists in the
+application UI footer. The LICENSE file is included in distribution.
 
 ---
 
@@ -99,7 +95,7 @@ in the application UI and is accessible to end users without needing to log in.
      a newer version of the chain resolves this.
 
    **BlueOak-1.0.0** (jackspeak, minipass, sax, path-scurry, package-json-from-dist):
-   - BlueOak-1.0.0 is a permissive license compatible with AGPL-3.0. Classify
+   - BlueOak-1.0.0 is a permissive license compatible with BSL-1.1. Classify
      as PASS after confirming the text matches the BlueOak 1.0.0 standard.
 
    **MIT\*** (chainsaw, traverse, png-js):
@@ -136,19 +132,20 @@ carry significantly lower compliance risk.
 
 ---
 
-### Section 8 — Dual-License Integrity Check
+### Section 8 — Copyleft Dependency Check
 
-AGPL-3.0 is copyleft. Verify that no module in the codebase is licensed under
-a stricter or incompatible license that would conflict:
+BSL-1.1 is a source-available license, not copyleft. Verify that no dependency
+carries copyleft obligations that would conflict with BSL-1.1 distribution:
 
-- GPL-2.0-only is NOT compatible with AGPL-3.0 (GPL-2.0-only cannot be
-  upgraded to AGPL-3.0).
-- GPL-3.0-or-later IS compatible with AGPL-3.0.
-- Proprietary / commercial licenses are NOT compatible.
+- AGPL-3.0 dependencies are NOT compatible (would require releasing under AGPL).
+- GPL-2.0-only is NOT compatible.
+- GPL-3.0-or-later requires review — acceptable if elected as runtime dependency
+  only and not statically linked.
 - LGPL packages used as libraries (not modified and statically linked) are
   generally acceptable.
+- Proprietary / commercial licenses are NOT compatible.
 
-If any GPL-2.0-only package is found, classify as CRITICAL.
+If any AGPL-3.0 or GPL-2.0-only package is found, classify as CRITICAL.
 
 ---
 
@@ -161,7 +158,7 @@ This application integrates three AI providers. Verify:
 3. `@modelcontextprotocol/sdk` — confirm MIT or Apache-2.0
 
 These packages process sensitive financial data. Confirm their licenses permit
-use in a self-hosted, network-served AGPL application without additional terms.
+use in a BSL-1.1 licensed application without additional terms.
 
 ---
 
@@ -173,7 +170,7 @@ Produce a structured compliance report with the following format:
 ## License Audit Report — vibe-tb
 Date: <today>
 Auditor: Claude Code
-Project License: AGPL-3.0-only
+Project License: BSL-1.1 (converts to Apache-2.0 on 2030-03-30)
 
 ### CRITICAL Issues (must fix before any distribution)
 [list]

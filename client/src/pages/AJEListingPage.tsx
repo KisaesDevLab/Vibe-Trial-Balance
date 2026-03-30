@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { listJournalEntries, type JournalEntry } from '../api/journalEntries';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
+import { downloadExport, bookkeeperLetterUrl } from '../api/exports';
 import { downloadXlsx } from '../utils/downloadXlsx';
 
 function fmt(cents: number): string {
@@ -182,6 +183,33 @@ export function AJEListingPage() {
             className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
           >
             {pdfLoading ? 'Generating…' : '⬇ Download PDF'}
+          </button>
+          <span className="w-px h-6 bg-gray-300 dark:bg-gray-600" />
+          <button
+            onClick={async () => {
+              if (!token || !selectedPeriodId) return;
+              try {
+                await openPdfPreview(bookkeeperLetterUrl(selectedPeriodId, true), token);
+              } catch { /* ignore */ }
+            }}
+            disabled={!entries.length}
+            title="Preview bookkeeper letter"
+            className="px-3 py-1.5 text-sm border border-purple-300 dark:border-purple-700 text-purple-700 dark:text-purple-400 rounded hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-40"
+          >
+            Bookkeeper Letter
+          </button>
+          <button
+            onClick={async () => {
+              if (!selectedPeriodId) return;
+              try {
+                await downloadExport(bookkeeperLetterUrl(selectedPeriodId, false), `bookkeeper-letter-${selectedPeriodId}.pdf`);
+              } catch { /* ignore */ }
+            }}
+            disabled={!entries.length}
+            title="Download bookkeeper letter PDF"
+            className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-40"
+          >
+            ⬇ Letter PDF
           </button>
         </div>
       </div>

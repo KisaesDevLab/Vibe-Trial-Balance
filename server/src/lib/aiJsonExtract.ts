@@ -8,7 +8,7 @@
 
 /** Strip markdown code fences if present, then return cleaned text */
 function stripFences(raw: string): string {
-  const fenceMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  const fenceMatch = raw.match(/(?:```|~~~)(?:json)?\s*\n?([\s\S]*?)(?:```|~~~)/);
   return fenceMatch ? fenceMatch[1].trim() : raw;
 }
 

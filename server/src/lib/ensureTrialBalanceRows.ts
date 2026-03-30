@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// Copyright (C) 2024–2026 [Project Author]
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (C) 2024–2026 Kisaes LLC
 
 import type { Knex } from 'knex';
 

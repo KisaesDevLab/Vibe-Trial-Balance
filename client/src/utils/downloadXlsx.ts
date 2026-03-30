@@ -111,3 +111,42 @@ export function downloadXlsx(
   const xlsxFilename = filename.endsWith('.xlsx') ? filename : filename.replace(/\.csv$/, '.xlsx');
   XLSX.writeFile(wb, xlsxFilename);
 }
+
+/**
+ * Downloads a multi-sheet Excel workbook. Each sheet has its own header + data rows.
+ */
+export function downloadXlsxMultiSheet(
+  filename: string,
+  sheets: Array<{ name: string; rows: string[][] }>,
+): void {
+  if (!sheets.length) return;
+
+  const wb = XLSX.utils.book_new();
+
+  for (const sheet of sheets) {
+    if (!sheet.rows.length) continue;
+    const colCount = sheet.rows[0].length;
+
+    const styledData = sheet.rows.map((row, rowIdx) =>
+      row.map((cell) => {
+        const isHeader = rowIdx === 0;
+        const n = Number(cell);
+        const value = !isHeader && cell !== '' && !isNaN(n) ? n : cell;
+        return {
+          v: value,
+          t: typeof value === 'number' ? 'n' as const : 's' as const,
+          s: isHeader ? headerStyle() : dataStyle(rowIdx - 1, typeof value === 'number'),
+        };
+      }),
+    );
+
+    const ws = XLSX.utils.aoa_to_sheet(styledData);
+    ws['!cols'] = Array.from({ length: colCount }, () => ({ wch: 16 }));
+    ws['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft', state: 'frozen' };
+
+    XLSX.utils.book_append_sheet(wb, ws, sheet.name);
+  }
+
+  const xlsxFilename = filename.endsWith('.xlsx') ? filename : filename.replace(/\.csv$/, '.xlsx');
+  XLSX.writeFile(wb, xlsxFilename);
+}

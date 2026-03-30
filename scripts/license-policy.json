@@ -1,8 +1,10 @@
 {
-  "_comment": "Machine-readable license policy for vibe-tb (AGPL-3.0-only).",
-  "_updated": "2026-03-22",
+  "_comment": "Machine-readable license policy for vibe-tb (BSL-1.1, converts to Apache-2.0 on 2030-03-30).",
+  "_updated": "2026-03-30",
 
-  "projectLicense": "AGPL-3.0-only",
+  "projectLicense": "BUSL-1.1",
+  "changeDate": "2030-03-30",
+  "changeLicense": "Apache-2.0",
 
   "allowed": [
     "MIT",
@@ -15,9 +17,6 @@
     "0BSD",
     "Unlicense",
     "BlueOak-1.0.0",
-    "AGPL-3.0",
-    "AGPL-3.0-only",
-    "AGPL-3.0-or-later",
     "(MIT AND Zlib)",
     "(MIT OR GPL-3.0-or-later)"
   ],
@@ -37,8 +36,10 @@
   "denied": [
     "GPL-2.0-only",
     "GPL-2.0",
+    "AGPL-3.0",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
     "SSPL-1.0",
-    "BUSL-1.1",
     "Commons Clause",
     "Proprietary",
     "Commercial",
@@ -69,26 +70,26 @@
       "detectedLicense": "(MIT OR GPL-3.0-or-later)",
       "severity": "LOW",
       "action": "Elect MIT. No action required.",
-      "notes": "Dual-licensed. MIT option is fully AGPL-3.0 compatible."
+      "notes": "Dual-licensed. MIT option is compatible."
     }
   ],
 
-  "agplRequirements": {
+  "bslRequirements": {
     "licenseFile": {
       "required": true,
       "path": "LICENSE",
-      "status": "PRESENT — full AGPL-3.0 text"
+      "status": "PRESENT — full BSL-1.1 text with parameters"
     },
     "sourceHeaders": {
       "required": true,
-      "status": "NOT PRESENT — no source files contain AGPL headers",
-      "note": "AGPL section 5 requires each file to carry a notice. Minimum: copyright line + SPDX identifier."
+      "status": "PARTIAL — 17/165+ files have SPDX headers",
+      "note": "BSL-1.1 requires conspicuous display of the License on each copy."
     },
-    "section13NetworkUse": {
-      "required": true,
-      "description": "App is served over a network (Raspberry Pi + Nginx). Under AGPL-3.0 Section 13, users who interact with the software over a network must be offered a way to receive the Corresponding Source.",
+    "sourceCodeLink": {
+      "required": false,
+      "description": "Not legally required by BSL-1.1, but kept for transparency.",
       "status": "IMPLEMENTED — Source Code link in Sidebar footer (Sidebar.tsx)",
-      "note": "Link points to GitHub repo. Verify repo is public and kept up to date with deployed version."
+      "note": "Link points to GitHub repo."
     }
   }
 }

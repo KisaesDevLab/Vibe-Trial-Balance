@@ -5,16 +5,18 @@ The Audit Log records every significant action taken in the app — who did what
 
 ## What Gets Logged
 Every write operation in the system creates an audit log entry:
-- Trial balance edits (account-level changes)
-- Journal entries created, modified, or deleted
-- Period lock and unlock events
-- Tax code assignments
-- User creation and password changes
-- Bank transaction classification and reclassification
-- Import events (CSV, PDF, OFX)
-- Backup and restore operations
-- MCP tool calls (attributed to the `mcp_agent` system user)
-- Settings changes (API key updates, MCP token generation/rotation/revocation)
+- **Trial balance**: initialization, balance edits, unadjusted imports, prior year imports
+- **Journal entries**: created, modified, or deleted
+- **Chart of accounts**: account creation, import, update, deactivation
+- **Periods**: creation, update, deletion, lock, unlock, roll forward
+- **Clients**: creation, update, deactivation
+- **Users**: creation, update (including password changes), deactivation
+- **PY comparison**: manual entry, CSV/PDF import, AJE creation, data clearing
+- **Bank transactions**: reclassification
+- **Import events**: CSV, PDF, OFX
+- **Backup and restore** operations
+- **MCP tool calls** (attributed to the `mcp_agent` system user)
+- **Settings changes** (API key updates, MCP token generation/rotation/revocation)
 
 ## Viewing the Audit Log
 1. Go to **Admin > Audit Log**
@@ -23,7 +25,7 @@ Every write operation in the system creates an audit log entry:
 
 ## Filtering
 Use the filter controls to narrow the log:
-- **Entity Type**: Filter by the type of record affected (e.g., `trial_balance`, `journal_entry`, `period`, `user`, `mcp_tool`)
+- **Entity Type**: Filter by the type of record affected (e.g., `trial_balance`, `journal_entry`, `period`, `chart_of_accounts`, `client`, `user`, `py_comparison`, `mcp_tool`)
 - **Action**: Filter by the action taken (e.g., `lock`, `unlock`, `create`, `update`, `delete`)
 - **Date Range**: Show entries from a specific time window
 - **User**: Filter by the user who performed the action

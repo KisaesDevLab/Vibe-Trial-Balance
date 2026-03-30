@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
+import { listTickmarks, getTBTickmarks, TICKMARK_COLOR_CLASSES, type Tickmark, type TBTickmarkMap } from '../api/tickmarks';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
-import { downloadXlsx } from '../utils/downloadXlsx';
+import { downloadXlsxMultiSheet } from '../utils/downloadXlsx';
 
 type ColSet = 'book' | 'tax' | 'both';
 
@@ -24,6 +25,7 @@ export function WorkpaperIndexPage() {
   const { selectedPeriodId } = useUIStore();
   const token = useAuthStore((s) => s.token);
   const [colSet, setColSet] = useState<ColSet>('both');
+  const [pageBreakByGroup, setPageBreakByGroup] = useState(true);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
@@ -32,7 +34,7 @@ export function WorkpaperIndexPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await openPdfPreview(pdfReports.workpaperIndex(selectedPeriodId) + '?preview=true', token);
+      await openPdfPreview(pdfReports.workpaperIndex(selectedPeriodId) + `?preview=true&pageBreak=${pageBreakByGroup}`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {
@@ -45,13 +47,15 @@ export function WorkpaperIndexPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await downloadPdf(pdfReports.workpaperIndex(selectedPeriodId), `workpaper-index-${selectedPeriodId}.pdf`, token);
+      await downloadPdf(pdfReports.workpaperIndex(selectedPeriodId) + `?pageBreak=${pageBreakByGroup}`, `workpaper-index-${selectedPeriodId}.pdf`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {
       setPdfLoading(false);
     }
   };
+
+  const { selectedClientId } = useUIStore();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['trial-balance', selectedPeriodId],
@@ -62,6 +66,28 @@ export function WorkpaperIndexPage() {
       return res.data ?? [];
     },
     enabled: selectedPeriodId !== null,
+  });
+
+  const { data: tickmarkLibrary } = useQuery({
+    queryKey: ['tickmarks', selectedClientId],
+    queryFn: async () => {
+      if (!selectedClientId) return [] as Tickmark[];
+      const res = await listTickmarks(selectedClientId);
+      if (res.error) return [];
+      return res.data ?? [];
+    },
+    enabled: !!selectedClientId,
+  });
+
+  const { data: tbTickmarks } = useQuery({
+    queryKey: ['tb-tickmarks', selectedPeriodId],
+    queryFn: async () => {
+      if (!selectedPeriodId) return {} as TBTickmarkMap;
+      const res = await getTBTickmarks(selectedPeriodId);
+      if (res.error) return {};
+      return res.data ?? {};
+    },
+    enabled: !!selectedPeriodId,
   });
 
   const rows = (data ?? []).filter((r) => r.is_active);
@@ -84,19 +110,66 @@ export function WorkpaperIndexPage() {
   const showBook = colSet === 'book' || colSet === 'both';
   const showTax  = colSet === 'tax'  || colSet === 'both';
 
+  const getMarksStr = (accountId: number) => {
+    const marks = tbTickmarks?.[accountId] ?? [];
+    return marks.map((m) => m.symbol).join(' ');
+  };
+
   const handleExport = () => {
-    const header = ['WP Ref', 'Account #', 'Account Name', 'Category', 'Tax Line', 'Book Adj Net', 'Tax Adj Net'];
-    const exportRows: string[][] = [];
-    for (const [ref, refRows] of sortedGroups) {
+    const header = ['Account #', 'Account Name', 'Category', 'Tax Line', 'Book Adj Net', 'Tax Adj Net', 'Tickmarks', 'Preparer Notes', 'Reviewer Notes'];
+    const sheets: Array<{ name: string; rows: string[][] }> = [];
+
+    const buildGroupRows = (ref: string, refRows: TBRow[]): string[][] => {
+      const sheetRows: string[][] = [];
       const sorted = [...refRows].sort((a, b) => a.account_number.localeCompare(b.account_number));
       for (const r of sorted) {
-        exportRows.push([ref, r.account_number, r.account_name, r.category, r.tax_line ?? '', String(netBalance(r, 'book') / 100), String(netBalance(r, 'tax') / 100)]);
+        sheetRows.push([r.account_number, r.account_name, r.category, r.tax_line ?? '', String(netBalance(r, 'book') / 100), String(netBalance(r, 'tax') / 100), getMarksStr(r.account_id), r.preparer_notes ?? '', r.reviewer_notes ?? '']);
       }
       const bookSub = refRows.reduce((s, r) => s + netBalance(r, 'book'), 0);
       const taxSub  = refRows.reduce((s, r) => s + netBalance(r, 'tax'), 0);
-      exportRows.push([ref, '', 'SUBTOTAL', '', '', String(bookSub / 100), String(taxSub / 100)]);
+      sheetRows.push(['', `SUBTOTAL — ${ref}`, '', '', String(bookSub / 100), String(taxSub / 100), '', '', '']);
+      return sheetRows;
+    };
+
+    if (pageBreakByGroup) {
+      // Separate worksheet per WP ref
+      for (const [ref, refRows] of sortedGroups) {
+        const sheetRows: string[][] = [header, ...buildGroupRows(ref, refRows)];
+
+        // Per-sheet tickmark legend
+        const usedMarks = new Set<number>();
+        for (const r of refRows) { for (const m of (tbTickmarks?.[r.account_id] ?? [])) usedMarks.add(m.id); }
+        if (usedMarks.size > 0 && tickmarkLibrary) {
+          sheetRows.push([]);
+          sheetRows.push(['Tickmark Legend', '', '', '', '', '', '', '', '']);
+          for (const tm of tickmarkLibrary.filter((t) => usedMarks.has(t.id))) {
+            sheetRows.push([tm.symbol, tm.description, '', '', '', '', '', '', '']);
+          }
+        }
+
+        const safeName = ref.replace(/[\\/*?[\]:]/g, '').slice(0, 31) || 'Sheet';
+        sheets.push({ name: safeName, rows: sheetRows });
+      }
+    } else {
+      // All on one sheet
+      const allRows: string[][] = [header];
+      const allUsedMarks = new Set<number>();
+      for (const [ref, refRows] of sortedGroups) {
+        allRows.push([`--- ${ref} ---`, '', '', '', '', '', '', '', '']);
+        allRows.push(...buildGroupRows(ref, refRows));
+        allRows.push([]);
+        for (const r of refRows) { for (const m of (tbTickmarks?.[r.account_id] ?? [])) allUsedMarks.add(m.id); }
+      }
+      if (allUsedMarks.size > 0 && tickmarkLibrary) {
+        allRows.push(['Tickmark Legend', '', '', '', '', '', '', '', '']);
+        for (const tm of tickmarkLibrary.filter((t) => allUsedMarks.has(t.id))) {
+          allRows.push([tm.symbol, tm.description, '', '', '', '', '', '', '']);
+        }
+      }
+      sheets.push({ name: 'Workpaper Index', rows: allRows });
     }
-    downloadXlsx(`workpaper-index-${selectedPeriodId}.xlsx`, [header, ...exportRows]);
+
+    downloadXlsxMultiSheet(`workpaper-index-${selectedPeriodId}.xlsx`, sheets);
   };
 
   if (!selectedPeriodId) {
@@ -111,7 +184,7 @@ export function WorkpaperIndexPage() {
   }
 
   return (
-    <div className="p-6 max-w-4xl">
+    <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Workpaper Reference Index</h2>
         <div className="flex items-center gap-2">
@@ -124,6 +197,15 @@ export function WorkpaperIndexPage() {
             <option value="book">Book Adjusted</option>
             <option value="tax">Tax Adjusted</option>
           </select>
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={pageBreakByGroup}
+              onChange={(e) => setPageBreakByGroup(e.target.checked)}
+              className="rounded border-gray-300 dark:border-gray-600 text-blue-600"
+            />
+            <span className="text-sm text-gray-600 dark:text-gray-400">Page per group</span>
+          </label>
           <button onClick={handleExport} disabled={!rows.length} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40">Export Excel</button>
           <button
             onClick={handlePreview}
@@ -156,68 +238,104 @@ export function WorkpaperIndexPage() {
       ) : rows.length === 0 ? (
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-10 text-center text-gray-400 dark:text-gray-500">No trial balance data for this period.</div>
       ) : (
-        <div className="space-y-4">
-          {sortedGroups.map(([ref, refRows]) => {
-            const sorted = [...refRows].sort((a, b) => a.account_number.localeCompare(b.account_number));
-            const bookSub = refRows.reduce((s, r) => s + netBalance(r, 'book'), 0);
-            const taxSub  = refRows.reduce((s, r) => s + netBalance(r, 'tax'), 0);
-            const isUnassigned = ref === 'Unassigned';
-
-            return (
-              <div key={ref} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                {/* Group header */}
-                <div className={`px-4 py-2 border-b flex items-center justify-between ${isUnassigned ? 'bg-gray-100 dark:bg-gray-700 border-gray-300 dark:border-gray-600' : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700'}`}>
-                  <span className={`text-sm font-bold ${isUnassigned ? 'text-gray-400 dark:text-gray-500 italic' : 'text-amber-900 dark:text-amber-300'}`}>{ref}</span>
-                  <div className="flex items-center gap-6">
-                    {showBook && (
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        Book: <span className="font-mono font-semibold text-gray-800 dark:text-gray-200">{fmt(bookSub)}</span>
-                      </span>
-                    )}
-                    {showTax && (
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        Tax: <span className="font-mono font-semibold text-gray-800 dark:text-gray-200">{fmt(taxSub)}</span>
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Account rows */}
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-700">
-                      <th className="px-4 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 w-28">Acct #</th>
-                      <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">Account Name</th>
-                      <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 w-24">Category</th>
-                      <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 w-28">Tax Line</th>
-                      {showBook && <th className="px-4 py-1.5 text-right text-xs font-semibold text-blue-700 dark:text-blue-400 w-36">Book Adj</th>}
-                      {showTax  && <th className="px-4 py-1.5 text-right text-xs font-semibold text-purple-700 dark:text-purple-400 w-36">Tax Adj</th>}
+      <>
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <table className="w-full text-sm table-fixed">
+            <colgroup>
+              <col style={{ width: '7%' }} />   {/* Acct # */}
+              <col style={{ width: '15%' }} />  {/* Account Name */}
+              <col style={{ width: '6%' }} />   {/* Category */}
+              <col style={{ width: '7%' }} />   {/* Tax Line */}
+              {showBook && <col style={{ width: '9%' }} />}  {/* Book Adj */}
+              {showTax  && <col style={{ width: '9%' }} />}  {/* Tax Adj */}
+              <col style={{ width: '5%' }} />   {/* Marks */}
+              <col style={{ width: '21%' }} />  {/* Preparer Notes */}
+              <col style={{ width: '21%' }} />  {/* Reviewer Notes */}
+            </colgroup>
+            <thead className="sticky top-0 z-10 bg-gray-50 dark:bg-gray-800/60">
+              <tr className="border-b border-gray-200 dark:border-gray-700">
+                <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">Acct #</th>
+                <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">Account Name</th>
+                <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">Category</th>
+                <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">Tax Line</th>
+                {showBook && <th className="px-3 py-1.5 text-right text-xs font-semibold text-blue-700 dark:text-blue-400">Book Adj</th>}
+                {showTax  && <th className="px-3 py-1.5 text-right text-xs font-semibold text-purple-700 dark:text-purple-400">Tax Adj</th>}
+                <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">Marks</th>
+                <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">Preparer Notes</th>
+                <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">Reviewer Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedGroups.map(([ref, refRows]) => {
+                const sorted = [...refRows].sort((a, b) => a.account_number.localeCompare(b.account_number));
+                const bookSub = refRows.reduce((s, r) => s + netBalance(r, 'book'), 0);
+                const taxSub  = refRows.reduce((s, r) => s + netBalance(r, 'tax'), 0);
+                const isUnassigned = ref === 'Unassigned';
+                const colCount = 7 + (showBook ? 1 : 0) + (showTax ? 1 : 0);
+                return (
+                  <React.Fragment key={ref}>
+                    {/* Group header */}
+                    <tr className={isUnassigned ? 'bg-gray-100 dark:bg-gray-700' : 'bg-amber-50 dark:bg-amber-900/20'}>
+                      <td colSpan={colCount} className="px-3 py-2 border-t-2 border-gray-300 dark:border-gray-600">
+                        <span className={`text-sm font-bold ${isUnassigned ? 'text-gray-400 dark:text-gray-500 italic' : 'text-amber-900 dark:text-amber-300'}`}>{ref}</span>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                    {sorted.map((r) => (
-                      <tr key={r.account_id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                        <td className="px-4 py-1.5 text-sm font-mono text-gray-600 dark:text-gray-400 whitespace-nowrap">{r.account_number}</td>
-                        <td className="px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300">{r.account_name}</td>
-                        <td className="px-3 py-1.5 text-xs text-gray-500 dark:text-gray-400 capitalize">{r.category}</td>
-                        <td className="px-3 py-1.5 text-xs text-gray-500 dark:text-gray-400">{r.tax_line ?? <span className="text-gray-300 dark:text-gray-600">—</span>}</td>
-                        {showBook && <td className="px-4 py-1.5 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(netBalance(r, 'book'))}</td>}
-                        {showTax  && <td className="px-4 py-1.5 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(netBalance(r, 'tax'))}</td>}
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
+                    {/* Account rows */}
+                    {sorted.map((r, ri) => {
+                      const marks = tbTickmarks?.[r.account_id] ?? [];
+                      return (
+                        <tr key={r.account_id} className={`${ri % 2 === 1 ? 'bg-gray-50/40 dark:bg-gray-700/20' : ''} hover:bg-blue-50/50 dark:hover:bg-blue-900/10`}>
+                          <td className="px-3 py-1 text-sm font-mono text-gray-600 dark:text-gray-400 truncate">{r.account_number}</td>
+                          <td className="px-3 py-1 text-sm text-gray-700 dark:text-gray-300 truncate">{r.account_name}</td>
+                          <td className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 capitalize truncate">{r.category}</td>
+                          <td className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 truncate">{r.tax_line ?? '—'}</td>
+                          {showBook && <td className="px-3 py-1 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(netBalance(r, 'book'))}</td>}
+                          {showTax  && <td className="px-3 py-1 text-right text-sm font-mono text-gray-700 dark:text-gray-300">{fmt(netBalance(r, 'tax'))}</td>}
+                          <td className="px-3 py-1">
+                            {marks.length > 0 ? (
+                              <span className="flex items-center gap-0.5">
+                                {marks.map((m) => (
+                                  <span key={m.id} className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold ${TICKMARK_COLOR_CLASSES[m.color]}`}>{m.symbol}</span>
+                                ))}
+                              </span>
+                            ) : <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>}
+                          </td>
+                          <td className="px-3 py-1 text-xs text-gray-600 dark:text-gray-400 truncate" title={r.preparer_notes ?? undefined}>{r.preparer_notes || <span className="text-gray-300 dark:text-gray-600">—</span>}</td>
+                          <td className="px-3 py-1 text-xs text-gray-600 dark:text-gray-400 truncate" title={r.reviewer_notes ?? undefined}>{r.reviewer_notes || <span className="text-gray-300 dark:text-gray-600">—</span>}</td>
+                        </tr>
+                      );
+                    })}
+                    {/* Subtotal */}
                     <tr className="border-t border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">
-                      <td colSpan={showBook && showTax ? 4 : 4} className="px-4 py-1.5 text-xs font-semibold text-gray-600 dark:text-gray-400">Subtotal — {ref}</td>
-                      {showBook && <td className="px-4 py-1.5 text-right text-sm font-mono font-semibold text-blue-800 dark:text-blue-300 border-t border-blue-300 dark:border-blue-700">{fmt(bookSub)}</td>}
-                      {showTax  && <td className="px-4 py-1.5 text-right text-sm font-mono font-semibold text-purple-800 dark:text-purple-300 border-t border-purple-300 dark:border-purple-700">{fmt(taxSub)}</td>}
+                      <td colSpan={4} className="px-3 py-1.5 text-xs font-semibold text-gray-600 dark:text-gray-400 text-right">Subtotal — {ref}</td>
+                      {showBook && <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-blue-800 dark:text-blue-300 border-t border-blue-300 dark:border-blue-700">{fmt(bookSub)}</td>}
+                      {showTax  && <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-purple-800 dark:text-purple-300 border-t border-purple-300 dark:border-purple-700">{fmt(taxSub)}</td>}
+                      <td colSpan={3} />
                     </tr>
-                  </tfoot>
-                </table>
-              </div>
-            );
-          })}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
+
+        {/* Tickmark Legend */}
+        {tickmarkLibrary && tickmarkLibrary.length > 0 && Object.keys(tbTickmarks ?? {}).length > 0 && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden mt-4">
+            <div className="px-4 py-2 border-b bg-gray-50 dark:bg-gray-800/60 border-gray-200 dark:border-gray-700">
+              <span className="text-sm font-bold text-gray-700 dark:text-gray-300">Tickmark Legend</span>
+            </div>
+            <div className="px-4 py-3 grid grid-cols-2 gap-2">
+              {tickmarkLibrary.map((tm) => (
+                <div key={tm.id} className="flex items-center gap-2">
+                  <span className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${TICKMARK_COLOR_CLASSES[tm.color]}`}>{tm.symbol}</span>
+                  <span className="text-sm text-gray-700 dark:text-gray-300">{tm.description}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </>
       )}
     </div>
   );

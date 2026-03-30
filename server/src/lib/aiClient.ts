@@ -5,6 +5,7 @@ import {
   OpenAICompatProvider,
   type LLMConfig,
   type LLMProvider,
+  type VisionConfig,
 } from './llmProvider';
 
 export const DEFAULT_FAST_MODEL    = 'claude-haiku-4-5-20251001';
@@ -47,28 +48,9 @@ export async function getAiTokenSettings(): Promise<AiTokenSettings> {
  *   2. Defaults to 'claude' if key is missing or blank.
  */
 export async function getLLMProvider(): Promise<LLMConfig> {
-  const LLM_KEYS = [
-    'llm.provider',
-    'llm.ollama_base_url',
-    'llm.ollama_vision_model',
-    'llm.ollama_reasoning_model',
-    'llm.ollama_vision_override',
-    'llm.openai_compat_base_url',
-    'llm.openai_compat_api_key',
-    'llm.openai_compat_model',
-    'llm.openai_compat_fast_model',
-    'llm.openai_compat_vision_override',
-    'llm.timeout_ms',
-    'claude_api_key',
-    'ai_model_fast',
-    'ai_model_primary',
-  ];
+  const s = await loadLLMSettings();
 
-  const rows = await db('settings').whereIn('key', LLM_KEYS).select('key', 'value');
-  const s: Record<string, string> = {};
-  for (const r of rows) s[r.key as string] = r.value as string;
-
-  const providerName = (s['llm.provider'] || 'claude') as 'claude' | 'ollama' | 'openai-compat';
+  const providerName = (s['llm.provider'] || 'claude') as 'claude' | 'ollama' | 'openai' | 'openai-compat';
   const timeoutMs = Number(s['llm.timeout_ms'] || '120000') || 120_000;
 
   let provider: LLMProvider;
@@ -94,6 +76,19 @@ export async function getLLMProvider(): Promise<LLMConfig> {
       timeoutMs,
       supportsVisionOverride: parseVisionOverride(s['llm.ollama_vision_override']),
     });
+  } else if (providerName === 'openai') {
+    const apiKey = s['llm.openai_api_key'];
+    if (!apiKey) throw new Error('OpenAI API key not configured. Set it in Admin > Settings.');
+    primaryModel = s['llm.openai_primary_model'] || 'gpt-4o';
+    fastModel    = s['llm.openai_fast_model']    || primaryModel;
+    provider = new OpenAICompatProvider({
+      providerName: 'openai',
+      baseURL: 'https://api.openai.com',
+      apiKey,
+      model: primaryModel,
+      timeoutMs,
+      supportsVisionOverride: true,
+    });
   } else if (providerName === 'openai-compat') {
     const baseURL = s['llm.openai_compat_base_url'];
     if (!baseURL) throw new Error('OpenAI-compatible base URL not configured. Set it in Admin > Settings.');
@@ -117,6 +112,121 @@ export async function getLLMProvider(): Promise<LLMConfig> {
     provider = new ClaudeProvider(new Anthropic({ apiKey }));
   }
 
-  return { provider, fastModel, primaryModel, providerName };
+  // ── Vision config ──────────────────────────────────────────────────────────
+  // When llm.vision_provider is blank or matches the main provider, reuse the
+  // main provider instance with an optional vision-specific model override.
+  // When different, construct a second provider from that type's stored creds.
+
+  const visionProviderName = s['llm.vision_provider'] || '';
+  const visionModelSetting = s['llm.vision_model'] || '';
+
+  let vision: VisionConfig;
+
+  if (!visionProviderName || visionProviderName === providerName) {
+    // Same provider — pick a per-provider default if no explicit vision model
+    const defaultVisionModel =
+      providerName === 'claude' ? fastModel
+        : providerName === 'ollama' ? fastModel   // ollama_vision_model already maps to fastModel
+          : primaryModel;                          // openai / openai-compat
+    vision = {
+      provider,
+      model: visionModelSetting || defaultVisionModel,
+      providerName,
+    };
+  } else {
+    // Different provider for vision — build a second provider instance
+    vision = buildProviderFromSettings(visionProviderName, visionModelSetting, s, timeoutMs);
+  }
+
+  return { provider, fastModel, primaryModel, providerName, vision };
+}
+
+/**
+ * Load all LLM-related settings from the database.
+ * Exported so other modules (e.g. settings routes) can build ad-hoc providers.
+ */
+export async function loadLLMSettings(): Promise<Record<string, string>> {
+  const LLM_KEYS = [
+    'llm.provider', 'llm.ollama_base_url', 'llm.ollama_vision_model',
+    'llm.ollama_reasoning_model', 'llm.ollama_vision_override',
+    'llm.openai_api_key', 'llm.openai_primary_model', 'llm.openai_fast_model',
+    'llm.openai_compat_base_url', 'llm.openai_compat_api_key',
+    'llm.openai_compat_model', 'llm.openai_compat_fast_model',
+    'llm.openai_compat_vision_override', 'llm.vision_provider', 'llm.vision_model',
+    'llm.timeout_ms', 'claude_api_key', 'ai_model_fast', 'ai_model_primary',
+  ];
+  const rows = await db('settings').whereIn('key', LLM_KEYS).select('key', 'value');
+  const s: Record<string, string> = {};
+  for (const r of rows) s[r.key as string] = r.value as string;
+  return s;
+}
+
+/** Construct a separate provider instance for a given provider type using stored creds. */
+export function buildProviderFromSettings(
+  vpName: string,
+  model: string,
+  s: Record<string, string>,
+  timeoutMs: number,
+): VisionConfig {
+  if (vpName === 'claude') {
+    const apiKey = s['claude_api_key'] ?? process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new Error('Vision provider is Claude but no API key is configured.');
+    return {
+      provider: new ClaudeProvider(new Anthropic({ apiKey })),
+      model: model || s['ai_model_fast'] || DEFAULT_FAST_MODEL,
+      providerName: 'claude',
+    };
+  }
+  if (vpName === 'openai') {
+    const apiKey = s['llm.openai_api_key'];
+    if (!apiKey) throw new Error('Vision provider is OpenAI but no API key is configured.');
+    const m = model || s['llm.openai_primary_model'] || 'gpt-4o';
+    return {
+      provider: new OpenAICompatProvider({
+        providerName: 'openai',
+        baseURL: 'https://api.openai.com',
+        apiKey,
+        model: m,
+        timeoutMs,
+        supportsVisionOverride: true,
+      }),
+      model: m,
+      providerName: 'openai',
+    };
+  }
+  if (vpName === 'ollama') {
+    const baseURL = s['llm.ollama_base_url'];
+    if (!baseURL) throw new Error('Vision provider is Ollama but no base URL is configured.');
+    const m = model || s['llm.ollama_vision_model'] || 'qwen3-vl:8b';
+    return {
+      provider: new OpenAICompatProvider({
+        providerName: 'ollama',
+        baseURL,
+        model: m,
+        timeoutMs,
+        supportsVisionOverride: true,
+      }),
+      model: m,
+      providerName: 'ollama',
+    };
+  }
+  if (vpName === 'openai-compat') {
+    const baseURL = s['llm.openai_compat_base_url'];
+    if (!baseURL) throw new Error('Vision provider is OpenAI-compatible but no base URL is configured.');
+    const m = model || s['llm.openai_compat_model'] || '';
+    return {
+      provider: new OpenAICompatProvider({
+        providerName: 'openai-compat',
+        baseURL,
+        apiKey: s['llm.openai_compat_api_key'] || undefined,
+        model: m,
+        timeoutMs,
+        supportsVisionOverride: true,
+      }),
+      model: m,
+      providerName: 'openai-compat',
+    };
+  }
+  throw new Error(`Unknown vision provider: ${vpName}`);
 }
 

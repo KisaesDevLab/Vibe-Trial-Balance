@@ -8,11 +8,11 @@ import {
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 
 const CATEGORY_COLORS: Record<string, string> = {
-  assets: 'bg-blue-50 text-blue-700',
-  liabilities: 'bg-orange-50 text-orange-700',
-  equity: 'bg-purple-50 text-purple-700',
-  revenue: 'bg-green-50 text-green-700',
-  expenses: 'bg-red-50 text-red-700',
+  assets: 'bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400',
+  liabilities: 'bg-orange-50 dark:bg-orange-900/40 text-orange-700 dark:text-orange-400',
+  equity: 'bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400',
+  revenue: 'bg-green-50 dark:bg-green-900/40 text-green-700 dark:text-green-400',
+  expenses: 'bg-red-50 dark:bg-red-900/40 text-red-700 dark:text-red-400',
 };
 
 function Badge({ value, color }: { value: number; color: string }) {

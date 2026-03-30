@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMProviderSettings, saveLLMProviderSettings, testLLM, type LLMProvider, type LLMProviderSettings } from '../api/settings';
+import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMProviderSettings, saveLLMProviderSettings, testLLM, fetchOpenAIModels, fetchProviderModels, type LLMProvider, type LLMProviderSettings, type OpenAIModelInfo } from '../api/settings';
 import { getMcpTokenStatus, generateMcpToken, revokeMcpToken } from '../api/mcpSettings';
 import { getAiPricing, saveAiPricing, fetchAiPricingFromClaude, getAiUsage, getAiModels, saveAiModels, getAvailableModels, type AiPricingMap } from '../api/aiUsage';
 import { useAuthStore } from '../store/uiStore';
 
 function AdminBadge() {
   return (
-    <span className="ml-2 px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded font-medium">
+    <span className="ml-2 px-1.5 py-0.5 text-xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 rounded font-medium">
       Admin only
     </span>
   );
@@ -46,6 +46,16 @@ export function SettingsPage() {
   const [llmError, setLlmError] = useState<string | null>(null);
   const [llmTesting, setLlmTesting] = useState(false);
   const [llmTestResult, setLlmTestResult] = useState<{ valid: boolean; message?: string } | null>(null);
+
+  // OpenAI model fetch state
+  const [openaiModels, setOpenaiModels] = useState<OpenAIModelInfo[] | null>(null);
+  const [openaiModelsFetching, setOpenaiModelsFetching] = useState(false);
+  const [openaiModelsError, setOpenaiModelsError] = useState<string | null>(null);
+
+  // Vision model fetch state
+  const [visionModels, setVisionModels] = useState<OpenAIModelInfo[] | null>(null);
+  const [visionModelsFetching, setVisionModelsFetching] = useState(false);
+  const [visionModelsError, setVisionModelsError] = useState<string | null>(null);
 
   // MCP state
   const [mcpActiveTab, setMcpActiveTab] = useState<'stdio' | 'http'>('stdio');
@@ -193,6 +203,11 @@ export function SettingsPage() {
     ollamaVisionModel: 'qwen3-vl:8b',
     ollamaReasoningModel: 'qwq:32b',
     ollamaVisionOverride: '',
+    openaiApiKey: '',
+    openaiPrimaryModel: '',
+    openaiFastModel: '',
+    visionProvider: '',
+    visionModel: '',
     openaiCompatBaseUrl: '',
     openaiCompatApiKey: '',
     openaiCompatModel: '',
@@ -314,11 +329,15 @@ export function SettingsPage() {
                 className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
               >
                 <option value="claude">Claude (Anthropic API)</option>
+                <option value="openai">OpenAI (GPT-4o, o3, etc.)</option>
                 <option value="ollama">Ollama (self-hosted)</option>
                 <option value="openai-compat">OpenAI-Compatible (vLLM, LM Studio, etc.)</option>
               </select>
               {effectiveLlm.provider === 'claude' && (
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Cloud-hosted. Requires Anthropic API key below.</p>
+              )}
+              {effectiveLlm.provider === 'openai' && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1">Cloud-hosted. Requires OpenAI API key.</p>
               )}
               {effectiveLlm.provider === 'ollama' && (
                 <p className="text-xs text-teal-600 dark:text-teal-400 mt-1">Self-hosted — data never leaves your infrastructure.</p>
@@ -374,6 +393,101 @@ export function SettingsPage() {
                     <option value="false">Disabled (text-only)</option>
                   </select>
                   <p className="text-[10px] text-gray-400 mt-0.5">Override if model name isn't recognized by auto-detection</p>
+                </div>
+              </div>
+            )}
+
+            {/* OpenAI fields */}
+            {effectiveLlm.provider === 'openai' && (
+              <div className="space-y-3 mb-4 border border-green-200 dark:border-green-800 rounded p-3 bg-green-50/30 dark:bg-green-900/10">
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">OpenAI API Key</label>
+                  <input
+                    type="password"
+                    value={effectiveLlm.openaiApiKey}
+                    onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), openaiApiKey: e.target.value }))}
+                    placeholder="sk-..."
+                    className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-0.5">Get your key from platform.openai.com/api-keys</p>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="text-xs text-gray-500 dark:text-gray-400">Models</label>
+                    <button
+                      onClick={async () => {
+                        const key = effectiveLlm.openaiApiKey;
+                        if (!key || key.startsWith('••••')) {
+                          setOpenaiModelsError('Enter or save your API key first, then fetch models.');
+                          return;
+                        }
+                        setOpenaiModelsFetching(true);
+                        setOpenaiModelsError(null);
+                        try {
+                          const res = await fetchOpenAIModels(key);
+                          if (res.error) throw new Error(res.error.message);
+                          setOpenaiModels(res.data ?? []);
+                        } catch (e) {
+                          setOpenaiModelsError(e instanceof Error ? e.message : 'Failed to fetch models');
+                        } finally {
+                          setOpenaiModelsFetching(false);
+                        }
+                      }}
+                      disabled={openaiModelsFetching}
+                      className="px-2 py-0.5 text-xs border border-green-300 dark:border-green-700 rounded hover:bg-green-50 dark:hover:bg-green-900/30 text-green-700 dark:text-green-400 disabled:opacity-50"
+                    >
+                      {openaiModelsFetching ? 'Fetching…' : openaiModels ? 'Refresh Models' : 'Fetch Available Models'}
+                    </button>
+                    {openaiModelsError && <span className="text-xs text-red-500">{openaiModelsError}</span>}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Primary Model</label>
+                      {openaiModels ? (
+                        <select
+                          value={effectiveLlm.openaiPrimaryModel}
+                          onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), openaiPrimaryModel: e.target.value }))}
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
+                        >
+                          <option value="">Select a model…</option>
+                          {openaiModels.map((m) => (
+                            <option key={m.id} value={m.id}>{m.id}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={effectiveLlm.openaiPrimaryModel}
+                          onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), openaiPrimaryModel: e.target.value }))}
+                          placeholder="gpt-4o"
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
+                        />
+                      )}
+                      <p className="text-[10px] text-gray-400 mt-0.5">Support chat, complex tasks</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Fast Model <span className="text-gray-400">(optional)</span></label>
+                      {openaiModels ? (
+                        <select
+                          value={effectiveLlm.openaiFastModel}
+                          onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), openaiFastModel: e.target.value }))}
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
+                        >
+                          <option value="">Use Primary Model</option>
+                          {openaiModels.map((m) => (
+                            <option key={m.id} value={m.id}>{m.id}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={effectiveLlm.openaiFastModel}
+                          onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), openaiFastModel: e.target.value }))}
+                          placeholder="Leave blank to use Primary Model"
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
+                        />
+                      )}
+                      <p className="text-[10px] text-gray-400 mt-0.5">Classification, PDF extraction, diagnostics</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -436,6 +550,98 @@ export function SettingsPage() {
                 </div>
               </div>
             )}
+
+            {/* Vision Processing */}
+            {(() => {
+              const effectiveVisionProvider = effectiveLlm.visionProvider || effectiveLlm.provider;
+              const visionPlaceholder =
+                effectiveVisionProvider === 'claude' ? 'Default: fast model'
+                  : effectiveVisionProvider === 'ollama' ? 'Default: vision/fast model'
+                    : 'Default: primary model';
+
+              const handleFetchVisionModels = async () => {
+                setVisionModelsFetching(true);
+                setVisionModelsError(null);
+                try {
+                  const res = await fetchProviderModels(effectiveVisionProvider);
+                  if (res.error) throw new Error(res.error.message);
+                  setVisionModels(res.data ?? []);
+                } catch (e) {
+                  setVisionModelsError(e instanceof Error ? e.message : 'Failed to fetch models');
+                } finally {
+                  setVisionModelsFetching(false);
+                }
+              };
+
+              return (
+                <div className="mb-4 border border-blue-200 dark:border-blue-800 rounded p-3 bg-blue-50/30 dark:bg-blue-900/10">
+                  <p className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">Vision Processing (Scanned / Handwritten PDFs)</p>
+                  <p className="text-[10px] text-gray-400 dark:text-gray-500 mb-3">
+                    When a PDF has no text layer, images are sent to a vision-capable AI. You can use a different provider or model for this.
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Vision Provider</label>
+                      <select
+                        value={effectiveLlm.visionProvider}
+                        onChange={(e) => {
+                          setLlmEdits((p) => ({ ...(p ?? {}), visionProvider: e.target.value, visionModel: '' }));
+                          setVisionModels(null);
+                          setVisionModelsError(null);
+                        }}
+                        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                      >
+                        <option value="">Same as main provider</option>
+                        <option value="claude">Claude (Anthropic)</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="ollama">Ollama</option>
+                        <option value="openai-compat">OpenAI-Compatible</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <label className="text-xs text-gray-500 dark:text-gray-400">Vision Model <span className="text-gray-400">(optional)</span></label>
+                        <button
+                          onClick={handleFetchVisionModels}
+                          disabled={visionModelsFetching}
+                          className="px-2 py-0.5 text-[10px] border border-blue-300 dark:border-blue-700 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 text-blue-700 dark:text-blue-400 disabled:opacity-50"
+                        >
+                          {visionModelsFetching ? 'Fetching…' : visionModels ? 'Refresh' : 'Fetch Models'}
+                        </button>
+                        {visionModelsError && <span className="text-[10px] text-red-500">{visionModelsError}</span>}
+                      </div>
+                      {visionModels ? (
+                        <select
+                          value={effectiveLlm.visionModel}
+                          onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), visionModel: e.target.value }))}
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                        >
+                          <option value="">{visionPlaceholder}</option>
+                          {visionModels.map((m) => (
+                            <option key={m.id} value={m.id}>{m.id}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={effectiveLlm.visionModel}
+                          onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), visionModel: e.target.value }))}
+                          placeholder={visionPlaceholder}
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                        />
+                      )}
+                    </div>
+                  </div>
+                  {effectiveLlm.visionProvider && effectiveLlm.visionProvider !== effectiveLlm.provider && (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-2">
+                      {effectiveLlm.visionProvider === 'claude' && 'Uses the Claude API key configured below.'}
+                      {effectiveLlm.visionProvider === 'openai' && 'Uses the OpenAI API key from the OpenAI provider section. Switch to OpenAI as main provider to configure credentials, then switch back.'}
+                      {effectiveLlm.visionProvider === 'ollama' && 'Uses the Ollama base URL from the Ollama provider section.'}
+                      {effectiveLlm.visionProvider === 'openai-compat' && 'Uses the base URL and API key from the OpenAI-Compatible provider section.'}
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Timeout */}
             <div className="mb-4 flex items-center gap-3">
@@ -514,8 +720,8 @@ export function SettingsPage() {
         </div>
       )}
 
-      {/* Claude API Key */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
+      {/* Claude API Key — only shown when Claude is the active provider */}
+      {effectiveLlm.provider === 'claude' && <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
         <div className="px-5 py-4">
           <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-1">
             Claude API Key
@@ -612,7 +818,7 @@ export function SettingsPage() {
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* AI Usage & Pricing */}
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
@@ -625,8 +831,8 @@ export function SettingsPage() {
             Per-model token prices used to estimate API costs. Prices are in USD per million tokens.
           </p>
 
-          {/* Model name configuration */}
-          {(() => {
+          {/* Model name configuration — only for Claude; other providers configure models in their own section */}
+          {effectiveLlm.provider === 'claude' && (() => {
             const KNOWN_MODELS = availableModels?.map((m) => ({ id: m.id, label: m.displayName })) ?? [
               { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
               { id: 'claude-sonnet-4-6',         label: 'Claude Sonnet 4.6' },

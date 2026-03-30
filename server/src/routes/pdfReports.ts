@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { PDFDocument } from 'pdf-lib';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import {
@@ -222,7 +223,8 @@ pdfReportsRouter.get('/periods/:periodId/workpaper-index', async (req: AuthReque
     return;
   }
   try {
-    const buffer = await generateWorkpaperIndexPdf(db, periodId);
+    const pageBreak = req.query.pageBreak !== 'false'; // default true
+    const buffer = await generateWorkpaperIndexPdf(db, periodId, pageBreak);
     sendPdf(res, buffer, `workpaper-index-${periodId}.pdf`, isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
@@ -260,6 +262,60 @@ pdfReportsRouter.get('/periods/:periodId/tax-return-order', async (req: AuthRequ
   try {
     const buffer = await generateTaxReturnOrderPdf(db, periodId);
     sendPdf(res, buffer, `tax-return-order-${periodId}.pdf`, isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/reports/periods/:periodId/workpaper-merged
+// Merges selected PDF reports into a single PDF file
+// ─────────────────────────────────────────────────────────────────────────────
+
+const REPORT_GENERATORS: Record<string, (periodId: number) => Promise<Buffer>> = {
+  'pdf-tb':         (id) => generateTrialBalancePdf(db, id),
+  'pdf-is':         (id) => generateIncomeStatementPdf(db, id),
+  'pdf-bs':         (id) => generateBalanceSheetPdf(db, id),
+  'pdf-je':         (id) => generateJournalEntryListingPdf(db, id),
+  'pdf-aje':        (id) => generateAjeListingPdf(db, id),
+  'pdf-gl':         (id) => generateGeneralLedgerPdf(db, id),
+  'pdf-tax-code':   (id) => generateTaxCodeReportPdf(db, id),
+  'pdf-wp-index':   (id) => generateWorkpaperIndexPdf(db, id),
+  'pdf-tax-pl':     (id) => generateTaxBasisPlPdf(db, id),
+  'pdf-tax-return': (id) => generateTaxReturnOrderPdf(db, id),
+};
+
+pdfReportsRouter.get('/periods/:periodId/workpaper-merged', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = getPeriodId(req);
+  if (periodId === null) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+
+  const reportIds = ((req.query.reports as string) || '').split(',').filter(Boolean);
+  if (reportIds.length === 0) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'No reports specified. Pass ?reports=pdf-tb,pdf-is,...' } });
+    return;
+  }
+
+  try {
+    const mergedPdf = await PDFDocument.create();
+
+    for (const reportId of reportIds) {
+      const generator = REPORT_GENERATORS[reportId];
+      if (!generator) continue;
+
+      const pdfBuffer = await generator(periodId);
+      const srcDoc = await PDFDocument.load(pdfBuffer);
+      const pages = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
+      for (const page of pages) {
+        mergedPdf.addPage(page);
+      }
+    }
+
+    const mergedBuffer = await mergedPdf.save();
+    sendPdf(res, Buffer.from(mergedBuffer), `workpaper-package-${periodId}.pdf`, isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });

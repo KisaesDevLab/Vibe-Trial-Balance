@@ -4,7 +4,7 @@ import pdfParse from 'pdf-parse';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAiUsage } from '../lib/aiUsage';
-import { getLLMProvider } from '../lib/aiClient';
+import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
@@ -85,7 +85,7 @@ pdfImportRouter.post(
       const isScanned = textLength < 100;
 
       // Load provider config (needed for both paths)
-      const { provider, fastModel } = await getLLMProvider();
+      const { provider, fastModel, vision } = await getLLMProvider();
 
       // Load client COA
       const coa = await db('chart_of_accounts')
@@ -100,8 +100,12 @@ pdfImportRouter.post(
         return `${a.id}|${a.account_number}|${a.account_name}|${a.category}|${a.normal_balance}|${aliasStr}`;
       }).join('\n');
 
-      // Truncate extracted text if very long (keep first ~8000 chars for token budget)
-      const truncatedText = extractedText.length > 8000 ? extractedText.slice(0, 8000) + '\n...(truncated)' : extractedText;
+      const tokenSettings = await getAiTokenSettings();
+      // Use configurable chunk limit; do NOT hard-truncate — send the full document
+      // so all accounts are captured. Only truncate if extremely large (over chunk limit).
+      const truncatedText = extractedText.length > tokenSettings.chunkCharLimit
+        ? extractedText.slice(0, tokenSettings.chunkCharLimit) + '\n...(truncated — very large document)'
+        : extractedText;
 
       const prompt = `You are an expert accountant. Extract trial balance data from this financial statement document.
 
@@ -162,12 +166,12 @@ Rules:
 
       let messageContent: string | LLMContentPart[];
       if (isScanned) {
-        if (!provider.supportsVision) {
+        if (!vision.provider.supportsVision) {
           res.status(422).json({
             data: null,
             error: {
               code: 'SCANNED_PDF',
-              message: 'This PDF appears to be scanned (no text layer). Switch to a vision-capable provider (Claude or an Ollama vision model) to import scanned PDFs.',
+              message: 'This PDF appears to be scanned (no text layer). Configure a vision-capable provider (Claude, OpenAI, or an Ollama vision model) in Settings > AI Provider > Vision Processing.',
             },
           });
           return;
@@ -198,12 +202,19 @@ Rules:
         messageContent = prompt;
       }
 
-      const aiResult = await provider.complete({
-        model: fastModel,
-        maxTokens: 4096,
+      const [aiProvider, aiModel] = isScanned
+        ? [vision.provider, vision.model]
+        : [provider, fastModel];
+      // Scale output tokens: ~200 tokens per account row. Estimate account count
+      // from text length (~80 chars per TB line). Min 4096, max from settings.
+      const estimatedAccounts = Math.ceil(extractedText.length / 80);
+      const maxTokens = Math.max(tokenSettings.maxTokensDefault, Math.min(tokenSettings.maxTokensBankStatement, estimatedAccounts * 200));
+      const aiResult = await aiProvider.complete({
+        model: aiModel,
+        maxTokens,
         messages: [{ role: 'user', content: messageContent }],
       });
-      logAiUsage({ endpoint: 'pdf/analyze', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
+      logAiUsage({ endpoint: 'pdf/analyze', model: aiModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
 
       const analysisResult = extractJsonObject<PdfAnalysisResult>(aiResult.text);
       if (!analysisResult) {
@@ -292,7 +303,9 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
         if (match.action === 'create_new' || (match.action === 'match' && !accountId)) {
           if (!match.pdfAccountName) { rowsSkipped++; continue; }
 
-          const accountNum = match.newAccountNumber?.trim() || match.pdfAccountNumber?.trim() || null;
+          const rawNum = match.newAccountNumber?.trim() || match.pdfAccountNumber?.trim() || null;
+          // Sanitize: strip non-alphanumeric, enforce varchar(20) limit
+          const accountNum = rawNum ? rawNum.replace(/[^a-zA-Z0-9.\-]/g, '').slice(0, 20) : null;
 
           // If account number already exists in COA, use that account (implicit match)
           if (accountNum && existingByNumber.has(accountNum)) {
@@ -303,7 +316,7 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
             const normalBalance = match.newNormalBalance ??
               (category === 'assets' || category === 'expenses' ? 'debit' : 'credit');
 
-            const finalNum = accountNum || `IMPORT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+            const finalNum = accountNum || `IMP${Date.now().toString(36).slice(-6).toUpperCase()}`;
             const [newAccount] = await trx('chart_of_accounts')
               .insert({
                 client_id: clientId,
@@ -419,7 +432,7 @@ pdfImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response)
     ).join('\n');
 
     const accountList = needNumbers.map((m, i) =>
-      `Entry ${i + 1}: "${m.pdfAccountName}"${m.newCategory ? ` [category hint: ${m.newCategory}]` : m.category ? ` [detected category: ${m.category}]` : ''}`
+      `Entry ${i}: "${m.pdfAccountName}"${m.newCategory ? ` [category hint: ${m.newCategory}]` : m.category ? ` [detected category: ${m.category}]` : ''}`
     ).join('\n');
 
     const prompt = `You are an expert accountant. Assign standard chart of accounts numbers to these accounts extracted from a PDF financial statement.
@@ -441,42 +454,49 @@ ${accountList}
 
 Assign numbers with gaps of 10-50 between consecutive entries to allow future insertions. Use the category hint when provided. Infer category from the account name otherwise.
 
-Return ONLY a valid JSON array (no prose, no markdown fences):
+Return ONLY a valid JSON array (no prose, no markdown fences). Each object MUST include the accountName field matching the account name shown above:
 [
-  { "entryIndex": 0, "suggestedNumber": "1000", "suggestedCategory": "assets", "suggestedNormalBalance": "debit" }
+  { "entryIndex": 0, "accountName": "Cash", "suggestedNumber": "1000", "suggestedCategory": "assets", "suggestedNormalBalance": "debit" }
 ]`;
 
     const { provider, fastModel } = await getLLMProvider();
     const aiResult = await provider.complete({
       model: fastModel,
-      maxTokens: 1024,
+      maxTokens: Math.max(2048, needNumbers.length * 150),
       messages: [{ role: 'user', content: prompt }],
     });
     logAiUsage({ endpoint: 'pdf/suggest-numbers', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
 
-    type SuggestionRaw = { entryIndex: number; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
+    type SuggestionRaw = { entryIndex: number; accountName?: string; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
     const rawSuggestions = extractJsonArray<SuggestionRaw>(aiResult.text);
     if (!rawSuggestions) {
+      console.error('[pdf/suggest-numbers] Failed to parse AI response:', aiResult.text.slice(0, 500));
       res.status(500).json({ data: null, error: { code: 'PARSE_ERROR', message: 'AI returned unexpected format' } });
       return;
     }
 
-    // Deduplicate within suggestions
+    // Deduplicate within suggestions; sanitize to digits-only, max 20 chars
     const usedNumbers = new Set(existingNumbers);
     const suggestions = rawSuggestions.map((s) => {
-      let num = s.suggestedNumber.trim();
+      let num = s.suggestedNumber.replace(/[^0-9]/g, '').slice(0, 20) || '9999';
       while (usedNumbers.has(num)) {
         num = String(parseInt(num, 10) + 1);
       }
       usedNumbers.add(num);
-      // Map back to the pdfAccountName via entryIndex
-      const match = needNumbers[s.entryIndex];
+      // Map back via entryIndex; fall back to name matching if index is off-by-one
+      const match = needNumbers[s.entryIndex]
+        ?? (s.accountName ? needNumbers.find((n) => n.pdfAccountName.toLowerCase() === s.accountName!.toLowerCase()) : undefined)
+        ?? needNumbers[s.entryIndex - 1];  // handle 1-indexed AI responses
+      const cat = s.suggestedCategory?.toLowerCase().trim();
+      const validCat = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'].includes(cat) ? cat : 'expenses';
+      const nb = s.suggestedNormalBalance?.toLowerCase().trim();
+      const validNb = nb === 'credit' ? 'credit' : 'debit';
       return {
-        pdfAccountName: match?.pdfAccountName ?? '',
+        pdfAccountName: match?.pdfAccountName ?? s.accountName ?? '',
         entryIndex: s.entryIndex,
         suggestedNumber: num,
-        suggestedCategory: s.suggestedCategory as 'assets' | 'liabilities' | 'equity' | 'revenue' | 'expenses',
-        suggestedNormalBalance: s.suggestedNormalBalance as 'debit' | 'credit',
+        suggestedCategory: validCat as 'assets' | 'liabilities' | 'equity' | 'revenue' | 'expenses',
+        suggestedNormalBalance: validNb as 'debit' | 'credit',
       };
     });
 

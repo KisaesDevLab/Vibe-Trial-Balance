@@ -50,12 +50,20 @@ interface OverrideDropdownProps {
   onChange: (codeId: number | null, taxCode: string | null, description: string | null) => void;
 }
 
+/** Find the REPORTING_ONLY tax code from the list */
+function findReportingOnlyCode(taxCodes: TaxCode[]): TaxCode | undefined {
+  return taxCodes.find((c) => c.tax_code === 'REPORTING_ONLY');
+}
+
 function OverrideDropdown({ currentCodeId, taxCodes, onChange }: OverrideDropdownProps) {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
 
+  const reportingOnlyCode = findReportingOnlyCode(taxCodes);
+  const isReportingOnly = reportingOnlyCode != null && currentCodeId === reportingOnlyCode.id;
   const current = taxCodes.find((c) => c.id === currentCodeId);
   const filtered = taxCodes.filter((c) => {
+    if (c.tax_code === 'REPORTING_ONLY') return false; // shown separately
     if (!search) return true;
     const q = search.toLowerCase();
     return c.tax_code.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
@@ -67,6 +75,13 @@ function OverrideDropdown({ currentCodeId, taxCodes, onChange }: OverrideDropdow
     setSearch('');
   };
 
+  const selectReportingOnly = () => {
+    if (!reportingOnlyCode) return;
+    onChange(reportingOnlyCode.id, reportingOnlyCode.tax_code, reportingOnlyCode.description);
+    setOpen(false);
+    setSearch('');
+  };
+
   return (
     <div className="relative">
       <button
@@ -74,7 +89,9 @@ function OverrideDropdown({ currentCodeId, taxCodes, onChange }: OverrideDropdow
         onClick={() => setOpen((o) => !o)}
         className="w-full text-left px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-gray-700 dark:text-white hover:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[200px]"
       >
-        {current ? (
+        {isReportingOnly ? (
+          <span className="text-amber-600 dark:text-amber-400 italic">Reporting only — no mapping</span>
+        ) : current ? (
           <span>
             <span className="font-mono font-medium text-gray-900 dark:text-white">{current.tax_code}</span>
             <span className="text-gray-500 dark:text-gray-400 ml-1 truncate">— {current.description}</span>
@@ -103,6 +120,16 @@ function OverrideDropdown({ currentCodeId, taxCodes, onChange }: OverrideDropdow
             >
               — unassigned —
             </button>
+            {reportingOnlyCode && (
+              <button
+                type="button"
+                onClick={selectReportingOnly}
+                className={`w-full text-left px-3 py-1.5 text-xs hover:bg-amber-50 dark:hover:bg-amber-900/20 border-b dark:border-gray-700 ${isReportingOnly ? 'bg-amber-50 dark:bg-amber-900/20 font-medium' : ''}`}
+              >
+                <span className="text-amber-600 dark:text-amber-400 font-medium">REPORTING_ONLY</span>
+                <span className="text-amber-500 dark:text-amber-500 ml-1">— Reporting only, no tax mapping</span>
+              </button>
+            )}
             {filtered.length === 0 ? (
               <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">No matching codes</p>
             ) : (
@@ -145,6 +172,35 @@ export function AssignmentPreviewModal({
   );
   const [showLowConfOnly, setShowLowConfOnly] = useState(false);
   const [excludeLowConf, setExcludeLowConf] = useState(false);
+  const [assignUnmappableReporting, setAssignUnmappableReporting] = useState(false);
+
+  const reportingOnlyCode = findReportingOnlyCode(taxCodes);
+
+  const handleToggleUnmappableReporting = (checked: boolean) => {
+    setAssignUnmappableReporting(checked);
+    if (!reportingOnlyCode) return;
+    setLocalSuggestions((prev) =>
+      prev.map((s) => {
+        if (s.source !== 'unmappable') return s;
+        if (checked) {
+          return {
+            ...s,
+            overrideTaxCodeId: reportingOnlyCode.id,
+            overrideTaxCode: reportingOnlyCode.tax_code,
+            overrideDescription: reportingOnlyCode.description,
+            excluded: false,
+          };
+        }
+        return {
+          ...s,
+          overrideTaxCodeId: undefined,
+          overrideTaxCode: undefined,
+          overrideDescription: undefined,
+          excluded: true,
+        };
+      })
+    );
+  };
 
   const LOW_CONF_THRESHOLD = 0.7;
 
@@ -160,16 +216,20 @@ export function AssignmentPreviewModal({
     description: string | null,
   ) => {
     setLocalSuggestions((prev) =>
-      prev.map((s) =>
-        s.accountId === accountId
-          ? {
-              ...s,
-              overrideTaxCodeId: codeId,
-              overrideTaxCode: taxCode,
-              overrideDescription: description,
-            }
-          : s
-      )
+      prev.map((s) => {
+        if (s.accountId !== accountId) return s;
+        const updated = {
+          ...s,
+          overrideTaxCodeId: codeId,
+          overrideTaxCode: taxCode,
+          overrideDescription: description,
+        };
+        // Auto-include when user picks a code (including reporting-only) on an excluded row
+        if (codeId !== null && s.excluded) {
+          updated.excluded = false;
+        }
+        return updated;
+      })
     );
   };
 
@@ -195,7 +255,7 @@ export function AssignmentPreviewModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
+      <div role="dialog" aria-modal="true" className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-start justify-between">
           <div>
@@ -263,6 +323,21 @@ export function AssignmentPreviewModal({
                 />
                 Show only low confidence (&lt;70%)
               </label>
+              <span className="text-gray-300 dark:text-gray-600">|</span>
+              {unmappableCount > 0 && reportingOnlyCode && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-600">|</span>
+                  <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={assignUnmappableReporting}
+                      onChange={(e) => handleToggleUnmappableReporting(e.target.checked)}
+                      className="rounded border-gray-300 dark:border-gray-600 text-amber-600 focus:ring-amber-500"
+                    />
+                    Assign unmappable as reporting only
+                  </label>
+                </>
+              )}
               <span className="text-gray-300 dark:text-gray-600">|</span>
               <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer select-none">
                 <input

@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// Copyright (C) 2024–2026 [Project Author]
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (C) 2024–2026 Kisaes LLC
 
 interface PiiItem {
   label: string;
@@ -16,7 +16,7 @@ interface Props {
 export function AiConsentDialog({ feature, piiItems, onConfirm, onCancel }: Props) {
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md">
+      <div role="dialog" aria-modal="true" className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md">
         <div className="px-5 py-4 border-b dark:border-gray-700">
           <h2 className="text-base font-semibold text-gray-900 dark:text-white">AI Data Disclosure</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{feature}</p>

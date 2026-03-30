@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # license-audit.sh — Automated license compliance audit for vibe-tb
-# License: AGPL-3.0-only
+# License: BUSL-1.1
 #
 # Usage:  ./scripts/license-audit.sh [--quiet] [--json]
 #   --quiet   Suppress passing checks; show only warnings and failures
@@ -48,7 +48,7 @@ header "1. Required project files"
 if [[ -f "$ROOT/LICENSE" ]]; then
   pass "LICENSE file present"
 else
-  fail "LICENSE file MISSING — required for AGPL-3.0 distribution"
+  fail "LICENSE file MISSING — required for BSL-1.1 distribution"
   bump_fail
 fi
 
@@ -59,10 +59,10 @@ else
   bump_warn
 fi
 
-# ── 2. AGPL source file headers ───────────────────────────────────────────────
-header "2. AGPL source file headers"
+# ── 2. BSL-1.1 source file headers ──────────────────────────────────────────
+header "2. Source file headers"
 
-HEADER_PATTERN="SPDX-License-Identifier|AGPL|GNU Affero|Copyright"
+HEADER_PATTERN="SPDX-License-Identifier|BUSL|BSL|Business Source|Copyright"
 TS_FILES=$(find "$ROOT/client/src" "$ROOT/server/src" -name "*.ts" -o -name "*.tsx" 2>/dev/null | wc -l | tr -d ' ')
 HEADERS_FOUND=$(find "$ROOT/client/src" "$ROOT/server/src" -name "*.ts" -o -name "*.tsx" 2>/dev/null \
   | xargs grep -l -E "$HEADER_PATTERN" 2>/dev/null | wc -l | tr -d ' ')
@@ -70,8 +70,8 @@ HEADERS_FOUND=$(find "$ROOT/client/src" "$ROOT/server/src" -name "*.ts" -o -name
 info "$HEADERS_FOUND / $TS_FILES source files have license headers"
 
 if [[ "$HEADERS_FOUND" -eq 0 ]]; then
-  warn "No source files contain license headers (AGPL-3.0 section 5 recommends them)"
-  warn "Minimum header:  // SPDX-License-Identifier: AGPL-3.0-only"
+  warn "No source files contain license headers"
+  warn "Minimum header:  // SPDX-License-Identifier: BUSL-1.1"
   bump_warn
 elif [[ "$HEADERS_FOUND" -lt "$TS_FILES" ]]; then
   warn "$(( TS_FILES - HEADERS_FOUND )) source files missing license headers"
@@ -80,21 +80,20 @@ else
   pass "All source files have license headers"
 fi
 
-# ── 3. AGPL Section 13 — network service source disclosure ───────────────────
-header "3. AGPL Section 13 — network service source disclosure"
+# ── 3. Source code visibility ────────────────────────────────────────────────
+header "3. Source code visibility"
 
 S13_PATTERN="source|Source|github|GitHub|repository|git\.io"
 S13_HITS=$(grep -r -l -E "$S13_PATTERN" \
   "$ROOT/client/src" 2>/dev/null | wc -l | tr -d ' ')
 
 if [[ "$S13_HITS" -gt 0 ]]; then
-  pass "Found potential source-disclosure link in client source ($S13_HITS file(s))"
+  pass "Found source-code link in client source ($S13_HITS file(s))"
   info "Verify a visible link to the source repo exists in the UI (footer, About page, etc.)"
 else
-  fail "No source-disclosure mechanism detected in UI source"
-  fail "AGPL-3.0 §13: network users must be offered the Corresponding Source"
-  fail "Action: add a link to the source repository in the app footer or About page"
-  bump_fail
+  warn "No source-code link detected in UI source"
+  warn "Recommended: add a link to the source repository in the app footer"
+  bump_warn
 fi
 
 # ── 4. Vendored / embedded third-party code ───────────────────────────────────
@@ -141,8 +140,8 @@ else
     echo "  $line"
   done
 
-  # Check for denied licenses
-  DENIED_PATTERN="GPL-2.0-only|SSPL|BUSL|Proprietary|Commercial|UNLICENSED"
+  # Check for denied licenses (AGPL now denied under BSL-1.1)
+  DENIED_PATTERN="GPL-2.0-only|SSPL|AGPL|Commons Clause|Proprietary|Commercial|UNLICENSED"
   CLIENT_DENIED=$(cd "$CLIENT_DIR" && npx license-checker \
     --excludePrivatePackages --csv 2>/dev/null \
     | grep -E "$DENIED_PATTERN" || true)
@@ -206,8 +205,7 @@ if command -v node &>/dev/null && [[ -f "$POLICY" ]]; then
     (p.knownIssues || []).forEach(i => {
       const sev = i.severity === 'HIGH' ? '✘ HIGH' : '⚠  ' + i.severity;
       console.log('  ' + sev + ' — ' + i.package + '@' + i.version);
-      console.log('    License : ' + i.actualLicense);
-      console.log('    Via     : ' + i.pulledInBy);
+      console.log('    License : ' + (i.detectedLicense || i.actualLicense));
       console.log('    Action  : ' + i.action);
       console.log('');
     });
@@ -216,10 +214,10 @@ else
   warn "license-policy.json not found or node unavailable"
 fi
 
-info "AGPL-3.0 requirements:"
+info "BSL-1.1 requirements:"
 node -e "
   const p = require('$POLICY');
-  const r = p.agplRequirements || {};
+  const r = p.bslRequirements || {};
   Object.entries(r).forEach(([k, v]) => {
     const status = v.status || '';
     const ok = status.toLowerCase().includes('missing') ||

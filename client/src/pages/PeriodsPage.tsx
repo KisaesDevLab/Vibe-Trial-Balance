@@ -11,7 +11,9 @@ import {
   type Period,
   type PeriodInput,
   type RollForwardInput,
+  type RollForwardMode,
 } from '../api/periods';
+import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { DateInput } from '../components/DateInput';
 
@@ -99,28 +101,58 @@ function PeriodForm({ initial, onSave, onCancel, saving, error }: PeriodFormProp
   );
 }
 
-function RollForwardModal({ source, onClose, onSuccess }: { source: Period; onClose: () => void; onSuccess: () => void }) {
+function RollForwardModal({ source, onClose }: { source: Period; onClose: () => void }) {
+  const { selectedClientId } = useUIStore();
   const [form, setForm] = useState<RollForwardInput>({
     periodName: `${source.period_name} (copy)`,
     startDate: '',
     endDate: '',
     isCurrent: false,
     copyRecurringJEs: true,
+    keepWorkpaperRefs: true,
+    mode: 'all_balances',
   });
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ tbCount: number; jeCopied: number } | null>(null);
 
+  // Load equity accounts for retained earnings selector
+  const { data: accounts } = useQuery({
+    queryKey: ['chart-of-accounts', selectedClientId],
+    queryFn: async () => {
+      if (!selectedClientId) return [];
+      const res = await listAccounts(selectedClientId);
+      if (res.error) return [];
+      return res.data ?? [];
+    },
+    enabled: !!selectedClientId,
+  });
+  const equityAccounts = (accounts ?? []).filter((a: Account) => a.category === 'equity');
+
+  const qc = useQueryClient();
   const mutation = useMutation({
     mutationFn: (input: RollForwardInput) => rollForwardPeriod(source.id, input),
     onSuccess: (res) => {
       if (res.error) { setError(res.error.message); return; }
       setResult({ tbCount: res.data!.tbCount, jeCopied: res.data!.jeCopied });
-      onSuccess();
+      // Invalidate periods list immediately so it's fresh when modal closes
+      qc.invalidateQueries({ queryKey: ['periods'] });
     },
   });
 
   const set = <K extends keyof RollForwardInput>(k: K, v: RollForwardInput[K]) =>
     setForm((p) => ({ ...p, [k]: v }));
+
+  const MODE_LABELS: Record<RollForwardMode, string> = {
+    all_balances: 'Roll forward all balances',
+    close_income: 'Close income/expense to retained earnings',
+    zero_balances: 'Create new period with zero balances',
+  };
+
+  const MODE_DESCRIPTIONS: Record<RollForwardMode, string> = {
+    all_balances: 'All book-adjusted balances become opening balances in the new period.',
+    close_income: 'Balance sheet accounts carry forward. Revenue and expense accounts reset to zero, and net income/loss is closed to a selected equity account.',
+    zero_balances: 'All accounts are created in the new period with zero balances. No balances are carried forward.',
+  };
 
   return (
     <Modal title={`Roll Forward — ${source.period_name}`} onClose={onClose}>
@@ -158,6 +190,50 @@ function RollForwardModal({ source, onClose, onSuccess }: { source: Period; onCl
                 className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white" />
             </div>
           </div>
+
+          {/* Balance mode selector */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Opening Balances</label>
+            <div className="space-y-2">
+              {(['all_balances', 'close_income', 'zero_balances'] as RollForwardMode[]).map((m) => (
+                <label key={m} className="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="rollForwardMode"
+                    checked={form.mode === m}
+                    onChange={() => set('mode', m)}
+                    className="mt-0.5 text-blue-600"
+                  />
+                  <div>
+                    <span className="font-medium">{MODE_LABELS[m]}</span>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">{MODE_DESCRIPTIONS[m]}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Retained earnings account selector — only for close_income mode */}
+          {form.mode === 'close_income' && (
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Close Net Income To</label>
+              <select
+                value={form.retainedEarningsAccountId ?? ''}
+                onChange={(e) => set('retainedEarningsAccountId', e.target.value ? Number(e.target.value) : undefined)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                required
+              >
+                <option value="">Select equity account…</option>
+                {equityAccounts.map((a: Account) => (
+                  <option key={a.id} value={a.id}>{a.account_number} — {a.account_name}</option>
+                ))}
+              </select>
+              {equityAccounts.length === 0 && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">No equity accounts found. Create a retained earnings account in Chart of Accounts first.</p>
+              )}
+            </div>
+          )}
+
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
               <input type="checkbox" checked={form.copyRecurringJEs ?? true} onChange={(e) => set('copyRecurringJEs', e.target.checked)}
@@ -165,17 +241,20 @@ function RollForwardModal({ source, onClose, onSuccess }: { source: Period; onCl
               Copy recurring journal entries to new period
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+              <input type="checkbox" checked={form.keepWorkpaperRefs ?? true} onChange={(e) => set('keepWorkpaperRefs', e.target.checked)}
+                className="rounded border-gray-300 dark:border-gray-600 text-blue-600" />
+              Keep workpaper references
+              <span className="text-[11px] text-gray-400 dark:text-gray-500">(uncheck to clear WP refs for new period)</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
               <input type="checkbox" checked={form.isCurrent ?? false} onChange={(e) => set('isCurrent', e.target.checked)}
                 className="rounded border-gray-300 dark:border-gray-600 text-blue-600" />
               Mark new period as current
             </label>
           </div>
-          <p className="text-xs text-gray-500 dark:text-gray-500">
-            Book-adjusted balances from <strong>{source.period_name}</strong> will become the opening unadjusted balances in the new period.
-          </p>
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
-            <button type="submit" disabled={mutation.isPending}
+            <button type="submit" disabled={mutation.isPending || (form.mode === 'close_income' && !form.retainedEarningsAccountId)}
               className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
               {mutation.isPending ? 'Creating…' : 'Create New Period'}
             </button>
@@ -402,8 +481,7 @@ export function PeriodsPage() {
       {rollForwardSource && (
         <RollForwardModal
           source={rollForwardSource}
-          onClose={() => setRollForwardSource(null)}
-          onSuccess={() => { invalidate(); setRollForwardSource(null); }}
+          onClose={() => { setRollForwardSource(null); invalidate(); }}
         />
       )}
 

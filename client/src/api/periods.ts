@@ -41,12 +41,20 @@ export const lockPeriod = (id: number) =>
 export const unlockPeriod = (id: number) =>
   apiFetch<Period>(`/periods/${id}/unlock`, { method: 'POST' });
 
+export type RollForwardMode = 'all_balances' | 'close_income' | 'zero_balances';
+
 export interface RollForwardInput {
   periodName: string;
   startDate?: string;
   endDate?: string;
   isCurrent?: boolean;
   copyRecurringJEs?: boolean;
+  /** How to handle balances in the new period */
+  mode?: RollForwardMode;
+  /** Account ID to close net income/loss into (required when mode='close_income') */
+  retainedEarningsAccountId?: number;
+  /** Whether to keep workpaper references on COA accounts (default: true) */
+  keepWorkpaperRefs?: boolean;
 }
 
 export interface RollForwardResult {

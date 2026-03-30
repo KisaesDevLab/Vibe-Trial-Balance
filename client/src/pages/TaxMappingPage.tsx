@@ -26,6 +26,7 @@ interface MappingRow {
   taxCodeId: number | null;
   taxLine: string | null;
   taxLineSource: string | null;
+  taxLineConfidence: number | null;
 }
 
 // ---- Constants ----
@@ -265,6 +266,7 @@ export function TaxMappingPage() {
     taxCodeId: (account as Account & { tax_code_id?: number | null }).tax_code_id ?? null,
     taxLine: account.tax_line,
     taxLineSource: (account as Account & { tax_line_source?: string | null }).tax_line_source ?? null,
+    taxLineConfidence: (account as Account & { tax_line_confidence?: number | null }).tax_line_confidence ?? null,
   }));
 
   // Progress
@@ -329,7 +331,7 @@ export function TaxMappingPage() {
     setAutoAssignError(null);
     setAutoAssignSuggestions([]);
     try {
-      const res = await autoAssignTaxLines(selectedClientId, { includeAll: true });
+      const res = await autoAssignTaxLines(selectedClientId, { includeAll: false });
       if (res.error) {
         setAutoAssignError(res.error.message);
         return;
@@ -568,8 +570,18 @@ export function TaxMappingPage() {
                               <span className="text-gray-300 text-xs">—</span>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-xs text-gray-500">
-                            {source === 'ai' && row.taxLineSource === 'ai' ? '—' : null}
+                          <td className="px-3 py-2 text-xs">
+                            {row.taxLineConfidence != null ? (
+                              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                row.taxLineConfidence >= 0.9 ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
+                                  : row.taxLineConfidence >= 0.7 ? 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400'
+                                    : 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-400'
+                              }`}>
+                                {Math.round(row.taxLineConfidence * 100)}%
+                              </span>
+                            ) : source ? (
+                              <span className="text-gray-400 dark:text-gray-500">—</span>
+                            ) : null}
                           </td>
                         </tr>
                       );

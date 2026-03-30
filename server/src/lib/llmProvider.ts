@@ -80,18 +80,21 @@ export class ClaudeProvider implements LLMProvider {
       ...(validStops?.length ? { stop_sequences: validStops } : {}),
       messages: params.messages.map(toAnthropicMessage),
     });
+    const textBlock = msg.content.find((b) => b.type === 'text');
     return {
-      text: (msg.content[0] as { type: string; text: string }).text,
+      text: textBlock && 'text' in textBlock ? textBlock.text : '',
       inputTokens: msg.usage.input_tokens,
       outputTokens: msg.usage.output_tokens,
     };
   }
 
   async *stream(params: LLMParams): AsyncGenerator<string, LLMUsage, void> {
+    const validStops = params.stopSequences?.filter((s) => s.trim().length > 0);
     const stream = this.client.messages.stream({
       model: params.model,
       max_tokens: params.maxTokens ?? 2048,
       ...(params.system ? { system: params.system } : {}),
+      ...(validStops?.length ? { stop_sequences: validStops } : {}),
       messages: params.messages.map(toAnthropicMessage),
     });
     for await (const chunk of stream) {
@@ -196,12 +199,17 @@ export class OpenAICompatProvider implements LLMProvider {
 
   async *stream(params: LLMParams): AsyncGenerator<string, LLMUsage, void> {
     const messages = buildOpenAIMessages(params);
+    // Only native OpenAI supports stream_options; Ollama and other compat
+    // providers will reject the parameter and break the stream entirely.
+    const streamOpts = this.providerName === 'openai'
+      ? { stream_options: { include_usage: true } }
+      : {};
     const stream = await this.client.chat.completions.create({
       model: params.model,
       max_tokens: params.maxTokens ?? 2048,
       messages,
       stream: true,
-      stream_options: { include_usage: true },
+      ...streamOpts,
     });
     let inputTokens = 0;
     let outputTokens = 0;
@@ -221,7 +229,8 @@ export class OpenAICompatProvider implements LLMProvider {
       // Ollama's /api/tags also works via /v1/models with the openai compat layer
       const list = await this.client.models.list();
       return list.data.map((m) => ({ id: m.id, displayName: m.id }));
-    } catch {
+    } catch (err) {
+      console.warn(`[${this.providerName}] Failed to list models:`, err instanceof Error ? err.message : err);
       return [];
     }
   }
@@ -264,9 +273,16 @@ function buildOpenAIMessages(params: LLMParams): OpenAI.Chat.ChatCompletionMessa
 
 // ── Config shape returned to callers ─────────────────────────────────────────
 
+export interface VisionConfig {
+  provider: LLMProvider;
+  model: string;
+  providerName: string;
+}
+
 export interface LLMConfig {
   provider: LLMProvider;
   fastModel: string;
   primaryModel: string;
   providerName: string;
+  vision: VisionConfig;
 }

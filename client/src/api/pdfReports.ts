@@ -54,4 +54,6 @@ export const pdfReports = {
   workpaperIndex: (periodId: number) => `/api/v1/reports/periods/${periodId}/workpaper-index`,
   taxBasisPl: (periodId: number) => `/api/v1/reports/periods/${periodId}/tax-basis-pl`,
   taxReturnOrder: (periodId: number) => `/api/v1/reports/periods/${periodId}/tax-return-order`,
+  workpaperMerged: (periodId: number, reportIds: string[]) =>
+    `/api/v1/reports/periods/${periodId}/workpaper-merged?reports=${reportIds.join(',')}`,
 };

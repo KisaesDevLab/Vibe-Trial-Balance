@@ -54,24 +54,46 @@ function ReportViewer({ config, periodId }: { config: ReportConfig; periodId: nu
   const tbRows = tbData?.data ?? [];
   const tbMap = new Map<number, TBRow>(tbRows.map(r => [r.account_id, r]));
 
-  const thCls = 'px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700';
-  const tdNum = 'px-3 py-1.5 text-sm text-right tabular-nums dark:text-gray-300';
+  const thCls = 'num px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700';
+  const tdNum = 'num px-3 py-1.5 text-sm text-right tabular-nums dark:text-gray-300';
   const numCols = config.columns.length;
+
+  const handlePrint = () => {
+    const tableEl = document.getElementById('custom-report-table');
+    if (!tableEl) return;
+    const printWin = window.open('', '_blank', 'width=900,height=700');
+    if (!printWin) return;
+    printWin.document.write(`<!DOCTYPE html><html><head><title>Custom Report</title>
+      <style>
+        body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; margin: 20px; color: #111; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f3f4f6; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 10px; border-bottom: 2px solid #d1d5db; }
+        td { padding: 4px 10px; border-bottom: 1px solid #e5e7eb; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .hdr { text-align: left; }
+        .section { background: #f0fdfa; font-weight: bold; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #115e59; padding: 5px 10px; }
+        .subtotal { background: #f9fafb; font-weight: 600; border-top: 2px solid #d1d5db; }
+        @media print { body { margin: 0; } }
+      </style></head><body>${tableEl.outerHTML}</body></html>`);
+    printWin.document.close();
+    printWin.focus();
+    setTimeout(() => { printWin.print(); }, 300);
+  };
 
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
-        <button onClick={() => window.print()}
+        <button onClick={handlePrint}
           className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
           Print / PDF
         </button>
       </div>
 
       <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-        <table className="w-full text-sm dark:text-gray-300">
+        <table id="custom-report-table" className="w-full text-sm dark:text-gray-300">
           <thead className="bg-gray-50 dark:bg-gray-800/60">
             <tr>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">
+              <th className="hdr px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">
                 Account
               </th>
               {config.columns.map(col => (
@@ -92,7 +114,7 @@ function ReportViewer({ config, periodId }: { config: ReportConfig; periodId: nu
               return [
                 <tr key={`${section.id}-hdr`} className="bg-teal-50 dark:bg-teal-900/20">
                   <td colSpan={numCols + 1}
-                    className="px-3 py-1.5 text-xs font-bold text-teal-800 dark:text-teal-400 uppercase tracking-wide">
+                    className="section px-3 py-1.5 text-xs font-bold text-teal-800 dark:text-teal-400 uppercase tracking-wide">
                     {section.name}
                   </td>
                 </tr>,
@@ -110,7 +132,7 @@ function ReportViewer({ config, periodId }: { config: ReportConfig; periodId: nu
                 )),
 
                 section.showSubtotal && (
-                  <tr key={`${section.id}-sub`} className="border-t-2 border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60 font-semibold">
+                  <tr key={`${section.id}-sub`} className="subtotal border-t-2 border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60 font-semibold">
                     <td className="px-3 py-1.5 text-sm dark:text-gray-200">Total {section.name}</td>
                     {subtotals.map((t, i) => (
                       <td key={i} className={tdNum}>{fmt(t)}</td>

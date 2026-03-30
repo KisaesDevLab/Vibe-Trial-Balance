@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
+import { listTaxCodes } from '../api/taxCodes';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
@@ -10,7 +11,7 @@ type ColSet = 'book' | 'tax';
 function netBalance(row: TBRow, colSet: ColSet): number {
   const dr = colSet === 'book' ? row.book_adjusted_debit : row.tax_adjusted_debit;
   const cr = colSet === 'book' ? row.book_adjusted_credit : row.tax_adjusted_credit;
-  return row.normal_balance === 'debit' ? dr - cr : cr - dr;
+  return dr - cr;
 }
 
 function fmt(cents: number): string {
@@ -63,6 +64,17 @@ export function TaxCodeReportPage() {
     },
     enabled: selectedPeriodId !== null,
   });
+
+  // Fetch tax codes for description lookup
+  const { data: taxCodesData } = useQuery({
+    queryKey: ['tax-codes-all'],
+    queryFn: async () => {
+      const res = await listTaxCodes();
+      if (res.error) return [];
+      return res.data ?? [];
+    },
+  });
+  const tcDescMap = new Map((taxCodesData ?? []).map((tc) => [tc.tax_code, tc.description]));
 
   const rows = (data ?? []).filter((r) => r.is_active);
 
@@ -159,7 +171,9 @@ export function TaxCodeReportPage() {
             return (
               <div key={code} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
                 <div className={`px-4 py-2 border-b flex items-center justify-between ${code === 'Unassigned' ? 'bg-gray-100 dark:bg-gray-700 border-gray-300 dark:border-gray-600' : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700'}`}>
-                  <span className={`text-sm font-bold ${code === 'Unassigned' ? 'text-gray-500 dark:text-gray-400 italic' : 'text-blue-900 dark:text-blue-300'}`}>{code}</span>
+                  <span className={`text-sm font-bold ${code === 'Unassigned' ? 'text-gray-500 dark:text-gray-400 italic' : 'text-blue-900 dark:text-blue-300'}`}>
+                    {code}{tcDescMap.get(code) ? ` — ${tcDescMap.get(code)}` : ''}
+                  </span>
                   <span className="text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">{fmt(subtotal)}</span>
                 </div>
                 <table className="w-full text-sm">

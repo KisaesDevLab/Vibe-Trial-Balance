@@ -2,7 +2,7 @@
 
 A self-hosted tax preparation and accounting workpaper application for small CPA firms. Manage trial balances, journal entries, bank transactions, tax code assignments, financial statements, and client engagements — with AI-powered diagnostics, classification, and PDF import.
 
-**License:** AGPL-3.0-only ([full text](LICENSE))
+**License:** BSL-1.1 ([full text](LICENSE)) — converts to Apache-2.0 on 2030-03-30
 
 ---
 
@@ -443,7 +443,7 @@ The app has built-in backup (Admin > Backup & Restore), but also set up external
 - [ ] Set `ALLOWED_ORIGIN` to your exact domain (no wildcards)
 - [ ] Enable firewall (UFW, cloud security groups)
 - [ ] Set up external database backups
-- [ ] Review AGPL-3.0 compliance: source code link in app footer must point to a public repo
+- [ ] Review BSL-1.1 compliance: LICENSE file included, source code link in app footer
 
 ---
 
@@ -483,13 +483,14 @@ See `server/knowledge/mcp-integration.md` for the full tool/resource/prompt refe
 
 ---
 
-## License Compliance
+## License
 
-This project is licensed under **AGPL-3.0-only**. Key obligations:
+This project is licensed under the **Business Source License 1.1** (BSL-1.1).
 
-- The LICENSE file contains the full AGPL-3.0 text
-- The app footer includes a link to the source code repository (AGPL Section 13)
-- All dependencies are MIT/Apache-2.0/BSD/ISC compatible (verified via `./scripts/license-audit.sh`)
-- See `scripts/license-policy.json` for the complete dependency license policy
+- **Additional Use Grant:** You may use the Licensed Work in production for your own internal business operations, including deploying it on self-hosted hardware for use by your employees and clients. You may not offer the Licensed Work to third parties as a commercial product, managed service, or appliance for resale.
+- **Change Date:** 2030-03-30 — on this date the license converts to **Apache-2.0**.
+- The LICENSE file contains the full BSL-1.1 text.
+- All dependencies are MIT/Apache-2.0/BSD/ISC compatible (verified via `./scripts/license-audit.sh`).
+- See `scripts/license-policy.json` for the complete dependency license policy.
 
 Run `./scripts/license-audit.sh` before any release to verify compliance.

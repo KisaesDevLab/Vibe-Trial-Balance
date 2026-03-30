@@ -150,10 +150,100 @@ async function getTbRows(periodId: number, software?: string) {
           .andOn(db.raw('tcsm.tax_software = ?', [software]))
           .andOn(db.raw('tcsm.is_active = true'));
       })
-      .select('tcsm.software_code', 'tcsm.software_description');
+      .select('tcsm.software_code', 'tcsm.software_description', 'tcsm.export_account_number', 'tcsm.export_description');
   }
 
   return q.orderBy('coa.account_number', 'asc');
+}
+
+/** Parse ?consolidate=1,5,12 query param into a Set of tax_code_ids */
+function parseConsolidateParam(val: unknown): Set<number> {
+  if (typeof val !== 'string' || !val.trim()) return new Set();
+  return new Set(val.split(',').map(Number).filter((n) => !isNaN(n) && n > 0));
+}
+
+/** Parse ?overrides=JSON query param into runtime override map */
+function parseOverridesParam(val: unknown): Record<string, { n: string; d: string }> | undefined {
+  if (typeof val !== 'string' || !val.trim()) return undefined;
+  try { return JSON.parse(val); } catch { return undefined; }
+}
+
+/** Handle export errors including consolidation duplicate check */
+function handleExportError(err: unknown, res: Response): void {
+  const e = err as { code?: string; status?: number; message?: string };
+  if (e.code === 'DUPLICATE_ACCOUNT') {
+    res.status(409).json({ data: null, error: { code: 'DUPLICATE_ACCOUNT', message: e.message } });
+    return;
+  }
+  res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+}
+
+/**
+ * Consolidate rows by tax_code_id for the given set of IDs.
+ * Returns synthetic rows with the same shape so downstream Excel mapping is unchanged.
+ */
+function consolidateRows(rows: Record<string, unknown>[], consolidateIds: Set<number>, overrides?: Record<string, { n: string; d: string }>): Record<string, unknown>[] {
+  if (consolidateIds.size === 0) return rows;
+
+  const passThrough: Record<string, unknown>[] = [];
+  const groups = new Map<number, { rows: Record<string, unknown>[]; first: Record<string, unknown> }>();
+
+  for (const r of rows) {
+    const tcId = r.tax_code_id as number | null;
+    if (!tcId || !consolidateIds.has(tcId)) {
+      passThrough.push(r);
+      continue;
+    }
+    if (!groups.has(tcId)) {
+      groups.set(tcId, { rows: [], first: r });
+    }
+    groups.get(tcId)!.rows.push(r);
+  }
+
+  const consolidated: Record<string, unknown>[] = [];
+  for (const [, grp] of groups) {
+    let bookDr = 0, bookCr = 0, taxDr = 0, taxCr = 0;
+    for (const r of grp.rows) {
+      bookDr += Number(r.book_adjusted_debit ?? 0);
+      bookCr += Number(r.book_adjusted_credit ?? 0);
+      taxDr  += Number(r.tax_adjusted_debit ?? 0);
+      taxCr  += Number(r.tax_adjusted_credit ?? 0);
+    }
+
+    const f = grp.first;
+    const tcId = f.tax_code_id as number;
+    const runtimeOverride = overrides?.[String(tcId)];
+    // Account identity: runtime override → DB export overrides → first account in group
+    const acctNum = runtimeOverride?.n || (f.export_account_number as string) || (f.account_number as string) || '';
+    const acctName = runtimeOverride?.d || (f.export_description as string) || (f.account_name as string) || '';
+
+    consolidated.push({
+      ...f,
+      account_number: acctNum,
+      account_name: acctName,
+      // software_code and software_description remain from the first row (the tax line mapping)
+      book_adjusted_debit: bookDr,
+      book_adjusted_credit: bookCr,
+      tax_adjusted_debit: taxDr,
+      tax_adjusted_credit: taxCr,
+    });
+  }
+
+  // Validate: consolidated account numbers must not conflict with pass-through account numbers
+  const existingAcctNums = new Set(passThrough.map((r) => String(r.account_number).toLowerCase()));
+  for (const c of consolidated) {
+    const num = String(c.account_number).toLowerCase();
+    if (existingAcctNums.has(num)) {
+      throw Object.assign(
+        new Error(`Consolidated account number "${c.account_number}" conflicts with an existing account in the export. Choose a different number.`),
+        { code: 'DUPLICATE_ACCOUNT', status: 409 },
+      );
+    }
+  }
+
+  // Sort consolidated by sort_order, then merge with pass-through
+  consolidated.sort((a, b) => (Number(a.tc_sort_order ?? 999) - Number(b.tc_sort_order ?? 999)));
+  return [...consolidated, ...passThrough];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -213,16 +303,52 @@ exportsRouter.get('/validate', async (req: AuthRequest, res: Response): Promise<
       warnings.push(`${missingMappings.length} account(s) have a tax code but no ${software} software mapping`);
     }
 
+    // Tax codes in use for consolidation UI — includes per-account detail and totals
+    type TcAccount = { account_number: string; account_name: string; bookAmt: number; taxAmt: number };
+    type TcGroup = {
+      tax_code_id: number; tax_code: string; description: string;
+      software_code: string | null; software_description: string | null;
+      export_account_number: string | null; export_description: string | null;
+      account_count: number; totalBookAmt: number; totalTaxAmt: number;
+      accounts: TcAccount[];
+    };
+    const tcGroups = new Map<number, TcGroup>();
+    for (const r of rows as Record<string, unknown>[]) {
+      const tcId = r.tax_code_id as number | null;
+      if (!tcId) continue;
+      if (!tcGroups.has(tcId)) {
+        tcGroups.set(tcId, {
+          tax_code_id: tcId,
+          tax_code: (r.tax_code as string) ?? '',
+          description: (r.tax_description as string) ?? '',
+          software_code: (r.software_code as string) ?? null,
+          software_description: (r.software_description as string) ?? null,
+          export_account_number: (r.export_account_number as string) ?? null,
+          export_description: (r.export_description as string) ?? null,
+          account_count: 0, totalBookAmt: 0, totalTaxAmt: 0, accounts: [],
+        });
+      }
+      const grp = tcGroups.get(tcId)!;
+      const bookAmt = (Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)) / 100;
+      const taxAmt = (Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)) / 100;
+      grp.account_count++;
+      grp.totalBookAmt += bookAmt;
+      grp.totalTaxAmt += taxAmt;
+      grp.accounts.push({ account_number: r.account_number as string, account_name: r.account_name as string, bookAmt, taxAmt });
+    }
+    const taxCodesInUse = [...tcGroups.values()].sort((a, b) => a.tax_code.localeCompare(b.tax_code));
+
     res.json({
       data: {
         isBalanced,
         unmappedAccounts,
         missingMappings,
-        canExport: true, // always allow (warnings only, not blockers)
+        canExport: true,
         warnings,
         software,
         totalDebit: totalDr,
         totalCredit: totalCr,
+        taxCodesInUse,
       },
       error: null,
     });
@@ -245,27 +371,32 @@ exportsRouter.get('/ultratax', async (req: AuthRequest, res: Response): Promise<
     const info = await getPeriodInfo(periodId);
     if (!info) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } }); return; }
 
-    const rows = await getTbRows(periodId, 'ultratax') as Record<string, unknown>[];
+    let rows = await getTbRows(periodId, 'ultratax') as Record<string, unknown>[];
+    const consolidateIds = parseConsolidateParam(req.query.consolidate);
+    const runtimeOverrides = parseOverridesParam(req.query.overrides);
+    if (consolidateIds.size > 0) rows = consolidateRows(rows, consolidateIds, runtimeOverrides);
 
     const data = rows.map((r) => ({
-      acct:   r.account_number,
-      name:   r.account_name,
-      code:   r.software_code ?? '',
-      amount: centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
+      acct:    r.account_number,
+      name:    r.account_name,
+      code:    r.software_code ?? '',
+      bookAmt: centsToAmt(Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)),
+      taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
     }));
 
     const buffer = await buildExcel('UltraTax CS Export', [
-      { header: 'AccountNumber', key: 'acct',   width: 18 },
-      { header: 'AccountName',   key: 'name',   width: 40 },
-      { header: 'TaxCode',       key: 'code',   width: 18 },
-      { header: 'Amount',        key: 'amount', width: 18, numFmt: '#,##0.00' },
+      { header: 'AccountNumber',    key: 'acct',    width: 18 },
+      { header: 'AccountName',      key: 'name',    width: 40 },
+      { header: 'TaxCode',          key: 'code',    width: 18 },
+      { header: 'Book Basis Amt',   key: 'bookAmt', width: 18, numFmt: '#,##0.00' },
+      { header: 'Tax Basis Amt',    key: 'taxAmt',  width: 18, numFmt: '#,##0.00' },
     ], data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="ultratax-export-${periodId}.xlsx"`);
     res.send(buffer);
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    handleExportError(err, res);
   }
 });
 
@@ -283,7 +414,10 @@ exportsRouter.get('/cch', async (req: AuthRequest, res: Response): Promise<void>
     const info = await getPeriodInfo(periodId);
     if (!info) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } }); return; }
 
-    const rows = await getTbRows(periodId, 'cch') as Record<string, unknown>[];
+    let rows = await getTbRows(periodId, 'cch') as Record<string, unknown>[];
+    const consolidateIds = parseConsolidateParam(req.query.consolidate);
+    const runtimeOverrides = parseOverridesParam(req.query.overrides);
+    if (consolidateIds.size > 0) rows = consolidateRows(rows, consolidateIds, runtimeOverrides);
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Trial Balance App';
@@ -291,11 +425,12 @@ exportsRouter.get('/cch', async (req: AuthRequest, res: Response): Promise<void>
 
     const ws = wb.addWorksheet('CCH Axcess Export');
     ws.columns = [
-      { header: 'AccountNumber', key: 'acct',   width: 18 },
-      { header: 'AccountName',   key: 'name',   width: 40 },
-      { header: 'CCHCode',       key: 'code',   width: 18 },
-      { header: 'Description',   key: 'desc',   width: 40 },
-      { header: 'Amount',        key: 'amount', width: 18 },
+      { header: 'AccountNumber',  key: 'acct',    width: 18 },
+      { header: 'AccountName',    key: 'name',    width: 40 },
+      { header: 'CCHCode',        key: 'code',    width: 18 },
+      { header: 'Description',    key: 'desc',    width: 40 },
+      { header: 'Book Basis Amt', key: 'bookAmt', width: 18 },
+      { header: 'Tax Basis Amt',  key: 'taxAmt',  width: 18 },
     ];
 
     // Bold header
@@ -304,13 +439,16 @@ exportsRouter.get('/cch', async (req: AuthRequest, res: Response): Promise<void>
     ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
 
     for (const r of rows) {
-      ws.addRow({
-        acct:   r.account_number,
-        name:   r.account_name,
-        code:   r.software_code ?? '',
-        desc:   r.software_description ?? '',
-        amount: centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
+      const row = ws.addRow({
+        acct:    r.account_number,
+        name:    r.account_name,
+        code:    r.software_code ?? '',
+        desc:    r.software_description ?? '',
+        bookAmt: centsToAmt(Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)),
+        taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
       });
+      row.getCell('bookAmt').numFmt = '#,##0.00';
+      row.getCell('taxAmt').numFmt = '#,##0.00';
     }
 
     // Freeze header row
@@ -321,7 +459,7 @@ exportsRouter.get('/cch', async (req: AuthRequest, res: Response): Promise<void>
     res.setHeader('Content-Disposition', `attachment; filename="cch-export-${periodId}.xlsx"`);
     res.send(Buffer.from(buffer));
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    handleExportError(err, res);
   }
 });
 
@@ -339,25 +477,30 @@ exportsRouter.get('/lacerte', async (req: AuthRequest, res: Response): Promise<v
     const info = await getPeriodInfo(periodId);
     if (!info) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } }); return; }
 
-    const rows = await getTbRows(periodId, 'lacerte') as Record<string, unknown>[];
+    let rows = await getTbRows(periodId, 'lacerte') as Record<string, unknown>[];
+    const consolidateIds = parseConsolidateParam(req.query.consolidate);
+    const runtimeOverrides = parseOverridesParam(req.query.overrides);
+    if (consolidateIds.size > 0) rows = consolidateRows(rows, consolidateIds, runtimeOverrides);
 
     const data = rows.map((r) => ({
-      code:   r.software_code ?? '',
-      name:   r.account_name,
-      amount: centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
+      code:    r.software_code ?? '',
+      name:    r.account_name,
+      bookAmt: centsToAmt(Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)),
+      taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
     }));
 
     const buffer = await buildExcel('Lacerte Export', [
-      { header: 'LineCode',    key: 'code',   width: 18 },
-      { header: 'Description', key: 'name',   width: 40 },
-      { header: 'Amount',      key: 'amount', width: 18, numFmt: '#,##0.00' },
+      { header: 'LineCode',         key: 'code',    width: 18 },
+      { header: 'Description',      key: 'name',    width: 40 },
+      { header: 'Book Basis Amt',   key: 'bookAmt', width: 18, numFmt: '#,##0.00' },
+      { header: 'Tax Basis Amt',    key: 'taxAmt',  width: 18, numFmt: '#,##0.00' },
     ], data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="lacerte-export-${periodId}.xlsx"`);
     res.send(buffer);
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    handleExportError(err, res);
   }
 });
 
@@ -375,25 +518,30 @@ exportsRouter.get('/gosystem', async (req: AuthRequest, res: Response): Promise<
     const info = await getPeriodInfo(periodId);
     if (!info) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } }); return; }
 
-    const rows = await getTbRows(periodId, 'gosystem') as Record<string, unknown>[];
+    let rows = await getTbRows(periodId, 'gosystem') as Record<string, unknown>[];
+    const consolidateIds = parseConsolidateParam(req.query.consolidate);
+    const runtimeOverrides = parseOverridesParam(req.query.overrides);
+    if (consolidateIds.size > 0) rows = consolidateRows(rows, consolidateIds, runtimeOverrides);
 
     const data = rows.map((r) => ({
-      code:   r.software_code ?? '',
-      name:   r.account_name,
-      amount: centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
+      code:    r.software_code ?? '',
+      name:    r.account_name,
+      bookAmt: centsToAmt(Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)),
+      taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
     }));
 
     const buffer = await buildExcel('GoSystem Tax RS Export', [
-      { header: 'LineCode',    key: 'code',   width: 18 },
-      { header: 'Description', key: 'name',   width: 40 },
-      { header: 'Amount',      key: 'amount', width: 18, numFmt: '#,##0.00' },
+      { header: 'LineCode',         key: 'code',    width: 18 },
+      { header: 'Description',      key: 'name',    width: 40 },
+      { header: 'Book Basis Amt',   key: 'bookAmt', width: 18, numFmt: '#,##0.00' },
+      { header: 'Tax Basis Amt',    key: 'taxAmt',  width: 18, numFmt: '#,##0.00' },
     ], data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="gosystem-export-${periodId}.xlsx"`);
     res.send(buffer);
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    handleExportError(err, res);
   }
 });
 
@@ -411,34 +559,112 @@ exportsRouter.get('/generic', async (req: AuthRequest, res: Response): Promise<v
     const info = await getPeriodInfo(periodId);
     if (!info) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } }); return; }
 
-    const rows = await getTbRows(periodId) as Record<string, unknown>[];
+    let rows = await getTbRows(periodId) as Record<string, unknown>[];
+    const consolidateIds = parseConsolidateParam(req.query.consolidate);
+    const runtimeOverrides = parseOverridesParam(req.query.overrides);
+    if (consolidateIds.size > 0) rows = consolidateRows(rows, consolidateIds, runtimeOverrides);
 
     const data = rows.map((r) => ({
-      acct:   r.account_number,
-      name:   r.account_name,
-      code:   r.tax_code ?? '',
-      desc:   r.tax_description ?? '',
-      amount: centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
+      acct:    r.account_number,
+      name:    r.account_name,
+      code:    r.tax_code ?? '',
+      desc:    r.tax_description ?? '',
+      bookAmt: centsToAmt(Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)),
+      taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
     }));
 
     const buffer = await buildExcel('Generic Export', [
-      { header: 'AccountNumber',  key: 'acct',   width: 18 },
-      { header: 'AccountName',    key: 'name',   width: 40 },
-      { header: 'TaxCode',        key: 'code',   width: 18 },
-      { header: 'TaxDescription', key: 'desc',   width: 40 },
-      { header: 'Amount',         key: 'amount', width: 18, numFmt: '#,##0.00' },
+      { header: 'AccountNumber',  key: 'acct',    width: 18 },
+      { header: 'AccountName',    key: 'name',    width: 40 },
+      { header: 'TaxCode',        key: 'code',    width: 18 },
+      { header: 'TaxDescription', key: 'desc',    width: 40 },
+      { header: 'Book Basis Amt', key: 'bookAmt', width: 18, numFmt: '#,##0.00' },
+      { header: 'Tax Basis Amt',  key: 'taxAmt',  width: 18, numFmt: '#,##0.00' },
     ], data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="generic-export-${periodId}.xlsx"`);
     res.send(buffer);
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    handleExportError(err, res);
   }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET working-tb  ->  Excel with all columns
+// ─────────────────────────────────────────────────────────────────────────────
+// GET/PUT consolidation-settings — per-client consolidation overrides
+// ─────────────────────────────────────────────────────────────────────────────
+
+exportsRouter.get('/consolidation-settings', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = Number(req.params.periodId);
+  if (isNaN(periodId)) { res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } }); return; }
+
+  const sw = (req.query.software as string) || 'ultratax';
+  try {
+    const info = await getPeriodInfo(periodId);
+    if (!info) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } }); return; }
+
+    const rows = await db('export_consolidation_settings')
+      .where({ client_id: info.client_id, tax_software: sw })
+      .select('tax_code_id', 'override_account_number', 'override_description');
+
+    const settings: Record<number, { acctNum: string; acctName: string }> = {};
+    for (const r of rows) {
+      settings[r.tax_code_id] = {
+        acctNum: r.override_account_number ?? '',
+        acctName: r.override_description ?? '',
+      };
+    }
+    res.json({ data: settings, error: null });
+  } catch (err: unknown) {
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+  }
+});
+
+exportsRouter.put('/consolidation-settings', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = Number(req.params.periodId);
+  if (isNaN(periodId)) { res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } }); return; }
+
+  const { software, settings } = req.body as {
+    software: string;
+    settings: Record<string, { acctNum: string; acctName: string }>;
+  };
+  if (!software || !settings) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'software and settings required' } });
+    return;
+  }
+
+  try {
+    const info = await getPeriodInfo(periodId);
+    if (!info) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } }); return; }
+
+    await db.transaction(async (trx) => {
+      // Remove existing settings for this client+software
+      await trx('export_consolidation_settings').where({ client_id: info.client_id, tax_software: software }).delete();
+
+      // Insert new settings
+      const entries = Object.entries(settings);
+      if (entries.length > 0) {
+        await trx('export_consolidation_settings').insert(
+          entries.map(([tcId, v]) => ({
+            client_id: info.client_id,
+            tax_code_id: Number(tcId),
+            tax_software: software,
+            override_account_number: v.acctNum || null,
+            override_description: v.acctName || null,
+            updated_at: trx.fn.now(),
+          })),
+        );
+      }
+    });
+
+    res.json({ data: { saved: Object.keys(settings).length }, error: null });
+  } catch (err: unknown) {
+    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 exportsRouter.get('/working-tb', async (req: AuthRequest, res: Response): Promise<void> => {

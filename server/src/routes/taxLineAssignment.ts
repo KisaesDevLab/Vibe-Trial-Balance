@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAiUsage } from '../lib/aiUsage';
-import { getLLMProvider } from '../lib/aiClient';
+import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { extractJsonArray } from '../lib/aiJsonExtract';
 
 export const taxLineAssignmentRouter = Router();
@@ -100,11 +100,16 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
       return;
     }
 
-    // Load available tax codes for this entity
+    // Load available tax codes for this entity (include common codes like REPORTING_ONLY)
     const taxCodes: TaxCodeRow[] = await db('tax_codes')
       .where('is_active', true)
-      .where('return_form', resolvedReturnForm)
-      .where('activity_type', activityType)
+      .where(function () {
+        this.where(function () {
+          this.where('return_form', resolvedReturnForm).where('activity_type', activityType);
+        }).orWhere(function () {
+          this.where('return_form', 'common').where('activity_type', 'common');
+        });
+      })
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'tax_code', order: 'asc' }])
       .select('id', 'tax_code', 'description', 'return_form', 'activity_type', 'sort_order');
 
@@ -305,6 +310,7 @@ async function getAiSuggestions(
   activityType: string,
 ): Promise<AiSuggestionOutput[]> {
   const { provider, fastModel } = await getLLMProvider();
+  const tokenSettings = await getAiTokenSettings();
 
   // Limit to top 200 most relevant tax codes to avoid token overload
   const taxCodeList = taxCodes.slice(0, 200).map((tc) => ({
@@ -333,11 +339,19 @@ IMPORTANT:
 - Confidence: 0.0-1.0 (1.0 = certain, 0.7 = likely, 0.5 = best guess, 0.0 = unknown)
 - Reasoning should be 1-2 sentences explaining the choice`;
 
-  const userPrompt = `Available tax codes:
+  // Batch accounts into groups of 30 to avoid output truncation
+  const BATCH_SIZE = 30;
+  const allResults: AiSuggestionOutput[] = [];
+
+  for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
+    const batch = accounts.slice(i, i + BATCH_SIZE);
+    const maxTokens = Math.max(tokenSettings.maxTokensDefault, batch.length * 120);
+
+    const userPrompt = `Available tax codes:
 ${JSON.stringify(taxCodeList, null, 2)}
 
 Accounts to assign:
-${JSON.stringify(accounts, null, 2)}
+${JSON.stringify(batch, null, 2)}
 
 Return a JSON array where each element has:
 - account_number: string (the original account_number)
@@ -345,20 +359,25 @@ Return a JSON array where each element has:
 - confidence: number (0.0 to 1.0)
 - reasoning: string (1-2 sentences)`;
 
-  const aiResult = await provider.complete({
-    model: fastModel,
-    maxTokens: 4096,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
-  });
-  logAiUsage({ endpoint: 'tax/auto-assign', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: null, clientId: null });
+    const aiResult = await provider.complete({
+      model: fastModel,
+      maxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    });
+    logAiUsage({ endpoint: 'tax/auto-assign', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: null, clientId: null });
 
-  const parsed = extractJsonArray<AiSuggestionOutput>(aiResult.text);
-  if (!parsed) {
-    console.error('[taxLineAssignment] AI returned non-array response:', aiResult.text.slice(0, 500));
-    throw new Error('AI returned invalid format');
+    const parsed = extractJsonArray<AiSuggestionOutput>(aiResult.text);
+    if (!parsed) {
+      console.error(`[taxLineAssignment] AI batch ${Math.floor(i / BATCH_SIZE) + 1} returned non-array:`, aiResult.text.slice(0, 500));
+      // Don't fail the whole run — skip this batch, caller will mark them unmappable
+      continue;
+    }
+    allResults.push(...parsed);
+    console.log(`[taxLineAssignment] Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${parsed.length} suggestions from ${batch.length} accounts`);
   }
-  return parsed;
+
+  return allResults;
 }
 
 function getEntityRules(entityType: string, activityType: string): string {

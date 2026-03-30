@@ -21,7 +21,7 @@ export const testClaudeKey = () =>
 export const testLLM = () =>
   apiFetch<{ valid: boolean; provider?: string; message?: string }>('/settings/test-llm', { method: 'POST' });
 
-export type LLMProvider = 'claude' | 'ollama' | 'openai-compat';
+export type LLMProvider = 'claude' | 'ollama' | 'openai' | 'openai-compat';
 
 export interface LLMProviderSettings {
   provider: LLMProvider;
@@ -30,6 +30,9 @@ export interface LLMProviderSettings {
   ollamaReasoningModel: string;
   /** 'true'/'false' to override vision detection; '' = auto-detect from model name */
   ollamaVisionOverride: string;
+  openaiApiKey: string;
+  openaiPrimaryModel: string;
+  openaiFastModel: string;
   openaiCompatBaseUrl: string;
   openaiCompatApiKey: string;
   /** Primary (capable) model */
@@ -38,6 +41,10 @@ export interface LLMProviderSettings {
   openaiCompatFastModel: string;
   /** 'true'/'false' to override vision detection; '' = auto-detect from model name */
   openaiCompatVisionOverride: string;
+  /** Separate vision provider for scanned/image PDFs; '' = same as main provider */
+  visionProvider: string;
+  /** Model for vision tasks; '' = use provider default */
+  visionModel: string;
   timeoutMs: number;
   /** Max output tokens for general AI calls (default: 4096) */
   maxTokensDefault: number;
@@ -54,4 +61,21 @@ export const saveLLMProviderSettings = (data: Partial<LLMProviderSettings>) =>
   apiFetch<{ saved: boolean }>('/settings/llm-provider', {
     method: 'PUT',
     body: JSON.stringify(data),
+  });
+
+export interface OpenAIModelInfo {
+  id: string;
+  displayName: string;
+}
+
+export const fetchOpenAIModels = (apiKey: string) =>
+  apiFetch<OpenAIModelInfo[]>('/settings/openai-models', {
+    method: 'POST',
+    body: JSON.stringify({ apiKey }),
+  });
+
+export const fetchProviderModels = (provider: string) =>
+  apiFetch<OpenAIModelInfo[]>('/settings/provider-models', {
+    method: 'POST',
+    body: JSON.stringify({ provider }),
   });

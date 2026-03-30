@@ -32,7 +32,15 @@ function fmtPct(current: number, prior: number): string {
 
 type ColSet = 'unadjusted' | 'book' | 'tax' | 'prior-year';
 
-function netBalance(row: TBRow, colSet: ColSet): number {
+/**
+ * Financial statement display using category-based sign convention:
+ * Revenue: positive when credit balance (cr - dr)
+ * Expenses: positive when debit balance (dr - cr)
+ * Assets: positive when debit balance (dr - cr)
+ * Liabilities: positive when credit balance (cr - dr)
+ * Equity: positive when credit balance (cr - dr)
+ */
+function fsDisplayBalance(row: TBRow, colSet: ColSet): number {
   let dr: number, cr: number;
   if (colSet === 'unadjusted') {
     dr = row.unadjusted_debit; cr = row.unadjusted_credit;
@@ -43,7 +51,10 @@ function netBalance(row: TBRow, colSet: ColSet): number {
   } else {
     dr = row.prior_year_debit; cr = row.prior_year_credit;
   }
-  return row.normal_balance === 'debit' ? dr - cr : cr - dr;
+  // Debit-normal categories (assets, expenses): dr - cr = positive
+  // Credit-normal categories (liabilities, equity, revenue): cr - dr = positive
+  const creditNormal = row.category === 'revenue' || row.category === 'liabilities' || row.category === 'equity';
+  return creditNormal ? cr - dr : dr - cr;
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -76,13 +87,14 @@ function AccountRow({ label, cents, priorCents }: { label: string; cents: number
 
 function SubtotalRow({ label, cents, priorCents, indent = false }: { label: string; cents: number; priorCents?: number; indent?: boolean }) {
   const changeCents = priorCents !== undefined ? cents - priorCents : undefined;
+  const borderClass = 'border-t border-b-2 border-gray-400 dark:border-gray-500';
   return (
     <tr className="border-t border-gray-300 dark:border-gray-600">
       <td className={`px-4 py-1.5 text-sm font-semibold text-gray-800 dark:text-gray-200 ${indent ? 'pl-6' : ''}`}>{label}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-36 border-t border-gray-400 dark:border-gray-500">{fmtTotal(cents)}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-36 border-t border-gray-300 dark:border-gray-600">{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-32 border-t border-gray-300 dark:border-gray-600">{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
-      <td className="px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-20 border-t border-gray-300 dark:border-gray-600">{priorCents !== undefined ? fmtPct(cents, priorCents) : ''}</td>
+      <td className={`px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-36 ${borderClass}`}>{fmtTotal(cents)}</td>
+      <td className={`px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-36 ${priorCents !== undefined ? borderClass : ''}`}>{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
+      <td className={`px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-32 ${changeCents !== undefined ? borderClass : ''}`}>{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
+      <td className={`px-4 py-1.5 text-sm text-right font-mono font-semibold text-gray-800 dark:text-gray-200 w-20 ${priorCents !== undefined ? borderClass : ''}`}>{priorCents !== undefined ? fmtPct(cents, priorCents) : ''}</td>
     </tr>
   );
 }
@@ -90,13 +102,16 @@ function SubtotalRow({ label, cents, priorCents, indent = false }: { label: stri
 function TotalRow({ label, cents, priorCents, double: isDouble = false }: { label: string; cents: number; priorCents?: number; double?: boolean }) {
   const color = cents < 0 ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-white';
   const changeCents = priorCents !== undefined ? cents - priorCents : undefined;
+  const borderClass = isDouble
+    ? 'border-t border-b-4 border-double border-gray-700 dark:border-gray-500'
+    : 'border-t border-b-2 border-gray-700 dark:border-gray-500';
   return (
     <tr className="border-t-2 border-gray-700 dark:border-gray-500">
       <td className={`px-4 py-2 text-sm font-bold ${color}`}>{label}</td>
-      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-36 ${color} ${isDouble ? 'border-b-4 border-double border-gray-700 dark:border-gray-500' : 'border-b-2 border-gray-700 dark:border-gray-500'}`}>{fmtTotal(cents)}</td>
-      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-36 ${color}`}>{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
-      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-32 ${color}`}>{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
-      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-20 ${color}`}>{priorCents !== undefined ? fmtPct(cents, priorCents) : ''}</td>
+      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-36 ${color} ${borderClass}`}>{fmtTotal(cents)}</td>
+      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-36 ${color} ${priorCents !== undefined ? borderClass : ''}`}>{priorCents !== undefined ? fmtTotal(priorCents) : ''}</td>
+      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-32 ${color} ${changeCents !== undefined ? borderClass : ''}`}>{changeCents !== undefined ? fmtTotal(changeCents) : ''}</td>
+      <td className={`px-4 py-2 text-sm text-right font-mono font-bold w-20 ${color} ${priorCents !== undefined ? borderClass : ''}`}>{priorCents !== undefined ? fmtPct(cents, priorCents) : ''}</td>
     </tr>
   );
 }
@@ -107,12 +122,13 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
   const revenue = rows.filter((r) => r.category === 'revenue').sort((a, b) => a.account_number.localeCompare(b.account_number));
   const expenses = rows.filter((r) => r.category === 'expenses').sort((a, b) => a.account_number.localeCompare(b.account_number));
 
-  const totalRevenue = revenue.reduce((s, r) => s + netBalance(r, colSet), 0);
-  const totalExpenses = expenses.reduce((s, r) => s + netBalance(r, colSet), 0);
+  // Revenue positive (cr-dr), expenses positive (dr-cr)
+  const totalRevenue = revenue.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
+  const totalExpenses = expenses.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
   const netIncome = totalRevenue - totalExpenses;
 
-  const pyRevenue = revenue.reduce((s, r) => s + netBalance(r, 'prior-year'), 0);
-  const pyExpenses = expenses.reduce((s, r) => s + netBalance(r, 'prior-year'), 0);
+  const pyRevenue = revenue.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
+  const pyExpenses = expenses.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
   const pyNetIncome = pyRevenue - pyExpenses;
 
   return (
@@ -130,7 +146,7 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
         <tbody>
           <SectionHeader title="Revenue" />
           {revenue.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
+            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
           ))}
           {revenue.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No revenue accounts found. Add revenue accounts to the Chart of Accounts page.</td></tr>
@@ -141,7 +157,7 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 
           <SectionHeader title="Expenses" />
           {expenses.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
+            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
           ))}
           {expenses.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No expense accounts found. Add expense accounts to the Chart of Accounts page.</td></tr>
@@ -165,20 +181,20 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 
   const revenue = rows.filter((r) => r.category === 'revenue');
   const expenses = rows.filter((r) => r.category === 'expenses');
-  const netIncome = revenue.reduce((s, r) => s + netBalance(r, colSet), 0)
-                  - expenses.reduce((s, r) => s + netBalance(r, colSet), 0);
-  const pyNetIncome = revenue.reduce((s, r) => s + netBalance(r, 'prior-year'), 0)
-                    - expenses.reduce((s, r) => s + netBalance(r, 'prior-year'), 0);
+  const netIncome = revenue.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0)
+                  - expenses.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
+  const pyNetIncome = revenue.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0)
+                    - expenses.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
 
-  const totalAssets = assets.reduce((s, r) => s + netBalance(r, colSet), 0);
-  const totalLiabilities = liabilities.reduce((s, r) => s + netBalance(r, colSet), 0);
-  const totalEquity = equity.reduce((s, r) => s + netBalance(r, colSet), 0) + netIncome;
+  const totalAssets = assets.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
+  const totalLiabilities = liabilities.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
+  const totalEquity = equity.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0) + netIncome;
   const totalLE = totalLiabilities + totalEquity;
   const balanced = totalAssets === totalLE;
 
-  const pyTotalAssets = assets.reduce((s, r) => s + netBalance(r, 'prior-year'), 0);
-  const pyTotalLiabilities = liabilities.reduce((s, r) => s + netBalance(r, 'prior-year'), 0);
-  const pyTotalEquity = equity.reduce((s, r) => s + netBalance(r, 'prior-year'), 0) + pyNetIncome;
+  const pyTotalAssets = assets.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
+  const pyTotalLiabilities = liabilities.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
+  const pyTotalEquity = equity.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0) + pyNetIncome;
   const pyTotalLE = pyTotalLiabilities + pyTotalEquity;
 
   return (
@@ -196,7 +212,7 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
         <tbody>
           <SectionHeader title="Assets" />
           {assets.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
+            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
           ))}
           {assets.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No asset accounts found. Add asset accounts to the Chart of Accounts page.</td></tr>
@@ -207,7 +223,7 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 
           <SectionHeader title="Liabilities" />
           {liabilities.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
+            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
           ))}
           {liabilities.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No liability accounts found. Add liability accounts to the Chart of Accounts page.</td></tr>
@@ -218,7 +234,7 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 
           <SectionHeader title="Equity" />
           {equity.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
+            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
           ))}
           {equity.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No equity accounts found. Add equity accounts to the Chart of Accounts page.</td></tr>
@@ -249,13 +265,13 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
   const revenue = rows.filter((r) => r.category === 'revenue');
   const expenses = rows.filter((r) => r.category === 'expenses');
 
-  const netIncome = revenue.reduce((s, r) => s + netBalance(r, colSet), 0)
-                  - expenses.reduce((s, r) => s + netBalance(r, colSet), 0);
-  const pyNetIncome = revenue.reduce((s, r) => s + netBalance(r, 'prior-year'), 0)
-                    - expenses.reduce((s, r) => s + netBalance(r, 'prior-year'), 0);
+  const netIncome = revenue.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0)
+                  - expenses.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
+  const pyNetIncome = revenue.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0)
+                    - expenses.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
 
-  const openingEquity = equity.reduce((s, r) => s + netBalance(r, 'prior-year'), 0);
-  const closingEquity = equity.reduce((s, r) => s + netBalance(r, colSet), 0) + netIncome;
+  const openingEquity = equity.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
+  const closingEquity = equity.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0) + netIncome;
   const pyClosing = openingEquity + pyNetIncome;
 
   return (
@@ -273,7 +289,7 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
         <tbody>
           <SectionHeader title="Opening Equity Balance (Prior Year)" />
           {equity.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, 'prior-year')} priorCents={undefined} />
+            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, 'prior-year')} priorCents={undefined} />
           ))}
           <SubtotalRow label="Total Opening Equity" cents={openingEquity} />
 
@@ -286,7 +302,7 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 
           <SectionHeader title="Ending Equity Balance" />
           {equity.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={netBalance(r, colSet)} priorCents={netBalance(r, 'prior-year')} />
+            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
           ))}
           <AccountRow label="Net Income (current period)" cents={netIncome} priorCents={pyNetIncome} />
           <TotalRow label="Total Equity" cents={closingEquity} priorCents={pyClosing} double />
@@ -369,8 +385,9 @@ export function FinancialStatementsPage() {
     if (!rows.length) return;
     const revenue = rows.filter((r) => r.category === 'revenue');
     const expenses = rows.filter((r) => r.category === 'expenses');
-    const netIncome = revenue.reduce((s, r) => s + netBalance(r, colSet), 0)
-                    - expenses.reduce((s, r) => s + netBalance(r, colSet), 0);
+    const totalRev = revenue.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
+    const totalExp = expenses.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
+    const netIncome = totalRev - totalExp;
 
     const header = ['Statement', 'Account Number', 'Account Name', 'Category', `${COL_LABELS[colSet] ?? colSet} Net`];
     const dataRows: string[][] = rows
@@ -380,8 +397,10 @@ export function FinancialStatementsPage() {
         return ci !== 0 ? ci : a.account_number.localeCompare(b.account_number);
       })
       .map((r) => {
-        const stmt = (r.category === 'revenue' || r.category === 'expenses') ? 'Income Statement' : 'Balance Sheet';
-        return [stmt, r.account_number, r.account_name, r.category, String(netBalance(r, colSet) / 100)];
+        const isIS = r.category === 'revenue' || r.category === 'expenses';
+        const stmt = isIS ? 'Income Statement' : 'Balance Sheet';
+        const amt = fsDisplayBalance(r, colSet);
+        return [stmt, r.account_number, r.account_name, r.category, String(amt / 100)];
       });
     dataRows.push(['Income Statement', '', 'Net Income', '', String(netIncome / 100)]);
     downloadXlsx(`financial-statements-${colSet}.xlsx`, [header, ...dataRows]);

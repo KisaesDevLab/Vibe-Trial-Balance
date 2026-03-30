@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// Copyright (C) 2024–2026 [Project Author]
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (C) 2024–2026 Kisaes LLC
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -120,6 +120,38 @@ function colTotal(rows: TBRow[], id: string): string {
 }
 
 const IS_TEXT_COL = new Set(['acct', 'name', 'cat']);
+
+/** Net income = Revenue credits minus Expense debits */
+function calcNetIncome(rows: TBRow[], drKey: keyof TBRow, crKey: keyof TBRow): number {
+  const revNet = rows.filter(r => r.category === 'revenue').reduce((s, r) => s + (r[crKey] as number) - (r[drKey] as number), 0);
+  const expNet = rows.filter(r => r.category === 'expenses').reduce((s, r) => s + (r[drKey] as number) - (r[crKey] as number), 0);
+  return revNet - expNet;
+}
+
+// Maps Dr column ID to its Cr pair — the Dr cell spans both, Cr cell is skipped
+const DR_CR_PAIRS: Record<string, string> = {
+  py_dr: 'py_cr', unaj_dr: 'unaj_cr', adj_dr: 'adj_cr', tax_dr: 'tax_cr',
+};
+// Cr columns that are consumed by their Dr pair's colSpan
+const CR_SKIP = new Set(Object.values(DR_CR_PAIRS));
+
+// Returns net income for a Dr column (dual mode) or single-column ID, null if not applicable
+function netIncomeForCol(rows: TBRow[], id: string): number | null {
+  switch (id) {
+    case 'py_dr': case 's_py':    return calcNetIncome(rows, 'prior_year_debit', 'prior_year_credit');
+    case 'unaj_dr': case 's_unaj': return calcNetIncome(rows, 'unadjusted_debit', 'unadjusted_credit');
+    case 'adj_dr': case 's_adj':   return calcNetIncome(rows, 'book_adjusted_debit', 'book_adjusted_credit');
+    case 'tax_dr': case 's_tx':    return calcNetIncome(rows, 'tax_adjusted_debit', 'tax_adjusted_credit');
+    case 's_post':                  return calcNetIncome(rows, 'post_trans_debit', 'post_trans_credit');
+    default:                        return null;
+  }
+}
+
+function fmtNetIncome(n: number): string {
+  if (n === 0) return '—';
+  const abs = (Math.abs(n) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n < 0 ? `(${abs})` : abs;
+}
 
 // ─── Component ────────────────────────────────────────────────────────────
 
@@ -288,6 +320,23 @@ export function TBPopoutPage() {
                 return (
                   <td key={c.id} className={`px-1.5 py-1 text-right font-mono tabular-nums ${c.bgClass ?? ''}`}>
                     {colTotal(sorted, c.id)}
+                  </td>
+                );
+              })}
+            </tr>
+            <tr className="border-t border-gray-300 bg-gray-50/80">
+              {visibleCols.map(c => {
+                if (c.id === 'acct') return <td key={c.id} className="px-1.5 py-1" />;
+                if (c.id === 'name') return <td key={c.id} className="px-1.5 py-1 text-right text-gray-500 uppercase tracking-wider">Net Income/(Loss)</td>;
+                if (c.id === 'cat') return <td key={c.id} className="px-1.5 py-1" />;
+                // In dual mode: Cr columns consumed by Dr colSpan — skip them
+                if (CR_SKIP.has(c.id)) return null;
+                const isDrPair = c.id in DR_CR_PAIRS;
+                const ni = netIncomeForCol(sorted, c.id);
+                if (ni === null) return <td key={c.id} colSpan={isDrPair ? 2 : 1} className={`px-1.5 py-1 ${c.bgClass ?? ''}`} />;
+                return (
+                  <td key={c.id} colSpan={isDrPair ? 2 : 1} className={`px-1.5 py-1 text-right font-mono tabular-nums font-semibold ${ni > 0 ? 'text-green-700' : ni < 0 ? 'text-red-600' : 'text-gray-400'} ${c.bgClass ?? ''}`}>
+                    {fmtNetIncome(ni)}
                   </td>
                 );
               })}

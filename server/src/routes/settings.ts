@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { randomBytes } from 'crypto';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { getLLMProvider, DEFAULT_FAST_MODEL, DEFAULT_PRIMARY_MODEL } from '../lib/aiClient';
+import OpenAI from 'openai';
+import { getLLMProvider, DEFAULT_FAST_MODEL, DEFAULT_PRIMARY_MODEL, loadLLMSettings, buildProviderFromSettings } from '../lib/aiClient';
 import { extractJsonObject } from '../lib/aiJsonExtract';
 
 export const settingsRouter = Router();
@@ -187,8 +188,8 @@ settingsRouter.post('/ai-pricing/fetch', async (req: AuthRequest, res: Response)
     return;
   }
   try {
-    const { provider, fastModel, primaryModel } = await getLLMProvider();
-    const modelList = [fastModel, primaryModel].filter((v, i, a) => a.indexOf(v) === i); // dedupe
+    const { provider, fastModel, primaryModel, vision } = await getLLMProvider();
+    const modelList = [fastModel, primaryModel, vision.model].filter((v, i, a) => a.indexOf(v) === i); // dedupe
     const emptyStructure = modelList.map((m) => `"${m}":{"input":0.00,"output":0.00}`).join(',');
     const aiResult = await provider.complete({
       model: fastModel,
@@ -391,6 +392,61 @@ settingsRouter.get('/ai-models/available', async (req: AuthRequest, res: Respons
   }
 });
 
+// POST /api/v1/settings/provider-models — fetch models from any provider using stored credentials (admin only)
+const OPENAI_CHAT_EXCLUDE = /^(dall-e|whisper|tts|text-embedding|text-moderation|babbage|davinci|canary|omni-moderation|codex)/i;
+settingsRouter.post('/provider-models', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  const schema = z.object({ provider: z.enum(['claude', 'openai', 'ollama', 'openai-compat']) });
+  const result = schema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'Valid provider name is required.' } });
+    return;
+  }
+  try {
+    const s = await loadLLMSettings();
+    const timeoutMs = Number(s['llm.timeout_ms'] || '120000') || 120_000;
+    const visionConfig = buildProviderFromSettings(result.data.provider, '', s, timeoutMs);
+    let models = await visionConfig.provider.listModels();
+    if (result.data.provider === 'openai') {
+      models = models.filter((m) => !OPENAI_CHAT_EXCLUDE.test(m.id));
+    }
+    models.sort((a, b) => a.id.localeCompare(b.id));
+    res.json({ data: models, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(400).json({ data: null, error: { code: 'PROVIDER_ERROR', message } });
+  }
+});
+
+// POST /api/v1/settings/openai-models — fetch models from OpenAI using a provided API key (admin only)
+settingsRouter.post('/openai-models', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  const schema = z.object({ apiKey: z.string().min(1).max(500) });
+  const result = schema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'API key is required.' } });
+    return;
+  }
+  try {
+    const client = new OpenAI({ apiKey: result.data.apiKey, timeout: 15_000 });
+    const list = await client.models.list();
+    const models = list.data
+      .filter((m) => !OPENAI_CHAT_EXCLUDE.test(m.id))
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((m) => ({ id: m.id, displayName: m.id }));
+    res.json({ data: models, error: null });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(400).json({ data: null, error: { code: 'OPENAI_ERROR', message } });
+  }
+});
+
 // GET /api/v1/settings/llm-provider (admin only)
 settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Promise<void> => {
   if (req.user?.role !== 'admin') {
@@ -400,9 +456,12 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
   const LLM_KEYS = [
     'llm.provider', 'llm.ollama_base_url', 'llm.ollama_vision_model',
     'llm.ollama_reasoning_model', 'llm.ollama_vision_override',
+    'llm.openai_api_key', 'llm.openai_primary_model', 'llm.openai_fast_model',
     'llm.openai_compat_base_url', 'llm.openai_compat_api_key',
     'llm.openai_compat_model', 'llm.openai_compat_fast_model',
-    'llm.openai_compat_vision_override', 'llm.timeout_ms',
+    'llm.openai_compat_vision_override',
+    'llm.vision_provider', 'llm.vision_model',
+    'llm.timeout_ms',
     'ai.max_tokens_default', 'ai.max_tokens_bank_statement', 'ai.chunk_char_limit',
   ];
   try {
@@ -416,11 +475,16 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
         ollamaVisionModel:           s['llm.ollama_vision_model']             || 'qwen3-vl:8b',
         ollamaReasoningModel:        s['llm.ollama_reasoning_model']          || 'qwq:32b',
         ollamaVisionOverride:        s['llm.ollama_vision_override']          || '',
+        openaiApiKey:                s['llm.openai_api_key'] ? '••••••••' + s['llm.openai_api_key'].slice(-4) : '',
+        openaiPrimaryModel:          s['llm.openai_primary_model']            || '',
+        openaiFastModel:             s['llm.openai_fast_model']               || '',
         openaiCompatBaseUrl:         s['llm.openai_compat_base_url']          || '',
         openaiCompatApiKey:          s['llm.openai_compat_api_key'] ? '••••••••' + s['llm.openai_compat_api_key'].slice(-4) : '',
         openaiCompatModel:           s['llm.openai_compat_model']             || '',
         openaiCompatFastModel:       s['llm.openai_compat_fast_model']        || '',
         openaiCompatVisionOverride:  s['llm.openai_compat_vision_override']   || '',
+        visionProvider:              s['llm.vision_provider']                 || '',
+        visionModel:                 s['llm.vision_model']                   || '',
         timeoutMs:                   Number(s['llm.timeout_ms'])              || 120000,
         maxTokensDefault:            Number(s['ai.max_tokens_default'])       || 4096,
         maxTokensBankStatement:      Number(s['ai.max_tokens_bank_statement'])|| 32768,
@@ -441,16 +505,21 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
   }
   const visionOverrideEnum = z.enum(['', 'true', 'false']).optional();
   const schema = z.object({
-    provider:                   z.enum(['claude', 'ollama', 'openai-compat']).optional(),
+    provider:                   z.enum(['claude', 'ollama', 'openai', 'openai-compat']).optional(),
     ollamaBaseUrl:              z.string().max(500).optional(),
     ollamaVisionModel:          z.string().max(200).optional(),
     ollamaReasoningModel:       z.string().max(200).optional(),
     ollamaVisionOverride:       visionOverrideEnum,
+    openaiApiKey:               z.string().max(500).optional(),
+    openaiPrimaryModel:         z.string().max(200).optional(),
+    openaiFastModel:            z.string().max(200).optional(),
     openaiCompatBaseUrl:        z.string().max(500).optional(),
     openaiCompatApiKey:         z.string().max(500).optional(),
     openaiCompatModel:          z.string().max(200).optional(),
     openaiCompatFastModel:      z.string().max(200).optional(),
     openaiCompatVisionOverride: visionOverrideEnum,
+    visionProvider:             z.enum(['', 'claude', 'ollama', 'openai', 'openai-compat']).optional(),
+    visionModel:                z.string().max(200).optional(),
     timeoutMs:                  z.number().int().min(1000).max(600000).optional(),
     maxTokensDefault:           z.number().int().min(512).max(200000).optional(),
     maxTokensBankStatement:     z.number().int().min(1024).max(200000).optional(),
@@ -476,6 +545,23 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
       const effectiveUrl = d.ollamaBaseUrl ?? cur['llm.ollama_base_url'] ?? '';
       if (!effectiveUrl) {
         res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'Ollama Base URL is required when using Ollama provider.' } });
+        return;
+      }
+    }
+    if (d.provider === 'openai') {
+      const currentOpenaiRows = await db('settings')
+        .whereIn('key', ['llm.openai_api_key', 'llm.openai_primary_model'])
+        .select('key', 'value');
+      const curOai: Record<string, string> = {};
+      for (const r of currentOpenaiRows) curOai[r.key as string] = r.value as string;
+      const effectiveKey = d.openaiApiKey ?? curOai['llm.openai_api_key'] ?? '';
+      const effectiveModel = d.openaiPrimaryModel ?? curOai['llm.openai_primary_model'] ?? '';
+      if (!effectiveKey) {
+        res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'OpenAI API key is required when using OpenAI provider.' } });
+        return;
+      }
+      if (!effectiveModel) {
+        res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'Primary Model is required when using OpenAI provider.' } });
         return;
       }
     }
@@ -506,11 +592,16 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     'llm.ollama_vision_model':           d.ollamaVisionModel,
     'llm.ollama_reasoning_model':        d.ollamaReasoningModel,
     'llm.ollama_vision_override':        d.ollamaVisionOverride,
+    'llm.openai_api_key':               d.openaiApiKey,
+    'llm.openai_primary_model':         d.openaiPrimaryModel,
+    'llm.openai_fast_model':            d.openaiFastModel,
     'llm.openai_compat_base_url':        d.openaiCompatBaseUrl,
     'llm.openai_compat_api_key':         d.openaiCompatApiKey,
     'llm.openai_compat_model':           d.openaiCompatModel,
     'llm.openai_compat_fast_model':      d.openaiCompatFastModel,
     'llm.openai_compat_vision_override': d.openaiCompatVisionOverride,
+    'llm.vision_provider':               d.visionProvider,
+    'llm.vision_model':                  d.visionModel,
     'llm.timeout_ms':                    d.timeoutMs !== undefined ? String(d.timeoutMs) : undefined,
     'ai.max_tokens_default':             d.maxTokensDefault !== undefined ? String(d.maxTokensDefault) : undefined,
     'ai.max_tokens_bank_statement':      d.maxTokensBankStatement !== undefined ? String(d.maxTokensBankStatement) : undefined,

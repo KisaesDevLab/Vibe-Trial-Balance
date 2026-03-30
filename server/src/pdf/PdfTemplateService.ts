@@ -204,29 +204,24 @@ export class PdfTemplateService {
       ? `${startDate} – ${endDate}`
       : startDate || endDate || periodName;
 
-    const firmLines: Content[] = [
-      { text: this.firmName || 'Accounting Firm', fontSize: FONT_SIZE.title, bold: true, color: COLORS.headerBg },
-      ...(this.firmAddress ? [{ text: this.firmAddress, fontSize: FONT_SIZE.footer, color: '#555555' } as Content] : []),
+    const companyLines: Content[] = [
+      { text: clientName, fontSize: FONT_SIZE.title, bold: true, color: COLORS.headerBg },
+      ...(ein ? [{ text: `EIN: ${ein}`, fontSize: FONT_SIZE.footer, color: '#555555' } as Content] : []),
+      ...(this.firmName ? [{ text: `Prepared by: ${this.firmName}`, fontSize: FONT_SIZE.footer, color: '#555555' } as Content] : []),
     ];
 
-    const clientLines: Content[] = [
-      { text: clientName, fontSize: FONT_SIZE.subtitle, bold: true },
-      ...(ein ? [{ text: `EIN: ${ein}`, fontSize: FONT_SIZE.footer } as Content] : []),
-      { text: dateRange, fontSize: FONT_SIZE.footer },
+    const reportLines: Content[] = [
+      { text: title, fontSize: FONT_SIZE.title, bold: true, alignment: 'right', color: COLORS.headerBg } as Content,
+      { text: periodName, fontSize: FONT_SIZE.subtitle, bold: true, alignment: 'right' } as Content,
+      { text: dateRange, fontSize: FONT_SIZE.footer, alignment: 'right' } as Content,
     ];
 
     const headerTable: Content = {
       table: {
         widths: ['*', '*'],
         body: [[
-          { stack: firmLines, border: [false, false, false, false] },
-          {
-            stack: [
-              { text: title, fontSize: FONT_SIZE.title, bold: true, alignment: 'right', color: COLORS.headerBg } as Content,
-              ...clientLines.map((c) => ({ ...c as object, alignment: 'right' } as Content)),
-            ],
-            border: [false, false, false, false],
-          },
+          { stack: companyLines, border: [false, false, false, false] },
+          { stack: reportLines, border: [false, false, false, false] },
         ]],
       },
       layout: 'noBorders',

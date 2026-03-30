@@ -25,6 +25,8 @@ const mapSchema = z.object({
   taxSoftware: z.enum(TAX_SOFTWARES),
   softwareCode: z.string().optional(),
   softwareDescription: z.string().optional(),
+  exportAccountNumber: z.string().optional(),
+  exportDescription: z.string().optional(),
   notes: z.string().optional(),
 });
 
@@ -66,6 +68,8 @@ async function upsertMaps(taxCodeId: number, maps: z.infer<typeof mapSchema>[]) 
       await db('tax_code_software_maps').where({ id: existing.id }).update({
         software_code: m.softwareCode ?? null,
         software_description: m.softwareDescription ?? null,
+        export_account_number: m.exportAccountNumber ?? null,
+        export_description: m.exportDescription ?? null,
         notes: m.notes ?? null,
         is_active: true,
       });
@@ -75,6 +79,8 @@ async function upsertMaps(taxCodeId: number, maps: z.infer<typeof mapSchema>[]) 
         tax_software: m.taxSoftware,
         software_code: m.softwareCode ?? null,
         software_description: m.softwareDescription ?? null,
+        export_account_number: m.exportAccountNumber ?? null,
+        export_description: m.exportDescription ?? null,
         notes: m.notes ?? null,
         is_active: true,
       });
@@ -169,8 +175,13 @@ router.get('/available', async (req: AuthRequest, res: Response): Promise<void> 
       })
       .select('tc.*', 'tcsm.software_code')
       .where('tc.is_active', true)
-      .where('tc.return_form', resolvedReturnForm)
-      .where('tc.activity_type', resolvedActivityType)
+      .where(function () {
+        this.where(function () {
+          this.where('tc.return_form', resolvedReturnForm).where('tc.activity_type', resolvedActivityType);
+        }).orWhere(function () {
+          this.where('tc.return_form', 'common').where('tc.activity_type', 'common');
+        });
+      })
       .orderBy([{ column: 'tc.sort_order', order: 'asc' }, { column: 'tc.tax_code', order: 'asc' }]);
 
     res.json({ data: rows, error: null, meta: { count: rows.length } });

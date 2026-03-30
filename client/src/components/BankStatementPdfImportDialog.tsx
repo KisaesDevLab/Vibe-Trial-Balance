@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// Copyright (C) 2024–2026 [Project Author]
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (C) 2024–2026 Kisaes LLC
 
 import { useState, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -273,7 +273,7 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+      <div role="dialog" aria-modal="true" className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700 shrink-0">
           <div>

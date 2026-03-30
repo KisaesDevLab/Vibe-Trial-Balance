@@ -6,6 +6,8 @@ export interface SoftwareMap {
   tax_software: string;
   software_code?: string;
   software_description?: string;
+  export_account_number?: string;
+  export_description?: string;
 }
 
 export interface TaxCode {
@@ -56,6 +58,8 @@ export interface SoftwareMapInput {
   taxSoftware: string;
   softwareCode?: string;
   softwareDescription?: string;
+  exportAccountNumber?: string;
+  exportDescription?: string;
 }
 
 function buildQuery(params: Record<string, string | boolean | number | undefined>): string {

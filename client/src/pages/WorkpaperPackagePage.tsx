@@ -447,7 +447,7 @@ export function WorkpaperPackagePage() {
         </div>
       </div>
 
-      <div className="space-y-2">
+      <div className="flex items-center gap-4 flex-wrap">
         <button
           onClick={async () => {
             setShowPreview(true);
@@ -470,7 +470,29 @@ export function WorkpaperPackagePage() {
           disabled={pdfDownloading}
           className="px-4 py-2 bg-teal-600 text-white text-sm font-medium rounded hover:bg-teal-700 disabled:opacity-50"
         >
-          {pdfDownloading ? 'Downloading PDFs…' : 'Generate Package'}
+          {pdfDownloading ? 'Downloading PDFs…' : 'Download Individual PDFs'}
+        </button>
+        <button
+          onClick={async () => {
+            if (!selectedPeriodId || includedPdfSections.length === 0) return;
+            setPdfDownloading(true);
+            setPdfErrors([]);
+            try {
+              const reportIds = includedPdfSections.map(s => s.id);
+              await downloadPdf(
+                pdfReports.workpaperMerged(selectedPeriodId, reportIds),
+                `workpaper-package-${selectedPeriodId}.pdf`,
+                token,
+              );
+            } catch (e) {
+              setPdfErrors([(e as Error).message]);
+            }
+            setPdfDownloading(false);
+          }}
+          disabled={pdfDownloading || includedPdfSections.length === 0}
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-50"
+        >
+          {pdfDownloading ? 'Merging…' : 'Merge into Single PDF'}
         </button>
         {pdfErrors.length > 0 && (
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 text-xs px-3 py-2 rounded space-y-1">

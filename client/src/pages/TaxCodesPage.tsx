@@ -120,6 +120,8 @@ interface SoftwareRowState {
   map?: SoftwareMap;
   code: string;
   description: string;
+  exportAcct: string;
+  exportDesc: string;
   dirty: boolean;
 }
 
@@ -140,6 +142,8 @@ function SoftwareMappingsTable({
         map: existing,
         code: existing?.software_code ?? '',
         description: existing?.software_description ?? '',
+        exportAcct: existing?.export_account_number ?? '',
+        exportDesc: existing?.export_description ?? '',
         dirty: false,
       };
     }),
@@ -160,6 +164,8 @@ function SoftwareMappingsTable({
         taxSoftware: row.software,
         softwareCode: row.code || undefined,
         softwareDescription: row.description || undefined,
+        exportAccountNumber: row.exportAcct || undefined,
+        exportDescription: row.exportDesc || undefined,
       };
       if (row.map) {
         if (!row.code && !row.description) {
@@ -175,7 +181,7 @@ function SoftwareMappingsTable({
     onSuccess: () => onChanged(),
   });
 
-  const setRow = (idx: number, field: 'code' | 'description', value: string) => {
+  const setRow = (idx: number, field: 'code' | 'description' | 'exportAcct' | 'exportDesc', value: string) => {
     setRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: value, dirty: true } : r));
   };
 
@@ -196,6 +202,8 @@ function SoftwareMappingsTable({
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-28">Software</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400">Software Code</th>
               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400">Software Description</th>
+              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400">Export Acct # Override</th>
+              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400">Export Desc Override</th>
               <th className="px-3 py-2 w-16"></th>
             </tr>
           </thead>
@@ -219,6 +227,24 @@ function SoftwareMappingsTable({
                     onBlur={() => saveRow(idx)}
                     className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
                     placeholder="—"
+                  />
+                </td>
+                <td className="px-3 py-1">
+                  <input
+                    value={row.exportAcct}
+                    onChange={(e) => setRow(idx, 'exportAcct', e.target.value)}
+                    onBlur={() => saveRow(idx)}
+                    className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                    placeholder="Uses software code"
+                  />
+                </td>
+                <td className="px-3 py-1">
+                  <input
+                    value={row.exportDesc}
+                    onChange={(e) => setRow(idx, 'exportDesc', e.target.value)}
+                    onBlur={() => saveRow(idx)}
+                    className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                    placeholder="Uses software desc"
                   />
                 </td>
                 <td className="px-3 py-1 text-center">
@@ -381,7 +407,7 @@ function EditPanel({ initial, onSave, onCancel, onDelete, saving, error, mapRefr
 
         <div className="flex items-center justify-between pt-2">
           <div>
-            {onDelete && !isSystem && (
+            {false && onDelete && (
               <button
                 type="button"
                 onClick={onDelete}
@@ -666,7 +692,7 @@ export function TaxCodesPage() {
   });
 
   const handleDelete = (code: TaxCode) => {
-    if (code.is_system) return;
+    // System codes can be deleted by admin if invalid
     if (!confirm(`Delete tax code "${code.tax_code}"? This will unmap all accounts using this code. Continue?`)) return;
     deleteMutation.mutate(code.id);
   };
@@ -833,14 +859,6 @@ export function TaxCodesPage() {
                           >
                             Edit
                           </button>
-                          {!code.is_system && (
-                            <button
-                              onClick={() => handleDelete(code)}
-                              className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-                            >
-                              Delete
-                            </button>
-                          )}
                         </div>
                       </td>
                     </tr>

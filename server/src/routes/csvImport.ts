@@ -27,10 +27,20 @@ async function excelBufferToCsv(buffer: Buffer): Promise<string> {
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error('Excel file has no worksheets');
 
+  // Determine the true column extent by scanning all rows.
+  // sheet.columnCount and row.cellCount can both undercount in edge cases.
+  let colCount = sheet.columnCount || 0;
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    // row.values is 1-indexed sparse array; its length is the max col + 1
+    const rowMax = Array.isArray(row.values) ? row.values.length - 1 : (row.cellCount || 0);
+    if (rowMax > colCount) colCount = rowMax;
+  });
+  if (colCount === 0) colCount = 1;
+
   const lines: string[] = [];
   sheet.eachRow({ includeEmpty: false }, (row) => {
     const cells: string[] = [];
-    for (let col = 1; col <= (row.cellCount || 0); col++) {
+    for (let col = 1; col <= colCount; col++) {
       const cell = row.getCell(col);
       let val = '';
       if (cell.value !== null && cell.value !== undefined) {
@@ -154,7 +164,7 @@ function splitCsvRow(line: string, delimiter: string): string[] {
   return result;
 }
 
-function buildFallbackResult(lines: string[], rawCsv: string): AiAnalysisResult {
+function buildFallbackColumnDetection(lines: string[], rawCsv: string): Omit<AiAnalysisResult, 'matches'> & { matches: CsvMatchRow[] } {
   const delimiter = detectDelimiter(lines);
   const nonEmpty = lines.filter((l) => l.trim().length > 0);
   if (nonEmpty.length === 0) {
@@ -206,24 +216,53 @@ function buildFallbackResult(lines: string[], rawCsv: string): AiAnalysisResult 
 
   const dataStartRow = looksLikeHeader ? 1 : 0;
 
-  // Build basic matches
-  const allLines = rawCsv.split('\n');
+  return {
+    delimiter,
+    hasHeaders: looksLikeHeader,
+    headerRow: looksLikeHeader ? 0 : -1,
+    dataStartRow,
+    amountFormat,
+    columns: { accountNumber: accountNumberCol, accountName: accountNameCol, debit: debitCol, credit: creditCol, amount: amountCol },
+    rowsToSkip: [],
+    matches: [],
+  };
+}
+
+/**
+ * Deterministic row parser — processes EVERY row in the file from dataStartRow
+ * to EOF using the detected column mapping. No row limit, no passes.
+ */
+function parseAllRows(
+  allLines: string[],
+  columns: AiAnalysisResult['columns'],
+  delimiter: string,
+  dataStartRow: number,
+  amountFormat: string,
+  rowsToSkip: number[],
+): CsvMatchRow[] {
+  const skipSet = new Set(rowsToSkip);
   const matches: CsvMatchRow[] = [];
-  for (let i = dataStartRow; i < Math.min(allLines.length, 30); i++) {
+
+  for (let i = dataStartRow; i < allLines.length; i++) {
+    if (skipSet.has(i)) continue;
     const line = allLines[i];
     if (!line.trim()) continue;
     const cells = splitCsvRow(line, delimiter);
 
-    const csvAccountNumber = accountNumberCol !== null ? (cells[accountNumberCol] ?? null) : null;
-    const csvAccountName = accountNameCol !== null ? (cells[accountNameCol] ?? null) : null;
+    const csvAccountNumber = columns.accountNumber !== null ? (cells[columns.accountNumber] ?? null) : null;
+    const csvAccountName = columns.accountName !== null ? (cells[columns.accountName] ?? null) : null;
+
+    // Skip rows with no identifiable account data
+    if (!csvAccountName?.trim() && !csvAccountNumber?.trim()) continue;
+
     let debitCents = 0;
     let creditCents = 0;
 
     if (amountFormat === 'separate_dr_cr') {
-      debitCents = debitCol !== null ? parseAmountToCents(cells[debitCol]) : 0;
-      creditCents = creditCol !== null ? parseAmountToCents(cells[creditCol]) : 0;
+      debitCents = columns.debit !== null ? parseAmountToCents(cells[columns.debit]) : 0;
+      creditCents = columns.credit !== null ? parseAmountToCents(cells[columns.credit]) : 0;
     } else {
-      const raw = amountCol !== null ? (cells[amountCol] ?? '') : '';
+      const raw = columns.amount !== null ? (cells[columns.amount] ?? '') : '';
       const amt = parseAmountToCents(raw);
       if (amt >= 0) debitCents = amt;
       else creditCents = Math.abs(amt);
@@ -233,8 +272,8 @@ function buildFallbackResult(lines: string[], rawCsv: string): AiAnalysisResult 
       csvRow: i,
       csvAccountNumber,
       csvAccountName,
-      csvDebit: debitCol !== null ? (cells[debitCol] ?? null) : null,
-      csvCredit: creditCol !== null ? (cells[creditCol] ?? null) : null,
+      csvDebit: columns.debit !== null ? (cells[columns.debit] ?? null) : null,
+      csvCredit: columns.credit !== null ? (cells[columns.credit] ?? null) : null,
       matchedAccountId: null,
       matchedAccountNumber: null,
       matchedAccountName: null,
@@ -246,16 +285,7 @@ function buildFallbackResult(lines: string[], rawCsv: string): AiAnalysisResult 
     });
   }
 
-  return {
-    delimiter,
-    hasHeaders: looksLikeHeader,
-    headerRow: looksLikeHeader ? 0 : -1,
-    dataStartRow,
-    amountFormat,
-    columns: { accountNumber: accountNumberCol, accountName: accountNameCol, debit: debitCol, credit: creditCol, amount: amountCol },
-    rowsToSkip: [],
-    matches,
-  };
+  return matches;
 }
 
 // ── POST /api/v1/import/csv/analyze ─────────────────────────────────────────
@@ -359,7 +389,10 @@ Rules:
 - rowsToSkip: row indexes (0-based from start of file) of total/subtotal/header rows that should be ignored
 - Include ALL data rows up to row 30 in matches (including rows where action="skip")`;
 
-      let analysisResult: AiAnalysisResult;
+      // ── Step 1: Detect column mapping ─────────────────────────────────────
+      // AI analyzes first 30 rows to detect delimiter, columns, and format.
+      // We ONLY use the AI for column detection — row parsing is deterministic.
+      let columnMapping: Omit<AiAnalysisResult, 'matches'>;
       let fallbackMode = false;
 
       try {
@@ -373,63 +406,86 @@ Rules:
 
         const parsed = extractJsonObject<AiAnalysisResult>(aiResult.text);
         if (!parsed) throw new Error('AI returned invalid format');
-        analysisResult = parsed;
+        // Extract column mapping only — discard AI's matches
+        columnMapping = {
+          delimiter: parsed.delimiter,
+          hasHeaders: parsed.hasHeaders,
+          headerRow: parsed.headerRow,
+          dataStartRow: parsed.dataStartRow,
+          amountFormat: parsed.amountFormat,
+          columns: parsed.columns,
+          rowsToSkip: parsed.rowsToSkip ?? [],
+        };
       } catch (_aiErr) {
-        // Fallback: use heuristic column detection + fuzzy name matching
+        // Fallback: heuristic column detection
         fallbackMode = true;
-        analysisResult = buildFallbackResult(allLines, rawCsv);
+        columnMapping = buildFallbackColumnDetection(allLines, rawCsv);
+      }
 
-        // Attempt matching against COA so not everything becomes create_new
-        for (const match of analysisResult.matches) {
-          if (match.action !== 'create_new') continue;
+      // ── Step 2: Parse EVERY row deterministically ─────────────────────────
+      // Single pass from dataStartRow to EOF using detected column indices.
+      // No row limit, no multi-pass — processes the entire file in one sweep.
+      const allMatches = parseAllRows(
+        allLines,
+        columnMapping.columns,
+        columnMapping.delimiter,
+        columnMapping.dataStartRow,
+        columnMapping.amountFormat,
+        columnMapping.rowsToSkip,
+      );
 
-          // 1. Exact account number match
-          if (match.csvAccountNumber?.trim()) {
-            const numMatch = (coa as CoaRow[]).find((a) => a.account_number.trim() === match.csvAccountNumber!.trim());
-            if (numMatch) {
-              match.matchedAccountId = numMatch.id;
-              match.matchedAccountNumber = numMatch.account_number;
-              match.matchedAccountName = numMatch.account_name;
-              match.confidence = 1.0;
-              match.matchType = 'exact';
-              match.action = 'match';
-              continue;
-            }
+      console.log(`[csv/analyze] Parsed ${allMatches.length} data rows from ${allLines.length} total lines (dataStartRow=${columnMapping.dataStartRow})`);
+
+      // ── Step 3: Match ALL rows against COA ────────────────────────────────
+      for (const match of allMatches) {
+        // 1. Exact account number match
+        if (match.csvAccountNumber?.trim()) {
+          const numMatch = (coa as CoaRow[]).find((a) => a.account_number.trim() === match.csvAccountNumber!.trim());
+          if (numMatch) {
+            match.matchedAccountId = numMatch.id;
+            match.matchedAccountNumber = numMatch.account_number;
+            match.matchedAccountName = numMatch.account_name;
+            match.confidence = 1.0;
+            match.matchType = 'exact';
+            match.action = 'match';
+            continue;
+          }
+        }
+
+        if (match.csvAccountName?.trim()) {
+          const matchNameLower = match.csvAccountName.trim().toLowerCase();
+
+          // 2. Alias exact match
+          const aliasMatch = (coa as CoaRow[]).find((a) =>
+            parseAliases(a.import_aliases).some((alias) => alias.toLowerCase() === matchNameLower)
+          );
+          if (aliasMatch) {
+            match.matchedAccountId = aliasMatch.id;
+            match.matchedAccountNumber = aliasMatch.account_number;
+            match.matchedAccountName = aliasMatch.account_name;
+            match.confidence = 0.95;
+            match.matchType = 'alias';
+            match.action = 'match';
+            continue;
           }
 
-          if (match.csvAccountName?.trim()) {
-            const nameLower = match.csvAccountName.trim().toLowerCase();
-
-            // 2. Alias exact match
-            const aliasMatch = (coa as CoaRow[]).find((a) =>
-              parseAliases(a.import_aliases).some((alias) => alias.toLowerCase() === nameLower)
-            );
-            if (aliasMatch) {
-              match.matchedAccountId = aliasMatch.id;
-              match.matchedAccountNumber = aliasMatch.account_number;
-              match.matchedAccountName = aliasMatch.account_name;
-              match.confidence = 0.95;
-              match.matchType = 'alias';
-              match.action = 'match';
-              continue;
-            }
-
-            // 3. Fuzzy name match
-            const nameMatch = (coa as CoaRow[]).find((a) => {
-              const coaLower = a.account_name.toLowerCase();
-              return coaLower === nameLower || coaLower.includes(nameLower) || nameLower.includes(coaLower);
-            });
-            if (nameMatch) {
-              match.matchedAccountId = nameMatch.id;
-              match.matchedAccountNumber = nameMatch.account_number;
-              match.matchedAccountName = nameMatch.account_name;
-              match.confidence = 0.55;
-              match.matchType = 'fuzzy';
-              match.action = 'match';
-            }
+          // 3. Fuzzy name match
+          const nameMatch = (coa as CoaRow[]).find((a) => {
+            const coaLower = a.account_name.toLowerCase();
+            return coaLower === matchNameLower || coaLower.includes(matchNameLower) || matchNameLower.includes(coaLower);
+          });
+          if (nameMatch) {
+            match.matchedAccountId = nameMatch.id;
+            match.matchedAccountNumber = nameMatch.account_number;
+            match.matchedAccountName = nameMatch.account_name;
+            match.confidence = 0.55;
+            match.matchType = 'fuzzy';
+            match.action = 'match';
           }
         }
       }
+
+      const analysisResult: AiAnalysisResult = { ...columnMapping, matches: allMatches };
 
       res.json({
         data: {
@@ -480,7 +536,7 @@ csvImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response)
     ).join('\n');
 
     const accountList = needNumbers.map((m) =>
-      `Row ${m.csvRow + 1}: "${m.csvAccountName ?? 'Unknown'}"${m.newCategory ? ` [category hint: ${m.newCategory}]` : ''}`
+      `csvRow ${m.csvRow}: "${m.csvAccountName ?? 'Unknown'}"${m.newCategory ? ` [category hint: ${m.newCategory}]` : ''}`
     ).join('\n');
 
     const prompt = `You are an expert accountant. Assign standard chart of accounts numbers to these accounts.
@@ -502,41 +558,49 @@ ${accountList}
 
 Assign numbers with gaps of 10-50 between consecutive entries to allow future insertions. Infer the category and normal balance from the account name if no hint is provided.
 
-Return ONLY a valid JSON array (no prose, no markdown fences):
+Return ONLY a valid JSON array (no prose, no markdown fences). Use the EXACT csvRow numbers shown above. Include the accountName field:
 [
-  { "csvRow": 1, "suggestedNumber": "1000", "suggestedCategory": "assets", "suggestedNormalBalance": "debit" }
+  { "csvRow": 0, "accountName": "Cash", "suggestedNumber": "1000", "suggestedCategory": "assets", "suggestedNormalBalance": "debit" }
 ]`;
 
     const { provider, fastModel } = await getLLMProvider();
     const aiResult2 = await provider.complete({
       model: fastModel,
-      maxTokens: 1024,
+      maxTokens: Math.max(2048, needNumbers.length * 150),
       messages: [{ role: 'user', content: prompt }],
     });
     logAiUsage({ endpoint: 'csv/suggest-numbers', model: fastModel, inputTokens: aiResult2.inputTokens, outputTokens: aiResult2.outputTokens, userId: req.user?.userId, clientId });
 
-    type SuggestionRaw = { csvRow: number; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
+    type SuggestionRaw = { csvRow: number; accountName?: string; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
     const rawSuggestions = extractJsonArray<SuggestionRaw>(aiResult2.text);
     if (!rawSuggestions) {
+      console.error('[csv/suggest-numbers] Failed to parse AI response:', aiResult2.text.slice(0, 500));
       res.status(500).json({ data: null, error: { code: 'PARSE_ERROR', message: 'AI returned unexpected format' } });
       return;
     }
 
     // Deduplicate: if AI produced collisions within its own suggestions, increment by 1
+    // Sanitize to digits-only, max 20 chars (DB column is varchar(20))
     const usedNumbers = new Set(existingNumbers);
     const suggestions = rawSuggestions.map((s) => {
-      let num = s.suggestedNumber.trim();
+      let num = s.suggestedNumber.replace(/[^0-9]/g, '').slice(0, 20) || '9999';
       while (usedNumbers.has(num)) {
         num = String(parseInt(num, 10) + 1);
       }
       usedNumbers.add(num);
-      const sourceMatch = needNumbers.find((m) => m.csvRow === s.csvRow);
+      // Match by csvRow; fall back to name matching if AI returned wrong row numbers
+      const sourceMatch = needNumbers.find((m) => m.csvRow === s.csvRow)
+        ?? (s.accountName ? needNumbers.find((m) => m.csvAccountName?.toLowerCase() === s.accountName!.toLowerCase()) : undefined);
+      const cat = s.suggestedCategory?.toLowerCase().trim();
+      const validCat = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'].includes(cat) ? cat : 'expenses';
+      const nb = s.suggestedNormalBalance?.toLowerCase().trim();
+      const validNb = nb === 'credit' ? 'credit' : 'debit';
       return {
-        csvRow: s.csvRow,
-        csvAccountName: sourceMatch?.csvAccountName ?? null,
+        csvRow: sourceMatch?.csvRow ?? s.csvRow,
+        csvAccountName: sourceMatch?.csvAccountName ?? s.accountName ?? null,
         suggestedNumber: num,
-        suggestedCategory: s.suggestedCategory as 'assets' | 'liabilities' | 'equity' | 'revenue' | 'expenses',
-        suggestedNormalBalance: s.suggestedNormalBalance as 'debit' | 'credit',
+        suggestedCategory: validCat as 'assets' | 'liabilities' | 'equity' | 'revenue' | 'expenses',
+        suggestedNormalBalance: validNb as 'debit' | 'credit',
       };
     });
 
@@ -697,7 +761,9 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
         if (match.action === 'create_new' || (match.action === 'match' && !accountId)) {
           if (!match.csvAccountName) { rowsSkipped++; continue; }
 
-          const accountNum = match.csvAccountNumber?.trim() || null;
+          const rawNum = (match as { newAccountNumber?: string }).newAccountNumber?.trim() || match.csvAccountNumber?.trim() || null;
+          // Sanitize: strip non-alphanumeric, enforce varchar(20) limit
+          const accountNum = rawNum ? rawNum.replace(/[^a-zA-Z0-9.\-]/g, '').slice(0, 20) : null;
 
           // If the account number already exists in COA, use that account (implicit match)
           if (accountNum && existingByNumber.has(accountNum)) {
@@ -731,7 +797,7 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
               }
             }
 
-            const finalNum = accountNum || `IMPORT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+            const finalNum = accountNum || `IMP${Date.now().toString(36).slice(-6).toUpperCase()}`;
             const [newAccount] = await trx('chart_of_accounts')
               .insert({
                 client_id: clientId,

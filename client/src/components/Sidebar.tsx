@@ -61,6 +61,8 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/tax-basis-pl',      label: 'Tax-Basis P&L' },
       { to: '/tax-return-order',  label: 'Tax Return Order' },
       { to: '/tax-worksheets',    label: 'Tax Worksheets' },
+      { to: '/tax-code-report',   label: 'Tax Code Report' },
+      { to: '/exports',           label: 'Tax Exports' },
     ],
     defaultOpen: false,
   },
@@ -72,11 +74,9 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/cash-flow',            label: 'Cash Flow' },
       { to: '/general-ledger',       label: 'General Ledger' },
       { to: '/trial-balance-report', label: 'TB Report' },
-      { to: '/tax-code-report',      label: 'Tax Code Report' },
       { to: '/workpaper-index',      label: 'Workpaper Index' },
       { to: '/workpaper-package',    label: 'Workpaper Package' },
       { to: '/custom-reports',       label: 'Custom Reports' },
-      { to: '/exports',              label: 'Exports' },
     ],
     defaultOpen: false,
   },
@@ -248,10 +248,10 @@ export function Sidebar() {
             </button>
           </div>
         </div>
-        {/* AGPL-3.0 §13 source disclosure */}
+        {/* BSL-1.1 source disclosure */}
         <div className="pt-1.5 border-t border-gray-700/40">
           <p className="text-[9px] text-gray-600 leading-tight">
-            AGPL-3.0 &middot;{' '}
+            BSL-1.1 &middot;{' '}
             <a
               href="https://github.com/KisaesDevLab/Vibe-Trial-Balance"
               target="_blank"

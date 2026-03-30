@@ -316,8 +316,11 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
         return;
       }
       setMatches((prev) => prev.map((m) => {
-        // Match by account name — entryIndex refers to needNumbers subset, not full matches array
-        const suggestion = suggestions.find((s) => s.pdfAccountName === m.pdfAccountName);
+        if (m.action !== 'create_new') return m;
+        // Match by name (exact then case-insensitive)
+        const nameLower = m.pdfAccountName.toLowerCase();
+        const suggestion = suggestions.find((s) => s.pdfAccountName === m.pdfAccountName)
+          ?? suggestions.find((s) => s.pdfAccountName.toLowerCase() === nameLower);
         if (!suggestion) return m;
         return {
           ...m,
@@ -426,7 +429,7 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-2xl flex flex-col ${dialogWidth}`}>
+      <div role="dialog" aria-modal="true" className={`bg-white dark:bg-gray-800 rounded-xl shadow-2xl flex flex-col ${dialogWidth}`}>
 
         {/* ── Stage 0: Consent ─────────────────────────────────────────── */}
         {stage === 'consent' && (
@@ -802,6 +805,20 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                 >
                   Back
                 </button>
+                {matches.some((m) => m.action === 'create_new' && !m.newAccountNumber?.trim() && !m.pdfAccountNumber?.trim()) && (
+                  <button
+                    onClick={handleAiAssignNumbers}
+                    disabled={suggestingNumbers}
+                    className="px-4 py-2 text-sm border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 disabled:opacity-50"
+                  >
+                    {suggestingNumbers ? (
+                      <span className="flex items-center gap-1.5">
+                        <span className="inline-block w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                        Suggesting…
+                      </span>
+                    ) : 'AI Assign Account Numbers'}
+                  </button>
+                )}
                 <button
                   onClick={handleConfirm}
                   disabled={confirming || totalActive === 0}

@@ -1,15 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { useUIStore, useAuthStore } from '../store/uiStore';
-import { openPdfPreview } from '../api/pdfReports';
+import { useUIStore } from '../store/uiStore';
 import {
   validateExport,
   downloadExport,
   taxSoftwareExportUrl,
-  workingTbExportUrl,
-  bookkeeperLetterUrl,
+  getConsolSettings,
+  saveConsolSettings,
   type TaxSoftware,
+  type TaxCodeInUse,
 } from '../api/exports';
 
 const SOFTWARE_OPTIONS: { value: TaxSoftware; label: string }[] = [
@@ -44,11 +44,73 @@ function StatusBadge({ ok }: { ok: boolean }) {
 
 export function ExportsPage() {
   const { selectedPeriodId } = useUIStore();
-  const token = useAuthStore((s) => s.token);
+
   const [software, setSoftware] = useState<TaxSoftware>('ultratax');
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [showConsolidation, setShowConsolidation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // Consolidation state: which tax codes are checked + optional overrides per code
+  type ConsolEntry = { acctNum: string; acctName: string };
+  const [consolidateMap, setConsolidateMap] = useState<Map<number, ConsolEntry>>(new Map());
+  const [expandedTc, setExpandedTc] = useState<Set<number>>(new Set());
+  const [consolDirty, setConsolDirty] = useState(false);
+  const [consolSaving, setConsolSaving] = useState(false);
+
+  // Load saved consolidation settings from server on software change
+  useEffect(() => {
+    if (!selectedPeriodId) return;
+    let cancelled = false;
+    (async () => {
+      const res = await getConsolSettings(selectedPeriodId, software);
+      if (cancelled || res.error || !res.data) return;
+      const entries = Object.entries(res.data).map(([k, v]) => [Number(k), v] as [number, ConsolEntry]);
+      setConsolidateMap(new Map(entries));
+      setConsolDirty(false);
+    })();
+    return () => { cancelled = true; };
+  }, [selectedPeriodId, software]);
+
+  // Save to server
+  const saveConsolToServer = useCallback(async () => {
+    if (!selectedPeriodId || !consolDirty) return;
+    setConsolSaving(true);
+    const settings: Record<number, { acctNum: string; acctName: string }> = {};
+    for (const [id, v] of consolidateMap) settings[id] = v;
+    await saveConsolSettings(selectedPeriodId, software, settings);
+    setConsolDirty(false);
+    setConsolSaving(false);
+  }, [selectedPeriodId, software, consolidateMap, consolDirty]);
+
+  const consolidateIds = new Set(consolidateMap.keys());
+
+  const toggleConsolidate = useCallback((tc: TaxCodeInUse, checked: boolean) => {
+    setConsolidateMap(prev => {
+      const next = new Map(prev);
+      if (checked) {
+        const firstAcct = tc.accounts[0];
+        next.set(tc.tax_code_id, {
+          acctNum: tc.export_account_number || firstAcct?.account_number || tc.tax_code,
+          acctName: tc.export_description || firstAcct?.account_name || tc.description,
+        });
+      } else {
+        next.delete(tc.tax_code_id);
+      }
+      return next;
+    });
+    setConsolDirty(true);
+  }, []);
+
+  const updateOverride = useCallback((tcId: number, field: 'acctNum' | 'acctName', value: string) => {
+    setConsolidateMap(prev => {
+      const next = new Map(prev);
+      const entry = next.get(tcId);
+      if (entry) next.set(tcId, { ...entry, [field]: value });
+      return next;
+    });
+    setConsolDirty(true);
+  }, []);
 
   const {
     data: validationResult,
@@ -71,6 +133,13 @@ export function ExportsPage() {
     setSuccess(null);
     setDownloading(label);
     try {
+      // Auto-save consolidation settings before downloading
+      if (consolDirty && selectedPeriodId) {
+        const settings: Record<number, { acctNum: string; acctName: string }> = {};
+        for (const [id, v] of consolidateMap) settings[id] = v;
+        await saveConsolSettings(selectedPeriodId, software, settings);
+        setConsolDirty(false);
+      }
       await downloadExport(url, filename);
       setSuccess(`${label} downloaded successfully.`);
     } catch (e) {
@@ -93,7 +162,7 @@ export function ExportsPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
-      <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Exports</h1>
+      <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Tax Exports</h1>
 
       {/* Success / error banners */}
       {success && (
@@ -233,31 +302,129 @@ export function ExportsPage() {
         </div>
       </section>
 
+      {/* ── Consolidation Options ─────────────────────────────────────────── */}
+      {validation && validation.taxCodesInUse.length > 0 && (
+        <section className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
+          <button
+            onClick={() => setShowConsolidation(!showConsolidation)}
+            className="w-full px-5 py-3 flex items-center justify-between text-left border-b border-gray-100 dark:border-gray-700"
+          >
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Consolidation Options</h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {consolidateIds.size === 0
+                  ? 'No consolidation — every account exports as a separate line'
+                  : `${consolidateIds.size} tax code${consolidateIds.size !== 1 ? 's' : ''} consolidated`}
+              </p>
+            </div>
+            <svg className={`w-4 h-4 text-gray-400 transition-transform ${showConsolidation ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {showConsolidation && (
+            <div className="px-5 py-3">
+              <div className="flex items-center gap-3 mb-2">
+                <button
+                  onClick={() => {
+                    const next = new Map(consolidateMap);
+                    for (const tc of validation.taxCodesInUse.filter(t => t.account_count > 1)) {
+                      if (!next.has(tc.tax_code_id)) {
+                        const firstAcct = tc.accounts[0];
+                        next.set(tc.tax_code_id, {
+                          acctNum: tc.export_account_number || firstAcct?.account_number || tc.tax_code,
+                          acctName: tc.export_description || firstAcct?.account_name || tc.description,
+                        });
+                      }
+                    }
+                    setConsolidateMap(next);
+                    setConsolDirty(true);
+                  }}
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  Select all multi-account
+                </button>
+                <button
+                  onClick={() => { setConsolidateMap(new Map()); setConsolDirty(true); }}
+                  className="text-xs text-gray-500 dark:text-gray-400 hover:underline"
+                >
+                  Clear all
+                </button>
+                <span className="flex-1" />
+                {consolDirty && (
+                  <button
+                    onClick={saveConsolToServer}
+                    disabled={consolSaving}
+                    className="text-xs px-2 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {consolSaving ? 'Saving...' : 'Save Settings'}
+                  </button>
+                )}
+                {!consolDirty && consolidateMap.size > 0 && (
+                  <span className="text-xs text-green-600 dark:text-green-400">Saved</span>
+                )}
+              </div>
+              <div className="max-h-[28rem] overflow-auto border border-gray-200 dark:border-gray-700 rounded">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-50 dark:bg-gray-800/60 z-10">
+                    <tr className="border-b border-gray-200 dark:border-gray-700">
+                      <th className="px-2 py-1.5 w-8" />
+                      <th className="px-2 py-1.5 w-6" />
+                      <th className="px-2 py-1.5 text-left font-semibold text-gray-600 dark:text-gray-400">Tax Code</th>
+                      <th className="px-2 py-1.5 text-left font-semibold text-gray-600 dark:text-gray-400">Description</th>
+                      <th className="px-2 py-1.5 text-center font-semibold text-gray-600 dark:text-gray-400 w-14">Accts</th>
+                      <th className="px-2 py-1.5 text-right font-semibold text-gray-600 dark:text-gray-400 w-24">Book Basis</th>
+                      <th className="px-2 py-1.5 text-right font-semibold text-gray-600 dark:text-gray-400 w-24">Tax Basis</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {validation.taxCodesInUse.map((tc) => {
+                      const isChecked = consolidateIds.has(tc.tax_code_id);
+                      const isExpanded = expandedTc.has(tc.tax_code_id);
+                      const entry = consolidateMap.get(tc.tax_code_id);
+                      const fmtAmt = (n: number) => n === 0 ? '—' : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                      return (
+                        <ConsolidationRow
+                          key={tc.tax_code_id}
+                          tc={tc}
+                          isChecked={isChecked}
+                          isExpanded={isExpanded}
+                          entry={entry}
+                          fmtAmt={fmtAmt}
+                          onToggleCheck={(checked) => toggleConsolidate(tc, checked)}
+                          onToggleExpand={() => {
+                            const next = new Set(expandedTc);
+                            if (next.has(tc.tax_code_id)) next.delete(tc.tax_code_id);
+                            else next.add(tc.tax_code_id);
+                            setExpandedTc(next);
+                          }}
+                          onUpdateOverride={(field, value) => updateOverride(tc.tax_code_id, field, value)}
+                        />
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* ── Tax Software Export ───────────────────────────────────────────── */}
       <section className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
         <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-700">
-          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Tax Software Export</h2>
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Download Export</h2>
         </div>
         <div className="px-5 py-4 space-y-4">
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            Exports tax-adjusted balances with software-specific line codes for import into your tax software.
+            Exports book and tax adjusted balances with software-specific line codes.
+            {consolidateIds.size > 0 && <span className="text-blue-600 dark:text-blue-400 font-medium"> {consolidateIds.size} tax code{consolidateIds.size !== 1 ? 's' : ''} will be consolidated.</span>}
           </p>
           <div className="flex items-center gap-3">
-            <select
-              value={software}
-              onChange={(e) => setSoftware(e.target.value as TaxSoftware)}
-              className="border border-gray-300 dark:border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-48 dark:bg-gray-700 dark:text-white"
-            >
-              {SOFTWARE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-
             <button
               disabled={!!downloading}
               onClick={() =>
                 handleDownload(
-                  taxSoftwareExportUrl(selectedPeriodId, software),
+                  taxSoftwareExportUrl(selectedPeriodId, software, consolidateIds.size > 0 ? Array.from(consolidateIds) : undefined, consolidateMap.size > 0 ? consolidateMap : undefined),
                   `${software}-export-${selectedPeriodId}.${SOFTWARE_EXT[software]}`,
                   SOFTWARE_OPTIONS.find((o) => o.value === software)?.label ?? software,
                 )
@@ -284,101 +451,88 @@ export function ExportsPage() {
         </div>
       </section>
 
-      {/* ── Other Exports ─────────────────────────────────────────────────── */}
-      <section className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
-        <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-700">
-          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Other Exports</h2>
-        </div>
-        <div className="px-5 py-4 space-y-3">
-
-          {/* Working TB Excel */}
-          <div className="flex items-center justify-between py-2 border-b border-gray-50 dark:border-gray-700">
-            <div>
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Working Trial Balance</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                Full TB with unadjusted, book & tax adjustments, and adjusted balances. Excel format.
-              </p>
-            </div>
-            <button
-              disabled={!!downloading}
-              onClick={() =>
-                handleDownload(
-                  workingTbExportUrl(selectedPeriodId),
-                  `working-tb-${selectedPeriodId}.xlsx`,
-                  'Working TB',
-                )
-              }
-              className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0 ml-4"
-            >
-              {downloading === 'Working TB' ? (
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-              ) : (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-              )}
-              Download (.xlsx)
-            </button>
-          </div>
-
-          {/* Bookkeeper Letter PDF */}
-          <div className="flex items-center justify-between py-2">
-            <div>
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Bookkeeper Letter</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                Proposed book adjusting journal entries formatted as a professional letter. PDF format.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0 ml-4">
-              <button
-                disabled={!!downloading}
-                onClick={() =>
-                  handleDownload(
-                    bookkeeperLetterUrl(selectedPeriodId, false),
-                    `bookkeeper-letter-${selectedPeriodId}.pdf`,
-                    'Bookkeeper Letter',
-                  )
-                }
-                className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {downloading === 'Bookkeeper Letter' ? (
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                ) : (
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                )}
-                Download (PDF)
-              </button>
-              <button
-                disabled={!!downloading}
-                onClick={async () => {
-                  if (!token) return;
-                  try {
-                    await openPdfPreview(bookkeeperLetterUrl(selectedPeriodId, true), token);
-                  } catch (e) {
-                    setError((e as Error).message);
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded text-sm font-medium border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-50 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                </svg>
-                Preview
-              </button>
-            </div>
-          </div>
-
-        </div>
-      </section>
     </div>
+  );
+}
+
+// ─── Consolidation row with expandable accounts and editable overrides ─────
+
+function ConsolidationRow({ tc, isChecked, isExpanded, entry, fmtAmt, onToggleCheck, onToggleExpand, onUpdateOverride }: {
+  tc: TaxCodeInUse;
+  isChecked: boolean;
+  isExpanded: boolean;
+  entry?: { acctNum: string; acctName: string };
+  fmtAmt: (n: number) => string;
+  onToggleCheck: (checked: boolean) => void;
+  onToggleExpand: () => void;
+  onUpdateOverride: (field: 'acctNum' | 'acctName', value: string) => void;
+}) {
+  return (
+    <>
+      {/* Main tax code row */}
+      <tr className={`border-t border-gray-100 dark:border-gray-700 ${isChecked ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}`}>
+        <td className="px-2 py-1.5 text-center">
+          <input
+            type="checkbox"
+            checked={isChecked}
+            onChange={(e) => onToggleCheck(e.target.checked)}
+            className="rounded border-gray-300 dark:border-gray-600 text-blue-600 w-3.5 h-3.5"
+          />
+        </td>
+        <td className="px-1 py-1.5 text-center">
+          {tc.account_count > 1 && (
+            <button onClick={onToggleExpand} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" title={isExpanded ? 'Collapse' : 'Expand accounts'}>
+              <svg className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          )}
+        </td>
+        <td className="px-2 py-1.5 font-mono text-gray-800 dark:text-gray-200">{tc.tax_code}</td>
+        <td className="px-2 py-1.5 text-gray-600 dark:text-gray-400 truncate max-w-[14rem]">{tc.description}</td>
+        <td className="px-2 py-1.5 text-center text-gray-500 dark:text-gray-400">{tc.account_count}</td>
+        <td className="px-2 py-1.5 text-right font-mono tabular-nums text-gray-700 dark:text-gray-300">{fmtAmt(tc.totalBookAmt)}</td>
+        <td className="px-2 py-1.5 text-right font-mono tabular-nums text-gray-700 dark:text-gray-300">{fmtAmt(tc.totalTaxAmt)}</td>
+      </tr>
+
+      {/* Editable override row (shown when checked) */}
+      {isChecked && entry && (
+        <tr className="bg-blue-50/30 dark:bg-blue-900/5">
+          <td />
+          <td />
+          <td colSpan={2} className="px-2 py-1">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">Export as:</span>
+              <input
+                value={entry.acctNum}
+                onChange={(e) => onUpdateOverride('acctNum', e.target.value)}
+                placeholder="Acct #"
+                className="border border-blue-200 dark:border-blue-700 rounded px-1.5 py-0.5 text-xs font-mono w-24 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+              />
+              <input
+                value={entry.acctName}
+                onChange={(e) => onUpdateOverride('acctName', e.target.value)}
+                placeholder="Description"
+                className="border border-blue-200 dark:border-blue-700 rounded px-1.5 py-0.5 text-xs flex-1 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+          </td>
+          <td colSpan={3} />
+        </tr>
+      )}
+
+      {/* Expanded individual accounts (shown when expand arrow clicked) */}
+      {isExpanded && tc.accounts.map((a, i) => (
+        <tr key={i} className="bg-gray-50/50 dark:bg-gray-700/10">
+          <td />
+          <td />
+          <td className="px-2 py-0.5 pl-6 font-mono text-gray-500 dark:text-gray-400">{a.account_number}</td>
+          <td className="px-2 py-0.5 text-gray-500 dark:text-gray-400 truncate max-w-[14rem]">{a.account_name}</td>
+          <td />
+          <td className="px-2 py-0.5 text-right font-mono tabular-nums text-gray-500 dark:text-gray-400">{fmtAmt(a.bookAmt)}</td>
+          <td className="px-2 py-0.5 text-right font-mono tabular-nums text-gray-500 dark:text-gray-400">{fmtAmt(a.taxAmt)}</td>
+        </tr>
+      ))}
+    </>
   );
 }

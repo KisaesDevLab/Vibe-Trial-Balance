@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// Copyright (C) 2024–2026 [Project Author]
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (C) 2024–2026 Kisaes LLC
 
 import { Router, Response } from 'express';
 import multer from 'multer';
@@ -258,10 +258,10 @@ bankStatementPdfRouter.post(
       }
 
       const isScanned = textLength < 100;
-      const { provider, primaryModel } = await getLLMProvider();
+      const { provider, primaryModel, vision } = await getLLMProvider();
 
       // Prefer vision mode for bank statements (check images contain payee info)
-      let useVision = provider.supportsVision;
+      let useVision = vision.provider.supportsVision;
       let visionFailed = false;
       let messageContent: string | LLMContentPart[];
 
@@ -295,7 +295,7 @@ bankStatementPdfRouter.post(
             data: null,
             error: {
               code: 'SCANNED_PDF',
-              message: 'This PDF appears to be scanned (no text layer). Switch to a vision-capable provider (Claude or an Ollama vision model) to import scanned bank statements.',
+              message: 'This PDF appears to be scanned (no text layer). Configure a vision-capable provider (Claude, OpenAI, or an Ollama vision model) in Settings > AI Provider > Vision Processing.',
             },
           });
           return;
@@ -405,12 +405,15 @@ bankStatementPdfRouter.post(
         const estimatedTxns = useVision ? 400 : Math.ceil(extractedText.length / 200);
         const maxTokens = Math.max(tokenSettings.maxTokensDefault, Math.min(tokenSettings.maxTokensBankStatement * 4, estimatedTxns * 80));
 
-        const aiResult = await provider.complete({
-          model: primaryModel,
+        const [aiProvider, aiModel] = useVision
+          ? [vision.provider, vision.model]
+          : [provider, primaryModel];
+        const aiResult = await aiProvider.complete({
+          model: aiModel,
           maxTokens,
           messages: [{ role: 'user', content: messageContent! }],
         });
-        logAiUsage({ endpoint: 'bank-statement-pdf/analyze', model: primaryModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
+        logAiUsage({ endpoint: 'bank-statement-pdf/analyze', model: aiModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
 
         analysisResult = extractJsonObject<BankStatementAnalysisResult>(aiResult.text);
       }

@@ -1,7 +1,7 @@
 # Tickmarks and Workpaper References
 
 ## Overview
-Tickmarks are color-coded symbols applied to accounts in the trial balance to indicate that a specific audit or review procedure was performed. They appear in the TB grid and on printed TB reports.
+Tickmarks are color-coded symbols applied to accounts in the trial balance to indicate that a specific audit or review procedure was performed. They appear in the TB grid, the Workpaper Index (both view and PDF/Excel), and on printed TB reports. A tickmark legend is automatically included at the end of reports that show tickmarks.
 
 Access: **Trial Balance > Tickmarks** to manage the library; tickmarks are assigned directly in the TB grid.
 

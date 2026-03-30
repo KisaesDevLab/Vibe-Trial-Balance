@@ -540,15 +540,16 @@ export async function generateIncomeStatementPdf(
   let totalExpensesPY = 0;
   let rowIdx = 0;
 
-  const bookNet = (r: Record<string, unknown>): number => {
+  // IS traditional: revenue positive (cr-dr), expenses positive (dr-cr)
+  const isBookNet = (r: Record<string, unknown>): number => {
     const dr = Number(r.book_adjusted_debit  ?? 0);
     const cr = Number(r.book_adjusted_credit ?? 0);
-    return (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+    return (r.category as string) === 'revenue' ? cr - dr : dr - cr;
   };
-  const pyNet = (r: Record<string, unknown>): number => {
+  const isPyNet = (r: Record<string, unknown>): number => {
     const dr = Number(r.prior_year_debit  ?? 0);
     const cr = Number(r.prior_year_credit ?? 0);
-    return (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+    return (r.category as string) === 'revenue' ? cr - dr : dr - cr;
   };
 
   for (const section of ['revenue', 'expenses'] as const) {
@@ -563,8 +564,8 @@ export async function generateIncomeStatementPdf(
     let sectionTotalPY = 0;
 
     for (const r of sectionRows) {
-      const amt  = bookNet(r);
-      const amtPY = pyNet(r);
+      const amt  = isBookNet(r);
+      const amtPY = isPyNet(r);
       sectionTotal   += amt;
       sectionTotalPY += amtPY;
 
@@ -595,7 +596,7 @@ export async function generateIncomeStatementPdf(
     rowIdx++;
   }
 
-  // Net Income
+  // Net Income = revenue - expenses (both positive in traditional presentation)
   const netIncome   = totalRevenue - totalExpenses;
   const netIncomePY = totalRevenuePY - totalExpensesPY;
   const netIncomeCells: (string | number | null)[] = ['', 'NET INCOME / (LOSS)', netIncome];
@@ -614,6 +615,7 @@ export async function generateIncomeStatementPdf(
     periodName: info.name,
     startDate:  fmtDate(info.start_date),
     endDate:    fmtDate(info.end_date),
+    pageOrientation: 'portrait',
     content,
   }));
 }
@@ -626,9 +628,9 @@ export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promi
   const svc  = await PdfTemplateService.fromDb(db);
   const info = await getPeriodInfo(db, periodId);
 
+  // Include revenue/expense for net income calculation
   const rows = await db('v_adjusted_trial_balance')
     .where({ period_id: periodId, is_active: true })
-    .whereIn('category', ['assets', 'liabilities', 'equity'])
     .orderBy('account_number', 'asc');
 
   const cols   = ['Acct #', 'Account Name', 'Amount'];
@@ -640,27 +642,43 @@ export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promi
   let totalEquity = 0;
   let rowIdx = 0;
 
-  const bookNet = (r: Record<string, unknown>): number => {
+  // Category-based sign: assets/expenses dr-cr, liabilities/equity/revenue cr-dr
+  const fsNet = (r: Record<string, unknown>): number => {
     const dr = Number(r.book_adjusted_debit  ?? 0);
     const cr = Number(r.book_adjusted_credit ?? 0);
-    return (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+    const cat = r.category as string;
+    const creditNormal = cat === 'revenue' || cat === 'liabilities' || cat === 'equity';
+    return creditNormal ? cr - dr : dr - cr;
   };
+  const revenueRows = (rows as Record<string, unknown>[]).filter(r => r.category === 'revenue');
+  const expenseRows = (rows as Record<string, unknown>[]).filter(r => r.category === 'expenses');
+  const totalRevenue = revenueRows.reduce((s, r) => s + fsNet(r), 0);
+  const totalExpenses = expenseRows.reduce((s, r) => s + fsNet(r), 0);
+  const netIncome = totalRevenue - totalExpenses;
 
   for (const section of ['assets', 'liabilities', 'equity'] as const) {
     const sectionRows = (rows as Record<string, unknown>[]).filter(r => r.category === section);
-    if (sectionRows.length === 0) continue;
+    if (sectionRows.length === 0 && section !== 'equity') continue;
 
     tableBody.push(svc.sectionHeaderRow(section, cols.length));
     let sectionTotal = 0;
 
     for (const r of sectionRows) {
-      const amt = bookNet(r);
+      const amt = fsNet(r);
       sectionTotal += amt;
       if (section === 'assets') totalAssets += amt;
       else if (section === 'liabilities') totalLiab += amt;
       else totalEquity += amt;
 
       tableBody.push(svc.dataRow([r.account_number as string, r.account_name as string, amt], { isAlt: rowIdx % 2 === 1 }));
+      rowIdx++;
+    }
+
+    // Add net income line in equity section
+    if (section === 'equity') {
+      tableBody.push(svc.dataRow(['', 'Net Income (current period)', netIncome], { isAlt: rowIdx % 2 === 1 }));
+      sectionTotal += netIncome;
+      totalEquity += netIncome;
       rowIdx++;
     }
 
@@ -698,6 +716,7 @@ export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promi
     periodName: info.name,
     startDate:  fmtDate(info.start_date),
     endDate:    fmtDate(info.end_date),
+    pageOrientation: 'portrait',
     content,
   }));
 }
@@ -711,6 +730,8 @@ export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Prom
   const info = await getPeriodInfo(db, periodId);
 
   const rows = await db('v_adjusted_trial_balance as vtb')
+    .join('chart_of_accounts as coa', 'coa.id', 'vtb.account_id')
+    .leftJoin('tax_codes as tc', 'tc.id', 'coa.tax_code_id')
     .where('vtb.period_id', periodId)
     .where('vtb.is_active', true)
     .whereNotNull('vtb.tax_line')
@@ -719,51 +740,53 @@ export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Prom
       'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
       'vtb.normal_balance',
       'vtb.tax_line',
+      'tc.description as tc_description',
     )
     .orderBy(['vtb.tax_line', 'vtb.account_number']);
 
-  const cols   = ['Tax Code', 'Tax Line', 'Acct #', 'Account Name', 'Tax-Adj DR', 'Tax-Adj CR', 'Net Amount'];
-  const widths = [55, '*', 45, '*', 65, 65, 65];
+  const cols   = ['Tax Code', 'Acct #', 'Account Name', 'Net Amount'];
+  const widths = [70, 55, '*', 80];
 
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
 
-  // Group by tax_line
-  const codeMap = new Map<string, typeof rows>();
+  // Group by tax_line, capture description from first row
+  const codeMap = new Map<string, { desc: string; rows: Record<string, unknown>[] }>();
   for (const r of rows as Record<string, unknown>[]) {
     const code = String(r.tax_line ?? 'Unassigned');
-    if (!codeMap.has(code)) codeMap.set(code, []);
-    codeMap.get(code)!.push(r);
+    if (!codeMap.has(code)) codeMap.set(code, { desc: (r.tc_description as string) ?? '', rows: [] });
+    codeMap.get(code)!.rows.push(r);
   }
 
   let grandTotal = 0;
   let rowIdx = 0;
 
-  for (const [code, codeRows] of codeMap.entries()) {
-    tableBody.push(svc.sectionHeaderRow(`Tax Code: ${code}`, cols.length));
+  for (const [code, group] of codeMap.entries()) {
+    const label = group.desc ? `${code} — ${group.desc}` : code;
+    tableBody.push(svc.sectionHeaderRow(label, cols.length));
+    const codeRows = group.rows;
     let codeTotal = 0;
 
     for (const r of codeRows as Record<string, unknown>[]) {
       const dr  = Number(r.tax_adjusted_debit  ?? 0);
       const cr  = Number(r.tax_adjusted_credit ?? 0);
-      const net = (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+      const net = dr - cr;
       codeTotal += net;
 
       tableBody.push(svc.dataRow([
         code,
-        '',
         r.account_number as string,
         r.account_name   as string,
-        dr, cr, net,
+        net,
       ], { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
     }
 
-    tableBody.push(svc.dataRow(['', '', '', '', '', `Total ${code}`, codeTotal], { bold: true, shade: true }));
+    tableBody.push(svc.dataRow(['', '', `Total ${code}`, codeTotal], { bold: true, shade: true }));
     grandTotal += codeTotal;
     rowIdx++;
   }
 
-  tableBody.push(svc.dataRow(['', '', '', '', '', 'GRAND TOTAL', grandTotal], { bold: true, shade: true }));
+  tableBody.push(svc.dataRow(['', '', 'GRAND TOTAL', grandTotal], { bold: true, shade: true }));
 
   const content: Content[] = [{
     table: { headerRows: 1, widths, body: tableBody },
@@ -777,6 +800,7 @@ export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Prom
     periodName: info.name,
     startDate:  fmtDate(info.start_date),
     endDate:    fmtDate(info.end_date),
+    pageOrientation: 'portrait',
     content,
   }));
 }
@@ -785,7 +809,7 @@ export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Prom
 // (h) Workpaper Index PDF
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function generateWorkpaperIndexPdf(db: Knex, periodId: number): Promise<Buffer> {
+export async function generateWorkpaperIndexPdf(db: Knex, periodId: number, pageBreakByGroup = true): Promise<Buffer> {
   const svc  = await PdfTemplateService.fromDb(db);
   const info = await getPeriodInfo(db, periodId);
 
@@ -797,38 +821,119 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number): Pro
       'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
       'vtb.category',
       'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
+      'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
       'vtb.normal_balance',
       'vtb.preparer_notes', 'vtb.reviewer_notes', 'vtb.workpaper_ref',
     )
     .orderBy('vtb.account_number', 'asc');
 
-  const cols   = ['Acct #', 'Account Name', 'Category', 'Book Balance', 'WP Ref', 'Preparer Note', 'Reviewer Note'];
-  const widths = [45, '*', 55, 65, 45, '*', '*'];
-
-  const tableBody: TableCell[][] = [svc.headerRow(cols)];
-  let rowIdx = 0;
-
-  for (const r of rows as Record<string, unknown>[]) {
-    const dr  = Number(r.book_adjusted_debit  ?? 0);
-    const cr  = Number(r.book_adjusted_credit ?? 0);
-    const bal = (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
-
-    tableBody.push(svc.dataRow([
-      r.account_number as string,
-      r.account_name   as string,
-      r.category       as string,
-      bal,
-      r.workpaper_ref   as string ?? '',
-      r.preparer_notes  as string ?? '',
-      r.reviewer_notes  as string ?? '',
-    ], { isAlt: rowIdx % 2 === 1 }));
-    rowIdx++;
+  // Fetch tickmark assignments for this period
+  const tickmarkRows = await db('tb_tickmarks as tt')
+    .join('tickmark_library as tl', 'tl.id', 'tt.tickmark_id')
+    .where('tt.period_id', periodId)
+    .select('tt.account_id', 'tl.id as tm_id', 'tl.symbol', 'tl.description as tm_description', 'tl.sort_order as tm_sort');
+  const tickMap = new Map<number, Array<{ id: number; symbol: string; description: string }>>();
+  for (const t of tickmarkRows) {
+    const aid = t.account_id as number;
+    if (!tickMap.has(aid)) tickMap.set(aid, []);
+    tickMap.get(aid)!.push({ id: t.tm_id as number, symbol: t.symbol as string, description: t.tm_description as string });
   }
 
-  const content: Content[] = [{
-    table: { headerRows: 1, widths, body: tableBody },
-    layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
-  }];
+  const cols   = ['Acct #', 'Account Name', 'Cat.', 'Book Bal', 'Tax Bal', 'Marks', 'Notes'];
+  const widths = [40, '*', 40, 60, 60, 35, '*'];
+  const tableLayout = { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' };
+
+  const bookBal = (r: Record<string, unknown>): number => {
+    const dr = Number(r.book_adjusted_debit ?? 0);
+    const cr = Number(r.book_adjusted_credit ?? 0);
+    const cat = r.category as string;
+    const creditNormal = cat === 'revenue' || cat === 'liabilities' || cat === 'equity';
+    return creditNormal ? cr - dr : dr - cr;
+  };
+  const taxBal = (r: Record<string, unknown>): number => {
+    const dr = Number(r.tax_adjusted_debit ?? 0);
+    const cr = Number(r.tax_adjusted_credit ?? 0);
+    const cat = r.category as string;
+    const creditNormal = cat === 'revenue' || cat === 'liabilities' || cat === 'equity';
+    return creditNormal ? cr - dr : dr - cr;
+  };
+
+  // Group by workpaper_ref
+  const wpGroups = new Map<string, Record<string, unknown>[]>();
+  for (const r of rows as Record<string, unknown>[]) {
+    const ref = (r.workpaper_ref as string) || 'Unassigned';
+    if (!wpGroups.has(ref)) wpGroups.set(ref, []);
+    wpGroups.get(ref)!.push(r);
+  }
+  const sortedRefs = [...wpGroups.entries()].sort(([a], [b]) => {
+    if (a === 'Unassigned') return 1;
+    if (b === 'Unassigned') return -1;
+    return a.localeCompare(b);
+  });
+
+  // Build one page (page break) per WP ref group
+  const content: Content[] = [];
+  const usedTickmarks = new Set<number>();
+
+  for (let gi = 0; gi < sortedRefs.length; gi++) {
+    const [ref, refRows] = sortedRefs[gi];
+    if (gi > 0 && pageBreakByGroup) content.push({ text: '', pageBreak: 'before' } as Content);
+
+    const tableBody: TableCell[][] = [svc.headerRow(cols)];
+    tableBody.push(svc.sectionHeaderRow(`WP Ref: ${ref}`, cols.length));
+    let bookTotal = 0;
+    let taxTotal = 0;
+
+    for (let ri = 0; ri < refRows.length; ri++) {
+      const r = refRows[ri];
+      const bk = bookBal(r);
+      const tx = taxBal(r);
+      bookTotal += bk;
+      taxTotal += tx;
+
+      const marks = tickMap.get(r.account_id as number) ?? [];
+      for (const m of marks) usedTickmarks.add(m.id);
+      const markStr = marks.map((m) => m.symbol).join(' ');
+
+      const notes: string[] = [];
+      if (r.preparer_notes) notes.push(`P: ${r.preparer_notes}`);
+      if (r.reviewer_notes) notes.push(`R: ${r.reviewer_notes}`);
+
+      tableBody.push(svc.dataRow([
+        r.account_number as string,
+        r.account_name as string,
+        r.category as string,
+        bk, tx, markStr,
+        notes.join(' | '),
+      ], { isAlt: ri % 2 === 1 }));
+    }
+
+    tableBody.push(svc.dataRow(['', '', `Total ${ref}`, bookTotal, taxTotal, '', ''], { bold: true, shade: true }));
+
+    content.push({
+      table: { headerRows: 1, widths, body: tableBody },
+      layout: tableLayout,
+    } as Content);
+  }
+
+  // Tickmark legend page (if any tickmarks used)
+  if (usedTickmarks.size > 0) {
+    content.push({ text: '', pageBreak: 'before' } as Content);
+    content.push({ text: 'Tickmark Legend', fontSize: 12, bold: true, margin: [0, 0, 0, 8] } as Content);
+
+    const legendBody: TableCell[][] = [svc.headerRow(['Symbol', 'Description'])];
+    const allMarks = [...tickMap.values()].flat();
+    const uniqueMarks = new Map<number, { symbol: string; description: string }>();
+    for (const m of allMarks) { if (usedTickmarks.has(m.id)) uniqueMarks.set(m.id, m); }
+    for (const m of uniqueMarks.values()) {
+      legendBody.push(svc.dataRow([m.symbol, m.description], {}));
+    }
+
+    content.push({
+      table: { headerRows: 1, widths: [40, '*'], body: legendBody },
+      layout: tableLayout,
+    } as Content);
+  }
 
   return svc.generateBuffer(svc.buildDocument({
     title:      'Workpaper Index',

@@ -286,6 +286,7 @@ exports.seed = async function(knex) {
     { return_form: 'common', activity_type: 'common', tax_code: 'INTERCOMPANY',         description: 'Intercompany/Eliminating Entry',          sort_order: 9020, is_system: true },
     { return_form: 'common', activity_type: 'common', tax_code: 'SUSPENSE',             description: 'Suspense Account',                        sort_order: 9030, is_system: true },
     { return_form: 'common', activity_type: 'common', tax_code: 'PRIOR_YEAR_ADJUSTMENT', description: 'Prior Year Adjustment',                  sort_order: 9040, is_system: true },
+    { return_form: 'common', activity_type: 'common', tax_code: 'REPORTING_ONLY',       description: 'Reporting only — no tax mapping',         sort_order: 9050, is_system: true },
   ];
 
   for (const code of codes) {
