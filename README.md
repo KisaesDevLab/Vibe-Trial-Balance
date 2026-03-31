@@ -173,10 +173,10 @@ sudo systemctl enable postgresql
 ```
 
 ### 6. Updates
+
+One-line update:
 ```bash
-cd /opt/vibe-tb
-git pull
-./deploy/deploy.sh
+cd /opt/vibe-tb && git pull && ./deploy/deploy.sh
 ```
 
 ### Optional: Scanned PDF support
@@ -330,9 +330,9 @@ docker compose -f docker-compose.prod.yml exec server \
 
 ### 8. Updates
 
+One-line update:
 ```bash
-git pull
-docker compose -f docker-compose.prod.yml up -d --build
+git pull && docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 ---
