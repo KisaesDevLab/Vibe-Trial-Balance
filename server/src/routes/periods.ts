@@ -1,8 +1,14 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
+import { sendServerError } from '../lib/safeError';
 
 export const periodCollectionRouter = Router({ mergeParams: true });
 periodCollectionRouter.use(authMiddleware);
@@ -30,8 +36,7 @@ periodCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise
       .orderBy('end_date', 'desc');
     res.json({ data: periods, error: null, meta: { count: periods.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'periods');
   }
 });
 
@@ -67,8 +72,7 @@ periodCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promis
       res.status(201).json({ data: period, error: null });
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'periods');
   }
 });
 
@@ -109,8 +113,7 @@ periodItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<
       res.json({ data: updated, error: null });
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'periods');
   }
 });
 
@@ -144,8 +147,7 @@ periodItemRouter.post('/:id/lock', async (req: AuthRequest, res: Response): Prom
     await logAudit({ userId: req.user!.userId, periodId: id, entityType: 'period', entityId: id, action: 'lock', description: `Locked period "${updated.period_name}"` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'periods');
   }
 });
 
@@ -172,8 +174,7 @@ periodItemRouter.post('/:id/unlock', async (req: AuthRequest, res: Response): Pr
     await logAudit({ userId: req.user!.userId, periodId: id, entityType: 'period', entityId: id, action: 'unlock', description: `Unlocked period "${updated.period_name}"` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'periods');
   }
 });
 
@@ -203,7 +204,6 @@ periodItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise
     }
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'periods');
   }
 });

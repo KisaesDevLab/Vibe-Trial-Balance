@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2024–2026 Kisaes LLC
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -31,14 +33,15 @@ interface FormLine {
 interface Props {
   periodId: number;
   clientId: number;
+  periodEndDate?: string;
   onClose: () => void;
   onSuccess: () => void;
 }
 
-export function JournalEntryDialog({ periodId, clientId, onClose, onSuccess }: Props) {
+export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose, onSuccess }: Props) {
   const qc = useQueryClient();
   const [entryType, setEntryType] = useState<'book' | 'tax'>('book');
-  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [entryDate, setEntryDate] = useState(periodEndDate ?? new Date().toISOString().slice(0, 10));
   const [description, setDescription] = useState('');
   const [lines, setLines] = useState<FormLine[]>([
     { accountId: '', debit: '', credit: '' },

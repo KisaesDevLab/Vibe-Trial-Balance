@@ -1,21 +1,34 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { JWT_SECRET, JWT_EXPIRY } from '../lib/jwtConfig';
+import { sendServerError } from '../lib/safeError';
 
 const router = Router();
 
-const JWT_SECRET = process.env.JWT_SECRET ?? 'local-dev-secret-12345';
-const JWT_EXPIRY = process.env.JWT_EXPIRY ?? '8h';
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 attempts per window per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many login attempts. Please try again later.' } },
+});
 
 const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
 });
 
-router.post('/login', async (req: Request, res: Response): Promise<void> => {
+router.post('/login', loginLimiter, async (req: Request, res: Response): Promise<void> => {
   const result = loginSchema.safeParse(req.body);
   if (!result.success) {
     res.status(400).json({
@@ -57,8 +70,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'auth');
   }
 });
 
@@ -86,8 +98,7 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res: Response): Promi
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'auth');
   }
 });
 

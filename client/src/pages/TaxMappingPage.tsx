@@ -1,4 +1,9 @@
-import { useState, useRef } from 'react';
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
+import { useState, useRef, useEffect } from 'react';
 import { AiConsentDialog, AI_PII } from '../components/AiConsentDialog';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useUIStore } from '../store/uiStore';
@@ -72,10 +77,12 @@ function fmtCents(cents: number): string {
 }
 
 function netBalance(row: TBRow): number {
-  // tax-adjusted net: use tax_adjusted if available, otherwise book_adjusted
-  const debit = row.tax_adjusted_debit || row.book_adjusted_debit || row.unadjusted_debit;
-  const credit = row.tax_adjusted_credit || row.book_adjusted_credit || row.unadjusted_credit;
-  return debit - credit;
+  // tax-adjusted net, respecting normal_balance direction so that
+  // revenue (credit-normal) and expenses (debit-normal) both return positive
+  // when they carry their expected balance.
+  const debit = row.tax_adjusted_debit;
+  const credit = row.tax_adjusted_credit;
+  return row.normal_balance === 'debit' ? debit - credit : credit - debit;
 }
 
 function accountNetBalance(account: Account, tbMap: Map<number, TBRow>): number {
@@ -97,7 +104,9 @@ interface TaxCodeDropdownProps {
 function TaxCodeDropdown({ accountId: _accountId, currentCodeId, taxCodes, onSelect, disabled }: TaxCodeDropdownProps) {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const current = taxCodes.find((c) => c.id === currentCodeId);
 
@@ -107,10 +116,29 @@ function TaxCodeDropdown({ accountId: _accountId, currentCodeId, taxCodes, onSel
     return c.tax_code.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
   });
 
+  useEffect(() => { setHighlightIndex(-1); }, [search]);
+
+  useEffect(() => {
+    if (highlightIndex < 0 || !listRef.current) return;
+    const child = listRef.current.children[highlightIndex + 1] as HTMLElement | undefined;
+    child?.scrollIntoView({ block: 'nearest' });
+  }, [highlightIndex]);
+
   const selectCode = (code: TaxCode | null) => {
     onSelect(code?.id ?? null, code?.tax_code ?? null);
     setOpen(false);
     setSearch('');
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') { setOpen(false); setSearch(''); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIndex((p) => (p < filtered.length - 1 ? p + 1 : 0)); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIndex((p) => (p > 0 ? p - 1 : filtered.length - 1)); return; }
+    if (e.key === 'Enter' && filtered.length > 0) {
+      e.preventDefault();
+      const idx = highlightIndex >= 0 ? highlightIndex : 0;
+      selectCode(filtered[idx]);
+    }
   };
 
   return (
@@ -135,11 +163,12 @@ function TaxCodeDropdown({ accountId: _accountId, currentCodeId, taxCodes, onSel
               autoFocus
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder="Search code or description…"
               className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
             />
           </div>
-          <div className="max-h-56 overflow-y-auto">
+          <div ref={listRef} className="max-h-56 overflow-y-auto">
             <button
               type="button"
               onClick={() => selectCode(null)}
@@ -150,12 +179,14 @@ function TaxCodeDropdown({ accountId: _accountId, currentCodeId, taxCodes, onSel
             {filtered.length === 0 ? (
               <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">No matching codes</p>
             ) : (
-              filtered.map((c) => (
+              filtered.map((c, idx) => (
                 <button
                   key={c.id}
                   type="button"
                   onClick={() => selectCode(c)}
-                  className={`w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 ${currentCodeId === c.id ? 'bg-blue-50 dark:bg-blue-900/20 font-medium' : ''}`}
+                  className={`w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 ${
+                    idx === highlightIndex ? 'bg-blue-100 dark:bg-blue-900/40 font-medium' : currentCodeId === c.id ? 'bg-blue-50 dark:bg-blue-900/20 font-medium' : ''
+                  }`}
                 >
                   <span className="font-mono font-medium text-gray-900 dark:text-white">{c.sort_order}: {c.tax_code}</span>
                   <span className="text-gray-500 dark:text-gray-400 ml-1">— {c.description}</span>

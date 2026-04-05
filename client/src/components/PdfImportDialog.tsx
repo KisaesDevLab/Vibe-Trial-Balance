@@ -1,6 +1,12 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
+import { getOcrStatus } from '../api/settings';
 import {
   analyzePdf,
   confirmPdfImport,
@@ -174,6 +180,17 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
   const [numberChoice, setNumberChoice] = useState<'pending' | 'ai' | 'manual' | null>(null);
   const [suggestingNumbers, setSuggestingNumbers] = useState(false);
 
+  // OCR state
+  const [useOcr, setUseOcr] = useState(false);
+  const { data: ocrStatus } = useQuery({
+    queryKey: ['ocr-status'],
+    queryFn: async () => {
+      const res = await getOcrStatus();
+      return res.data;
+    },
+  });
+  const ocrAvailable = ocrStatus?.configured ?? false;
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: accounts = [] } = useQuery<Account[]>({
@@ -220,7 +237,7 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
     setAnalyzing(true);
     setAnalyzeError(null);
     try {
-      const result = await analyzePdf(selectedFile, periodId, clientId);
+      const result = await analyzePdf(selectedFile, periodId, clientId, useOcr || undefined);
       if (result.error) { setAnalyzeError(result.error.message); return; }
       if (!result.data) { setAnalyzeError('No data returned from server'); return; }
 
@@ -494,6 +511,26 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                 )}
               </div>
 
+              {ocrAvailable && selectedFile && (
+                <div className="bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800 rounded p-3">
+                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useOcr}
+                      onChange={(e) => setUseOcr(e.target.checked)}
+                      className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                    />
+                    <span>Use OCR pre-processing</span>
+                    <span className="text-xs text-gray-400">(local Ollama — {ocrStatus?.model})</span>
+                  </label>
+                  {useOcr && (
+                    <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 ml-6">
+                      OCR processes each page locally (~30-60 sec/page). A multi-page PDF may take several minutes.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {analyzeError && (
                 <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 rounded p-3 text-sm text-red-700 dark:text-red-400">
                   <strong>Error:</strong> {analyzeError}
@@ -510,7 +547,7 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                   {analyzing ? (
                     <span className="flex items-center gap-1.5">
                       <span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Analyzing with AI...
+                      {useOcr ? 'Running OCR + AI analysis...' : 'Analyzing with AI...'}
                     </span>
                   ) : 'Analyze PDF'}
                 </button>
@@ -518,7 +555,10 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
               {showPiiConsent && (
                 <AiConsentDialog
                   feature="AI PDF Import Analysis"
-                  piiItems={AI_PII.pdfImport}
+                  piiItems={[
+                    ...AI_PII.pdfImport,
+                    ...(useOcr ? [{ label: 'OCR processing', detail: 'Page images will also be sent to the configured OCR server (Ollama) for text extraction before AI analysis' }] : []),
+                  ]}
                   onCancel={() => setShowPiiConsent(false)}
                   onConfirm={() => { setShowPiiConsent(false); handleAnalyze(); }}
                 />

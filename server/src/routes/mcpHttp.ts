@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 /**
  * HTTP/SSE transport for MCP.
  * Mounts at:
@@ -8,6 +13,7 @@ import { Router, Request, Response } from 'express';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { createMcpServer } from '../mcp/server';
 import { mcpAuthMiddleware } from '../mcp/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const mcpRouter = Router();
 
@@ -48,7 +54,6 @@ mcpRouter.post('/messages', mcpAuthMiddleware, async (req: Request, res: Respons
   try {
     await transport.handlePostMessage(req, res);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    sendServerError(res, err, 'mcp-http');
   }
 });

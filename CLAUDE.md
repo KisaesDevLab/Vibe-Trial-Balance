@@ -1,21 +1,23 @@
 # Vibe Trial Balance - Claude Code Project Memory
 
-## License Compliance (BSL-1.1)
+## License Compliance (ELv2)
 
-This project is licensed under the **Business Source License 1.1** (BUSL-1.1). It converts to **Apache-2.0** on **2030-03-30**. Enforce these rules in every coding session:
+This project is licensed under the **Elastic License 2.0** (ELv2). Enforce these rules in every coding session:
 
 ### When adding dependencies
 - Check the license before running `npm install`. Allowed: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, BlueOak-1.0.0, Unlicense.
 - Review required before adding: LGPL-*, MPL-2.0, GPL-3.0-or-later, CC-BY-4.0.
-- Never add: GPL-2.0-only, SSPL-1.0, AGPL-3.0 (copyleft incompatible with BSL), Proprietary, Commercial.
+- Never add: GPL-2.0-only, SSPL-1.0, AGPL-3.0 (copyleft incompatible with ELv2), Proprietary, Commercial.
 - After installing, run `npx license-checker --excludePrivatePackages --summary` in the relevant workspace and confirm no new denied licenses appear.
 - Update `scripts/license-policy.json` if a new package needs a `knownIssues` entry.
 
 ### Source file headers
 - Every new `.ts` or `.tsx` file created under `client/src/` or `server/src/` must begin with:
   ```
-  // SPDX-License-Identifier: BUSL-1.1
-  // Copyright (C) 2024–2026 Kisaes LLC
+  // Copyright 2025-2026 Kisaes LLC
+  // Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+  // except in compliance with the Elastic License 2.0.
+  // See LICENSE file in the project root for full license text.
   ```
 - Do not add headers to generated files, migration files, or config files.
 

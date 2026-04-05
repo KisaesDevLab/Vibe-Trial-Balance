@@ -5,11 +5,10 @@ before the Workflow Rules section).
 
 ---
 
-## License Compliance (BSL-1.1)
+## License Compliance (ELv2)
 
-This project is licensed under the **Business Source License 1.1** (BUSL-1.1).
-It converts to **Apache-2.0** on **2030-03-30**. Enforce these rules in every
-coding session:
+This project is licensed under the **Elastic License 2.0** (ELv2).
+Enforce these rules in every coding session:
 
 ### When adding dependencies
 - Check the license before running `npm install`. Allowed: MIT, Apache-2.0,
@@ -25,8 +24,10 @@ coding session:
 - Every new `.ts` or `.tsx` file created under `client/src/` or `server/src/`
   must begin with:
   ```
-  // SPDX-License-Identifier: BUSL-1.1
-  // Copyright (C) 2024–2026 Kisaes LLC
+  // Copyright 2025-2026 Kisaes LLC
+  // Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+  // except in compliance with the Elastic License 2.0.
+  // See LICENSE file in the project root for full license text.
   ```
 - Do not add headers to generated files, migration files, or config files.
 

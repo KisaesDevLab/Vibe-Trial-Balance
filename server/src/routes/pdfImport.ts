@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import multer from 'multer';
 import pdfParse from 'pdf-parse';
@@ -8,6 +13,8 @@ import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
+import { sendServerError } from '../lib/safeError';
+import { loadOcrSettings, isOcrConfigured, ocrPages } from '../lib/ocrProvider';
 
 export const pdfImportRouter = Router();
 pdfImportRouter.use(authMiddleware);
@@ -101,17 +108,58 @@ pdfImportRouter.post(
       }).join('\n');
 
       const tokenSettings = await getAiTokenSettings();
-      // Use configurable chunk limit; do NOT hard-truncate — send the full document
-      // so all accounts are captured. Only truncate if extremely large (over chunk limit).
-      const truncatedText = extractedText.length > tokenSettings.chunkCharLimit
+
+      // ── OCR pre-processing (optional) ──────────────────────────────────────
+      const ocrSettings = await loadOcrSettings();
+      const useOcr = req.body.useOcr === 'true' && isOcrConfigured(ocrSettings);
+      let ocrMode = false;
+      const extraWarnings: string[] = [];
+
+      if (useOcr) {
+        try {
+          const images = await renderPdfToImages(req.file!.buffer, 20);
+          if (images.length === 0) throw new Error('No pages rendered from PDF');
+
+          console.log(`[pdf-import] OCR: processing ${images.length} pages via ${ocrSettings.model}`);
+          const ocrResult = await ocrPages(ocrSettings, images);
+          logAiUsage({ endpoint: 'pdf/analyze-ocr', model: ocrSettings.model, inputTokens: ocrResult.totalInputTokens, outputTokens: ocrResult.totalOutputTokens, userId: req.user?.userId, clientId });
+          extraWarnings.push(...ocrResult.warnings);
+
+          // Replace extracted text with OCR output
+          const ocrText = ocrResult.texts.join('\n\n--- Page Break ---\n\n');
+          const ocrTextLength = ocrText.replace(/\s/g, '').length;
+
+          if (ocrTextLength < 50) {
+            // OCR ran but produced negligible text — fall back to standard flow
+            console.warn(`[pdf-import] OCR produced only ${ocrTextLength} chars — falling back to standard flow`);
+            extraWarnings.push('OCR produced very little text. Falling back to standard extraction.');
+          } else {
+            extractedText = ocrText;
+            ocrMode = true;
+            console.log(`[pdf-import] OCR complete: ${ocrText.length} chars from ${images.length} pages`);
+          }
+        } catch (ocrErr) {
+          // OCR failed — fall back to existing flow. Log full error server-side,
+          // but only send a generic message to the client (avoid leaking internals).
+          const msg = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
+          console.warn(`[pdf-import] OCR failed, falling back to standard flow:`, msg);
+          extraWarnings.push('OCR pre-processing failed. Falling back to standard extraction.');
+        }
+      }
+
+      // Re-evaluate scanned status after potential OCR (OCR may have produced text)
+      const effectiveTextLength = extractedText.replace(/\s/g, '').length;
+      const effectivelyScanned = !ocrMode && effectiveTextLength < 100;
+
+      // Rebuild prompt with potentially updated text
+      const finalText = extractedText.length > tokenSettings.chunkCharLimit
         ? extractedText.slice(0, tokenSettings.chunkCharLimit) + '\n...(truncated — very large document)'
         : extractedText;
-
-      const prompt = `You are an expert accountant. Extract trial balance data from this financial statement document.
+      const finalPrompt = `You are an expert accountant. Extract trial balance data from this financial statement document.
 
 DOCUMENT TEXT:
 \`\`\`
-${truncatedText}
+${finalText}
 \`\`\`
 
 CLIENT'S CHART OF ACCOUNTS (format: id|account_number|account_name|category|normal_balance|import_aliases):
@@ -165,13 +213,13 @@ Rules:
 - Include ALL line items including those with action="skip"`;
 
       let messageContent: string | LLMContentPart[];
-      if (isScanned) {
+      if (effectivelyScanned) {
         if (!vision.provider.supportsVision) {
           res.status(422).json({
             data: null,
             error: {
               code: 'SCANNED_PDF',
-              message: 'This PDF appears to be scanned (no text layer). Configure a vision-capable provider (Claude, OpenAI, or an Ollama vision model) in Settings > AI Provider > Vision Processing.',
+              message: 'This PDF appears to be scanned (no text layer). Configure a vision-capable provider (Claude, OpenAI, or an Ollama vision model) in Settings > AI Provider > Vision Processing, or enable OCR pre-processing.',
             },
           });
           return;
@@ -184,14 +232,14 @@ Rules:
             base64: b64,
             mimeType: 'image/png' as const,
           }));
-          messageContent = [...imageParts, { type: 'text' as const, text: prompt }];
+          messageContent = [...imageParts, { type: 'text' as const, text: finalPrompt }];
         } catch (visionErr) {
           if (visionErr instanceof PdftoppmNotFoundError) {
             res.status(422).json({
               data: null,
               error: {
                 code: 'SCANNED_PDF',
-                message: 'Scanned PDF detected. Install poppler-utils on the server (sudo apt install poppler-utils) to enable vision-mode import.',
+                message: 'Scanned PDF detected. Install poppler-utils on the server (sudo apt install poppler-utils) to enable vision-mode import, or enable OCR pre-processing.',
               },
             });
             return;
@@ -199,10 +247,10 @@ Rules:
           throw visionErr;
         }
       } else {
-        messageContent = prompt;
+        messageContent = finalPrompt;
       }
 
-      const [aiProvider, aiModel] = isScanned
+      const [aiProvider, aiModel] = effectivelyScanned
         ? [vision.provider, vision.model]
         : [provider, fastModel];
       // Scale output tokens: ~200 tokens per account row. Estimate account count
@@ -222,17 +270,22 @@ Rules:
         return;
       }
 
+      // Merge any OCR/fallback warnings into the analysis result
+      if (extraWarnings.length > 0) {
+        analysisResult.warnings = [...extraWarnings, ...analysisResult.warnings];
+      }
+
       res.json({
         data: {
           ...analysisResult,
-          extractedTextLength: textLength,
-          visionMode: isScanned,
+          extractedTextLength: effectiveTextLength,
+          visionMode: effectivelyScanned,
+          ocrMode,
         },
         error: null,
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+      sendServerError(res, err, 'pdf-import');
     }
   }
 );
@@ -399,8 +452,7 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'pdf-import');
   }
 });
 
@@ -502,8 +554,7 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Each object MUST 
 
     res.json({ data: { suggestions }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'pdf-import');
   }
 });
 
@@ -577,8 +628,7 @@ If the user requests corrections to the account matching, categories, or actions
     }
     res.json({ data: parsed, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'pdf-import');
   }
 });
 
@@ -599,8 +649,7 @@ pdfImportRouter.get('/imports', async (req: AuthRequest, res: Response): Promise
 
     res.json({ data: imports, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'pdf-import');
   }
 });
 
@@ -748,8 +797,7 @@ Rules:
 
     res.json({ data: verificationResult, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'pdf-import');
   }
 });
 
@@ -787,7 +835,6 @@ pdfImportRouter.get('/verify/:importId', async (req: AuthRequest, res: Response)
 
     res.json({ data: verificationResult, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'pdf-import');
   }
 });

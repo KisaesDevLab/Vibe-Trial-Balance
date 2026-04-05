@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2024–2026 Kisaes LLC
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
 
 import { Router, Response } from 'express';
 import { z } from 'zod';
@@ -7,6 +9,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
+import { sendServerError } from '../lib/safeError';
 
 export const pyComparisonRouter = Router({ mergeParams: true });
 pyComparisonRouter.use(authMiddleware);
@@ -169,8 +172,7 @@ pyComparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
 
     res.json({ data: { source, accounts, summary }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'py-comparison');
   }
 });
 
@@ -247,8 +249,7 @@ pyComparisonRouter.post('/manual', async (req: AuthRequest, res: Response): Prom
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'py-comparison');
   }
 });
 
@@ -414,8 +415,7 @@ pyComparisonRouter.post('/confirm-csv', async (req: AuthRequest, res: Response):
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'py-comparison');
   }
 });
 
@@ -578,8 +578,7 @@ pyComparisonRouter.post('/confirm-pdf', async (req: AuthRequest, res: Response):
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'py-comparison');
   }
 });
 
@@ -610,8 +609,7 @@ pyComparisonRouter.delete('/', async (req: AuthRequest, res: Response): Promise<
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'py-comparison');
   }
 });
 
@@ -758,7 +756,6 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
       res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: e.message ?? 'Validation error' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'py-comparison');
   }
 });

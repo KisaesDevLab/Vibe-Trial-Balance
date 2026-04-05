@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2024–2026 Kisaes LLC
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';

@@ -1,9 +1,15 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAiUsage } from '../lib/aiUsage';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { extractJsonArray } from '../lib/aiJsonExtract';
+import { sendServerError } from '../lib/safeError';
 
 export const taxLineAssignmentRouter = Router();
 taxLineAssignmentRouter.use(authMiddleware);
@@ -282,8 +288,7 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'tax-assignment');
   }
 });
 
@@ -498,8 +503,7 @@ taxLineAssignmentRouter.put('/bulk-confirm', async (req: AuthRequest, res: Respo
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'tax-assignment');
   }
 });
 
@@ -545,7 +549,6 @@ taxLineAssignmentRouter.get('/patterns/:accountName', async (req: AuthRequest, r
 
     res.json({ data: patterns, error: null, meta: { count: patterns.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'tax-assignment');
   }
 });

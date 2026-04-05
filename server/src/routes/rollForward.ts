@@ -1,9 +1,15 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
+import { sendServerError } from '../lib/safeError';
 
 export const rollForwardRouter = Router({ mergeParams: true });
 rollForwardRouter.use(authMiddleware);
@@ -281,7 +287,6 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
       res.status(409).json({ data: null, error: { code: 'TB_OUT_OF_BALANCE', message: e.message ?? 'Trial balance is out of balance.' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'roll-forward');
   }
 });

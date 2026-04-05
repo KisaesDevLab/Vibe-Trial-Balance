@@ -1,9 +1,15 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import bcrypt from 'bcrypt';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
+import { sendServerError } from '../lib/safeError';
 
 export const usersRouter = Router();
 usersRouter.use(authMiddleware);
@@ -31,8 +37,7 @@ usersRouter.get('/', adminOnly, async (_req: AuthRequest, res: Response): Promis
       .orderBy('display_name');
     res.json({ data: users, error: null, meta: { count: users.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'users');
   }
 });
 
@@ -58,12 +63,12 @@ usersRouter.post('/', adminOnly, async (req: AuthRequest, res: Response): Promis
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: user.id, action: 'create', description: `Created user "${username}" (role: ${role})` });
     res.status(201).json({ data: user, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    if (message.includes('unique') || message.includes('duplicate')) {
+    const internal = err instanceof Error ? err.message : '';
+    if (internal.includes('unique') || internal.includes('duplicate')) {
       res.status(409).json({ data: null, error: { code: 'DUPLICATE', message: 'Username already exists.' } });
       return;
     }
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'users');
   }
 });
 
@@ -110,8 +115,7 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: id, action: 'update', description: `Updated user "${updated.username}" — ${hasPasswordChange ? 'password changed' : changedFields.join(', ')}` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'users');
   }
 });
 
@@ -137,7 +141,6 @@ usersRouter.delete('/:id', adminOnly, async (req: AuthRequest, res: Response): P
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: id, action: 'delete', description: `Deactivated user "${updated.username}"` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'users');
   }
 });

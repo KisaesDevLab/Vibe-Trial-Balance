@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   ListResourcesRequestSchema,
@@ -718,8 +723,9 @@ export function createMcpServer(): Server {
           return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      return { content: [{ type: 'text', text: `Tool error: ${message}` }], isError: true };
+      const internal = err instanceof Error ? err.message : String(err);
+      console.error('[mcp-server]', internal);
+      return { content: [{ type: 'text', text: 'An internal error occurred. Please try again.' }], isError: true };
     }
   });
 

@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { useState, useRef, useEffect } from 'react';
 import type { Account } from '../api/chartOfAccounts';
 
@@ -37,9 +42,11 @@ export function AccountSearchDropdown({
 }: AccountSearchDropdownProps) {
   const [open, setOpen] = useState(defaultOpen);
   const [search, setSearch] = useState('');
+  const [highlightIndex, setHighlightIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const current = value !== '' ? accounts.find((a) => a.id === value) : null;
 
@@ -52,9 +59,15 @@ export function AccountSearchDropdown({
     );
   });
 
+  // Reset highlight when search changes
+  useEffect(() => {
+    setHighlightIndex(-1);
+  }, [search]);
+
   // Focus the search input whenever the dropdown opens
   useEffect(() => {
     if (!open) return;
+    setHighlightIndex(-1);
     const id = setTimeout(() => {
       if (searchRef.current) {
         searchRef.current.focus();
@@ -64,6 +77,15 @@ export function AccountSearchDropdown({
     }, 0);
     return () => clearTimeout(id);
   }, [open]);
+
+  // Scroll highlighted item into view
+  useEffect(() => {
+    if (highlightIndex < 0 || !listRef.current) return;
+    // offset by 1 if clear button is visible
+    const offset = value !== '' ? 1 : 0;
+    const child = listRef.current.children[highlightIndex + offset] as HTMLElement | undefined;
+    child?.scrollIntoView({ block: 'nearest' });
+  }, [highlightIndex, value]);
 
   // Close on outside click
   useEffect(() => {
@@ -145,9 +167,20 @@ export function AccountSearchDropdown({
       closeDropdown();
       return;
     }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightIndex((prev) => (prev < filtered.length - 1 ? prev + 1 : 0));
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightIndex((prev) => (prev > 0 ? prev - 1 : filtered.length - 1));
+      return;
+    }
     if (e.key === 'Enter' && filtered.length > 0) {
       e.preventDefault();
-      select(filtered[0].id);
+      const idx = highlightIndex >= 0 ? highlightIndex : 0;
+      select(filtered[idx].id);
     }
   }
 
@@ -182,7 +215,7 @@ export function AccountSearchDropdown({
               className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
             />
           </div>
-          <div className="max-h-56 overflow-y-auto">
+          <div ref={listRef} className="max-h-56 overflow-y-auto">
             {value !== '' && (
               <button
                 type="button"
@@ -195,12 +228,14 @@ export function AccountSearchDropdown({
             {filtered.length === 0 ? (
               <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">No matching accounts</p>
             ) : (
-              filtered.map((a) => (
+              filtered.map((a, idx) => (
                 <button
                   key={a.id}
                   type="button"
                   onClick={() => select(a.id)}
-                  className={`w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/30 ${value === a.id ? 'bg-blue-50 dark:bg-blue-900/30 font-medium' : ''}`}
+                  className={`w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/30 ${
+                    idx === highlightIndex ? 'bg-blue-100 dark:bg-blue-900/50 font-medium' : value === a.id ? 'bg-blue-50 dark:bg-blue-900/30 font-medium' : ''
+                  }`}
                 >
                   <span className="font-mono font-medium text-gray-900 dark:text-white">{a.account_number}</span>
                   <span className="text-gray-600 dark:text-gray-400 ml-1">– {a.account_name}</span>

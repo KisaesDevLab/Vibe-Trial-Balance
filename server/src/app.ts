@@ -1,6 +1,12 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import authRoutes from './routes/auth';
 import clientRoutes from './routes/clients';
 import { coaCollectionRouter, coaItemRouter } from './routes/chartOfAccounts';
@@ -39,10 +45,12 @@ import { unitsRouter } from './routes/units';
 import { pyComparisonRouter } from './routes/pyComparison';
 import { mcpRouter } from './routes/mcpHttp';
 import { db } from './db';
+import { sendServerError } from './lib/safeError';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+app.use(helmet());
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',
   credentials: true,
@@ -57,8 +65,7 @@ app.get('/api/v1/health', async (_req, res) => {
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'DB_ERROR', message } });
+    sendServerError(res, err, 'health');
   }
 });
 

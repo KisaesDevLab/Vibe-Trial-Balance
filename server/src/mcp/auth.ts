@@ -1,8 +1,13 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
 import { db } from '../db';
-
-const JWT_SECRET = process.env.JWT_SECRET ?? 'local-dev-secret-12345';
+import { JWT_SECRET } from '../lib/jwtConfig';
 
 export interface McpRequest extends Request {
   mcpUserId?: number;
@@ -24,7 +29,12 @@ export async function mcpAuthMiddleware(
 
   try {
     const row = await db('settings').where({ key: 'mcp_token' }).first('value');
-    if (!row || !row.value || row.value !== token) {
+    if (!row || !row.value) {
+      res.status(401).json({ error: 'Invalid MCP token' });
+      return;
+    }
+    const valid = await bcrypt.compare(token, row.value as string);
+    if (!valid) {
       res.status(401).json({ error: 'Invalid MCP token' });
       return;
     }

@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { ClientSelector } from './ClientSelector';
@@ -248,10 +253,10 @@ export function Sidebar() {
             </button>
           </div>
         </div>
-        {/* BSL-1.1 source disclosure */}
+        {/* ELv2 source disclosure */}
         <div className="pt-1.5 border-t border-gray-700/40">
           <p className="text-[9px] text-gray-600 leading-tight">
-            BSL-1.1 &middot;{' '}
+            ELv2 &middot;{' '}
             <a
               href="https://github.com/KisaesDevLab/Vibe-Trial-Balance"
               target="_blank"

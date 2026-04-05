@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { apiFetch } from './client';
 
 export interface DocumentImport {
@@ -58,6 +63,7 @@ export interface PdfAnalysisResult {
   matches: PdfMatchRow[];
   warnings: string[];
   extractedTextLength: number;
+  ocrMode?: boolean;
 }
 
 export interface PdfConfirmResult {
@@ -73,11 +79,13 @@ export async function analyzePdf(
   file: File,
   periodId: number,
   clientId: number,
+  useOcr?: boolean,
 ): Promise<{ data: PdfAnalysisResult | null; error: { code: string; message: string } | null }> {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('periodId', String(periodId));
   formData.append('clientId', String(clientId));
+  if (useOcr !== undefined) formData.append('useOcr', String(useOcr));
   return apiFetch<PdfAnalysisResult>('/import/pdf/analyze', {
     method: 'POST',
     body: formData,

@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 /**
  * Phase 16: Document Storage
  * GET    /api/v1/clients/:clientId/documents       -> list documents
@@ -12,12 +17,37 @@ import fs from 'fs';
 import path from 'path';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const documentsCollectionRouter = Router({ mergeParams: true });
 export const documentsItemRouter = Router({ mergeParams: true });
 
 documentsCollectionRouter.use(authMiddleware);
 documentsItemRouter.use(authMiddleware);
+
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'text/csv',
+  'text/plain',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword',
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/tiff',
+]);
+
+const BLOCKED_EXTENSIONS = new Set([
+  '.exe', '.bat', '.cmd', '.sh', '.ps1', '.msi', '.dll', '.com',
+  '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs',
+  '.php', '.jsp', '.aspx', '.asp', '.cgi', '.py', '.rb', '.pl',
+  '.html', '.htm', '.xhtml', '.svg',
+  '.jar', '.war', '.class',
+  '.scr', '.pif', '.vbs', '.vbe', '.wsf', '.wsh',
+]);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -67,8 +97,7 @@ documentsCollectionRouter.get('/', async (req: AuthRequest, res: Response): Prom
       .orderBy('d.uploaded_at', 'desc');
     res.json({ data: rows, error: null, meta: { total: rows.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'DB_ERROR', message } });
+    sendServerError(res, err, 'documents');
   }
 });
 
@@ -85,6 +114,16 @@ documentsCollectionRouter.post(
     }
     if (!req.file) {
       res.status(400).json({ data: null, error: { code: 'NO_FILE', message: 'No file uploaded' } });
+      return;
+    }
+
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    if (BLOCKED_EXTENSIONS.has(ext)) {
+      res.status(400).json({ data: null, error: { code: 'INVALID_FILE_TYPE', message: `File extension "${ext}" is not allowed.` } });
+      return;
+    }
+    if (!ALLOWED_MIME_TYPES.has(req.file.mimetype)) {
+      res.status(400).json({ data: null, error: { code: 'INVALID_FILE_TYPE', message: `File type "${req.file.mimetype}" is not allowed.` } });
       return;
     }
 
@@ -113,8 +152,7 @@ documentsCollectionRouter.post(
 
       res.status(201).json({ data: doc, error: null });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ data: null, error: { code: 'UPLOAD_ERROR', message } });
+      sendServerError(res, err, 'documents');
     }
   },
 );
@@ -145,8 +183,7 @@ documentsItemRouter.get('/:id/download', async (req: AuthRequest, res: Response)
     res.setHeader('Content-Length', fileBuffer.length);
     res.send(fileBuffer);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'DOWNLOAD_ERROR', message } });
+    sendServerError(res, err, 'documents');
   }
 });
 
@@ -173,8 +210,7 @@ documentsItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Prom
     await db('client_documents').where({ id: docId }).delete();
     res.json({ data: { id: docId }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'DELETE_ERROR', message } });
+    sendServerError(res, err, 'documents');
   }
 });
 
@@ -209,7 +245,6 @@ documentsItemRouter.put('/:id/link', async (req: AuthRequest, res: Response): Pr
 
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'LINK_ERROR', message } });
+    sendServerError(res, err, 'documents');
   }
 });

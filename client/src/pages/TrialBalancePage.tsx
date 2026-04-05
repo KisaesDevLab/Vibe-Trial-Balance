@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { evalAmountExpr } from '../utils/evalAmountExpr';
 import { CsvImportDialog } from '../components/CsvImportDialog';
@@ -1581,6 +1586,7 @@ export function TrialBalancePage() {
         <JournalEntryDialog
           periodId={selectedPeriodId}
           clientId={selectedClientId}
+          periodEndDate={currentPeriod?.end_date?.slice(0, 10)}
           onClose={() => setShowJEDialog(false)}
           onSuccess={() => { setShowJEDialog(false); qc.invalidateQueries({ queryKey }); }}
         />

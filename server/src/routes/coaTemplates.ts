@@ -1,8 +1,14 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const coaTemplatesRouter = Router();
 coaTemplatesRouter.use(authMiddleware);
@@ -48,8 +54,7 @@ coaTemplatesRouter.get('/', async (_req: AuthRequest, res: Response): Promise<vo
       .orderBy([{ column: 'is_system', order: 'desc' }, { column: 'name', order: 'asc' }]);
     res.json({ data: templates, error: null, meta: { count: templates.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -72,8 +77,7 @@ coaTemplatesRouter.get('/:id', async (req: AuthRequest, res: Response): Promise<
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'account_number', order: 'asc' }]);
     res.json({ data: { ...template, accounts }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -99,8 +103,7 @@ coaTemplatesRouter.post('/', async (req: AuthRequest, res: Response): Promise<vo
     }).returning('*');
     res.status(201).json({ data: template, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -141,8 +144,7 @@ coaTemplatesRouter.put('/:id', async (req: AuthRequest, res: Response): Promise<
     const [updated] = await db('coa_templates').where({ id }).update(updates).returning('*');
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -169,8 +171,7 @@ coaTemplatesRouter.delete('/:id', async (req: AuthRequest, res: Response): Promi
     await db('coa_templates').where({ id }).delete();
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -218,12 +219,12 @@ coaTemplatesRouter.post('/:id/accounts', async (req: AuthRequest, res: Response)
 
     res.status(201).json({ data: account, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    if (message.includes('unique') || message.includes('duplicate')) {
+    const internal = err instanceof Error ? err.message : '';
+    if (internal.includes('unique') || internal.includes('duplicate')) {
       res.status(409).json({ data: null, error: { code: 'DUPLICATE', message: 'Account number already exists in this template' } });
       return;
     }
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -268,8 +269,7 @@ coaTemplatesRouter.put('/accounts/:accountId', async (req: AuthRequest, res: Res
     }
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -297,8 +297,7 @@ coaTemplatesRouter.delete('/accounts/:accountId', async (req: AuthRequest, res: 
 
     res.json({ data: { id: accountId }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -369,8 +368,7 @@ coaTemplatesRouter.post('/from-client/:clientId', async (req: AuthRequest, res: 
 
     res.status(201).json({ data: template!, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -468,8 +466,7 @@ coaTemplatesRouter.post('/:id/apply/:clientId', async (req: AuthRequest, res: Re
 
     res.json({ data: { added, skipped, total: templateAccounts.length }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -528,8 +525,7 @@ coaTemplatesRouter.get('/:id/export', async (req: AuthRequest, res: Response): P
     await wb.xlsx.write(res);
     res.end();
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });
 
@@ -753,7 +749,6 @@ coaTemplatesRouter.post('/import', async (req: AuthRequest, res: Response): Prom
 
     res.json({ data: { imported, templateId: resolvedTemplateId }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa-templates');
   }
 });

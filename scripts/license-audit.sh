@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # license-audit.sh — Automated license compliance audit for vibe-tb
-# License: BUSL-1.1
+# License: Elastic-2.0
 #
 # Usage:  ./scripts/license-audit.sh [--quiet] [--json]
 #   --quiet   Suppress passing checks; show only warnings and failures
@@ -48,7 +48,7 @@ header "1. Required project files"
 if [[ -f "$ROOT/LICENSE" ]]; then
   pass "LICENSE file present"
 else
-  fail "LICENSE file MISSING — required for BSL-1.1 distribution"
+  fail "LICENSE file MISSING — required for ELv2 distribution"
   bump_fail
 fi
 
@@ -59,10 +59,10 @@ else
   bump_warn
 fi
 
-# ── 2. BSL-1.1 source file headers ──────────────────────────────────────────
+# ── 2. ELv2 source file headers ─────────────────────────────────────────────
 header "2. Source file headers"
 
-HEADER_PATTERN="SPDX-License-Identifier|BUSL|BSL|Business Source|Copyright"
+HEADER_PATTERN="Licensed under the Elastic License 2.0|Elastic-2.0|ELv2|Copyright.*Kisaes"
 TS_FILES=$(find "$ROOT/client/src" "$ROOT/server/src" -name "*.ts" -o -name "*.tsx" 2>/dev/null | wc -l | tr -d ' ')
 HEADERS_FOUND=$(find "$ROOT/client/src" "$ROOT/server/src" -name "*.ts" -o -name "*.tsx" 2>/dev/null \
   | xargs grep -l -E "$HEADER_PATTERN" 2>/dev/null | wc -l | tr -d ' ')
@@ -71,7 +71,7 @@ info "$HEADERS_FOUND / $TS_FILES source files have license headers"
 
 if [[ "$HEADERS_FOUND" -eq 0 ]]; then
   warn "No source files contain license headers"
-  warn "Minimum header:  // SPDX-License-Identifier: BUSL-1.1"
+  warn "Minimum header:  // Licensed under the Elastic License 2.0 (ELv2)"
   bump_warn
 elif [[ "$HEADERS_FOUND" -lt "$TS_FILES" ]]; then
   warn "$(( TS_FILES - HEADERS_FOUND )) source files missing license headers"
@@ -140,7 +140,7 @@ else
     echo "  $line"
   done
 
-  # Check for denied licenses (AGPL now denied under BSL-1.1)
+  # Check for denied licenses (AGPL denied under ELv2)
   DENIED_PATTERN="GPL-2.0-only|SSPL|AGPL|Commons Clause|Proprietary|Commercial|UNLICENSED"
   CLIENT_DENIED=$(cd "$CLIENT_DIR" && npx license-checker \
     --excludePrivatePackages --csv 2>/dev/null \
@@ -214,10 +214,10 @@ else
   warn "license-policy.json not found or node unavailable"
 fi
 
-info "BSL-1.1 requirements:"
+info "ELv2 requirements:"
 node -e "
   const p = require('$POLICY');
-  const r = p.bslRequirements || {};
+  const r = p.elv2Requirements || {};
   Object.entries(r).forEach(([k, v]) => {
     const status = v.status || '';
     const ok = status.toLowerCase().includes('missing') ||

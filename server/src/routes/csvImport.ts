@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import multer from 'multer';
 import ExcelJS from 'exceljs';
@@ -6,6 +11,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAiUsage } from '../lib/aiUsage';
 import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
+import { sendServerError } from '../lib/safeError';
 
 // ── Excel → CSV conversion ──────────────────────────────────────────────────
 
@@ -183,11 +189,17 @@ function buildFallbackColumnDetection(lines: string[], rawCsv: string): Omit<AiA
   const firstRow = splitCsvRow(nonEmpty[0], delimiter);
   const colCount = firstRow.length;
 
-  // Heuristic: if first row looks like headers (contains text, not numbers)
-  const looksLikeHeader = firstRow.some((c) => {
-    const lower = c.toLowerCase();
-    return lower.includes('account') || lower.includes('debit') || lower.includes('credit') || lower.includes('amount') || lower.includes('balance');
-  });
+  // Heuristic: the first row is a header if it contains column-label keywords
+  // AND doesn't look like data. Require at least one amount-column keyword
+  // (debit/credit/amount/balance) so that data rows with names like
+  // "Accounts Receivable" aren't mistaken for headers.
+  const LABEL_KEYWORDS = ['account', 'name', 'description', 'number', 'acct', 'no.'];
+  const AMOUNT_KEYWORDS = ['debit', 'credit', 'amount', 'balance', 'dr', 'cr'];
+  const hasLabelKeyword = firstRow.some((c) => LABEL_KEYWORDS.some((k) => c.toLowerCase().includes(k)));
+  const hasAmountKeyword = firstRow.some((c) => AMOUNT_KEYWORDS.some((k) => c.toLowerCase() === k || c.toLowerCase().includes(k)));
+  // A true header row should NOT contain numeric amounts in most cells
+  const numericCells = firstRow.filter((c) => /^[\s$(-]*\d[\d,.]*[)\s]*$/.test(c.trim())).length;
+  const looksLikeHeader = hasLabelKeyword && hasAmountKeyword && numericCells <= 1;
 
   let accountNumberCol: number | null = null;
   let accountNameCol: number | null = null;
@@ -411,7 +423,7 @@ Rules:
           delimiter: parsed.delimiter,
           hasHeaders: parsed.hasHeaders,
           headerRow: parsed.headerRow,
-          dataStartRow: parsed.dataStartRow,
+          dataStartRow: parsed.hasHeaders ? Math.max(parsed.dataStartRow, 1) : 0,
           amountFormat: parsed.amountFormat,
           columns: parsed.columns,
           rowsToSkip: parsed.rowsToSkip ?? [],
@@ -497,8 +509,7 @@ Rules:
         error: null,
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+      sendServerError(res, err, 'csv-import');
     }
   }
 );
@@ -606,8 +617,7 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Use the EXACT csv
 
     res.json({ data: { suggestions }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'csv-import');
   }
 });
 
@@ -690,8 +700,7 @@ If the user requests corrections to the column mapping, account matching, or row
     }
     res.json({ data: parsed, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'csv-import');
   }
 });
 
@@ -881,7 +890,6 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'csv-import');
   }
 });

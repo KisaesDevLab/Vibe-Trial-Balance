@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { useState } from 'react';
 import { evalAndFormatAmount } from '../utils/evalAmountExpr';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -11,6 +16,7 @@ import {
 } from '../api/journalEntries';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { useUIStore } from '../store/uiStore';
+import { listPeriods } from '../api/periods';
 import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 import { DateInput } from '../components/DateInput';
 
@@ -59,6 +65,7 @@ function JEForm({
   initialDate,
   initialDescription,
   initialLines,
+  periodEndDate,
 }: {
   periodId: number;
   clientId: number;
@@ -70,9 +77,10 @@ function JEForm({
   initialDate?: string;
   initialDescription?: string;
   initialLines?: JEFormLine[];
+  periodEndDate?: string;
 }) {
   const [entryType, setEntryType] = useState<'book' | 'tax'>(initialType ?? 'book');
-  const [entryDate, setEntryDate] = useState(initialDate ?? new Date().toISOString().slice(0, 10));
+  const [entryDate, setEntryDate] = useState(initialDate ?? periodEndDate ?? new Date().toISOString().slice(0, 10));
   const [description, setDescription] = useState(initialDescription ?? '');
   const [lines, setLines] = useState<JEFormLine[]>(
     initialLines ?? [
@@ -401,6 +409,13 @@ export function JournalEntriesPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<'all' | 'book' | 'tax' | 'trans'>('all');
 
+  const { data: periodsData } = useQuery({
+    queryKey: ['periods', selectedClientId],
+    queryFn: () => listPeriods(selectedClientId!),
+    enabled: !!selectedClientId,
+  });
+  const currentPeriod = periodsData?.data?.find((p) => p.id === selectedPeriodId);
+
   const queryKey = ['journal-entries', selectedPeriodId, typeFilter];
 
   const { data, isLoading, error } = useQuery({
@@ -562,6 +577,7 @@ export function JournalEntriesPage() {
             onCancel={() => setShowAdd(false)}
             saving={createMutation.isPending}
             error={formError}
+            periodEndDate={currentPeriod?.end_date?.slice(0, 10)}
           />
         </Modal>
       )}

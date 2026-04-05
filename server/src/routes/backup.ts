@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 /**
  * Phase 17: Backup & Restore System
  *
@@ -23,6 +28,7 @@ import cron from 'node-cron';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import type { Knex } from 'knex';
+import { sendServerError } from '../lib/safeError';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Directories
@@ -630,8 +636,7 @@ backupRouter.post('/full', async (req: AuthRequest, res: Response): Promise<void
     const record = await createBackup('full', { triggerType: 'manual' }, req.user!.userId);
     res.json({ data: record, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'BACKUP_ERROR', message } });
+    sendServerError(res, err, 'backup');
   }
 });
 
@@ -642,8 +647,7 @@ backupRouter.post('/settings', async (req: AuthRequest, res: Response): Promise<
     const record = await createBackup('settings', { triggerType: 'manual' }, req.user!.userId);
     res.json({ data: record, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'BACKUP_ERROR', message } });
+    sendServerError(res, err, 'backup');
   }
 });
 
@@ -659,8 +663,7 @@ backupRouter.post('/client/:clientId', async (req: AuthRequest, res: Response): 
     const record = await createBackup('client', { clientId, triggerType: 'manual' }, req.user!.userId);
     res.json({ data: record, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'BACKUP_ERROR', message } });
+    sendServerError(res, err, 'backup');
   }
 });
 
@@ -676,8 +679,7 @@ backupRouter.post('/period/:periodId', async (req: AuthRequest, res: Response): 
     const record = await createBackup('period', { periodId, triggerType: 'manual' }, req.user!.userId);
     res.json({ data: record, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'BACKUP_ERROR', message } });
+    sendServerError(res, err, 'backup');
   }
 });
 
@@ -693,8 +695,7 @@ backupRouter.get('/history', async (req: AuthRequest, res: Response): Promise<vo
     const rows = await query;
     res.json({ data: rows, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'backup');
   }
 });
 
@@ -717,8 +718,7 @@ backupRouter.get('/:backupId/download', async (req: AuthRequest, res: Response):
     res.setHeader('Content-Type', 'application/zip');
     fs.createReadStream(filePath).pipe(res);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'backup');
   }
 });
 
@@ -739,8 +739,7 @@ backupRouter.delete('/:backupId', async (req: AuthRequest, res: Response): Promi
     await db('backup_history').where('id', backupId).delete();
     res.json({ data: { deleted: true }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'backup');
   }
 });
 
@@ -786,8 +785,7 @@ restoreRouter.post(
         error: null,
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ data: null, error: { code: 'UPLOAD_ERROR', message } });
+      sendServerError(res, err, 'backup');
     }
   },
 );
@@ -827,7 +825,34 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
       return;
     }
 
+    // Verify checksum for known backups (backupId path)
+    if (backupRecord?.checksum) {
+      const fileBuffer = fs.readFileSync(filePath);
+      const actual = 'sha256:' + crypto.createHash('sha256').update(fileBuffer).digest('hex');
+      if (actual !== backupRecord.checksum) {
+        res.status(400).json({
+          data: null,
+          error: { code: 'CHECKSUM_MISMATCH', message: 'Backup file integrity check failed. The file may have been modified or corrupted.' },
+        });
+        return;
+      }
+    }
+
     const tables = await readZipContents(filePath);
+
+    // Validate essential data structure
+    if (tables.clients && !Array.isArray(tables.clients)) {
+      res.status(400).json({ data: null, error: { code: 'INVALID_BACKUP', message: 'Invalid backup data: clients must be an array.' } });
+      return;
+    }
+    if (tables.periods && !Array.isArray(tables.periods)) {
+      res.status(400).json({ data: null, error: { code: 'INVALID_BACKUP', message: 'Invalid backup data: periods must be an array.' } });
+      return;
+    }
+    if (tables.app_users && !Array.isArray(tables.app_users)) {
+      res.status(400).json({ data: null, error: { code: 'INVALID_BACKUP', message: 'Invalid backup data: app_users must be an array.' } });
+      return;
+    }
     let newClientId: number | null = null;
     let idMappings: Record<string, Record<number, number>> = {};
 
@@ -877,18 +902,18 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
+    const internal = err instanceof Error ? err.message : 'Unknown error';
     // Log failure
     try {
       await db('restore_history').insert({
         backup_id: null,
         restore_mode: (req.body as { mode?: string }).mode ?? 'unknown',
         status: 'failed',
-        error_message: message,
+        error_message: internal,
         restored_by: (req as AuthRequest).user?.userId ?? null,
       });
     } catch (_e) { /* ignore */ }
-    res.status(500).json({ data: null, error: { code: 'RESTORE_ERROR', message } });
+    sendServerError(res, err, 'backup');
   }
 });
 
@@ -899,8 +924,7 @@ restoreRouter.get('/history', async (req: AuthRequest, res: Response): Promise<v
     const rows = await db('restore_history').select('*').orderBy('restored_at', 'desc').limit(100);
     res.json({ data: rows, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'backup');
   }
 });
 

@@ -1,8 +1,14 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
+import { sendServerError } from '../lib/safeError';
 
 // Mounted at /api/v1/clients/:clientId/chart-of-accounts
 export const coaCollectionRouter = Router({ mergeParams: true });
@@ -52,8 +58,7 @@ coaCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<vo
       .orderBy('account_number', 'asc');
     res.json({ data: accounts, error: null, meta: { count: accounts.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa');
   }
 });
 
@@ -124,15 +129,15 @@ coaCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<v
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', entityId: account.id, action: 'create', description: `Created account ${account.account_number} — ${account.account_name}` });
     res.status(201).json({ data: account, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    if (message.includes('unique') || message.includes('duplicate')) {
+    const internal = err instanceof Error ? err.message : '';
+    if (internal.includes('unique') || internal.includes('duplicate')) {
       res.status(409).json({
         data: null,
         error: { code: 'DUPLICATE', message: 'Account number already exists for this client' },
       });
       return;
     }
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa');
   }
 });
 
@@ -206,8 +211,7 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', action: 'import', description: `COA import — ${inserted} created, ${updated} updated (${rows.length} total)` });
     res.json({ data: { inserted, updated, total: rows.length }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa');
   }
 });
 
@@ -283,8 +287,7 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
 
     res.json({ data: { inserted, updated, skipped, total: sourceAccounts.length }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa');
   }
 });
 
@@ -308,8 +311,7 @@ coaItemRouter.get('/:id', async (req: AuthRequest, res: Response): Promise<void>
     }
     res.json({ data: account, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa');
   }
 });
 
@@ -385,8 +387,7 @@ coaItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<voi
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', entityId: id, action: 'update', description: `Updated account ${updated.account_number} — ${Object.keys(updates).join(', ')}` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa');
   }
 });
 
@@ -430,7 +431,6 @@ coaItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<vo
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', entityId: id, action: 'delete', description: `Deactivated account #${id}` });
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'coa');
   }
 });

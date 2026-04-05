@@ -1,9 +1,15 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAiUsage } from '../lib/aiUsage';
 import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonArray } from '../lib/aiJsonExtract';
+import { sendServerError } from '../lib/safeError';
 
 export const diagnosticsRouter = Router({ mergeParams: true });
 diagnosticsRouter.use(authMiddleware);
@@ -123,7 +129,6 @@ Return 5-15 observations. Be specific and actionable.`;
 
     res.json({ data: { observations, periodId }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'diagnostics');
   }
 });

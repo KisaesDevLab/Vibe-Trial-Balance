@@ -1,6 +1,12 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response, NextFunction } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const auditLogRouter = Router();
 auditLogRouter.use(authMiddleware);
@@ -67,7 +73,6 @@ auditLogRouter.get('/', adminOnly, async (req: AuthRequest, res: Response): Prom
       meta: { total: Number(count), page, limit },
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'audit-log');
   }
 });

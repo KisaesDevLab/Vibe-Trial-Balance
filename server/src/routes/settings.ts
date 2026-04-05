@@ -1,11 +1,20 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { randomBytes } from 'crypto';
+import bcrypt from 'bcrypt';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import OpenAI from 'openai';
 import { getLLMProvider, DEFAULT_FAST_MODEL, DEFAULT_PRIMARY_MODEL, loadLLMSettings, buildProviderFromSettings } from '../lib/aiClient';
 import { extractJsonObject } from '../lib/aiJsonExtract';
+import { sendServerError } from '../lib/safeError';
+import { encrypt, decrypt, isEncrypted } from '../lib/encryption';
+import { loadOcrSettings, testOcrConnection } from '../lib/ocrProvider';
 
 export const settingsRouter = Router();
 settingsRouter.use(authMiddleware);
@@ -24,16 +33,19 @@ settingsRouter.get('/', async (_req: AuthRequest, res: Response): Promise<void> 
     };
     for (const row of rows) {
       if (row.key === 'claude_api_key') {
+        let rawVal = row.value as string;
+        if (rawVal && isEncrypted(rawVal)) {
+          try { rawVal = decrypt(rawVal); } catch { /* legacy plaintext */ }
+        }
         result.claude_api_key = {
-          masked: row.value ? maskKey(row.value as string) : null,
+          masked: rawVal ? maskKey(rawVal) : null,
           updated_at: row.updated_at,
         };
       }
     }
     res.json({ data: result, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -53,15 +65,15 @@ settingsRouter.put('/', async (req: AuthRequest, res: Response): Promise<void> =
   }
   try {
     if (result.data.claudeApiKey !== undefined) {
+      const encryptedKey = encrypt(result.data.claudeApiKey);
       await db('settings')
-        .insert({ key: 'claude_api_key', value: result.data.claudeApiKey, updated_at: db.fn.now() })
+        .insert({ key: 'claude_api_key', value: encryptedKey, updated_at: db.fn.now() })
         .onConflict('key')
-        .merge({ value: result.data.claudeApiKey, updated_at: db.fn.now() });
+        .merge({ value: encryptedKey, updated_at: db.fn.now() });
     }
     res.json({ data: { saved: true }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -75,8 +87,7 @@ settingsRouter.delete('/claude-api-key', async (req: AuthRequest, res: Response)
     await db('settings').where({ key: 'claude_api_key' }).delete();
     res.json({ data: { deleted: true }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -91,14 +102,13 @@ settingsRouter.get('/mcp-token', async (_req: AuthRequest, res: Response): Promi
     res.json({
       data: {
         configured: true,
-        masked: maskKey(row.value as string),
+        masked: '••••••••' + ' (hashed)', // Token is hashed — original value not recoverable
         updated_at: row.updated_at,
       },
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -110,20 +120,20 @@ settingsRouter.post('/mcp-token/generate', async (req: AuthRequest, res: Respons
   }
   try {
     const token = randomBytes(32).toString('hex');
+    const tokenHash = await bcrypt.hash(token, 12);
     await db('settings')
-      .insert({ key: 'mcp_token', value: token, updated_at: db.fn.now() })
+      .insert({ key: 'mcp_token', value: tokenHash, updated_at: db.fn.now() })
       .onConflict('key')
-      .merge({ value: token, updated_at: db.fn.now() });
+      .merge({ value: tokenHash, updated_at: db.fn.now() });
     res.json({
       data: {
-        token, // Full token returned ONCE on generation
+        token, // Full token returned ONCE on generation — only the hash is stored
         masked: maskKey(token),
       },
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -137,8 +147,7 @@ settingsRouter.delete('/mcp-token', async (req: AuthRequest, res: Response): Pro
     await db('settings').where({ key: 'mcp_token' }).delete();
     res.json({ data: { revoked: true }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -149,8 +158,7 @@ settingsRouter.get('/ai-pricing', async (_req: AuthRequest, res: Response): Prom
     const pricing = row?.value ? JSON.parse(row.value as string) : {};
     res.json({ data: pricing, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -176,8 +184,7 @@ settingsRouter.put('/ai-pricing', async (req: AuthRequest, res: Response): Promi
       .merge({ value: JSON.stringify(result.data), updated_at: db.fn.now() });
     res.json({ data: { saved: true }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -208,8 +215,7 @@ Fill in the actual USD prices per million tokens from your most current knowledg
     }
     res.json({ data: pricing, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -231,8 +237,7 @@ settingsRouter.get('/ai-usage', async (_req: AuthRequest, res: Response): Promis
 
     res.json({ data: summary, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -283,8 +288,7 @@ settingsRouter.get('/ai-usage/detail', async (req: AuthRequest, res: Response): 
 
     res.json({ data: rows, error: null, meta: { total: Number(count), page, limit } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -328,8 +332,7 @@ settingsRouter.get('/ai-models', async (_req: AuthRequest, res: Response): Promi
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -370,8 +373,7 @@ settingsRouter.put('/ai-models', async (req: AuthRequest, res: Response): Promis
     await Promise.all(ops);
     res.json({ data: { saved: true }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -387,8 +389,7 @@ settingsRouter.get('/ai-models/available', async (req: AuthRequest, res: Respons
     const models = await provider.listModels();
     res.json({ data: models, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -416,8 +417,7 @@ settingsRouter.post('/provider-models', async (req: AuthRequest, res: Response):
     models.sort((a, b) => a.id.localeCompare(b.id));
     res.json({ data: models, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(400).json({ data: null, error: { code: 'PROVIDER_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -442,8 +442,7 @@ settingsRouter.post('/openai-models', async (req: AuthRequest, res: Response): P
       .map((m) => ({ id: m.id, displayName: m.id }));
     res.json({ data: models, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(400).json({ data: null, error: { code: 'OPENAI_ERROR', message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -462,12 +461,21 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
     'llm.openai_compat_vision_override',
     'llm.vision_provider', 'llm.vision_model',
     'llm.timeout_ms',
+    'llm.ocr_enabled', 'llm.ocr_base_url', 'llm.ocr_model', 'llm.ocr_timeout_ms',
     'ai.max_tokens_default', 'ai.max_tokens_bank_statement', 'ai.chunk_char_limit',
   ];
   try {
+    const ENCRYPTED_SETTING_KEYS = new Set(['llm.openai_api_key', 'llm.openai_compat_api_key']);
     const rows = await db('settings').whereIn('key', LLM_KEYS).select('key', 'value');
     const s: Record<string, string> = {};
-    for (const r of rows) s[r.key as string] = r.value as string;
+    for (const r of rows) {
+      const key = r.key as string;
+      let val = r.value as string;
+      if (ENCRYPTED_SETTING_KEYS.has(key) && val && isEncrypted(val)) {
+        try { val = decrypt(val); } catch { /* legacy plaintext */ }
+      }
+      s[key] = val;
+    }
     res.json({
       data: {
         provider:                    s['llm.provider']                        || 'claude',
@@ -486,6 +494,10 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
         visionProvider:              s['llm.vision_provider']                 || '',
         visionModel:                 s['llm.vision_model']                   || '',
         timeoutMs:                   Number(s['llm.timeout_ms'])              || 120000,
+        ocrEnabled:                  s['llm.ocr_enabled'] === 'true',
+        ocrBaseUrl:                  s['llm.ocr_base_url']                   || '',
+        ocrModel:                    s['llm.ocr_model']                      || 'glm-ocr',
+        ocrTimeoutMs:                Number(s['llm.ocr_timeout_ms'])         || 120000,
         maxTokensDefault:            Number(s['ai.max_tokens_default'])       || 4096,
         maxTokensBankStatement:      Number(s['ai.max_tokens_bank_statement'])|| 32768,
         chunkCharLimit:              Number(s['ai.chunk_char_limit'])         || 30000,
@@ -493,7 +505,7 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
       error: null,
     });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'settings');
   }
 });
 
@@ -521,6 +533,16 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     visionProvider:             z.enum(['', 'claude', 'ollama', 'openai', 'openai-compat']).optional(),
     visionModel:                z.string().max(200).optional(),
     timeoutMs:                  z.number().int().min(1000).max(600000).optional(),
+    ocrEnabled:                 z.boolean().optional(),
+    ocrBaseUrl:                 z.string().max(500).refine(
+      (v) => !v || /^https?:\/\/.+/.test(v),
+      { message: 'OCR Base URL must be a valid HTTP or HTTPS URL' },
+    ).optional(),
+    ocrModel:                   z.string().max(200).regex(
+      /^[a-zA-Z0-9._:/-]*$/,
+      { message: 'OCR Model name contains invalid characters' },
+    ).optional(),
+    ocrTimeoutMs:               z.number().int().min(5000).max(600000).optional(),
     maxTokensDefault:           z.number().int().min(512).max(200000).optional(),
     maxTokensBankStatement:     z.number().int().min(1024).max(200000).optional(),
     chunkCharLimit:             z.number().int().min(5000).max(200000).optional(),
@@ -586,23 +608,41 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     }
   }
 
+  // OCR validation: if enabling OCR, require a base URL
+  if (d.ocrEnabled === true) {
+    const currentOcrRows = await db('settings')
+      .whereIn('key', ['llm.ocr_base_url'])
+      .select('key', 'value');
+    const curOcr: Record<string, string> = {};
+    for (const r of currentOcrRows) curOcr[r.key as string] = r.value as string;
+    const effectiveOcrUrl = d.ocrBaseUrl ?? curOcr['llm.ocr_base_url'] ?? '';
+    if (!effectiveOcrUrl) {
+      res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'OCR Base URL is required when enabling OCR pre-processing.' } });
+      return;
+    }
+  }
+
   const keyMap: Record<string, string | number | undefined> = {
     'llm.provider':                      d.provider,
     'llm.ollama_base_url':               d.ollamaBaseUrl,
     'llm.ollama_vision_model':           d.ollamaVisionModel,
     'llm.ollama_reasoning_model':        d.ollamaReasoningModel,
     'llm.ollama_vision_override':        d.ollamaVisionOverride,
-    'llm.openai_api_key':               d.openaiApiKey,
+    'llm.openai_api_key':               d.openaiApiKey ? encrypt(d.openaiApiKey) : d.openaiApiKey,
     'llm.openai_primary_model':         d.openaiPrimaryModel,
     'llm.openai_fast_model':            d.openaiFastModel,
     'llm.openai_compat_base_url':        d.openaiCompatBaseUrl,
-    'llm.openai_compat_api_key':         d.openaiCompatApiKey,
+    'llm.openai_compat_api_key':         d.openaiCompatApiKey ? encrypt(d.openaiCompatApiKey) : d.openaiCompatApiKey,
     'llm.openai_compat_model':           d.openaiCompatModel,
     'llm.openai_compat_fast_model':      d.openaiCompatFastModel,
     'llm.openai_compat_vision_override': d.openaiCompatVisionOverride,
     'llm.vision_provider':               d.visionProvider,
     'llm.vision_model':                  d.visionModel,
     'llm.timeout_ms':                    d.timeoutMs !== undefined ? String(d.timeoutMs) : undefined,
+    'llm.ocr_enabled':                   d.ocrEnabled !== undefined ? String(d.ocrEnabled) : undefined,
+    'llm.ocr_base_url':                  d.ocrBaseUrl,
+    'llm.ocr_model':                     d.ocrModel,
+    'llm.ocr_timeout_ms':               d.ocrTimeoutMs !== undefined ? String(d.ocrTimeoutMs) : undefined,
     'ai.max_tokens_default':             d.maxTokensDefault !== undefined ? String(d.maxTokensDefault) : undefined,
     'ai.max_tokens_bank_statement':      d.maxTokensBankStatement !== undefined ? String(d.maxTokensBankStatement) : undefined,
     'ai.chunk_char_limit':               d.chunkCharLimit !== undefined ? String(d.chunkCharLimit) : undefined,
@@ -619,6 +659,46 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     await Promise.all(ops);
     res.json({ data: { saved: true }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'llm-provider');
+  }
+});
+
+// GET /api/v1/settings/ocr-status (all authenticated users)
+settingsRouter.get('/ocr-status', async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const ocrSettings = await loadOcrSettings();
+    res.json({
+      data: {
+        configured: ocrSettings.enabled && !!ocrSettings.baseUrl,
+        model: ocrSettings.model,
+      },
+      error: null,
+    });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'ocr-status');
+  }
+});
+
+// POST /api/v1/settings/test-ocr (admin only)
+settingsRouter.post('/test-ocr', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  try {
+    const ocrSettings = await loadOcrSettings();
+    if (!ocrSettings.baseUrl) {
+      res.status(400).json({ data: null, error: { code: 'NOT_CONFIGURED', message: 'OCR base URL is not configured.' } });
+      return;
+    }
+    await testOcrConnection(ocrSettings);
+    res.json({ data: { valid: true, model: ocrSettings.model }, error: null });
+  } catch (err: unknown) {
+    // Log full error server-side; return sanitized message to admin client
+    const raw = err instanceof Error ? err.message : 'OCR connection test failed';
+    console.error('[test-ocr]', raw);
+    // Keep useful info (status codes, "model not found") but strip raw response bodies
+    const message = raw.length > 120 ? raw.slice(0, 120) + '…' : raw;
+    res.status(500).json({ data: null, error: { code: 'OCR_TEST_FAILED', message } });
   }
 });

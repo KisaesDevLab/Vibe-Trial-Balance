@@ -1,6 +1,12 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const dashboardRouter = Router({ mergeParams: true });
 dashboardRouter.use(authMiddleware);
@@ -103,8 +109,7 @@ dashboardRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> 
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'dashboard');
   }
 });
 
@@ -133,7 +138,6 @@ dashboardRouter.get('/audit-log', async (req: AuthRequest, res: Response): Promi
     const [{ count }] = await db('audit_log').where({ period_id: periodId }).count('* as count');
     res.json({ data: rows, error: null, meta: { total: Number(count), limit, offset } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'dashboard');
   }
 });

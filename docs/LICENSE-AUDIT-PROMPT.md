@@ -11,9 +11,8 @@ accepting external contributions, or after adding multiple dependencies.
 You are performing a comprehensive license compliance audit of
 **vibe-tb** — a self-hosted accounting/tax-workpaper application
 served over a network (Raspberry Pi 5, Nginx). The project license is
-**BSL-1.1** (Business Source License 1.1), converting to **Apache-2.0** on
-**2030-03-30**. Work through all 10 sections below. For each section,
-report findings with severity (CRITICAL / HIGH / MEDIUM / LOW / PASS).
+**Elastic License 2.0** (ELv2). Work through all 10 sections below. For each
+section, report findings with severity (CRITICAL / HIGH / MEDIUM / LOW / PASS).
 
 Reference file: `scripts/license-policy.json` — the authoritative policy.
 
@@ -22,12 +21,12 @@ Reference file: `scripts/license-policy.json` — the authoritative policy.
 ### Section 1 — LICENSE File
 
 1. Check whether `LICENSE` exists in the project root.
-2. Confirm it contains the full BSL-1.1 text with correct parameters
-   (Licensor, Licensed Work, Additional Use Grant, Change Date, Change License).
-3. Confirm the copyright year and holder are correct (Kisaes LLC).
+2. Confirm it contains the full Elastic License 2.0 text with correct details
+   (Licensor: Kisaes LLC, Software: Vibe Trial Balance).
+3. Confirm the `NOTICE` file exists with correct copyright and attribution.
 
-**Expected result:** `LICENSE` exists, contains full BSL-1.1 text with all
-parameters filled in correctly.
+**Expected result:** `LICENSE` exists, contains full ELv2 text with correct
+licensor and software identification.
 
 ---
 
@@ -37,21 +36,22 @@ parameters filled in correctly.
 2. For each file, check for a license header comment at the top.
    Minimum acceptable header:
    ```
-   // SPDX-License-Identifier: BUSL-1.1
-   // Copyright (C) <YEAR> Kisaes LLC
+   // Copyright 2025-2026 Kisaes LLC
+   // Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+   // except in compliance with the Elastic License 2.0.
+   // See LICENSE file in the project root for full license text.
    ```
 3. List any files missing headers.
 4. Note: generated files (e.g. Vite build output, migration auto-generators)
    are exempt.
 
-**Expected result:** All hand-written source files have SPDX headers.
+**Expected result:** All hand-written source files have ELv2 headers.
 
 ---
 
 ### Section 3 — Source Code Visibility
 
-BSL-1.1 requires conspicuous display of the License on each copy of the
-Licensed Work.
+ELv2 requires that licensing notices not be removed or obscured.
 
 1. Search `client/src/` for any UI component, page, or footer that links to
    the source code repository (GitHub, etc.).
@@ -95,7 +95,7 @@ application UI footer. The LICENSE file is included in distribution.
      a newer version of the chain resolves this.
 
    **BlueOak-1.0.0** (jackspeak, minipass, sax, path-scurry, package-json-from-dist):
-   - BlueOak-1.0.0 is a permissive license compatible with BSL-1.1. Classify
+   - BlueOak-1.0.0 is a permissive license compatible with ELv2. Classify
      as PASS after confirming the text matches the BlueOak 1.0.0 standard.
 
    **MIT\*** (chainsaw, traverse, png-js):
@@ -134,8 +134,8 @@ carry significantly lower compliance risk.
 
 ### Section 8 — Copyleft Dependency Check
 
-BSL-1.1 is a source-available license, not copyleft. Verify that no dependency
-carries copyleft obligations that would conflict with BSL-1.1 distribution:
+ELv2 is a source-available license, not copyleft. Verify that no dependency
+carries copyleft obligations that would conflict with ELv2 distribution:
 
 - AGPL-3.0 dependencies are NOT compatible (would require releasing under AGPL).
 - GPL-2.0-only is NOT compatible.
@@ -158,7 +158,7 @@ This application integrates three AI providers. Verify:
 3. `@modelcontextprotocol/sdk` — confirm MIT or Apache-2.0
 
 These packages process sensitive financial data. Confirm their licenses permit
-use in a BSL-1.1 licensed application without additional terms.
+use in an ELv2 licensed application without additional terms.
 
 ---
 
@@ -170,7 +170,7 @@ Produce a structured compliance report with the following format:
 ## License Audit Report — vibe-tb
 Date: <today>
 Auditor: Claude Code
-Project License: BSL-1.1 (converts to Apache-2.0 on 2030-03-30)
+Project License: Elastic License 2.0 (ELv2)
 
 ### CRITICAL Issues (must fix before any distribution)
 [list]

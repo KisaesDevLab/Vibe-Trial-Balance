@@ -1,0 +1,1620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vibe Trial Balance — Setup, Installation &amp; Usage Guide</title>
+  <style>
+    :root {
+      --color-bg: #ffffff;
+      --color-surface: #f8fafc;
+      --color-border: #e2e8f0;
+      --color-text: #1e293b;
+      --color-text-muted: #64748b;
+      --color-primary: #2563eb;
+      --color-primary-light: #eff6ff;
+      --color-accent: #059669;
+      --color-accent-light: #ecfdf5;
+      --color-warning: #d97706;
+      --color-warning-light: #fffbeb;
+      --color-danger: #dc2626;
+      --color-danger-light: #fef2f2;
+      --color-code-bg: #f1f5f9;
+      --color-code-border: #cbd5e1;
+      --color-sidebar-bg: #f8fafc;
+      --color-sidebar-hover: #e2e8f0;
+      --sidebar-width: 280px;
+      --header-height: 64px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: calc(var(--header-height) + 24px);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.7;
+      color: var(--color-text);
+      background: var(--color-bg);
+    }
+
+    /* Header */
+    .header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: var(--header-height);
+      background: var(--color-bg);
+      border-bottom: 1px solid var(--color-border);
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      z-index: 100;
+    }
+
+    .header-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--color-text);
+    }
+
+    .header-title span {
+      color: var(--color-primary);
+    }
+
+    .header-subtitle {
+      margin-left: 16px;
+      font-size: 0.875rem;
+      color: var(--color-text-muted);
+    }
+
+    .header-toggle {
+      display: none;
+      background: none;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 1.25rem;
+      margin-right: 12px;
+      color: var(--color-text);
+    }
+
+    /* Sidebar */
+    .sidebar {
+      position: fixed;
+      top: var(--header-height);
+      left: 0;
+      width: var(--sidebar-width);
+      height: calc(100vh - var(--header-height));
+      overflow-y: auto;
+      background: var(--color-sidebar-bg);
+      border-right: 1px solid var(--color-border);
+      padding: 16px 0;
+      z-index: 90;
+    }
+
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.3);
+      z-index: 89;
+    }
+
+    .sidebar nav {
+      padding: 0 12px;
+    }
+
+    .sidebar .nav-section {
+      margin-bottom: 4px;
+    }
+
+    .sidebar .nav-link {
+      display: block;
+      padding: 6px 12px;
+      color: var(--color-text-muted);
+      text-decoration: none;
+      font-size: 0.875rem;
+      border-radius: 6px;
+      transition: all 0.15s;
+    }
+
+    .sidebar .nav-link:hover {
+      background: var(--color-sidebar-hover);
+      color: var(--color-text);
+    }
+
+    .sidebar .nav-link.active {
+      background: var(--color-primary-light);
+      color: var(--color-primary);
+      font-weight: 600;
+    }
+
+    .sidebar .nav-link.section-link {
+      font-weight: 600;
+      color: var(--color-text);
+      font-size: 0.9rem;
+      padding: 8px 12px;
+      margin-top: 8px;
+    }
+
+    .sidebar .nav-link.section-link:first-child {
+      margin-top: 0;
+    }
+
+    .sidebar .nav-link.sub-link {
+      padding-left: 28px;
+      font-size: 0.8125rem;
+    }
+
+    /* Main content */
+    .main {
+      margin-left: var(--sidebar-width);
+      margin-top: var(--header-height);
+      max-width: 900px;
+      padding: 40px 48px 80px;
+    }
+
+    /* Typography */
+    h1 {
+      font-size: 2.25rem;
+      font-weight: 800;
+      margin-bottom: 12px;
+      letter-spacing: -0.02em;
+      color: var(--color-text);
+    }
+
+    h1 + .lead {
+      font-size: 1.125rem;
+      color: var(--color-text-muted);
+      margin-bottom: 40px;
+      line-height: 1.8;
+    }
+
+    h2 {
+      font-size: 1.625rem;
+      font-weight: 700;
+      margin-top: 56px;
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid var(--color-border);
+      letter-spacing: -0.01em;
+    }
+
+    h3 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-top: 36px;
+      margin-bottom: 12px;
+    }
+
+    h4 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin-top: 28px;
+      margin-bottom: 10px;
+    }
+
+    p {
+      margin-bottom: 16px;
+    }
+
+    a {
+      color: var(--color-primary);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    strong {
+      font-weight: 600;
+    }
+
+    /* Lists */
+    ul, ol {
+      margin-bottom: 16px;
+      padding-left: 24px;
+    }
+
+    li {
+      margin-bottom: 6px;
+    }
+
+    li > ul, li > ol {
+      margin-top: 6px;
+      margin-bottom: 0;
+    }
+
+    /* Code */
+    code {
+      font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+      font-size: 0.875em;
+      background: var(--color-code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--color-code-border);
+    }
+
+    pre {
+      margin-bottom: 20px;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      overflow-x: auto;
+      position: relative;
+    }
+
+    pre code {
+      display: block;
+      padding: 16px 20px;
+      font-size: 0.8125rem;
+      line-height: 1.7;
+      background: none;
+      border: none;
+      color: inherit;
+    }
+
+    .code-label {
+      display: inline-block;
+      background: #1e293b;
+      color: #94a3b8;
+      font-size: 0.7rem;
+      font-family: inherit;
+      padding: 4px 12px;
+      border-radius: 0 0 6px 6px;
+      margin-left: 16px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* Tables */
+    .table-wrap {
+      overflow-x: auto;
+      margin-bottom: 20px;
+      border-radius: 8px;
+      border: 1px solid var(--color-border);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+
+    thead {
+      background: var(--color-surface);
+    }
+
+    th {
+      text-align: left;
+      padding: 10px 16px;
+      font-weight: 600;
+      border-bottom: 2px solid var(--color-border);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--color-border);
+      vertical-align: top;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tbody tr:hover {
+      background: var(--color-surface);
+    }
+
+    /* Callout boxes */
+    .callout {
+      padding: 16px 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      border-left: 4px solid;
+      font-size: 0.9375rem;
+    }
+
+    .callout-warning {
+      background: var(--color-warning-light);
+      border-color: var(--color-warning);
+    }
+
+    .callout-danger {
+      background: var(--color-danger-light);
+      border-color: var(--color-danger);
+    }
+
+    .callout-info {
+      background: var(--color-primary-light);
+      border-color: var(--color-primary);
+    }
+
+    .callout-success {
+      background: var(--color-accent-light);
+      border-color: var(--color-accent);
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    /* Checklist */
+    .checklist {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .checklist li {
+      padding: 8px 0 8px 32px;
+      position: relative;
+      border-bottom: 1px solid var(--color-border);
+    }
+
+    .checklist li:last-child {
+      border-bottom: none;
+    }
+
+    .checklist li::before {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 12px;
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--color-border);
+      border-radius: 3px;
+    }
+
+    /* Steps */
+    .step {
+      counter-increment: step-counter;
+      position: relative;
+      padding-left: 48px;
+      margin-bottom: 28px;
+    }
+
+    .step::before {
+      content: counter(step-counter);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 32px;
+      height: 32px;
+      background: var(--color-primary);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.875rem;
+    }
+
+    .steps {
+      counter-reset: step-counter;
+    }
+
+    /* Badge/tag */
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .badge-required {
+      background: var(--color-danger-light);
+      color: var(--color-danger);
+    }
+
+    .badge-optional {
+      background: var(--color-accent-light);
+      color: var(--color-accent);
+    }
+
+    .badge-recommended {
+      background: var(--color-primary-light);
+      color: var(--color-primary);
+    }
+
+    /* Divider */
+    hr {
+      border: none;
+      border-top: 1px solid var(--color-border);
+      margin: 40px 0;
+    }
+
+    /* Back to top */
+    .back-to-top {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 40px;
+      height: 40px;
+      background: var(--color-primary);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 1.125rem;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      transition: opacity 0.2s;
+      z-index: 50;
+    }
+
+    .back-to-top.visible {
+      display: flex;
+    }
+
+    .back-to-top:hover {
+      opacity: 0.85;
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .sidebar {
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+      }
+
+      .sidebar.open {
+        transform: translateX(0);
+      }
+
+      .sidebar-overlay.open {
+        display: block;
+      }
+
+      .header-toggle {
+        display: block;
+      }
+
+      .main {
+        margin-left: 0;
+        padding: 32px 20px 80px;
+      }
+
+      .header-subtitle {
+        display: none;
+      }
+    }
+
+    @media print {
+      .sidebar, .header, .back-to-top, .header-toggle {
+        display: none !important;
+      }
+      .main {
+        margin-left: 0;
+        margin-top: 0;
+        max-width: 100%;
+        padding: 20px;
+      }
+      pre {
+        background: #f1f5f9 !important;
+        color: #1e293b !important;
+        border: 1px solid #ccc;
+      }
+      pre code {
+        color: #1e293b !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="header">
+    <button class="header-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">&#9776;</button>
+    <div class="header-title"><span>Vibe</span> Trial Balance</div>
+    <div class="header-subtitle">Setup, Installation &amp; Usage Guide</div>
+  </header>
+
+  <!-- Sidebar overlay (mobile) -->
+  <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <nav>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#overview">1. Overview</a>
+      </div>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#system-requirements">2. System Requirements</a>
+      </div>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#installation">3. Installation</a>
+        <a class="nav-link sub-link" href="#windows-dev">Windows Development</a>
+        <a class="nav-link sub-link" href="#raspberry-pi">Raspberry Pi</a>
+        <a class="nav-link sub-link" href="#docker">Docker</a>
+      </div>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#configuration">4. Configuration</a>
+        <a class="nav-link sub-link" href="#env-vars">Environment Variables</a>
+        <a class="nav-link sub-link" href="#ai-provider">AI Provider Setup</a>
+        <a class="nav-link sub-link" href="#mcp-integration">MCP Integration</a>
+      </div>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#first-run">5. First-Run Walkthrough</a>
+      </div>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#usage-guide">6. Usage Guide</a>
+        <a class="nav-link sub-link" href="#dashboard">Dashboard &amp; Navigation</a>
+        <a class="nav-link sub-link" href="#client-management">Client Management</a>
+        <a class="nav-link sub-link" href="#chart-of-accounts">Chart of Accounts</a>
+        <a class="nav-link sub-link" href="#periods">Periods</a>
+        <a class="nav-link sub-link" href="#trial-balance">Trial Balance</a>
+        <a class="nav-link sub-link" href="#journal-entries">Journal Entries</a>
+        <a class="nav-link sub-link" href="#bank-transactions">Bank Transactions</a>
+        <a class="nav-link sub-link" href="#bank-reconciliation">Bank Reconciliation</a>
+        <a class="nav-link sub-link" href="#tax-codes">Tax Codes &amp; Mapping</a>
+        <a class="nav-link sub-link" href="#financial-statements">Financial Statements</a>
+        <a class="nav-link sub-link" href="#reports-exports">Reports &amp; Exports</a>
+        <a class="nav-link sub-link" href="#multi-period">Multi-Period Comparison</a>
+        <a class="nav-link sub-link" href="#documents">Document Storage</a>
+        <a class="nav-link sub-link" href="#engagement">Engagement Management</a>
+        <a class="nav-link sub-link" href="#workpapers">Workpapers &amp; Tickmarks</a>
+        <a class="nav-link sub-link" href="#coa-templates">COA Templates</a>
+        <a class="nav-link sub-link" href="#transaction-entry">Transaction Entry</a>
+        <a class="nav-link sub-link" href="#custom-reports">Custom Report Builder</a>
+        <a class="nav-link sub-link" href="#ai-features">AI Features</a>
+        <a class="nav-link sub-link" href="#ai-support-chat">AI Support Chat</a>
+      </div>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#administration">7. Administration</a>
+        <a class="nav-link sub-link" href="#user-management">User Management</a>
+        <a class="nav-link sub-link" href="#settings">Settings</a>
+        <a class="nav-link sub-link" href="#backup-restore">Backup &amp; Restore</a>
+        <a class="nav-link sub-link" href="#audit-log">Audit Log</a>
+      </div>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#maintenance">8. Maintenance &amp; Updates</a>
+      </div>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#troubleshooting">9. Troubleshooting</a>
+      </div>
+      <div class="nav-section">
+        <a class="nav-link section-link" href="#security-checklist">10. Security Checklist</a>
+      </div>
+    </nav>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main">
+
+    <!-- 1. Overview -->
+    <h1 id="overview">Vibe Trial Balance</h1>
+    <p class="lead">A complete guide to installing, configuring, and using the Vibe Trial Balance application. Covers system requirements, three deployment methods (Windows development, Raspberry Pi, Docker), first-run configuration, and day-to-day usage.</p>
+
+    <p>Vibe Trial Balance is a self-hosted tax preparation and accounting workpaper application designed for small CPA firms. It manages trial balances, journal entries, bank transactions, tax code assignments, financial statements, and client engagements &mdash; with optional AI-powered diagnostics, classification, and PDF import.</p>
+
+    <h3>Tech Stack</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Layer</th><th>Technology</th></tr></thead>
+        <tbody>
+          <tr><td>Frontend</td><td>React 18, TypeScript, Vite, Tailwind CSS, TanStack Query/Table</td></tr>
+          <tr><td>Backend</td><td>Node.js 20, Express, TypeScript, Knex.js</td></tr>
+          <tr><td>Database</td><td>PostgreSQL 16</td></tr>
+          <tr><td>AI (optional)</td><td>Anthropic Claude, Ollama (self-hosted), or OpenAI-compatible</td></tr>
+          <tr><td>PDF Generation</td><td>pdfmake (server-side)</td></tr>
+          <tr><td>Hosting</td><td>Raspberry Pi 5, Docker, or any Linux/Windows server</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-info">
+      <strong>License: Elastic License 2.0 (ELv2)</strong>
+      Free for personal and internal firm use. See the LICENSE file for full text.
+    </div>
+
+    <hr>
+
+    <!-- 2. System Requirements -->
+    <h2 id="system-requirements">2. System Requirements</h2>
+
+    <h3>Minimum Hardware</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Deployment</th><th>CPU</th><th>RAM</th><th>Storage</th></tr></thead>
+        <tbody>
+          <tr><td>Development (Windows/Mac/Linux)</td><td>Any modern x64</td><td>8 GB</td><td>2 GB free</td></tr>
+          <tr><td>Production (Raspberry Pi)</td><td>Raspberry Pi 5</td><td>8 GB</td><td>32 GB SD + external SSD recommended</td></tr>
+          <tr><td>Production (Docker/VPS)</td><td>2 vCPU</td><td>4 GB</td><td>20 GB</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Software Prerequisites</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Software</th><th>Version</th><th>Purpose</th><th>Required?</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Node.js</strong></td><td>20+ (LTS)</td><td>Runtime for server and build tools</td><td><span class="badge badge-required">Required</span></td></tr>
+          <tr><td><strong>npm</strong></td><td>10+</td><td>Package manager (ships with Node.js)</td><td><span class="badge badge-required">Required</span></td></tr>
+          <tr><td><strong>PostgreSQL</strong></td><td>16</td><td>Database</td><td><span class="badge badge-required">Required</span></td></tr>
+          <tr><td><strong>Docker Desktop</strong></td><td>Latest</td><td>Runs PostgreSQL in development</td><td><span class="badge badge-recommended">Recommended</span></td></tr>
+          <tr><td><strong>Git</strong></td><td>2.40+</td><td>Source code management</td><td><span class="badge badge-required">Required</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Optional Software</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Software</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td>Ollama</td><td>Self-hosted AI (no cloud dependency)</td></tr>
+          <tr><td>poppler-utils</td><td>Scanned PDF import (vision-mode extraction)</td></tr>
+          <tr><td>Nginx</td><td>Reverse proxy (production deployments)</td></tr>
+          <tr><td>PM2</td><td>Process manager (Raspberry Pi production)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Network Requirements</h3>
+    <ul>
+      <li>Port <strong>5173</strong> &mdash; frontend dev server (development only)</li>
+      <li>Port <strong>3001</strong> &mdash; backend API server</li>
+      <li>Port <strong>5432</strong> &mdash; PostgreSQL</li>
+      <li>Port <strong>80/443</strong> &mdash; production web access (via Nginx or Docker)</li>
+      <li>Port <strong>5050</strong> &mdash; pgAdmin (development only, optional)</li>
+      <li>Outbound HTTPS to <code>api.anthropic.com</code> if using Claude AI features</li>
+    </ul>
+
+    <hr>
+
+    <!-- 3. Installation -->
+    <h2 id="installation">3. Installation</h2>
+
+    <!-- 3.1 Windows -->
+    <h3 id="windows-dev">3.1 Windows Development Setup</h3>
+
+    <h4>Option A: Automated Setup (Recommended)</h4>
+
+    <p>Open <strong>PowerShell as Administrator</strong> and run:</p>
+
+    <div class="code-label">PowerShell</div>
+    <pre><code>Set-ExecutionPolicy Bypass -Scope Process -Force</code></pre>
+
+    <p>If you haven't cloned the repository yet:</p>
+
+    <div class="code-label">PowerShell</div>
+    <pre><code>git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git
+cd Vibe-Trial-Balance</code></pre>
+
+    <p>Run the setup script:</p>
+
+    <div class="code-label">PowerShell</div>
+    <pre><code>.\setup.ps1</code></pre>
+
+    <p>This script will:</p>
+    <ul>
+      <li>Install Git, Node.js 20 LTS, and Docker Desktop (via winget, skipping any already installed)</li>
+      <li>Install all npm dependencies (root, server, client)</li>
+      <li>Start PostgreSQL via Docker Compose</li>
+      <li>Run all database migrations</li>
+      <li>Seed the database with the admin user and tax code reference data</li>
+    </ul>
+
+    <h4>Option B: Manual Setup</h4>
+
+    <div class="steps">
+      <div class="step">
+        <h4 style="margin-top:0">Install prerequisites</h4>
+        <ul>
+          <li><a href="https://nodejs.org/">Node.js 20 LTS</a> &mdash; verify with <code>node --version</code></li>
+          <li><a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a> &mdash; verify with <code>docker --version</code></li>
+          <li><a href="https://git-scm.com/">Git</a> &mdash; verify with <code>git --version</code></li>
+        </ul>
+      </div>
+
+      <div class="step">
+        <h4 style="margin-top:0">Clone the repository</h4>
+        <pre><code>git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git
+cd Vibe-Trial-Balance</code></pre>
+      </div>
+
+      <div class="step">
+        <h4 style="margin-top:0">Start the database</h4>
+        <pre><code>docker compose up -d</code></pre>
+        <p>This starts PostgreSQL 16 and pgAdmin. Wait 5&ndash;10 seconds for PostgreSQL to initialize.</p>
+      </div>
+
+      <div class="step">
+        <h4 style="margin-top:0">Install dependencies</h4>
+        <pre><code>npm install
+cd server &amp;&amp; npm install &amp;&amp; cd ..
+cd client &amp;&amp; npm install &amp;&amp; cd ..</code></pre>
+      </div>
+
+      <div class="step">
+        <h4 style="margin-top:0">Create the server environment file</h4>
+        <p>Create <code>server/.env</code> with:</p>
+        <div class="code-label">server/.env</div>
+        <pre><code>PORT=3001
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_NAME=vibe_tb_db
+DB_USER=vibetb
+DB_PASSWORD=localdev123
+JWT_SECRET=local-dev-secret-12345
+JWT_EXPIRY=8h
+ALLOWED_ORIGIN=http://localhost:5173</code></pre>
+      </div>
+
+      <div class="step">
+        <h4 style="margin-top:0">Run database migrations and seed</h4>
+        <pre><code>npm run migrate
+npm run seed</code></pre>
+      </div>
+
+      <div class="step">
+        <h4 style="margin-top:0">Start the application</h4>
+        <pre><code>npm run dev</code></pre>
+      </div>
+
+      <div class="step">
+        <h4 style="margin-top:0">Open the app</h4>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Service</th><th>URL</th><th>Credentials</th></tr></thead>
+            <tbody>
+              <tr><td>Frontend</td><td><code>http://localhost:5173</code></td><td>App login</td></tr>
+              <tr><td>API</td><td><code>http://localhost:3001</code></td><td>JWT auth</td></tr>
+              <tr><td>pgAdmin</td><td><code>http://localhost:5050</code></td><td><code>admin@local.dev</code> / <code>admin</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <h4>Daily Startup (Windows)</h4>
+    <p>After the initial setup, start the app each day with:</p>
+    <div class="code-label">PowerShell</div>
+    <pre><code>.\start.ps1</code></pre>
+
+    <p>Or manually:</p>
+    <pre><code>docker compose up -d      # Start PostgreSQL
+npm run dev               # Start frontend + backend</code></pre>
+
+    <h4>Linux / macOS One-Liner</h4>
+    <div class="code-label">Bash</div>
+    <pre><code>git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git &amp;&amp; cd Vibe-Trial-Balance &amp;&amp; bash setup.sh</code></pre>
+
+    <hr>
+
+    <!-- 3.2 Raspberry Pi -->
+    <h3 id="raspberry-pi">3.2 Raspberry Pi Production Setup</h3>
+
+    <p>Designed for Raspberry Pi 5 (8GB) with Raspberry Pi OS (64-bit). An external SSD is recommended for the database and file storage.</p>
+
+    <h4>Step 1: Clone and Run Initial Setup</h4>
+    <div class="code-label">Bash</div>
+    <pre><code>git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git /opt/vibe-tb
+cd /opt/vibe-tb
+chmod +x deploy/setup-pi.sh
+./deploy/setup-pi.sh</code></pre>
+
+    <p>This installs:</p>
+    <ul>
+      <li>Node.js 20 (from NodeSource)</li>
+      <li>PostgreSQL 16</li>
+      <li>Nginx</li>
+      <li>PM2 (global)</li>
+      <li>Creates application directories (<code>/opt/vibe-tb</code>, <code>/var/www/vibe-tb</code>, <code>/mnt/ssd/uploads</code>, <code>/mnt/ssd/backups</code>)</li>
+      <li>Creates the PostgreSQL user <code>vibetb</code> and database <code>vibe_tb_db</code></li>
+      <li>Configures Nginx as a reverse proxy</li>
+    </ul>
+
+    <h4>Step 2: Configure Environment</h4>
+    <div class="code-label">Bash</div>
+    <pre><code>cat &gt; /opt/vibe-tb/server/.env &lt;&lt; 'EOF'
+NODE_ENV=production
+PORT=3001
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_NAME=vibe_tb_db
+DB_USER=vibetb
+DB_PASSWORD=YOUR_STRONG_PASSWORD_HERE
+JWT_SECRET=YOUR_RANDOM_64_CHAR_SECRET_HERE
+ENCRYPTION_KEY=YOUR_SEPARATE_RANDOM_SECRET_HERE
+ALLOWED_ORIGIN=http://YOUR_PI_IP_OR_HOSTNAME
+EOF</code></pre>
+
+    <p>Set the matching PostgreSQL password:</p>
+    <pre><code>sudo -u postgres psql -c "ALTER USER vibetb WITH PASSWORD 'YOUR_STRONG_PASSWORD_HERE';"</code></pre>
+
+    <h4>Step 3: Deploy</h4>
+    <pre><code>chmod +x deploy/deploy.sh
+./deploy/deploy.sh</code></pre>
+    <p>This builds the TypeScript server, builds the React client, copies the frontend to Nginx's web root (<code>/var/www/vibe-tb/</code>), runs migrations, and starts PM2.</p>
+
+    <h4>Step 4: Verify</h4>
+    <pre><code>curl http://localhost:3001/api/v1/health    # {"status":"ok"}
+pm2 status                                   # "vibe-tb-server" should be online
+sudo nginx -t                                # Syntax check should pass</code></pre>
+
+    <p>Access the app at <code>http://YOUR_PI_IP</code> (port 80).</p>
+
+    <h4>Step 5: Enable Auto-Start on Boot</h4>
+    <pre><code>pm2 save
+pm2 startup     # Follow the printed command (copy-paste and run it)
+sudo systemctl enable nginx
+sudo systemctl enable postgresql</code></pre>
+
+    <h4>Updating</h4>
+    <pre><code>cd /opt/vibe-tb &amp;&amp; git pull &amp;&amp; ./deploy/deploy.sh</code></pre>
+
+    <hr>
+
+    <!-- 3.3 Docker -->
+    <h3 id="docker">3.3 Docker Setup</h3>
+
+    <p>Works on any machine with Docker installed &mdash; office servers, NAS devices, or cloud VPS.</p>
+
+    <h4>Step 1: Clone the Repository</h4>
+    <pre><code>git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git
+cd Vibe-Trial-Balance</code></pre>
+
+    <h4>Step 2: Create a Production <code>.env</code> File</h4>
+    <p>Create a <code>.env</code> file in the project root:</p>
+    <div class="code-label">.env</div>
+    <pre><code>NODE_ENV=production
+DB_PASSWORD=your_strong_password_here
+JWT_SECRET=your_random_64_char_secret_here
+ENCRYPTION_KEY=your_separate_random_secret_here
+ALLOWED_ORIGIN=http://your-server-ip
+ANTHROPIC_API_KEY=sk-ant-...</code></pre>
+    <p>The <code>ANTHROPIC_API_KEY</code> is optional &mdash; it can also be set later in the app's Admin Settings.</p>
+
+    <h4>Step 3: Build and Start</h4>
+    <pre><code>docker compose -f docker-compose.prod.yml up -d --build</code></pre>
+    <p>This starts three containers:</p>
+    <ul>
+      <li><strong>db</strong> &mdash; PostgreSQL 16 with a health check</li>
+      <li><strong>server</strong> &mdash; Node.js backend (runs migrations on startup)</li>
+      <li><strong>client</strong> &mdash; Nginx serving the React frontend</li>
+    </ul>
+
+    <h4>Step 4: Seed the Admin User (First Time Only)</h4>
+    <pre><code>docker compose -f docker-compose.prod.yml exec server \
+  sh -c "cd server &amp;&amp; npx knex seed:run --knexfile knexfile.js"</code></pre>
+
+    <h4>Step 5: Verify</h4>
+    <pre><code>docker compose -f docker-compose.prod.yml ps    # All services should be "Up"
+curl http://localhost:3001/api/v1/health          # {"status":"ok"}</code></pre>
+    <p>Access the app at <code>http://YOUR_SERVER_IP</code>.</p>
+
+    <h4>Updating</h4>
+    <pre><code>git pull &amp;&amp; docker compose -f docker-compose.prod.yml up -d --build</code></pre>
+
+    <h4>Cloud / VPS Additional Steps</h4>
+    <p>For internet-facing deployments, add HTTPS. The simplest option is <strong>Caddy</strong> for automatic TLS. See the main README for Caddy and Certbot configurations, firewall rules, and the full security checklist.</p>
+
+    <hr>
+
+    <!-- 4. Configuration -->
+    <h2 id="configuration">4. Configuration</h2>
+
+    <h3 id="env-vars">4.1 Environment Variables</h3>
+    <p>All environment variables are set in <code>server/.env</code>. Complete reference:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>NODE_ENV</code></td><td><em>(none)</em></td><td>Set to <code>production</code> for production deployments &mdash; enforces <code>JWT_SECRET</code> requirement</td></tr>
+          <tr><td><code>PORT</code></td><td><code>3001</code></td><td>Backend server listen port</td></tr>
+          <tr><td><code>DB_HOST</code></td><td><code>127.0.0.1</code></td><td>PostgreSQL host (<code>db</code> in Docker)</td></tr>
+          <tr><td><code>DB_PORT</code></td><td><code>5432</code></td><td>PostgreSQL port</td></tr>
+          <tr><td><code>DB_NAME</code></td><td><code>vibe_tb_db</code></td><td>Database name</td></tr>
+          <tr><td><code>DB_USER</code></td><td><code>vibetb</code></td><td>Database user</td></tr>
+          <tr><td><code>DB_PASSWORD</code></td><td><code>localdev123</code></td><td>Database password &mdash; <strong>change in production</strong></td></tr>
+          <tr><td><code>JWT_SECRET</code></td><td><code>local-dev-secret-12345</code></td><td>JWT signing key &mdash; <strong>required in production</strong> (server refuses to start without it when <code>NODE_ENV=production</code>)</td></tr>
+          <tr><td><code>JWT_EXPIRY</code></td><td><code>8h</code></td><td>JWT token lifetime (e.g., <code>8h</code>, <code>1d</code>)</td></tr>
+          <tr><td><code>ALLOWED_ORIGIN</code></td><td><code>http://localhost:5173</code></td><td>CORS allowed origin &mdash; see <a href="#allowed-origin">details below</a></td></tr>
+          <tr><td><code>ENCRYPTION_KEY</code></td><td><em>(falls back to JWT_SECRET)</em></td><td>Encryption key for API keys stored in the database &mdash; set a separate value for best security</td></tr>
+          <tr><td><code>ANTHROPIC_API_KEY</code></td><td><em>(none)</em></td><td>Anthropic API key &mdash; can also set in Admin &gt; Settings</td></tr>
+          <tr><td><code>APP_BASE_URL</code></td><td><code>http://localhost:3001</code></td><td>Used for MCP integration and self-referencing URLs</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4 id="allowed-origin">ALLOWED_ORIGIN Details</h4>
+    <p><code>ALLOWED_ORIGIN</code> controls which browser origins the server accepts cross-origin requests from (CORS). The browser sends the page's origin with every API request, and the server rejects requests that don't match.</p>
+
+    <h4>What to set it to</h4>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Deployment</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Local development</td><td><code>http://localhost:5173</code> (the default &mdash; no change needed)</td></tr>
+          <tr><td>Raspberry Pi on LAN</td><td><code>http://192.168.1.50</code> or <code>http://your-pi-hostname</code> (the URL users type in their browser)</td></tr>
+          <tr><td>Docker on LAN</td><td><code>http://your-server-ip</code></td></tr>
+          <tr><td>Cloud with HTTPS</td><td><code>https://yourdomain.com</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Format rules</h4>
+    <ul>
+      <li>Must include the <strong>scheme</strong> (<code>http://</code> or <code>https://</code>)</li>
+      <li>Must include the <strong>host</strong> (IP address or domain name)</li>
+      <li>Must include the <strong>port</strong> if it is non-standard (not 80 for HTTP or 443 for HTTPS) &mdash; e.g., <code>http://192.168.1.50:8080</code></li>
+      <li>Must <strong>not</strong> include a trailing slash &mdash; <code>http://example.com</code> not <code>http://example.com/</code></li>
+      <li>Must <strong>not</strong> include a path &mdash; <code>http://example.com</code> not <code>http://example.com/app</code></li>
+      <li>Is <strong>case-sensitive</strong> &mdash; <code>http://Example.com</code> will not match <code>http://example.com</code></li>
+    </ul>
+
+    <div class="callout callout-warning">
+      <strong>Multiple origins are not supported</strong>
+      The current configuration accepts exactly one origin. If you need to allow access from multiple origins (e.g., both <code>http://</code> and <code>https://</code>, or both a domain and an IP), you would need to modify <code>server/src/app.ts</code> to pass an array or function to the <code>cors()</code> middleware.
+    </div>
+
+    <h4>Common mistakes</h4>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Wrong</th><th>Right</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td><code>https://example.com/</code></td><td><code>https://example.com</code></td><td>No trailing slash</td></tr>
+          <tr><td><code>example.com</code></td><td><code>https://example.com</code></td><td>Must include scheme</td></tr>
+          <tr><td><code>http://example.com:80</code></td><td><code>http://example.com</code></td><td>Port 80 is implicit for HTTP</td></tr>
+          <tr><td><code>*</code></td><td><code>https://example.com</code></td><td>Wildcards are not supported and would be treated as a literal string</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong>What happens if it's wrong:</strong> The browser will block all API requests with a CORS error, and the app will appear to load but show errors or a blank page. Check the browser developer console (F12 &gt; Console) for messages like <code>Access to XMLHttpRequest ... has been blocked by CORS policy</code>.</p>
+
+    <h3 id="ai-provider">4.2 AI Provider Setup</h3>
+    <p>AI features are optional. If no AI provider is configured, all non-AI features work normally.</p>
+    <p>Configure your provider at <strong>Admin &gt; Settings &gt; AI Provider</strong> in the app:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Provider</th><th>Setup</th><th>Best For</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Claude (Anthropic)</strong></td><td>Enter your API key in Settings or as <code>ANTHROPIC_API_KEY</code> env var</td><td>Highest quality, native vision for PDF extraction</td></tr>
+          <tr><td><strong>Ollama (self-hosted)</strong></td><td>Install Ollama, pull models, enter base URL <code>http://localhost:11434</code></td><td>Full data privacy, no cloud calls, free</td></tr>
+          <tr><td><strong>OpenAI-compatible</strong></td><td>Enter server URL and model name (for vLLM, LM Studio, etc.)</td><td>Use your own GPU infrastructure</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Ollama Quick Start (Raspberry Pi or Linux)</h4>
+    <div class="code-label">Bash</div>
+    <pre><code>curl -fsSL https://ollama.ai/install.sh | sh
+ollama pull qwen3-vl:8b       # Vision model for PDF extraction
+ollama pull qwq:32b            # Reasoning model for support chat</code></pre>
+    <p>Then in the app: <strong>Admin &gt; Settings &gt; AI Provider &gt; Ollama</strong>, and set Base URL to <code>http://localhost:11434</code>.</p>
+
+    <h4>AI Features That Use the Provider</h4>
+    <ul>
+      <li><strong>AI Diagnostics</strong> &mdash; analyzes trial balance for anomalies and issues</li>
+      <li><strong>Tax Code Auto-Assignment</strong> &mdash; suggests tax codes for unmapped accounts</li>
+      <li><strong>Bank Transaction Classification</strong> &mdash; categorizes imported transactions</li>
+      <li><strong>Smart CSV Import</strong> &mdash; AI-powered column mapping and account matching</li>
+      <li><strong>PDF Import with AI Extraction</strong> &mdash; extracts trial balance data from PDFs</li>
+      <li><strong>AI Support Chat</strong> &mdash; context-aware help using the built-in knowledge base</li>
+    </ul>
+
+    <h3 id="mcp-integration">4.3 MCP Integration (Claude Desktop)</h3>
+    <p>The app includes a Model Context Protocol (MCP) server that lets Claude Desktop interact directly with your accounting data.</p>
+    <ol>
+      <li>Go to <strong>Admin &gt; Settings &gt; MCP Integration</strong></li>
+      <li>Click <strong>Generate Token</strong> to create an MCP access token</li>
+      <li>Copy the connection snippet (choose <strong>stdio</strong> or <strong>HTTP/SSE</strong> transport)</li>
+      <li>Paste it into your Claude Desktop configuration file</li>
+    </ol>
+
+    <h4>Available MCP Capabilities</h4>
+    <ul>
+      <li><strong>8 Resources</strong> &mdash; read clients, periods, trial balances, etc.</li>
+      <li><strong>18 Tools</strong> &mdash; create journal entries, run diagnostics, assign tax codes, etc.</li>
+      <li><strong>5 Prompts</strong> &mdash; guided workflows for common accounting tasks</li>
+    </ul>
+    <div class="callout callout-warning">
+      <strong>Upgrading?</strong>
+      MCP tokens are now stored as bcrypt hashes. If upgrading from a prior version, regenerate your token in Admin &gt; Settings &gt; MCP Integration and update your Claude Desktop configuration.
+    </div>
+
+    <hr>
+
+    <!-- 5. First-Run Walkthrough -->
+    <h2 id="first-run">5. First-Run Walkthrough</h2>
+    <p>After installation, follow these steps to get started:</p>
+
+    <h4>Step 1: Log In</h4>
+    <p>Open the app in your browser and log in with the default credentials:</p>
+    <div class="callout callout-danger">
+      <strong>Default Credentials</strong>
+      Username: <code>admin</code> &nbsp;/&nbsp; Password: <code>admin</code><br>
+      Change this password immediately via the user menu in the top-right corner.
+    </div>
+
+    <h4>Step 2: Create Additional Users (Optional)</h4>
+    <p>Go to <strong>Admin &gt; Users</strong> and create accounts. Available roles:</p>
+    <ul>
+      <li><strong>admin</strong> &mdash; full access including settings, user management, and audit logs</li>
+      <li><strong>user</strong> &mdash; standard access to client data and workflows</li>
+    </ul>
+
+    <h4>Step 3: Create Your First Client</h4>
+    <ol>
+      <li>Click <strong>Clients</strong> in the sidebar</li>
+      <li>Click <strong>New Client</strong></li>
+      <li>Enter the client name, tax ID (optional), entity type, and activity type (business / rental / farm / farm_rental)</li>
+      <li>Save</li>
+    </ol>
+
+    <h4>Step 4: Set Up the Chart of Accounts</h4>
+    <p>For the new client, go to <strong>Chart of Accounts</strong> and choose one of:</p>
+    <ul>
+      <li><strong>Import from CSV</strong> &mdash; upload an existing chart of accounts</li>
+      <li><strong>Copy from another client</strong> &mdash; reuse a chart from an existing client</li>
+      <li><strong>Apply a template</strong> &mdash; use one of the 7 built-in templates (General Business, Retail, Restaurant, Professional Services, Real Estate, Construction, Farm)</li>
+      <li><strong>Add accounts manually</strong> &mdash; enter accounts one at a time</li>
+    </ul>
+
+    <h4>Step 5: Create a Period</h4>
+    <ol>
+      <li>Go to <strong>Periods</strong> for the client</li>
+      <li>Click <strong>New Period</strong></li>
+      <li>Enter the fiscal year start and end dates (e.g., 2025-01-01 to 2025-12-31)</li>
+      <li>Save</li>
+    </ol>
+
+    <h4>Step 6: Enter Trial Balance Data</h4>
+    <p>Navigate to the <strong>Trial Balance</strong> for the period. You can:</p>
+    <ul>
+      <li><strong>Type directly</strong> into the grid (inline editing with keyboard navigation)</li>
+      <li><strong>Import from CSV</strong> &mdash; click "Import from CSV" and use the AI-powered column mapping</li>
+      <li><strong>Import from PDF</strong> &mdash; click "Import from PDF" to extract data from a scanned or digital trial balance</li>
+    </ul>
+
+    <h4>Step 7: Configure AI (Optional)</h4>
+    <p>If you want AI features, go to <strong>Admin &gt; Settings &gt; AI Provider</strong> and configure your preferred provider (see <a href="#ai-provider">Section 4.2</a>).</p>
+
+    <hr>
+
+    <!-- 6. Usage Guide -->
+    <h2 id="usage-guide">6. Usage Guide</h2>
+
+    <h3 id="dashboard">6.1 Dashboard &amp; Navigation</h3>
+    <p>The <strong>Dashboard</strong> is the landing page after login. It shows a summary of open clients, recent activity, and quick links.</p>
+    <p>The <strong>Sidebar</strong> organizes features into groups:</p>
+    <ul>
+      <li><strong>Clients</strong> &mdash; client list and management</li>
+      <li><strong>Bookkeeping</strong> &mdash; bank transactions, reconciliation, transaction entry</li>
+      <li><strong>Tax</strong> &mdash; tax codes, tax mapping</li>
+      <li><strong>Reports</strong> &mdash; financial statements, exports, multi-period comparison, custom reports</li>
+      <li><strong>Engagement</strong> &mdash; checklists, open items</li>
+      <li><strong>Admin</strong> &mdash; settings, users, audit log, backup, documents, COA templates</li>
+    </ul>
+    <div class="callout callout-info">
+      <strong>Context-sensitive navigation</strong>
+      Select a client and period first, then access features that operate on that data.
+    </div>
+
+    <h3 id="client-management">6.2 Client Management</h3>
+    <p><strong>Clients</strong> are the top-level organizational unit. Each client has:</p>
+    <ul>
+      <li>Name, tax ID, entity type</li>
+      <li>Activity type: business, rental, farm, or farm_rental (affects available tax codes)</li>
+      <li>One or more periods (fiscal years)</li>
+      <li>Their own chart of accounts</li>
+      <li>Associated bank accounts, documents, and engagement checklists</li>
+    </ul>
+    <p>Create, edit, and delete clients from the Clients page.</p>
+
+    <h3 id="chart-of-accounts">6.3 Chart of Accounts</h3>
+    <p>Each client has an independent chart of accounts (COA). Accounts have:</p>
+    <ul>
+      <li>Account number, name, and type (Asset, Liability, Equity, Revenue, Expense)</li>
+      <li>Optional sub-type and description</li>
+      <li>Tax code assignment (for tax mapping)</li>
+    </ul>
+    <p><strong>Populating the COA:</strong></p>
+    <ul>
+      <li><strong>Manual entry</strong> &mdash; add accounts one at a time</li>
+      <li><strong>CSV import</strong> &mdash; upload a CSV with column mapping</li>
+      <li><strong>Copy from client</strong> &mdash; duplicate another client's COA</li>
+      <li><strong>Apply template</strong> &mdash; choose from 7 industry templates via Admin &gt; COA Templates</li>
+    </ul>
+
+    <h3 id="periods">6.4 Periods</h3>
+    <p>Periods represent fiscal years or reporting periods for a client. Each period contains:</p>
+    <ul>
+      <li>Start and end dates</li>
+      <li>Trial balance data</li>
+      <li>Journal entries (book and tax adjustments)</li>
+      <li>Bank transactions and reconciliations</li>
+    </ul>
+    <p><strong>Period controls:</strong></p>
+    <ul>
+      <li><strong>Lock</strong> &mdash; prevents edits to the trial balance and journal entries. Requires the TB to be in balance before locking.</li>
+      <li><strong>Unlock</strong> &mdash; admin-only action to reopen a locked period.</li>
+      <li><strong>Roll forward</strong> &mdash; creates a new period copying forward the COA and ending balances as beginning balances. Tickmarks are carried forward.</li>
+    </ul>
+
+    <h3 id="trial-balance">6.5 Trial Balance</h3>
+    <p>The <strong>Trial Balance Grid</strong> is the core workspace. It displays all accounts with:</p>
+    <ul>
+      <li>Account number and name</li>
+      <li>Unadjusted (book) balances (debit/credit)</li>
+      <li>Book AJE totals</li>
+      <li>Tax AJE totals</li>
+      <li>Adjusted balance (computed, never stored)</li>
+      <li>Prior year balance (if imported)</li>
+      <li>Variance from prior year</li>
+      <li>Notes and tickmarks</li>
+    </ul>
+
+    <p><strong>Editing:</strong> Click any editable cell to type. Use Tab/Enter to move between cells. The grid supports full keyboard navigation.</p>
+    <p><strong>Column visibility:</strong> Toggle which columns appear using the column visibility controls. These settings also apply to PDF and Excel exports.</p>
+
+    <p><strong>Importing data:</strong></p>
+    <ul>
+      <li><strong>Import from CSV</strong> &mdash; AI-powered column mapping for automatic matching</li>
+      <li><strong>Import from PDF</strong> &mdash; extracts data from scanned or digital PDFs using AI</li>
+      <li><strong>Import Prior Year</strong> &mdash; load PY balances for comparison</li>
+    </ul>
+
+    <p><strong>Verification:</strong> After PDF import, the <strong>Verification Panel</strong> shows a line-by-line comparison between the imported PDF and the entered data, highlighting any discrepancies.</p>
+
+    <h3 id="journal-entries">6.6 Journal Entries</h3>
+    <p>Create adjusting journal entries of two types:</p>
+    <ul>
+      <li><strong>Book AJEs</strong> &mdash; standard adjustments</li>
+      <li><strong>Tax AJEs</strong> &mdash; tax-only adjustments (M-1 differences)</li>
+    </ul>
+    <p>Each journal entry has:</p>
+    <ul>
+      <li>Date, description, type (Book/Tax)</li>
+      <li>Line items with account, debit, and credit amounts</li>
+      <li>Balance validation &mdash; entries must balance (debits = credits) to save</li>
+    </ul>
+    <p><strong>Access:</strong> From the Trial Balance grid ("New JE"), the Journal Entries page, or the General Ledger view.</p>
+    <p><strong>Editing:</strong> Click any existing JE to open the edit dialog. Available from the Journal Entries list, the General Ledger, and the Trial Balance zoom view.</p>
+
+    <h3 id="bank-transactions">6.7 Bank Transactions</h3>
+    <p><strong>Importing:</strong></p>
+    <ul>
+      <li><strong>OFX files</strong> &mdash; standard bank download format</li>
+      <li><strong>CSV files</strong> &mdash; with column mapping</li>
+      <li><strong>Manual entry</strong> &mdash; via the Transaction Entry Register</li>
+    </ul>
+    <p><strong>AI Classification:</strong> After import, use the "Classify" button to have AI categorize transactions based on payee patterns and descriptions. The AI learns from your previous classifications.</p>
+    <p><strong>Classification rules:</strong> The app builds rules from confirmed classifications. Transactions matching existing rules are auto-classified on future imports.</p>
+    <p><strong>Deduplication:</strong> Imported transactions are hashed (SHA-256) to prevent duplicate imports.</p>
+    <p><strong>Batch operations:</strong> Select multiple transactions for bulk classify, approve, or delete.</p>
+
+    <h3 id="bank-reconciliation">6.8 Bank Reconciliation</h3>
+    <p>A full reconciliation workspace for matching bank transactions to book balances:</p>
+    <ul>
+      <li>Select a bank account and statement date</li>
+      <li>Mark transactions as cleared</li>
+      <li>The app calculates and displays the reconciling difference</li>
+      <li>Admin can reopen completed reconciliations if needed</li>
+    </ul>
+
+    <h3 id="tax-codes">6.9 Tax Codes &amp; Tax Mapping</h3>
+
+    <h4>Tax Codes (Admin &gt; Tax Codes)</h4>
+    <ul>
+      <li>500+ pre-seeded tax codes for 1040, 1065, 1120, and 1120S entity types</li>
+      <li>Each code maps to specific lines on tax returns</li>
+      <li>Software-specific mappings for UltraTax, CCH, Lacerte, GoSystem, and Generic</li>
+      <li>Full CRUD management, CSV import/export</li>
+    </ul>
+
+    <h4>Tax Mapping (per client/period)</h4>
+    <ul>
+      <li>A dedicated page for assigning tax codes to accounts</li>
+      <li>Dropdown selectors filtered by entity type and activity type</li>
+      <li>Progress bar showing mapping completion percentage</li>
+      <li>Category subtotals and net income calculation</li>
+      <li>Balance sheet check (assets = liabilities + equity)</li>
+      <li>Optimistic updates with visual flash feedback</li>
+    </ul>
+
+    <h4>AI Auto-Assignment</h4>
+    <ul>
+      <li>Click "Auto-assign Tax Codes" on the Tax Mapping page</li>
+      <li>Uses a 5-step waterfall: existing mappings, prior period, cross-client patterns, AI suggestion, or unmappable</li>
+      <li>Preview modal shows confidence-coded suggestions with override dropdowns</li>
+      <li>Confirm to apply with dual-write (sets both <code>tax_code_id</code> and legacy <code>tax_line</code> field)</li>
+    </ul>
+
+    <h3 id="financial-statements">6.10 Financial Statements</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Statement</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Income Statement</strong></td><td>Revenue and expenses with current year, prior year, change, and variance %</td></tr>
+          <tr><td><strong>Balance Sheet</strong></td><td>Assets, liabilities, and equity with comparative columns</td></tr>
+          <tr><td><strong>Statement of Equity</strong></td><td>Changes in equity accounts</td></tr>
+          <tr><td><strong>Cash Flow Statement</strong></td><td>Indirect method with configurable account mapping</td></tr>
+          <tr><td><strong>Tax-Basis P&amp;L</strong></td><td>Income and expenses grouped by tax code with sort order and per-code subtotals</td></tr>
+          <tr><td><strong>Tax Return Order</strong></td><td>All accounts in tax return filing order with category filter</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>All statements are available as on-screen views with formatting and subtotals, and as downloadable PDFs (server-side pdfmake, branded header/footer).</p>
+
+    <h3 id="reports-exports">6.11 Reports &amp; Exports</h3>
+    <h4>Reports Available</h4>
+    <ul>
+      <li>Trial Balance Report (with column visibility toggles)</li>
+      <li>General Ledger</li>
+      <li>Tax Code Report</li>
+      <li>AJE Listing</li>
+      <li>Workpaper Index</li>
+      <li>Bookkeeper Letter (PDF)</li>
+      <li>Flux Analysis (multi-period variance report)</li>
+    </ul>
+
+    <h4>Tax Software Exports</h4>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Software</th><th>Formats</th></tr></thead>
+        <tbody>
+          <tr><td>UltraTax</td><td>CSV, Excel</td></tr>
+          <tr><td>CCH</td><td>CSV, Excel</td></tr>
+          <tr><td>Lacerte</td><td>CSV, Excel</td></tr>
+          <tr><td>GoSystem</td><td>CSV, Excel</td></tr>
+          <tr><td>Generic</td><td>CSV, Excel</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The export dialog includes pre-export validation checks for unmapped accounts and out-of-balance conditions. Access from the Reports sidebar group or the Exports page.</p>
+
+    <h3 id="multi-period">6.12 Multi-Period Comparison</h3>
+    <p>Compare two periods side by side:</p>
+    <ul>
+      <li>Book-adjusted balances for both periods</li>
+      <li>Dollar and percentage variance columns</li>
+      <li>Significance threshold highlighting (flag large variances)</li>
+      <li>Inline variance note editing (per account, per comparison)</li>
+      <li>Category grouping (assets, liabilities, equity, revenue, expense)</li>
+      <li>Flux Analysis PDF export</li>
+    </ul>
+    <p>Access from <strong>Reports &gt; Multi-Period Comparison</strong>.</p>
+
+    <h3 id="documents">6.13 Document Storage</h3>
+    <p>Upload and manage client documents:</p>
+    <ul>
+      <li>Drag-and-drop file upload</li>
+      <li>Download and delete documents</li>
+      <li>Link documents to specific accounts or journal entries</li>
+      <li>Files stored in <code>server/uploads/</code> (or Docker volume)</li>
+      <li>Allowed file types: PDF, CSV, plain text, Excel (.xls/.xlsx), Word (.doc/.docx), and images (PNG, JPEG, GIF, WebP, TIFF). Executable files and scripts are blocked.</li>
+    </ul>
+
+    <h3 id="engagement">6.14 Engagement Management</h3>
+    <p>Track engagement progress:</p>
+    <ul>
+      <li><strong>Period Checklist</strong> &mdash; a configurable checklist for each period's workflow steps</li>
+      <li><strong>All Open Items</strong> &mdash; aggregated view of incomplete items across all clients with "View Checklist" drill-down</li>
+    </ul>
+
+    <h3 id="workpapers">6.15 Workpaper Package &amp; Tickmarks</h3>
+    <h4>Tickmarks</h4>
+    <ul>
+      <li>A tickmark library with customizable symbols and descriptions</li>
+      <li>Apply tickmarks to individual TB rows as superscripts</li>
+      <li>Tickmark legend appears on TB reports</li>
+      <li>Tickmarks carry forward during period roll-forward</li>
+    </ul>
+    <h4>Workpaper References</h4>
+    <ul>
+      <li>Tag accounts with workpaper reference numbers</li>
+      <li>Workpaper Index report lists all references</li>
+    </ul>
+
+    <h3 id="coa-templates">6.16 COA Templates</h3>
+    <p><strong>System templates</strong> (7 built-in, read-only):</p>
+    <p>General Business, Retail, Restaurant, Professional Services, Real Estate, Construction, Farm</p>
+    <p><strong>Custom templates:</strong></p>
+    <ul>
+      <li>Create from an existing client's COA</li>
+      <li>Import from CSV</li>
+      <li>Apply to a client with merge or replace mode</li>
+      <li>Templates include account numbers, names, types, and tax code mappings</li>
+    </ul>
+    <p>Access from <strong>Admin &gt; COA Templates</strong>.</p>
+
+    <h3 id="transaction-entry">6.17 Transaction Entry Register</h3>
+    <p>A spreadsheet-style register for manual transaction entry:</p>
+    <ul>
+      <li>Add rows with date, payee, memo, account, debit/credit</li>
+      <li>Smart payee combo dropdown with previously-used suggestions</li>
+      <li>Smart category select showing previously-used categories first</li>
+      <li>Stat cards showing total debits, credits, and net</li>
+      <li>Unsaved rows are tinted for visual distinction</li>
+      <li>Duplicate and delete row actions</li>
+      <li>Entries sync to journal entries and bank transactions</li>
+    </ul>
+    <p>Access from <strong>Bookkeeping &gt; Transaction Entry</strong>.</p>
+
+    <h3 id="custom-reports">6.18 Custom Report Builder</h3>
+    <p>Create and save custom report definitions:</p>
+    <ul>
+      <li>Select which accounts, columns, and groupings to include</li>
+      <li>Save report configurations for reuse</li>
+      <li>Run saved reports at any time</li>
+    </ul>
+
+    <h3 id="ai-features">6.19 AI Features</h3>
+    <p>All AI features require a configured AI provider (see <a href="#ai-provider">Section 4.2</a>).</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Feature</th><th>What It Does</th><th>Where to Find It</th></tr></thead>
+        <tbody>
+          <tr><td><strong>AI Diagnostics</strong></td><td>Analyzes your trial balance and flags anomalies, unusual balances, and potential issues</td><td>Diagnostics page</td></tr>
+          <tr><td><strong>Tax Auto-Assignment</strong></td><td>Suggests tax codes for unmapped accounts using a 5-step confidence waterfall</td><td>Tax Mapping &gt; "Auto-assign Tax Codes"</td></tr>
+          <tr><td><strong>Bank Classification</strong></td><td>Categorizes imported bank transactions by payee and description</td><td>Bank Transactions &gt; "Classify"</td></tr>
+          <tr><td><strong>Smart CSV Import</strong></td><td>AI-powered column mapping and account matching for CSV files</td><td>Trial Balance &gt; "Import from CSV"</td></tr>
+          <tr><td><strong>PDF Import</strong></td><td>Extracts trial balance data from scanned or digital PDFs</td><td>Trial Balance &gt; "Import from PDF"</td></tr>
+          <tr><td><strong>PDF Verification</strong></td><td>Compares imported PDF data against entered trial balance line by line</td><td>Verification Panel on Trial Balance page</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout callout-success">
+      <strong>Privacy</strong>
+      AI features include data disclosure consent dialogs. Client names are removed from AI prompts. Account numbers are masked before sending to the AI provider.
+    </div>
+
+    <h3 id="ai-support-chat">6.20 AI Support Chat</h3>
+    <p>A context-aware help system powered by AI:</p>
+    <ul>
+      <li>Floating chat bubble accessible from any page</li>
+      <li>Ask questions about the app's features, accounting concepts, or your data</li>
+      <li>Draws on a 16-article knowledge base covering all app features</li>
+      <li>Conversation history with bookmarking</li>
+      <li>Dedicated Support page for longer conversations</li>
+    </ul>
+
+    <hr>
+
+    <!-- 7. Administration -->
+    <h2 id="administration">7. Administration</h2>
+
+    <h3 id="user-management">7.1 User Management</h3>
+    <p><strong>Admin &gt; Users:</strong></p>
+    <ul>
+      <li>Create, edit, and deactivate user accounts</li>
+      <li>Assign roles: <code>admin</code> (full access) or <code>user</code> (standard access)</li>
+      <li>Admins can access settings, user management, audit logs, and period unlock</li>
+    </ul>
+
+    <h3 id="settings">7.2 Settings</h3>
+    <p><strong>Admin &gt; Settings:</strong></p>
+    <ul>
+      <li><strong>AI Provider</strong> &mdash; configure Claude, Ollama, or OpenAI-compatible provider</li>
+      <li><strong>MCP Integration</strong> &mdash; generate/rotate/revoke MCP tokens, view connection snippets</li>
+      <li><strong>Backup Schedule</strong> &mdash; configure automatic nightly backups</li>
+    </ul>
+
+    <h3 id="backup-restore">7.3 Backup &amp; Restore</h3>
+    <p><strong>Admin &gt; Backup &amp; Restore:</strong></p>
+
+    <h4>Backup Types</h4>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Type</th><th>What's Included</th></tr></thead>
+        <tbody>
+          <tr><td>Full</td><td>All clients, periods, data, settings, and users</td></tr>
+          <tr><td>Client</td><td>Single client with all periods and associated data</td></tr>
+          <tr><td>Period</td><td>Single period with TB, JEs, and transactions</td></tr>
+          <tr><td>Settings</td><td>App settings, users, and tax code configuration only</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>Backup format:</strong> <code>.tbak</code> ZIP archives containing JSON data exports.</p>
+    <p><strong>Scheduled backups:</strong> Automatic nightly backups via node-cron (configurable).</p>
+
+    <h4>Restore Modes</h4>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Mode</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr><td>As New</td><td>Creates new client(s) with remapped IDs &mdash; no existing data affected</td></tr>
+          <tr><td>Replace</td><td>Overwrites matching client data</td></tr>
+          <tr><td>Settings Only</td><td>Restores settings, users, and tax codes only</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>External backups:</strong> For additional safety, set up <code>pg_dump</code> as a cron job.</p>
+
+    <h3 id="audit-log">7.4 Audit Log</h3>
+    <p><strong>Admin &gt; Audit Log:</strong></p>
+    <ul>
+      <li>Tracks all significant actions: logins, data changes, period locks/unlocks, imports, exports</li>
+      <li>Paginated and filterable by user, action type, and date range</li>
+      <li>Admin-only access</li>
+      <li>MCP tool calls are also logged</li>
+    </ul>
+
+    <hr>
+
+    <!-- 8. Maintenance -->
+    <h2 id="maintenance">8. Maintenance &amp; Updates</h2>
+
+    <h3>Updating the Application</h3>
+
+    <h4>Windows (development)</h4>
+    <pre><code>git pull
+npm install &amp;&amp; cd server &amp;&amp; npm install &amp;&amp; cd ../client &amp;&amp; npm install &amp;&amp; cd ..
+npm run migrate
+npm run dev</code></pre>
+
+    <h4>Raspberry Pi</h4>
+    <pre><code>cd /opt/vibe-tb &amp;&amp; git pull &amp;&amp; ./deploy/deploy.sh</code></pre>
+
+    <h4>Docker</h4>
+    <pre><code>git pull &amp;&amp; docker compose -f docker-compose.prod.yml up -d --build</code></pre>
+
+    <p>Migrations run automatically on server startup (Docker) or via the deploy script (Pi).</p>
+
+    <h3>Database Maintenance</h3>
+
+    <h4>Reset database to clean state (development only)</h4>
+    <pre><code>npm run db:reset</code></pre>
+    <p>This rolls back all migrations, re-runs them, and re-seeds the database.</p>
+
+    <h4>Full database wipe (development only)</h4>
+    <div class="callout callout-warning">
+      <strong>Destructive operation</strong>
+      This destroys all data in the database. Only use in development.
+    </div>
+    <pre><code>docker compose down -v      # Destroys the database volume
+docker compose up -d        # Recreates a fresh database
+npm run migrate
+npm run seed</code></pre>
+
+    <h4>Database shell access</h4>
+    <pre><code># Docker development
+docker exec -it vibe-tb-db psql -U vibetb -d vibe_tb_db
+
+# Raspberry Pi
+sudo -u postgres psql -d vibe_tb_db</code></pre>
+
+    <hr>
+
+    <!-- 9. Troubleshooting -->
+    <h2 id="troubleshooting">9. Troubleshooting</h2>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th style="min-width:220px">Problem</th><th>Solution</th></tr></thead>
+        <tbody>
+          <tr><td><strong>"Docker Desktop is not running"</strong></td><td>Open Docker Desktop from the Start Menu. Wait for the whale icon to stop animating.</td></tr>
+          <tr><td><strong>"Port 5432 already in use"</strong></td><td>Another PostgreSQL instance is running. Stop it, or edit <code>docker-compose.yml</code> to use port 5433.</td></tr>
+          <tr><td><strong>"Cannot find module" errors</strong></td><td>Run <code>npm install</code> in the failing directory (root, <code>server/</code>, or <code>client/</code>).</td></tr>
+          <tr><td><strong>Database tables are missing</strong></td><td>Run <code>npm run migrate</code> from the project root.</td></tr>
+          <tr><td><strong>Frontend shows blank page or API errors</strong></td><td>Verify the backend is running: <code>curl http://localhost:3001/api/v1/health</code></td></tr>
+          <tr><td><strong>Login fails with correct credentials</strong></td><td>Run <code>npm run seed</code> to re-create the admin user.</td></tr>
+          <tr><td><strong>AI features return errors</strong></td><td>Check your AI provider configuration in Admin &gt; Settings. Verify the API key or Ollama server is accessible.</td></tr>
+          <tr><td><strong>PDF import fails</strong></td><td>Ensure <code>poppler-utils</code> is installed for scanned PDFs. Digital PDFs work without it.</td></tr>
+          <tr><td><strong>Migrations fail</strong></td><td>Check that PostgreSQL is running and the <code>server/.env</code> credentials are correct.</td></tr>
+          <tr><td><strong>"CORS error" in browser console</strong></td><td>Set <code>ALLOWED_ORIGIN</code> in <code>server/.env</code> to match your frontend URL exactly.</td></tr>
+          <tr><td><strong>"Too many login attempts"</strong></td><td>Login is rate-limited to 10 attempts per 15 minutes per IP. Wait 15 minutes and try again.</td></tr>
+          <tr><td><strong>Server refuses to start in production</strong></td><td><code>JWT_SECRET</code> is required when <code>NODE_ENV=production</code>. Set it in <code>server/.env</code>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>View Server Logs</h3>
+    <pre><code># Development — server output appears in the terminal running npm run dev
+
+# Raspberry Pi
+pm2 logs vibe-tb-server
+
+# Docker
+docker compose -f docker-compose.prod.yml logs -f server</code></pre>
+
+    <hr>
+
+    <!-- 10. Security Checklist -->
+    <h2 id="security-checklist">10. Security Checklist</h2>
+    <p>Before exposing the app to any network beyond localhost:</p>
+
+    <ul class="checklist">
+      <li><strong>Set <code>NODE_ENV=production</code></strong> in your <code>server/.env</code> file &mdash; enables security enforcement</li>
+      <li><strong>Change the default admin password</strong> &mdash; <code>admin</code> / <code>admin</code> must be changed on first login</li>
+      <li><strong>Set a strong <code>JWT_SECRET</code></strong> &mdash; at least 64 random characters (server refuses to start without it in production)</li>
+      <li><strong>Set a strong <code>ENCRYPTION_KEY</code></strong> &mdash; separate from JWT_SECRET, used to encrypt API keys stored in the database</li>
+      <li><strong>Set a strong <code>DB_PASSWORD</code></strong> &mdash; do not use the development default</li>
+      <li><strong>Set <code>ALLOWED_ORIGIN</code></strong> to your exact domain (no wildcards)</li>
+      <li><strong>Enable HTTPS</strong> for any non-localhost deployment (Caddy, Certbot, or cloud load balancer)</li>
+      <li><strong>Configure a firewall</strong> &mdash; allow only ports 22, 80, and 443</li>
+      <li><strong>Set up external database backups</strong> &mdash; <code>pg_dump</code> cron job in addition to in-app backups</li>
+      <li><strong>Regenerate your MCP token</strong> after upgrading (Admin &gt; Settings &gt; MCP Integration) &mdash; tokens are now stored as hashes</li>
+      <li><strong>Review the LICENSE file</strong> is present and the source code link in the app footer is visible</li>
+      <li><strong>Keep dependencies updated</strong> &mdash; run <code>npm audit</code> periodically</li>
+      <li><strong>Review AI data consent</strong> &mdash; understand what data is sent to AI providers (client names are stripped, account numbers are masked)</li>
+    </ul>
+
+  </main>
+
+  <!-- Back to top button -->
+  <button class="back-to-top" onclick="window.scrollTo({top:0})" aria-label="Back to top">&#8593;</button>
+
+  <script>
+    // Sidebar toggle (mobile)
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('open');
+      document.querySelector('.sidebar-overlay').classList.toggle('open');
+    }
+
+    // Close sidebar on link click (mobile)
+    document.querySelectorAll('.sidebar .nav-link').forEach(function(link) {
+      link.addEventListener('click', function() {
+        if (window.innerWidth <= 900) {
+          document.querySelector('.sidebar').classList.remove('open');
+          document.querySelector('.sidebar-overlay').classList.remove('open');
+        }
+      });
+    });
+
+    // Back to top visibility
+    window.addEventListener('scroll', function() {
+      var btn = document.querySelector('.back-to-top');
+      if (window.scrollY > 400) {
+        btn.classList.add('visible');
+      } else {
+        btn.classList.remove('visible');
+      }
+    });
+
+    // Active sidebar link highlighting
+    (function() {
+      var links = document.querySelectorAll('.sidebar .nav-link');
+      var sections = [];
+      links.forEach(function(link) {
+        var href = link.getAttribute('href');
+        if (href && href.startsWith('#')) {
+          var el = document.getElementById(href.slice(1));
+          if (el) sections.push({ link: link, el: el });
+        }
+      });
+
+      function updateActive() {
+        var scrollPos = window.scrollY + 100;
+        var current = null;
+        for (var i = sections.length - 1; i >= 0; i--) {
+          if (sections[i].el.offsetTop <= scrollPos) {
+            current = sections[i].link;
+            break;
+          }
+        }
+        links.forEach(function(l) { l.classList.remove('active'); });
+        if (current) current.classList.add('active');
+      }
+
+      window.addEventListener('scroll', updateActive);
+      updateActive();
+    })();
+  </script>
+
+</body>
+</html>

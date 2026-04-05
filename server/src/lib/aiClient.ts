@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../db';
 import {
@@ -7,6 +12,7 @@ import {
   type LLMProvider,
   type VisionConfig,
 } from './llmProvider';
+import { decrypt, isEncrypted } from './encryption';
 
 export const DEFAULT_FAST_MODEL    = 'claude-haiku-4-5-20251001';
 export const DEFAULT_PRIMARY_MODEL = 'claude-sonnet-4-6';
@@ -155,9 +161,17 @@ export async function loadLLMSettings(): Promise<Record<string, string>> {
     'llm.openai_compat_vision_override', 'llm.vision_provider', 'llm.vision_model',
     'llm.timeout_ms', 'claude_api_key', 'ai_model_fast', 'ai_model_primary',
   ];
+  const ENCRYPTED_KEYS = new Set(['claude_api_key', 'llm.openai_api_key', 'llm.openai_compat_api_key']);
   const rows = await db('settings').whereIn('key', LLM_KEYS).select('key', 'value');
   const s: Record<string, string> = {};
-  for (const r of rows) s[r.key as string] = r.value as string;
+  for (const r of rows) {
+    const key = r.key as string;
+    let val = r.value as string;
+    if (ENCRYPTED_KEYS.has(key) && val && isEncrypted(val)) {
+      try { val = decrypt(val); } catch { /* treat as plaintext if decryption fails (legacy data) */ }
+    }
+    s[key] = val;
+  }
   return s;
 }
 

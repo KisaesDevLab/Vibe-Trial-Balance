@@ -1,8 +1,14 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
+import { sendServerError } from '../lib/safeError';
 
 const router = Router();
 router.use(authMiddleware);
@@ -21,8 +27,7 @@ router.get('/', async (_req: AuthRequest, res: Response): Promise<void> => {
     const clients = await db('clients').where({ is_active: true }).orderBy('name');
     res.json({ data: clients, error: null, meta: { count: clients.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'clients');
   }
 });
 
@@ -53,8 +58,7 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'client', entityId: client.id, action: 'create', description: `Created client "${client.name}"` });
     res.status(201).json({ data: client, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'clients');
   }
 });
 
@@ -75,8 +79,7 @@ router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     }
     res.json({ data: client, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'clients');
   }
 });
 
@@ -118,8 +121,7 @@ router.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'client', entityId: id, action: 'update', description: `Updated client "${updated.name}"` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'clients');
   }
 });
 
@@ -144,8 +146,7 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => 
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'client', entityId: id, action: 'delete', description: `Deactivated client #${id}` });
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'clients');
   }
 });
 

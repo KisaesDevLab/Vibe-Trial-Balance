@@ -1,0 +1,53 @@
+Vibe Trial Balance
+Copyright 2025-2026 Kisaes LLC
+
+This product is licensed under the Elastic License 2.0 (ELv2).
+See the LICENSE file for the full license text.
+
+For commercial licensing inquiries (e.g., providing client-facing access
+to a hosted instance), contact: licensing@kisaes.com
+
+Source code: https://github.com/KisaesDevLab/Vibe-Trial-Balance
+
+---
+
+Third-Party Software Notices
+
+This product includes or depends on the following third-party software:
+
+@anthropic-ai/sdk - MIT License - Copyright Anthropic
+@modelcontextprotocol/sdk - MIT License - Copyright Anthropic
+@tanstack/react-query - MIT License - Copyright Tanner Linsley
+@tanstack/react-table - MIT License - Copyright Tanner Linsley
+archiver - MIT License - Copyright Chris Talkington
+bcrypt - MIT License - Copyright Nick Campbell
+cors - MIT License - Copyright Troy Goode
+dotenv - BSD-2-Clause License - Copyright Scott Motte
+exceljs - MIT License - Copyright Guyon Roche
+express - MIT License - Copyright TJ Holowaychuk, Douglas Christopher Wilson
+express-rate-limit - MIT License - Copyright Nathan Friedly
+fast-csv - MIT License - Copyright Doug Martin
+helmet - MIT License - Copyright Adam Baldwin
+jsonwebtoken - MIT License - Copyright Auth0
+knex - MIT License - Copyright Tim Griesser
+multer - MIT License - Copyright Hage Yaapa
+node-cron - ISC License - Copyright Luke Childs
+openai - Apache-2.0 License - Copyright OpenAI
+pdf-lib - MIT License - Copyright Andrew Dillon
+pdf-parse - MIT License - Copyright Modesty Zhang
+pdfmake - MIT License - Copyright Bartek Pampuch
+pg - MIT License - Copyright Brian Carlson
+react - MIT License - Copyright Meta Platforms
+react-dom - MIT License - Copyright Meta Platforms
+react-router-dom - MIT License - Copyright Remix Software
+tailwindcss - MIT License - Copyright Tailwind Labs
+typescript - Apache-2.0 License - Copyright Microsoft
+vite - MIT License - Copyright Evan You
+xlsx - Apache-2.0 License - Copyright SheetJS
+xlsx-js-style - Apache-2.0 License - Copyright Git Tad
+zod - MIT License - Copyright Colin McDonnell
+zustand - MIT License - Copyright Paul Henschel
+
+For the complete list of dependencies and their licenses, run:
+  cd client && npx license-checker --excludePrivatePackages --summary
+  cd server && npx license-checker --excludePrivatePackages --summary

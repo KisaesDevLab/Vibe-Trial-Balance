@@ -1,10 +1,11 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-
-const JWT_SECRET = process.env.JWT_SECRET ?? 'local-dev-secret-12345';
-if (!process.env.JWT_SECRET) {
-  console.warn('\n⚠️  WARNING: JWT_SECRET env var not set. Using insecure default — set JWT_SECRET before deploying.\n');
-}
+import { JWT_SECRET } from '../lib/jwtConfig';
 
 export interface AuthRequest extends Request {
   user?: { userId: number; username: string; role: string };

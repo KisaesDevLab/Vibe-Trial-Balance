@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import multer from 'multer';
@@ -12,6 +17,7 @@ import { logAiUsage } from '../lib/aiUsage';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonArray } from '../lib/aiJsonExtract';
+import { sendServerError } from '../lib/safeError';
 
 function txHash(date: string, description: string, amount: number): string {
   return createHash('sha256').update(`${date}|${description}|${amount}`).digest('hex').slice(0, 64);
@@ -147,8 +153,7 @@ btCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
     const rows = await query.limit(pageSize).offset(offset);
     res.json({ data: rows, error: null, meta: { total, page, pageSize, pages: Math.ceil(total / pageSize) } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -187,8 +192,7 @@ btCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<vo
     }).returning('*');
     res.status(201).json({ data: row, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -428,8 +432,7 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
 
     res.json({ data: { imported: importedCount, duplicates: duplicateCount }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -516,8 +519,7 @@ btCollectionRouter.post('/manual', async (req: AuthRequest, res: Response): Prom
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -553,8 +555,7 @@ btCollectionRouter.post('/batch-delete', async (req: AuthRequest, res: Response)
     });
     res.json({ data: { deleted: result.data.ids.length }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -607,8 +608,7 @@ btCollectionRouter.post('/batch-classify', async (req: AuthRequest, res: Respons
 
     res.json({ data: { updated: ids.length }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -650,8 +650,7 @@ btCollectionRouter.post('/batch-update-source', async (req: AuthRequest, res: Re
     });
     res.json({ data: { updated: ids.length }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -712,8 +711,7 @@ btCollectionRouter.post('/batch-confirm-ai', async (req: AuthRequest, res: Respo
 
     res.json({ data: { confirmed }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -823,9 +821,7 @@ Respond with a JSON array and nothing else. Each element: { "id": number, "accou
 
     res.json({ data: { classified, results: suggestions }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    const code = (err as { code?: string }).code === 'NO_API_KEY' ? 'NO_API_KEY' : 'SERVER_ERROR';
-    res.status(code === 'NO_API_KEY' ? 400 : 500).json({ data: null, error: { code, message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -933,8 +929,7 @@ btCollectionRouter.patch('/:id', async (req: AuthRequest, res: Response): Promis
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Transaction not found' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -962,8 +957,7 @@ btCollectionRouter.delete('/:id', async (req: AuthRequest, res: Response): Promi
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Transaction not found' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -983,8 +977,7 @@ btRulesRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =>
       .orderBy('r.times_confirmed', 'desc');
     res.json({ data: rules, error: null, meta: { count: rules.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });
 
@@ -1004,7 +997,6 @@ btRulesRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<vo
     }
     res.json({ data: { deleted }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-tx');
   }
 });

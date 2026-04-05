@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2024–2026 Kisaes LLC
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
 
 import { Router, Response } from 'express';
 import multer from 'multer';
@@ -12,6 +14,8 @@ import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
 import { extractJsonObject } from '../lib/aiJsonExtract';
+import { sendServerError } from '../lib/safeError';
+import { loadOcrSettings, isOcrConfigured, ocrPages } from '../lib/ocrProvider';
 
 export const bankStatementPdfRouter = Router();
 bankStatementPdfRouter.use(authMiddleware);
@@ -260,8 +264,46 @@ bankStatementPdfRouter.post(
       const isScanned = textLength < 100;
       const { provider, primaryModel, vision } = await getLLMProvider();
 
+      // ── OCR pre-processing (optional) ──────────────────────────────────────
+      const ocrSettings = await loadOcrSettings();
+      const requestOcr = req.body.useOcr === 'true' && isOcrConfigured(ocrSettings);
+      let ocrMode = false;
+      const ocrWarnings: string[] = [];
+
+      if (requestOcr) {
+        try {
+          const images = await renderPdfToImages(req.file.buffer, 20);
+          if (images.length === 0) throw new Error('No pages rendered from PDF');
+
+          console.log(`[bank-pdf] OCR: processing ${images.length} pages via ${ocrSettings.model}`);
+          const ocrResult = await ocrPages(ocrSettings, images);
+          logAiUsage({ endpoint: 'bank-statement-pdf/analyze-ocr', model: ocrSettings.model, inputTokens: ocrResult.totalInputTokens, outputTokens: ocrResult.totalOutputTokens, userId: req.user?.userId, clientId });
+          ocrWarnings.push(...ocrResult.warnings);
+
+          const ocrText = ocrResult.texts.join('\n\n--- Page Break ---\n\n');
+          const ocrTextLength = ocrText.replace(/\s/g, '').length;
+
+          if (ocrTextLength < 50) {
+            // OCR ran but produced negligible text — fall back to standard flow
+            console.warn(`[bank-pdf] OCR produced only ${ocrTextLength} chars — falling back to standard flow`);
+            ocrWarnings.push('OCR produced very little text. Falling back to standard extraction.');
+          } else {
+            extractedText = ocrText;
+            textLength = ocrTextLength;
+            ocrMode = true;
+            console.log(`[bank-pdf] OCR complete: ${ocrText.length} chars from ${images.length} pages`);
+          }
+        } catch (ocrErr) {
+          // Log full error server-side, send generic message to client
+          const msg = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
+          console.warn(`[bank-pdf] OCR failed, falling back to standard flow:`, msg);
+          ocrWarnings.push('OCR pre-processing failed. Falling back to standard extraction.');
+        }
+      }
+
       // Prefer vision mode for bank statements (check images contain payee info)
-      let useVision = vision.provider.supportsVision;
+      // Skip vision if OCR already produced text — use the text-based path instead
+      let useVision = !ocrMode && vision.provider.supportsVision;
       let visionFailed = false;
       let messageContent: string | LLMContentPart[];
 
@@ -289,23 +331,26 @@ bankStatementPdfRouter.post(
         }
       }
 
+      // Re-evaluate scanned status: OCR may have produced text from a scanned PDF
+      const effectivelyScanned = !ocrMode && textLength < 100;
+
       if (!useVision) {
-        if (isScanned && !visionFailed) {
+        if (effectivelyScanned && !visionFailed) {
           res.status(422).json({
             data: null,
             error: {
               code: 'SCANNED_PDF',
-              message: 'This PDF appears to be scanned (no text layer). Configure a vision-capable provider (Claude, OpenAI, or an Ollama vision model) in Settings > AI Provider > Vision Processing.',
+              message: 'This PDF appears to be scanned (no text layer). Configure a vision-capable provider (Claude, OpenAI, or an Ollama vision model) in Settings > AI Provider > Vision Processing, or enable OCR pre-processing.',
             },
           });
           return;
         }
-        if (isScanned && visionFailed) {
+        if (effectivelyScanned && visionFailed) {
           res.status(422).json({
             data: null,
             error: {
               code: 'SCANNED_PDF',
-              message: 'Scanned PDF detected. Install poppler-utils on the server (sudo apt install poppler-utils) to enable vision-mode import.',
+              message: 'Scanned PDF detected. Install poppler-utils on the server (sudo apt install poppler-utils) to enable vision-mode import, or enable OCR pre-processing.',
             },
           });
           return;
@@ -441,15 +486,15 @@ bankStatementPdfRouter.post(
           openingBalance: analysisResult.openingBalance ?? null,
           closingBalance: analysisResult.closingBalance ?? null,
           transactions: txns,
-          warnings: analysisResult.warnings ?? [],
+          warnings: [...ocrWarnings, ...(analysisResult.warnings ?? [])],
           visionMode: useVision,
+          ocrMode,
           extractedTextLength: textLength,
         },
         error: null,
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+      sendServerError(res, err, 'bank-pdf');
     }
   },
 );
@@ -523,7 +568,6 @@ bankStatementPdfRouter.post('/confirm', async (req: AuthRequest, res: Response):
       error: null,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'bank-pdf');
   }
 });

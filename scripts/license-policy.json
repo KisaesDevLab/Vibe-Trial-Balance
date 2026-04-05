@@ -1,10 +1,8 @@
 {
-  "_comment": "Machine-readable license policy for vibe-tb (BSL-1.1, converts to Apache-2.0 on 2030-03-30).",
-  "_updated": "2026-03-30",
+  "_comment": "Machine-readable license policy for vibe-tb (Elastic License 2.0).",
+  "_updated": "2026-04-05",
 
-  "projectLicense": "BUSL-1.1",
-  "changeDate": "2030-03-30",
-  "changeLicense": "Apache-2.0",
+  "projectLicense": "Elastic-2.0",
 
   "allowed": [
     "MIT",
@@ -74,20 +72,25 @@
     }
   ],
 
-  "bslRequirements": {
+  "elv2Requirements": {
     "licenseFile": {
       "required": true,
       "path": "LICENSE",
-      "status": "PRESENT — full BSL-1.1 text with parameters"
+      "status": "PRESENT — full Elastic License 2.0 text"
+    },
+    "noticeFile": {
+      "required": true,
+      "path": "NOTICE",
+      "status": "PRESENT — copyright, attribution, and third-party notices"
     },
     "sourceHeaders": {
       "required": true,
-      "status": "PARTIAL — 17/165+ files have SPDX headers",
-      "note": "BSL-1.1 requires conspicuous display of the License on each copy."
+      "status": "COMPLETE — all source files have ELv2 headers",
+      "note": "ELv2 requires that licensing notices not be removed or obscured."
     },
     "sourceCodeLink": {
       "required": false,
-      "description": "Not legally required by BSL-1.1, but kept for transparency.",
+      "description": "Not legally required by ELv2, but kept for transparency.",
       "status": "IMPLEMENTED — Source Code link in Sidebar footer (Sidebar.tsx)",
       "note": "Link points to GitHub repo."
     }

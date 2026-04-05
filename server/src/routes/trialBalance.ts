@@ -1,8 +1,14 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
+import { sendServerError } from '../lib/safeError';
 
 export const tbPeriodRouter = Router({ mergeParams: true });
 tbPeriodRouter.use(authMiddleware);
@@ -41,8 +47,7 @@ tbPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
       .orderBy('account_number', 'asc');
     res.json({ data: rows.map(parseBigInts), error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'trial-balance');
   }
 });
 
@@ -105,8 +110,7 @@ tbPeriodRouter.post('/initialize', async (req: AuthRequest, res: Response): Prom
     await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'create', description: `Initialized TB from COA — ${toInsert.length} rows created, ${removed} inactive removed` });
     res.json({ data: { initialized: toInsert.length, removed }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'trial-balance');
   }
 });
 
@@ -197,8 +201,7 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
     await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported unadjusted balances — ${upserted} upserted, ${skipped} skipped` });
     res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'trial-balance');
   }
 });
 
@@ -284,8 +287,7 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
     await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported prior year balances — ${upserted} upserted, ${skipped} skipped` });
     res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'trial-balance');
   }
 });
 
@@ -331,7 +333,6 @@ tbPeriodRouter.put('/:accountId', async (req: AuthRequest, res: Response): Promi
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'trial-balance');
   }
 });

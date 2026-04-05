@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -5,6 +10,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAiUsage } from '../lib/aiUsage';
 import { getLLMProvider } from '../lib/aiClient';
+import { sendServerError } from '../lib/safeError';
 
 export const supportRouter = Router();
 supportRouter.use(authMiddleware);
@@ -137,8 +143,9 @@ ${knowledge}`;
     writeEvent({ type: 'done', fullText, conversationId });
     res.end();
   } catch (err: unknown) {
-    const errMessage = err instanceof Error ? err.message : 'Unknown error';
-    writeEvent({ type: 'error', message: errMessage });
+    const internal = err instanceof Error ? err.message : String(err);
+    console.error('[support]', internal);
+    writeEvent({ type: 'error', message: 'An internal error occurred. Please try again.' });
     res.end();
   }
 });
@@ -160,8 +167,7 @@ supportRouter.get('/conversations', async (req: AuthRequest, res: Response): Pro
       .orderBy('sc.updated_at', 'desc');
     res.json({ data: rows, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'support');
   }
 });
 
@@ -185,8 +191,7 @@ supportRouter.get('/conversations/:id', async (req: AuthRequest, res: Response):
       .select('id', 'role', 'content', 'created_at');
     res.json({ data: { ...conv, messages }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'support');
   }
 });
 
@@ -211,8 +216,7 @@ supportRouter.put('/conversations/:id', async (req: AuthRequest, res: Response):
     const conv = await db('support_conversations').where({ id }).first();
     res.json({ data: conv, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'support');
   }
 });
 
@@ -232,8 +236,7 @@ supportRouter.delete('/conversations/:id', async (req: AuthRequest, res: Respons
     }
     res.json({ data: { deleted: true }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'support');
   }
 });
 
@@ -255,7 +258,6 @@ supportRouter.post('/conversations/:id/bookmark', async (req: AuthRequest, res: 
     await db('support_conversations').where({ id }).update({ is_bookmarked: newValue, updated_at: db.fn.now() });
     res.json({ data: { is_bookmarked: newValue }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'support');
   }
 });

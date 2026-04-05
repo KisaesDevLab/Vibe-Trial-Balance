@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { apiFetch } from './client';
 
 export interface SettingsData {
@@ -52,6 +57,14 @@ export interface LLMProviderSettings {
   maxTokensBankStatement: number;
   /** Max characters per chunk for large statement processing (default: 40000) */
   chunkCharLimit: number;
+  /** Whether OCR pre-processing is enabled */
+  ocrEnabled: boolean;
+  /** Ollama base URL for OCR (may differ from main Ollama URL) */
+  ocrBaseUrl: string;
+  /** OCR model name (default: glm-ocr) */
+  ocrModel: string;
+  /** Per-page timeout in ms for OCR processing (default: 120000) */
+  ocrTimeoutMs: number;
 }
 
 export const getLLMProviderSettings = () =>
@@ -79,3 +92,9 @@ export const fetchProviderModels = (provider: string) =>
     method: 'POST',
     body: JSON.stringify({ provider }),
   });
+
+export const getOcrStatus = () =>
+  apiFetch<{ configured: boolean; model: string }>('/settings/ocr-status');
+
+export const testOcr = () =>
+  apiFetch<{ valid: boolean; model?: string; message?: string }>('/settings/test-ocr', { method: 'POST' });

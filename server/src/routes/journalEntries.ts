@@ -1,9 +1,15 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
+import { sendServerError } from '../lib/safeError';
 
 export const jeCollectionRouter = Router({ mergeParams: true });
 jeCollectionRouter.use(authMiddleware);
@@ -76,8 +82,7 @@ jeCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
 
     res.json({ data: result, error: null, meta: { count: result.length } });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'journal-entries');
   }
 });
 
@@ -149,8 +154,7 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'journal-entries');
   }
 });
 
@@ -174,8 +178,7 @@ jeItemRouter.get('/:id', async (req: AuthRequest, res: Response): Promise<void> 
 
     res.json({ data: { ...entry, lines: parseBigIntLines(lines) }, error: null });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'journal-entries');
   }
 });
 
@@ -232,8 +235,7 @@ jeItemRouter.put('/:id/lines', async (req: AuthRequest, res: Response): Promise<
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'journal-entries');
   }
 });
 
@@ -252,8 +254,7 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
       return;
     }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'journal-entries');
     return;
   }
   const patchSchema = z.object({
@@ -326,11 +327,11 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    if (message === 'NOT_FOUND') {
+    const internal = err instanceof Error ? err.message : '';
+    if (internal === 'NOT_FOUND') {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
     } else {
-      res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+      sendServerError(res, err, 'journal-entries');
     }
   }
 });
@@ -362,7 +363,6 @@ jeItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<voi
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
       return;
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message } });
+    sendServerError(res, err, 'journal-entries');
   }
 });

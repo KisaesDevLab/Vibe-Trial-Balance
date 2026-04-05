@@ -1,6 +1,11 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMProviderSettings, saveLLMProviderSettings, testLLM, fetchOpenAIModels, fetchProviderModels, type LLMProvider, type LLMProviderSettings, type OpenAIModelInfo } from '../api/settings';
+import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMProviderSettings, saveLLMProviderSettings, testLLM, testOcr, fetchOpenAIModels, fetchProviderModels, type LLMProvider, type LLMProviderSettings, type OpenAIModelInfo } from '../api/settings';
 import { getMcpTokenStatus, generateMcpToken, revokeMcpToken } from '../api/mcpSettings';
 import { getAiPricing, saveAiPricing, fetchAiPricingFromClaude, getAiUsage, getAiModels, saveAiModels, getAvailableModels, type AiPricingMap } from '../api/aiUsage';
 import { useAuthStore } from '../store/uiStore';
@@ -46,6 +51,8 @@ export function SettingsPage() {
   const [llmError, setLlmError] = useState<string | null>(null);
   const [llmTesting, setLlmTesting] = useState(false);
   const [llmTestResult, setLlmTestResult] = useState<{ valid: boolean; message?: string } | null>(null);
+  const [ocrTesting, setOcrTesting] = useState(false);
+  const [ocrTestResult, setOcrTestResult] = useState<{ valid: boolean; message?: string } | null>(null);
 
   // OpenAI model fetch state
   const [openaiModels, setOpenaiModels] = useState<OpenAIModelInfo[] | null>(null);
@@ -214,6 +221,10 @@ export function SettingsPage() {
     openaiCompatFastModel: '',
     openaiCompatVisionOverride: '',
     timeoutMs: 120000,
+    ocrEnabled: false,
+    ocrBaseUrl: '',
+    ocrModel: 'glm-ocr',
+    ocrTimeoutMs: 120000,
     maxTokensDefault: 4096,
     maxTokensBankStatement: 32768,
     chunkCharLimit: 30000,
@@ -243,6 +254,31 @@ export function SettingsPage() {
     const res = await testLLM();
     setLlmTesting(false);
     if (res.data) setLlmTestResult(res.data);
+  };
+
+  const handleTestOcr = async () => {
+    if (llmEdits) {
+      await handleSaveLLM();
+      // If save failed, don't proceed with test against stale settings
+      if (llmError) {
+        setOcrTestResult({ valid: false, message: 'Save failed — fix settings errors first.' });
+        return;
+      }
+    }
+    setOcrTesting(true);
+    setOcrTestResult(null);
+    try {
+      const res = await testOcr();
+      if (res.error) {
+        setOcrTestResult({ valid: false, message: res.error.message });
+      } else {
+        setOcrTestResult({ valid: true, message: `Connected to ${res.data?.model ?? 'OCR model'}` });
+      }
+    } catch (e) {
+      setOcrTestResult({ valid: false, message: e instanceof Error ? e.message : 'Test failed' });
+    } finally {
+      setOcrTesting(false);
+    }
   };
 
   // MCP token queries — all users can view status; mutations are admin only
@@ -642,6 +678,86 @@ export function SettingsPage() {
                 </div>
               );
             })()}
+
+            {/* OCR Pre-processing */}
+            <div className="mb-4 border border-purple-200 dark:border-purple-800 rounded p-3 bg-purple-50/30 dark:bg-purple-900/10">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-medium text-gray-600 dark:text-gray-400">OCR Pre-processing (Ollama)</p>
+                <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={effectiveLlm.ocrEnabled}
+                    onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), ocrEnabled: e.target.checked }))}
+                    className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                  />
+                  Enable
+                </label>
+              </div>
+              <p className="text-[10px] text-gray-400 dark:text-gray-500 mb-3">
+                Use a local OCR model (e.g. GLM-OCR on Ollama) to extract text from PDF images before sending to the main AI.
+                Improves accuracy for scanned documents and keeps image data local. Uses Ollama&apos;s native /api/generate endpoint.
+              </p>
+              <div className="grid grid-cols-2 gap-3 mb-2">
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">OCR Base URL</label>
+                  <input
+                    value={effectiveLlm.ocrBaseUrl}
+                    onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), ocrBaseUrl: e.target.value }))}
+                    placeholder="http://192.168.1.100:11434"
+                    className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-0.5">Can differ from the main Ollama URL</p>
+                  {effectiveLlm.ocrBaseUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(effectiveLlm.ocrBaseUrl) && (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
+                      Non-localhost URL: PDF page images will be sent over the network to this server. Ensure this is a trusted endpoint on a secure network.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">OCR Model</label>
+                  <input
+                    value={effectiveLlm.ocrModel}
+                    onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), ocrModel: e.target.value }))}
+                    placeholder="glm-ocr"
+                    className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-0.5">Default: glm-ocr</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 mb-2">
+                <label className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">Per-page timeout (ms)</label>
+                <input
+                  type="number"
+                  value={effectiveLlm.ocrTimeoutMs}
+                  onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), ocrTimeoutMs: Number(e.target.value) || 120000 }))}
+                  className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
+                />
+                <span className="text-[10px] text-gray-400">Default: 120000 (2 min)</span>
+              </div>
+              <p className="text-[10px] text-gray-400 dark:text-gray-500 mb-2">
+                OCR is CPU-intensive. Expect ~30-60 seconds per page on typical hardware. GPU acceleration significantly improves speed.
+                Context window is automatically set to 16384 for image processing.
+              </p>
+              {effectiveLlm.ocrEnabled && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleTestOcr}
+                    disabled={ocrTesting || !effectiveLlm.ocrBaseUrl}
+                    className="px-3 py-1 text-xs border border-purple-300 dark:border-purple-700 rounded hover:bg-purple-50 dark:hover:bg-purple-900/30 dark:text-gray-300 disabled:opacity-50"
+                  >
+                    {ocrTesting ? 'Testing…' : 'Test OCR Connection'}
+                  </button>
+                  {ocrTestResult && (
+                    <span className={`text-xs ${ocrTestResult.valid ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                      {ocrTestResult.valid ? ocrTestResult.message : `Failed: ${ocrTestResult.message}`}
+                    </span>
+                  )}
+                </div>
+              )}
+              <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2">
+                Independent from the main AI provider. You can use Claude/OpenAI for data extraction while using local Ollama for OCR.
+              </p>
+            </div>
 
             {/* Timeout */}
             <div className="mb-4 flex items-center gap-3">

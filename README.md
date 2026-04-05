@@ -2,7 +2,7 @@
 
 A self-hosted tax preparation and accounting workpaper application for small CPA firms. Manage trial balances, journal entries, bank transactions, tax code assignments, financial statements, and client engagements — with AI-powered diagnostics, classification, and PDF import.
 
-**License:** BSL-1.1 ([full text](LICENSE)) — converts to Apache-2.0 on 2030-03-30
+**License:** Elastic License 2.0 (ELv2) ([full text](LICENSE)) — free for personal and internal firm use. [Commercial license](COMMERCIAL_LICENSE.md) required for client-facing access. [FAQ](docs/LICENSING_FAQ.md)
 
 ---
 
@@ -18,7 +18,7 @@ A self-hosted tax preparation and accounting workpaper application for small CPA
 - [AI Provider Configuration](#ai-provider-configuration)
 - [Backup & Restore](#backup--restore)
 - [MCP Integration (Claude Desktop)](#mcp-integration-claude-desktop)
-- [License Compliance](#license-compliance)
+- [License](#license)
 
 ---
 
@@ -59,15 +59,17 @@ Create a `.env` file in `server/` (or set these as system environment variables)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `NODE_ENV` | *(none)* | Set to `production` for production deployments — enforces `JWT_SECRET` requirement |
 | `PORT` | `3001` | Server listen port |
 | `DB_HOST` | `127.0.0.1` | PostgreSQL host |
 | `DB_PORT` | `5432` | PostgreSQL port |
 | `DB_NAME` | `vibe_tb_db` | Database name |
 | `DB_USER` | `vibetb` | Database user |
 | `DB_PASSWORD` | `localdev123` | Database password |
-| `JWT_SECRET` | `local-dev-secret-12345` | **Change in production** — JWT signing key |
+| `JWT_SECRET` | `local-dev-secret-12345` | **Required in production** — server refuses to start without it when `NODE_ENV=production` |
 | `JWT_EXPIRY` | `8h` | JWT token lifetime |
 | `ALLOWED_ORIGIN` | `http://localhost:5173` | CORS allowed origin (set to your domain in production) |
+| `ENCRYPTION_KEY` | *(falls back to JWT_SECRET)* | Encryption key for API keys stored in the database. Set a separate value for best security. |
 | `ANTHROPIC_API_KEY` | *(none)* | Optional — can also be set in Admin > Settings |
 | `APP_BASE_URL` | `http://localhost:3001` | Used in MCP integration for self-referencing URLs |
 
@@ -131,6 +133,7 @@ chmod +x deploy/setup-pi.sh
 ### 2. Configure environment
 ```bash
 cat > /opt/vibe-tb/server/.env << 'EOF'
+NODE_ENV=production
 PORT=3001
 DB_HOST=127.0.0.1
 DB_PORT=5432
@@ -138,6 +141,7 @@ DB_NAME=vibe_tb_db
 DB_USER=vibetb
 DB_PASSWORD=YOUR_STRONG_PASSWORD_HERE
 JWT_SECRET=YOUR_RANDOM_SECRET_HERE
+ENCRYPTION_KEY=YOUR_SEPARATE_RANDOM_SECRET_HERE
 ALLOWED_ORIGIN=http://YOUR_PI_IP_OR_HOSTNAME
 EOF
 ```
@@ -300,8 +304,10 @@ EXPOSE 80
 ### 4. Create `.env` for production
 
 ```bash
+NODE_ENV=production
 DB_PASSWORD=your_strong_password_here
 JWT_SECRET=your_random_64_char_secret_here
+ENCRYPTION_KEY=your_separate_random_secret_here
 ALLOWED_ORIGIN=http://your-server-ip
 ANTHROPIC_API_KEY=sk-ant-...       # Optional — can configure in app Settings instead
 ```
@@ -436,14 +442,17 @@ The app has built-in backup (Admin > Backup & Restore), but also set up external
 
 #### 5. Security checklist
 
+- [ ] Set `NODE_ENV=production` in your `.env` file
 - [ ] Change default `admin` / `admin` password immediately
-- [ ] Set a strong `JWT_SECRET` (64+ random characters)
+- [ ] Set a strong `JWT_SECRET` (64+ random characters) — server refuses to start without it in production
+- [ ] Set a strong `ENCRYPTION_KEY` (separate from JWT_SECRET) for API key encryption at rest
 - [ ] Set a strong `DB_PASSWORD`
 - [ ] Configure HTTPS (Caddy, Certbot, or cloud load balancer)
 - [ ] Set `ALLOWED_ORIGIN` to your exact domain (no wildcards)
 - [ ] Enable firewall (UFW, cloud security groups)
 - [ ] Set up external database backups
-- [ ] Review BSL-1.1 compliance: LICENSE file included, source code link in app footer
+- [ ] Regenerate your MCP token after upgrading (Admin > Settings > MCP Integration)
+- [ ] Review ELv2 compliance: LICENSE file included, source code link in app footer
 
 ---
 
@@ -485,12 +494,16 @@ See `server/knowledge/mcp-integration.md` for the full tool/resource/prompt refe
 
 ## License
 
-This project is licensed under the **Business Source License 1.1** (BSL-1.1).
+This project is licensed under the **Elastic License 2.0** (ELv2).
 
-- **Additional Use Grant:** You may use the Licensed Work in production for your own internal business operations, including deploying it on self-hosted hardware for use by your employees and clients. You may not offer the Licensed Work to third parties as a commercial product, managed service, or appliance for resale.
-- **Change Date:** 2030-03-30 — on this date the license converts to **Apache-2.0**.
-- The LICENSE file contains the full BSL-1.1 text.
+- **Free for:** Personal use, internal firm use, self-hosting, modification
+- **Requires commercial license:** Providing client-facing access (clients get their own login)
+- **Not permitted:** Offering the software as a hosted/managed SaaS to third parties
+- The [LICENSE](LICENSE) file contains the full ELv2 text.
+- See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for commercial licensing terms.
+- See [docs/LICENSING_FAQ.md](docs/LICENSING_FAQ.md) for common questions.
 - All dependencies are MIT/Apache-2.0/BSD/ISC compatible (verified via `./scripts/license-audit.sh`).
 - See `scripts/license-policy.json` for the complete dependency license policy.
+- Contact **licensing@kisaes.com** for commercial inquiries.
 
 Run `./scripts/license-audit.sh` before any release to verify compliance.

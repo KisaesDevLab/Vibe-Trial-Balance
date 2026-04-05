@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
+
 /**
  * Evaluates a simple arithmetic expression entered in an amount field.
  * e.g. "94+4" → "98", "1000*0.05" → "50", "500-100/2" → "450"

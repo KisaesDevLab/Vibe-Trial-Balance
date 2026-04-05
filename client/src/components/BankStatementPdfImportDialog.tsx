@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: BUSL-1.1
-// Copyright (C) 2024–2026 Kisaes LLC
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
+// except in compliance with the Elastic License 2.0.
+// See LICENSE file in the project root for full license text.
 
 import { useState, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -12,6 +14,7 @@ import {
 } from '../api/bankStatementPdfImport';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { AiConsentDialog, AI_PII } from './AiConsentDialog';
+import { getOcrStatus } from '../api/settings';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -180,7 +183,17 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ imported: number; duplicates: number } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [useOcr, setUseOcr] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: ocrStatus } = useQuery({
+    queryKey: ['ocr-status'],
+    queryFn: async () => {
+      const res = await getOcrStatus();
+      return res.data;
+    },
+  });
+  const ocrAvailable = ocrStatus?.configured ?? false;
 
   const { data: accountsData } = useQuery({
     queryKey: ['chart-of-accounts', clientId],
@@ -213,7 +226,7 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
     setStage('analyzing');
     setError(null);
 
-    const res = await analyzeBankStatementPdf(selectedFile, clientId);
+    const res = await analyzeBankStatementPdf(selectedFile, clientId, useOcr || undefined);
     if (res.error) {
       setError(res.error.message);
       setStage('upload');
@@ -336,6 +349,26 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
                 )}
               </div>
 
+              {ocrAvailable && selectedFile && (
+                <div className="bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800 rounded p-3">
+                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useOcr}
+                      onChange={(e) => setUseOcr(e.target.checked)}
+                      className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                    />
+                    <span>Use OCR pre-processing</span>
+                    <span className="text-xs text-gray-400">(local Ollama — {ocrStatus?.model})</span>
+                  </label>
+                  {useOcr && (
+                    <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 ml-6">
+                      OCR processes each page locally (~30-60 sec/page). A multi-page statement may take several minutes.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 AI will analyze the PDF to extract transactions. If the PDF contains check images, the AI will attempt to read payee names from them.
               </p>
@@ -353,7 +386,10 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
               {showConsent && (
                 <AiConsentDialog
                   feature="AI Bank Statement PDF Import"
-                  piiItems={AI_PII.bankStatementPdf}
+                  piiItems={[
+                    ...AI_PII.bankStatementPdf,
+                    ...(useOcr ? [{ label: 'OCR processing', detail: 'Page images will also be sent to the configured OCR server (Ollama) for text extraction before AI analysis' }] : []),
+                  ]}
                   onCancel={() => setShowConsent(false)}
                   onConfirm={() => { setShowConsent(false); handleAnalyze(); }}
                 />
@@ -365,8 +401,8 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
           {stage === 'analyzing' && (
             <div className="flex flex-col items-center justify-center py-16 text-gray-500 dark:text-gray-400">
               <span className="inline-block w-8 h-8 border-3 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
-              <p className="text-lg font-medium">Analyzing bank statement...</p>
-              <p className="text-sm mt-1">This may take a moment for longer statements.</p>
+              <p className="text-lg font-medium">{useOcr ? 'Running OCR + analyzing statement...' : 'Analyzing bank statement...'}</p>
+              <p className="text-sm mt-1">{useOcr ? 'OCR may take 30-60 seconds per page. Please wait.' : 'This may take a moment for longer statements.'}</p>
             </div>
           )}
 
