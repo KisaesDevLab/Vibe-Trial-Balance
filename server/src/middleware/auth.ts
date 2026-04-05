@@ -28,14 +28,16 @@ export function authMiddleware(
   const token = authHeader.slice(7);
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as {
+    const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as {
       userId: number;
       username: string;
       role: string;
     };
     req.user = payload;
     next();
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[auth] JWT verification failed: ${msg}`);
     res
       .status(401)
       .json({ data: null, error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token' } });

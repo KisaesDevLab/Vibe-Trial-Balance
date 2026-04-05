@@ -68,6 +68,6 @@ export async function generateMcpAgentJwt(): Promise<string | null> {
   return jwt.sign(
     { userId: agentUser.id, username: agentUser.username, role: agentUser.role },
     JWT_SECRET,
-    { expiresIn: '5m' } as jwt.SignOptions,
+    { algorithm: 'HS256', expiresIn: '5m' } as jwt.SignOptions,
   );
 }

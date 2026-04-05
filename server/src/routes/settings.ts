@@ -14,6 +14,7 @@ import { getLLMProvider, DEFAULT_FAST_MODEL, DEFAULT_PRIMARY_MODEL, loadLLMSetti
 import { extractJsonObject } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 import { encrypt, decrypt, isEncrypted } from '../lib/encryption';
+import { logAudit } from '../lib/periodGuard';
 import { loadOcrSettings, testOcrConnection } from '../lib/ocrProvider';
 
 export const settingsRouter = Router();
@@ -70,6 +71,7 @@ settingsRouter.put('/', async (req: AuthRequest, res: Response): Promise<void> =
         .insert({ key: 'claude_api_key', value: encryptedKey, updated_at: db.fn.now() })
         .onConflict('key')
         .merge({ value: encryptedKey, updated_at: db.fn.now() });
+      await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'setting', entityId: null, action: 'update', description: 'Updated Claude API key' });
     }
     res.json({ data: { saved: true }, error: null });
   } catch (err: unknown) {
@@ -125,6 +127,7 @@ settingsRouter.post('/mcp-token/generate', async (req: AuthRequest, res: Respons
       .insert({ key: 'mcp_token', value: tokenHash, updated_at: db.fn.now() })
       .onConflict('key')
       .merge({ value: tokenHash, updated_at: db.fn.now() });
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'setting', entityId: null, action: 'create', description: 'Generated new MCP token' });
     res.json({
       data: {
         token, // Full token returned ONCE on generation — only the hash is stored

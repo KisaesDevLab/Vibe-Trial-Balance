@@ -9,8 +9,20 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 const AUTH_TAG_LENGTH = 16;
 
+const isProduction = process.env.NODE_ENV === 'production';
+
+if (isProduction && !process.env.ENCRYPTION_KEY) {
+  console.error('\nFATAL: ENCRYPTION_KEY environment variable is required in production.');
+  console.error('Set a unique value separate from JWT_SECRET for defense-in-depth.\n');
+  process.exit(1);
+}
+
+if (!isProduction && !process.env.ENCRYPTION_KEY) {
+  console.warn('⚠️  ENCRYPTION_KEY not set — falling back to JWT_SECRET. Set ENCRYPTION_KEY for production.');
+}
+
 /**
- * Derives a 32-byte key from the ENCRYPTION_KEY env var (or falls back to JWT_SECRET).
+ * Derives a 32-byte key from the ENCRYPTION_KEY env var (or falls back to JWT_SECRET in dev).
  * Uses SHA-256 so the key length is always correct regardless of input length.
  */
 function getKey(): Buffer {

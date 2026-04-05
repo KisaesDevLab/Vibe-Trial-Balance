@@ -204,10 +204,19 @@ supportRouter.put('/conversations/:id', async (req: AuthRequest, res: Response):
     return;
   }
   try {
-    const { title, is_bookmarked } = req.body as { title?: string; is_bookmarked?: boolean };
+    const { z } = await import('zod');
+    const updateSchema = z.object({
+      title: z.string().min(1).max(500).optional(),
+      is_bookmarked: z.boolean().optional(),
+    });
+    const parsed = updateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.issues[0]?.message ?? 'Invalid input' } });
+      return;
+    }
     const updates: Record<string, unknown> = { updated_at: db.fn.now() };
-    if (title !== undefined) updates.title = title;
-    if (is_bookmarked !== undefined) updates.is_bookmarked = is_bookmarked;
+    if (parsed.data.title !== undefined) updates.title = parsed.data.title;
+    if (parsed.data.is_bookmarked !== undefined) updates.is_bookmarked = parsed.data.is_bookmarked;
     const count = await db('support_conversations').where({ id, user_id: userId }).update(updates);
     if (!count) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Conversation not found' } });

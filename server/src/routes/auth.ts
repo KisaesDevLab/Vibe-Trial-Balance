@@ -54,7 +54,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
     const token = jwt.sign(
       { userId: user.id, username: user.username, role: user.role },
       JWT_SECRET,
-      { expiresIn: JWT_EXPIRY } as jwt.SignOptions,
+      { algorithm: 'HS256', expiresIn: JWT_EXPIRY } as jwt.SignOptions,
     );
 
     res.json({

@@ -229,14 +229,20 @@ documentsItemRouter.put('/:id/link', async (req: AuthRequest, res: Response): Pr
       return;
     }
 
-    const { linkedAccountId, linkedJournalEntryId } = req.body as {
-      linkedAccountId?: number | null;
-      linkedJournalEntryId?: number | null;
-    };
+    const { z } = await import('zod');
+    const linkSchema = z.object({
+      linkedAccountId: z.number().int().positive().nullable().optional(),
+      linkedJournalEntryId: z.number().int().positive().nullable().optional(),
+    });
+    const parsed = linkSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.issues[0]?.message ?? 'Invalid input' } });
+      return;
+    }
 
     const updates: Record<string, unknown> = {};
-    if (linkedAccountId !== undefined) updates.linked_account_id = linkedAccountId ?? null;
-    if (linkedJournalEntryId !== undefined) updates.linked_journal_entry_id = linkedJournalEntryId ?? null;
+    if (parsed.data.linkedAccountId !== undefined) updates.linked_account_id = parsed.data.linkedAccountId ?? null;
+    if (parsed.data.linkedJournalEntryId !== undefined) updates.linked_journal_entry_id = parsed.data.linkedJournalEntryId ?? null;
 
     const [updated] = await db('client_documents')
       .where({ id: docId })

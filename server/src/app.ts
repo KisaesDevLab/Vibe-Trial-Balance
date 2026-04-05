@@ -7,6 +7,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/auth';
 import clientRoutes from './routes/clients';
 import { coaCollectionRouter, coaItemRouter } from './routes/chartOfAccounts';
@@ -49,13 +50,40 @@ import { sendServerError } from './lib/safeError';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const isProduction = process.env.NODE_ENV === 'production';
+
+if (isProduction && !process.env.ALLOWED_ORIGIN) {
+  console.error('\nFATAL: ALLOWED_ORIGIN environment variable is required in production.\n');
+  process.exit(1);
+}
 
 app.use(helmet());
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+
+// Global rate limiter — 200 requests per 15 minutes per IP
+app.use('/api/', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } },
+}));
+
+// Stricter limits for file upload / AI endpoints — 20 per hour per IP
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many upload/AI requests. Please try again later.' } },
+});
+app.use('/api/v1/import/', uploadLimiter);
+app.use('/api/v1/support/chat', uploadLimiter);
+app.use('/api/v1/periods/:periodId/diagnostics', uploadLimiter);
 
 app.get('/api/v1/health', async (_req, res) => {
   try {

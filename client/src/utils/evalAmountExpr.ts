@@ -7,11 +7,92 @@
  * Evaluates a simple arithmetic expression entered in an amount field.
  * e.g. "94+4" → "98", "1000*0.05" → "50", "500-100/2" → "450"
  *
+ * Uses a safe recursive-descent parser — no eval() or new Function().
+ *
  * Returns the original string unchanged if:
  *  - there are no operators (plain number like "1234.56")
  *  - the expression contains unsafe characters
  *  - evaluation fails
  */
+
+// ── Safe arithmetic parser (no eval/Function) ──────────────────────────────
+
+type Parser = { pos: number; expr: string };
+
+function peek(p: Parser): string {
+  return p.expr[p.pos] ?? '';
+}
+
+function consume(p: Parser): string {
+  return p.expr[p.pos++] ?? '';
+}
+
+function skipSpaces(p: Parser): void {
+  while (p.pos < p.expr.length && p.expr[p.pos] === ' ') p.pos++;
+}
+
+function parseNumber(p: Parser): number {
+  skipSpaces(p);
+  let numStr = '';
+  // Handle unary minus/plus
+  if (peek(p) === '-' || peek(p) === '+') {
+    numStr += consume(p);
+  }
+  while (p.pos < p.expr.length && (/[0-9.]/).test(peek(p))) {
+    numStr += consume(p);
+  }
+  const val = parseFloat(numStr);
+  if (isNaN(val)) throw new Error('Expected number');
+  return val;
+}
+
+function parseFactor(p: Parser): number {
+  skipSpaces(p);
+  if (peek(p) === '(') {
+    consume(p); // skip '('
+    const val = parseAddSub(p);
+    skipSpaces(p);
+    if (peek(p) !== ')') throw new Error('Expected )');
+    consume(p); // skip ')'
+    return val;
+  }
+  return parseNumber(p);
+}
+
+function parseMulDiv(p: Parser): number {
+  let left = parseFactor(p);
+  skipSpaces(p);
+  while (peek(p) === '*' || peek(p) === '/') {
+    const op = consume(p);
+    const right = parseFactor(p);
+    left = op === '*' ? left * right : left / right;
+    skipSpaces(p);
+  }
+  return left;
+}
+
+function parseAddSub(p: Parser): number {
+  let left = parseMulDiv(p);
+  skipSpaces(p);
+  while (peek(p) === '+' || peek(p) === '-') {
+    const op = consume(p);
+    const right = parseMulDiv(p);
+    left = op === '+' ? left + right : left - right;
+    skipSpaces(p);
+  }
+  return left;
+}
+
+function safeEval(expr: string): number {
+  const p: Parser = { pos: 0, expr };
+  const result = parseAddSub(p);
+  skipSpaces(p);
+  if (p.pos !== p.expr.length) throw new Error('Unexpected character');
+  return result;
+}
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
 export function evalAmountExpr(raw: string): string {
   // Strip currency symbols, commas, and spaces for parsing
   const s = raw.trim().replace(/[$,\s]/g, '');
@@ -26,9 +107,8 @@ export function evalAmountExpr(raw: string): string {
   if (!/^[0-9+\-*/.()]+$/.test(s)) return raw;
 
   try {
-    // eslint-disable-next-line no-new-func
-    const result = new Function(`return (${s})`)() as unknown;
-    if (typeof result !== 'number' || !isFinite(result)) return raw;
+    const result = safeEval(s);
+    if (!isFinite(result)) return raw;
     const rounded = Math.round(result * 100) / 100;
     return String(rounded);
   } catch {
