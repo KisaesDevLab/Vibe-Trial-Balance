@@ -22,6 +22,12 @@ coverage/
 # Claude Code local settings
 .claude/settings.local.json
 
+# Playwright / e2e tests
+e2e/
+playwright.config.ts
+playwright-report/
+test-results/
+
 # Internal planning docs
 *_BUILD_PLAN*.md
 specs/*-plan.md
