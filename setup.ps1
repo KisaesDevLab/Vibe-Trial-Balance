@@ -17,7 +17,12 @@ $PROJECT_DIR = "$env:USERPROFILE\Projects\Vibe-Trial-Balance"
 $DB_USER = "vibetb"
 $DB_PASS = "localdev123"
 $DB_NAME = "vibe_tb_db"
-$DB_PORT = "5432"
+
+# Default ports (will be adjusted if conflicts are detected)
+$PORT_DB = 5432
+$PORT_PGADMIN = 5050
+$PORT_SERVER = 3001
+$PORT_CLIENT = 5173
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -61,6 +66,71 @@ function Refresh-Path {
     $env:Path = $machinePath + ";" + $userPath
 }
 
+function Test-PortInUse($port) {
+    try {
+        $connections = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+        return ($null -ne $connections -and @($connections).Count -gt 0)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-PortProcess($port) {
+    try {
+        $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($conn) {
+            $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+            if ($proc) { return $proc.ProcessName }
+        }
+    }
+    catch {}
+    return $null
+}
+
+function Find-NextAvailablePort($startPort) {
+    $candidate = $startPort + 1
+    while ($candidate -lt ($startPort + 100)) {
+        if (-not (Test-PortInUse $candidate)) {
+            return $candidate
+        }
+        $candidate++
+    }
+    return $candidate
+}
+
+function Resolve-Port($port, $name) {
+    if (Test-PortInUse $port) {
+        $process = Get-PortProcess $port
+        $processInfo = if ($process) { " by '$process'" } else { "" }
+        $suggested = Find-NextAvailablePort $port
+
+        Write-Host ""
+        Write-Host "  [!] Port $port ($name) is already in use$processInfo." -ForegroundColor Yellow
+        Write-Host "      Suggested alternative: $suggested" -ForegroundColor Cyan
+
+        $userInput = Read-Host "      Enter port for $name [$suggested]"
+        if ([string]::IsNullOrWhiteSpace($userInput)) {
+            $chosen = $suggested
+        } else {
+            $chosen = [int]$userInput
+        }
+
+        # Verify chosen port is free
+        if (Test-PortInUse $chosen) {
+            Write-Host "      Port $chosen is also in use. Using $suggested instead." -ForegroundColor Yellow
+            $chosen = $suggested
+        }
+
+        Write-OK "$name will use port $chosen"
+        return $chosen
+    }
+    else {
+        Write-OK "Port $port ($name) is available"
+        return $port
+    }
+}
+
 # ============================================================
 # PRE-FLIGHT CHECK
 # ============================================================
@@ -92,7 +162,7 @@ Write-OK "winget is available"
 # STEP 1: GIT
 # ============================================================
 
-Write-Step "1/7" "Checking Git"
+Write-Step "1/8" "Checking Git"
 
 if (Test-Command "git") {
     $gitVersion = git --version
@@ -117,7 +187,7 @@ else {
 # STEP 2: NODE.JS
 # ============================================================
 
-Write-Step "2/7" "Checking Node.js"
+Write-Step "2/8" "Checking Node.js"
 
 if (Test-Command "node") {
     $nodeVersion = node --version
@@ -153,7 +223,7 @@ else {
 # STEP 3: DOCKER
 # ============================================================
 
-Write-Step "3/7" "Checking Docker Desktop"
+Write-Step "3/8" "Checking Docker Desktop"
 
 if (Test-Command "docker") {
     try {
@@ -191,10 +261,24 @@ else {
 }
 
 # ============================================================
-# STEP 4: CLONE / FIND REPO
+# STEP 4: PORT CONFLICT DETECTION
 # ============================================================
 
-Write-Step "4/7" "Setting up project directory"
+Write-Step "4/8" "Checking for port conflicts"
+
+$PORT_DB = Resolve-Port $PORT_DB "PostgreSQL"
+$PORT_PGADMIN = Resolve-Port $PORT_PGADMIN "pgAdmin"
+$PORT_SERVER = Resolve-Port $PORT_SERVER "Backend API"
+$PORT_CLIENT = Resolve-Port $PORT_CLIENT "Frontend (Vite)"
+
+Write-Host ""
+Write-Info "Ports: PostgreSQL=$PORT_DB  pgAdmin=$PORT_PGADMIN  Server=$PORT_SERVER  Client=$PORT_CLIENT"
+
+# ============================================================
+# STEP 5: CLONE / FIND REPO
+# ============================================================
+
+Write-Step "5/8" "Setting up project directory"
 
 if (Test-Path "$PROJECT_DIR\.git") {
     Write-Skip "Project already exists at $PROJECT_DIR"
@@ -211,32 +295,35 @@ elseif (Test-Path $PROJECT_DIR) {
     }
 }
 else {
-    if ($GITHUB_REPO -like "*YOUR_USERNAME*") {
-        Write-Info "No GitHub repo URL configured. Creating local project..."
-        New-Item -ItemType Directory -Path $PROJECT_DIR -Force | Out-Null
-        Set-Location $PROJECT_DIR
-        git init
-        Write-OK "Created project at $PROJECT_DIR"
-        Write-Host "  TIP: Update GITHUB_REPO at the top of setup.ps1 with your actual repo URL" -ForegroundColor Yellow
-    }
-    else {
-        Write-Info "Cloning from $GITHUB_REPO..."
-        $parentDir = Split-Path $PROJECT_DIR -Parent
-        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
-        git clone $GITHUB_REPO $PROJECT_DIR
-        Set-Location $PROJECT_DIR
-        Write-OK "Cloned repository"
-    }
+    Write-Info "Cloning from $GITHUB_REPO..."
+    $parentDir = Split-Path $PROJECT_DIR -Parent
+    New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+    git clone $GITHUB_REPO $PROJECT_DIR
+    Set-Location $PROJECT_DIR
+    Write-OK "Cloned repository"
 }
 
 # ============================================================
-# STEP 5: CREATE CONFIG FILES (if missing)
+# STEP 6: CREATE CONFIG FILES (if missing)
 # ============================================================
 
-Write-Step "5/7" "Checking configuration files"
+Write-Step "6/8" "Checking configuration files"
 
 if (Test-Path "server\.env") {
     Write-Skip "server/.env file exists"
+    # Update ports in existing .env if they differ from defaults
+    $envContent = Get-Content "server\.env" -Raw
+    if ($PORT_SERVER -ne 3001) {
+        $envContent = $envContent -replace "(?m)^PORT=.*", "PORT=$PORT_SERVER"
+    }
+    if ($PORT_DB -ne 5432) {
+        $envContent = $envContent -replace "(?m)^DB_PORT=.*", "DB_PORT=$PORT_DB"
+    }
+    if ($PORT_CLIENT -ne 5173) {
+        $envContent = $envContent -replace "(?m)^ALLOWED_ORIGIN=.*", "ALLOWED_ORIGIN=http://localhost:$PORT_CLIENT"
+    }
+    $envContent | Set-Content -Path "server\.env" -Encoding UTF8 -NoNewline
+    Write-Info "Updated server/.env with resolved ports"
 }
 else {
     Write-Info "Creating server/.env with dev defaults..."
@@ -244,7 +331,7 @@ else {
     $envLines = @(
         "# Database (matches docker-compose.yml)",
         "DB_HOST=127.0.0.1",
-        "DB_PORT=$DB_PORT",
+        "DB_PORT=$PORT_DB",
         "DB_NAME=$DB_NAME",
         "DB_USER=$DB_USER",
         "DB_PASSWORD=$DB_PASS",
@@ -257,9 +344,9 @@ else {
         "ANTHROPIC_API_KEY=",
         "",
         "# Server",
-        "PORT=3001",
+        "PORT=$PORT_SERVER",
         "NODE_ENV=development",
-        "ALLOWED_ORIGIN=http://localhost:5173"
+        "ALLOWED_ORIGIN=http://localhost:$PORT_CLIENT"
     )
     $envLines | Set-Content -Path "server\.env" -Encoding UTF8
     Write-OK "Created server/.env"
@@ -267,6 +354,18 @@ else {
 
 if (Test-Path "docker-compose.yml") {
     Write-Skip "docker-compose.yml exists"
+    # Update port mappings if non-default
+    if ($PORT_DB -ne 5432 -or $PORT_PGADMIN -ne 5050) {
+        $dcContent = Get-Content "docker-compose.yml" -Raw
+        if ($PORT_DB -ne 5432) {
+            $dcContent = $dcContent -replace '"5432:5432"', "`"${PORT_DB}:5432`""
+        }
+        if ($PORT_PGADMIN -ne 5050) {
+            $dcContent = $dcContent -replace '"5050:5050"', "`"${PORT_PGADMIN}:5050`""
+        }
+        $dcContent | Set-Content -Path "docker-compose.yml" -Encoding UTF8 -NoNewline
+        Write-Info "Updated docker-compose.yml with resolved ports"
+    }
 }
 else {
     Write-Fail "docker-compose.yml is missing!"
@@ -275,10 +374,10 @@ else {
 }
 
 # ============================================================
-# STEP 6: START POSTGRESQL
+# STEP 7: START POSTGRESQL
 # ============================================================
 
-Write-Step "6/7" "Starting PostgreSQL database"
+Write-Step "7/8" "Starting PostgreSQL database"
 
 $dbRunning = docker ps --filter "name=vibe-tb-db" --format "{{.Names}}" 2>$null
 if ($dbRunning -eq "vibe-tb-db") {
@@ -328,14 +427,14 @@ $pgAdminRunning = docker ps --filter "name=vibe-tb-pgadmin" --format "{{.Names}}
 if ($pgAdminRunning -ne "vibe-tb-pgadmin") {
     Write-Info "Starting pgAdmin (database browser)..."
     docker compose up -d pgadmin 2>$null
-    Write-OK "pgAdmin available at http://localhost:5050 (admin@local.dev / admin)"
+    Write-OK "pgAdmin available at http://localhost:$PORT_PGADMIN (admin@local.dev / admin)"
 }
 
 # ============================================================
-# STEP 7: INSTALL DEPENDENCIES + MIGRATE + SEED
+# STEP 8: INSTALL DEPENDENCIES + MIGRATE + SEED
 # ============================================================
 
-Write-Step "7/7" "Installing dependencies and setting up database"
+Write-Step "8/8" "Installing dependencies and setting up database"
 
 if (Test-Path "package.json") {
     Write-Info "Installing root dependencies..."
@@ -386,12 +485,8 @@ if (Test-Path "server\package.json") {
             exit 1
         }
         Pop-Location
-        Write-OK "Database seeded (admin user + tax line references)"
+        Write-OK "Database seeded (admin user + tax codes + demo data)"
     }
-}
-else {
-    Write-Info "server/package.json not found - skipping server setup"
-    Write-Info "(This is normal if Claude Code has not built Phase 1 yet)"
 }
 
 if (Test-Path "client\package.json") {
@@ -406,10 +501,6 @@ if (Test-Path "client\package.json") {
     Pop-Location
     Write-OK "Client dependencies installed"
 }
-else {
-    Write-Info "client/package.json not found - skipping client setup"
-    Write-Info "(This is normal if Claude Code has not built Phase 1 yet)"
-}
 
 # ============================================================
 # FINAL VERIFICATION
@@ -421,30 +512,17 @@ Write-Host "  Setup Complete!" -ForegroundColor Green
 Write-Host "================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Project location:  $PROJECT_DIR" -ForegroundColor White
-Write-Host "  PostgreSQL:        localhost:$DB_PORT (user: $DB_USER)" -ForegroundColor White
-Write-Host "  pgAdmin:           http://localhost:5050" -ForegroundColor White
+Write-Host "  PostgreSQL:        localhost:$PORT_DB (user: $DB_USER)" -ForegroundColor White
+Write-Host "  pgAdmin:           http://localhost:$PORT_PGADMIN" -ForegroundColor White
 Write-Host "    Login:           admin@local.dev / admin" -ForegroundColor Gray
 Write-Host "    Add server:      Host=db  Port=5432  User=$DB_USER  Pass=$DB_PASS" -ForegroundColor Gray
 Write-Host ""
 
-if (Test-Path "server\src\app.ts") {
-    Write-Host "  To start the backend:" -ForegroundColor Cyan
-    Write-Host "    cd server" -ForegroundColor White
-    Write-Host "    npm run dev" -ForegroundColor White
-    Write-Host "    Then open: http://localhost:3001/api/v1/health" -ForegroundColor Gray
-    Write-Host ""
-}
-
-if (Test-Path "client\package.json") {
-    Write-Host "  To start the frontend:" -ForegroundColor Cyan
-    Write-Host "    cd client" -ForegroundColor White
-    Write-Host "    npm run dev" -ForegroundColor White
-    Write-Host "    Then open: http://localhost:5173" -ForegroundColor Gray
-    Write-Host ""
-}
-
-Write-Host "  Or start both at once:" -ForegroundColor Cyan
+Write-Host "  To start the app:" -ForegroundColor Cyan
 Write-Host "    npm run dev" -ForegroundColor White
+Write-Host ""
+Write-Host "  Frontend:  http://localhost:$PORT_CLIENT" -ForegroundColor White
+Write-Host "  Backend:   http://localhost:$PORT_SERVER" -ForegroundColor White
 Write-Host ""
 Write-Host "  Default login:  admin / admin  (change immediately)" -ForegroundColor Yellow
 Write-Host ""

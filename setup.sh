@@ -22,6 +22,12 @@ info() { echo -e "${CYAN}[i]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 fail() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
+# ── Port configuration defaults ─────────────────────────────────────────────
+PORT_DB=5432
+PORT_PGADMIN=5050
+PORT_SERVER=3001
+PORT_CLIENT=5173
+
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║   Vibe Trial Balance — Quick Setup       ║${NC}"
@@ -40,6 +46,76 @@ if [ "$NODE_VER" -lt 18 ]; then
 fi
 log "Node $(node -v), npm $(npm -v)"
 
+# ── Port conflict detection ─────────────────────────────────────────────────
+
+check_port() {
+  local PORT=$1
+  local NAME=$2
+  local DEFAULT=$3
+
+  # Check if something is listening on the port
+  local IN_USE=false
+  if command -v ss >/dev/null 2>&1; then
+    ss -tlnp 2>/dev/null | grep -q ":${PORT} " && IN_USE=true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1 && IN_USE=true
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -tlnp 2>/dev/null | grep -q ":${PORT} " && IN_USE=true
+  fi
+
+  if [ "$IN_USE" = true ]; then
+    # Find the process using the port
+    local PROC=""
+    if command -v lsof >/dev/null 2>&1; then
+      PROC=$(lsof -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null | head -1)
+      if [ -n "$PROC" ]; then
+        PROC=$(ps -p "$PROC" -o comm= 2>/dev/null || echo "unknown")
+      fi
+    fi
+
+    # Find next available port
+    local SUGGESTED=$((PORT + 1))
+    while true; do
+      local TAKEN=false
+      if command -v ss >/dev/null 2>&1; then
+        ss -tlnp 2>/dev/null | grep -q ":${SUGGESTED} " && TAKEN=true
+      elif command -v lsof >/dev/null 2>&1; then
+        lsof -iTCP:"${SUGGESTED}" -sTCP:LISTEN >/dev/null 2>&1 && TAKEN=true
+      fi
+      [ "$TAKEN" = false ] && break
+      SUGGESTED=$((SUGGESTED + 1))
+    done
+
+    echo ""
+    warn "Port ${PORT} (${NAME}) is already in use${PROC:+ by '${PROC}'}."
+    info "Suggested alternative: ${SUGGESTED}"
+
+    # Check if stdin is a terminal (not piped from curl)
+    if [ -t 0 ]; then
+      read -rp "  Enter port for ${NAME} [${SUGGESTED}]: " USER_PORT
+      USER_PORT=${USER_PORT:-$SUGGESTED}
+    else
+      USER_PORT=$SUGGESTED
+      info "Non-interactive mode — using port ${USER_PORT}"
+    fi
+
+    echo "$USER_PORT"
+  else
+    log "Port ${PORT} (${NAME}) is available"
+    echo "$PORT"
+  fi
+}
+
+info "Checking for port conflicts..."
+
+PORT_DB=$(check_port "$PORT_DB" "PostgreSQL" 5432)
+PORT_PGADMIN=$(check_port "$PORT_PGADMIN" "pgAdmin" 5050)
+PORT_SERVER=$(check_port "$PORT_SERVER" "Backend API" 3001)
+PORT_CLIENT=$(check_port "$PORT_CLIENT" "Frontend" 5173)
+
+echo ""
+info "Ports: PostgreSQL=$PORT_DB  pgAdmin=$PORT_PGADMIN  Server=$PORT_SERVER  Client=$PORT_CLIENT"
+
 # ── Clone if needed ──────────────────────────────────────────────────────────
 
 REPO="https://github.com/KisaesDevLab/Vibe-Trial-Balance.git"
@@ -57,6 +133,59 @@ else
 fi
 
 cd "$APP_DIR"
+
+# ── Create server/.env with resolved ports ──────────────────────────────────
+
+if [ ! -f "server/.env" ]; then
+  info "Creating server/.env..."
+  RANDOM_SUFFIX=$((RANDOM % 999999))
+  cat > server/.env <<ENVEOF
+# Database (matches docker-compose.yml)
+DB_HOST=127.0.0.1
+DB_PORT=$PORT_DB
+DB_NAME=vibe_tb_db
+DB_USER=vibetb
+DB_PASSWORD=localdev123
+
+# Auth
+JWT_SECRET=local-dev-secret-$RANDOM_SUFFIX
+JWT_EXPIRY=8h
+
+# Anthropic API (optional — can also configure in Admin > Settings)
+ANTHROPIC_API_KEY=
+
+# Server
+PORT=$PORT_SERVER
+NODE_ENV=development
+ALLOWED_ORIGIN=http://localhost:$PORT_CLIENT
+ENVEOF
+  log "Created server/.env"
+else
+  info "server/.env already exists — updating ports if changed..."
+  # Update PORT, DB_PORT, and ALLOWED_ORIGIN if ports differ from defaults
+  if [ "$PORT_SERVER" != "3001" ]; then
+    sed -i "s/^PORT=.*/PORT=$PORT_SERVER/" server/.env
+  fi
+  if [ "$PORT_DB" != "5432" ]; then
+    sed -i "s/^DB_PORT=.*/DB_PORT=$PORT_DB/" server/.env
+  fi
+  if [ "$PORT_CLIENT" != "5173" ]; then
+    sed -i "s|^ALLOWED_ORIGIN=.*|ALLOWED_ORIGIN=http://localhost:$PORT_CLIENT|" server/.env
+  fi
+fi
+
+# ── Update docker-compose ports if non-default ──────────────────────────────
+
+if [ "$PORT_DB" != "5432" ] || [ "$PORT_PGADMIN" != "5050" ]; then
+  info "Adjusting docker-compose.yml port mappings..."
+  if [ "$PORT_DB" != "5432" ]; then
+    sed -i "s/\"5432:5432\"/\"$PORT_DB:5432\"/" docker-compose.yml
+  fi
+  if [ "$PORT_PGADMIN" != "5050" ]; then
+    sed -i "s/\"5050:5050\"/\"$PORT_PGADMIN:5050\"/" docker-compose.yml
+  fi
+  log "docker-compose.yml updated with custom ports"
+fi
 
 # ── Install dependencies ─────────────────────────────────────────────────────
 
@@ -99,7 +228,7 @@ if command -v docker >/dev/null 2>&1; then
   log "Database seeded."
 else
   warn "Docker not found. You need PostgreSQL 16 running with:"
-  warn "  Host: 127.0.0.1:5432"
+  warn "  Host: 127.0.0.1:$PORT_DB"
   warn "  Database: vibe_tb_db"
   warn "  User: vibetb / Password: localdev123"
   warn ""
@@ -115,9 +244,9 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "  Start the app:  ${CYAN}npm run dev${NC}"
 echo ""
-echo -e "  Client:  ${CYAN}http://localhost:5173${NC}"
-echo -e "  Server:  ${CYAN}http://localhost:3001${NC}"
-echo -e "  pgAdmin: ${CYAN}http://localhost:5050${NC}  (admin@local.dev / admin)"
+echo -e "  Client:  ${CYAN}http://localhost:${PORT_CLIENT}${NC}"
+echo -e "  Server:  ${CYAN}http://localhost:${PORT_SERVER}${NC}"
+echo -e "  pgAdmin: ${CYAN}http://localhost:${PORT_PGADMIN}${NC}  (admin@local.dev / admin)"
 echo ""
 echo -e "  Default login:  ${CYAN}admin / admin${NC}  (change immediately)"
 echo ""

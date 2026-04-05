@@ -19,6 +19,50 @@ function Stop-WithError {
     exit 1
 }
 
+function Test-PortInUse($port) {
+    try {
+        $connections = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+        return ($null -ne $connections -and @($connections).Count -gt 0)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-PortProcess($port) {
+    try {
+        $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($conn) {
+            $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+            if ($proc) { return $proc.ProcessName }
+        }
+    }
+    catch {}
+    return $null
+}
+
+function Find-NextAvailablePort($startPort) {
+    $candidate = $startPort + 1
+    while ($candidate -lt ($startPort + 100)) {
+        if (-not (Test-PortInUse $candidate)) {
+            return $candidate
+        }
+        $candidate++
+    }
+    return $candidate
+}
+
+# Read configured ports from server/.env (fall back to defaults)
+$PORT_SERVER = 3001
+$PORT_CLIENT = 5173
+
+if (Test-Path "server\.env") {
+    Get-Content "server\.env" | ForEach-Object {
+        if ($_ -match "^PORT=(\d+)") { $script:PORT_SERVER = [int]$Matches[1] }
+        if ($_ -match "^ALLOWED_ORIGIN=.*:(\d+)") { $script:PORT_CLIENT = [int]$Matches[1] }
+    }
+}
+
 Clear-Host
 Write-Host ""
 Write-Host "  ============================================" -ForegroundColor Cyan
@@ -37,7 +81,53 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-OK "Docker is running"
 
-# ── 2. PostgreSQL container ───────────────────────────────────────────────────
+# ── 2. Port conflict check ───────────────────────────────────────────────────
+
+Write-Info "Checking for port conflicts..."
+
+# Check server port
+if (Test-PortInUse $PORT_SERVER) {
+    $proc = Get-PortProcess $PORT_SERVER
+    $procInfo = if ($proc) { " by '$proc'" } else { "" }
+    $suggested = Find-NextAvailablePort $PORT_SERVER
+    Write-Warn "Port $PORT_SERVER (Backend API) is in use$procInfo."
+    $userInput = Read-Host "      Enter port for Backend API [$suggested]"
+    $PORT_SERVER = if ([string]::IsNullOrWhiteSpace($userInput)) { $suggested } else { [int]$userInput }
+
+    # Update server/.env
+    if (Test-Path "server\.env") {
+        $envContent = Get-Content "server\.env" -Raw
+        $envContent = $envContent -replace "(?m)^PORT=.*", "PORT=$PORT_SERVER"
+        $envContent | Set-Content -Path "server\.env" -Encoding UTF8 -NoNewline
+    }
+    Write-OK "Backend API will use port $PORT_SERVER"
+}
+else {
+    Write-OK "Port $PORT_SERVER (Backend API) is available"
+}
+
+# Check client port
+if (Test-PortInUse $PORT_CLIENT) {
+    $proc = Get-PortProcess $PORT_CLIENT
+    $procInfo = if ($proc) { " by '$proc'" } else { "" }
+    $suggested = Find-NextAvailablePort $PORT_CLIENT
+    Write-Warn "Port $PORT_CLIENT (Frontend) is in use$procInfo."
+    $userInput = Read-Host "      Enter port for Frontend [$suggested]"
+    $PORT_CLIENT = if ([string]::IsNullOrWhiteSpace($userInput)) { $suggested } else { [int]$userInput }
+
+    # Update server/.env ALLOWED_ORIGIN
+    if (Test-Path "server\.env") {
+        $envContent = Get-Content "server\.env" -Raw
+        $envContent = $envContent -replace "(?m)^ALLOWED_ORIGIN=.*", "ALLOWED_ORIGIN=http://localhost:$PORT_CLIENT"
+        $envContent | Set-Content -Path "server\.env" -Encoding UTF8 -NoNewline
+    }
+    Write-OK "Frontend will use port $PORT_CLIENT"
+}
+else {
+    Write-OK "Port $PORT_CLIENT (Frontend) is available"
+}
+
+# ── 3. PostgreSQL container ───────────────────────────────────────────────────
 
 Write-Info "Starting PostgreSQL container..."
 docker compose up -d db 2>&1 | Out-Null
@@ -55,7 +145,7 @@ if (-not $dbReady) {
 }
 Write-OK "PostgreSQL is ready"
 
-# ── 3. Install dependencies ───────────────────────────────────────────────────
+# ── 4. Install dependencies ───────────────────────────────────────────────────
 
 Write-Info "Installing dependencies..."
 npm install --silent 2>&1 | Out-Null
@@ -63,7 +153,7 @@ Push-Location server; npm install --silent 2>&1 | Out-Null; Pop-Location
 Push-Location client; npm install --silent 2>&1 | Out-Null; Pop-Location
 Write-OK "Dependencies installed"
 
-# ── 4. Run migrations ─────────────────────────────────────────────────────────
+# ── 5. Run migrations ─────────────────────────────────────────────────────────
 
 Write-Info "Running database migrations..."
 Push-Location server
@@ -78,22 +168,24 @@ if ($migExit -ne 0) {
 }
 Write-OK "Database schema is up to date"
 
-# ── 5. Open browser (delayed) ─────────────────────────────────────────────────
+# ── 6. Open browser (delayed) ─────────────────────────────────────────────────
 
-$null = Start-Job {
+$browserPort = $PORT_CLIENT
+$null = Start-Job -ScriptBlock {
+    param($p)
     Start-Sleep -Seconds 5
-    Start-Process "http://localhost:5173"
-}
+    Start-Process "http://localhost:$p"
+} -ArgumentList $browserPort
 
-# ── 6. Start servers ──────────────────────────────────────────────────────────
+# ── 7. Start servers ──────────────────────────────────────────────────────────
 
 Write-Host ""
 Write-Host "  ============================================" -ForegroundColor Green
 Write-Host "    All systems go!  Starting servers..."      -ForegroundColor Green
 Write-Host "  ============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Frontend : http://localhost:5173" -ForegroundColor White
-Write-Host "  Backend  : http://localhost:3001" -ForegroundColor White
+Write-Host "  Frontend : http://localhost:$PORT_CLIENT" -ForegroundColor White
+Write-Host "  Backend  : http://localhost:$PORT_SERVER" -ForegroundColor White
 Write-Host "  Login    : admin / admin (change immediately)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Press Ctrl+C to stop." -ForegroundColor Yellow
