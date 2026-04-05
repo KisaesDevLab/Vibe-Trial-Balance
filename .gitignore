@@ -1,10 +1,23 @@
 ﻿node_modules/
 .env
 .env.local
+.env.*
+!.env.example
 client/dist/
 server/dist/
 *.log
 Thumbs.db
+.DS_Store
 uploads/
 server/backups/
 coverage/
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Vite cache
+.vite/
+
+# Claude Code local settings
+.claude/settings.local.json
