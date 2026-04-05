@@ -29,6 +29,9 @@ playwright.config.ts
 playwright-report/
 test-results/
 
+# Installer output
+installer/Output/
+
 # Internal planning docs
 *_BUILD_PLAN*.md
 specs/*-plan.md

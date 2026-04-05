@@ -171,6 +171,8 @@ end;
 // ── Installer event hooks ──
 
 function InitializeSetup: Boolean;
+var
+  ErrorCode: Integer;
 begin
   Result := True;
 
@@ -185,7 +187,7 @@ begin
       mbError, MB_OKCANCEL
     ) = IDOK then
     begin
-      ShellExec('open', 'https://www.docker.com/products/docker-desktop/', '', '', SW_SHOWNORMAL, ewNoWait, 0);
+      ShellExec('open', 'https://www.docker.com/products/docker-desktop/', '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
     end;
     Result := False;
   end;
