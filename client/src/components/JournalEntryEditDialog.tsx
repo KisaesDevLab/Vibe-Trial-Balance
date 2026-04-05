@@ -9,7 +9,6 @@ import {
   getJournalEntry,
   updateJournalEntry,
   deleteJournalEntry,
-  type JournalEntry,
 } from '../api/journalEntries';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { AccountSearchDropdown } from './AccountSearchDropdown';

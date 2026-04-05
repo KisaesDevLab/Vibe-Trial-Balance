@@ -134,17 +134,18 @@ export const deleteBankTransaction = (clientId: number, id: number) =>
 
 const CHUNK = 250;
 
-async function chunked<T extends { data: { deleted?: number; updated?: number } | null; error: { code: string; message: string } | null }>(
+async function chunked<T extends { data: Record<string, number> | null; error: { code: string; message: string } | null }>(
   ids: number[],
   fn: (chunk: number[]) => Promise<T>,
-): Promise<{ data: { deleted?: number; updated?: number }; error: null }> {
+): Promise<{ data: { count: number }; error: null }> {
   let total = 0;
   for (let i = 0; i < ids.length; i += CHUNK) {
     const res = await fn(ids.slice(i, i + CHUNK));
     if (res.error) throw new Error(res.error.message);
-    total += (res.data?.deleted ?? res.data?.updated ?? 0);
+    const vals = res.data ? Object.values(res.data) : [0];
+    total += (vals[0] ?? 0);
   }
-  return { data: { deleted: total, updated: total }, error: null };
+  return { data: { count: total }, error: null };
 }
 
 export const batchDeleteTransactions = (clientId: number, ids: number[]) =>

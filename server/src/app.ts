@@ -122,10 +122,21 @@ app.use('/api/v1/clients/:clientId/units', unitsRouter);
 app.use('/api/v1/periods/:periodId/py-comparison', pyComparisonRouter);
 app.use('/mcp', mcpRouter);
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/api/v1/health`);
   startBackupScheduler();
+});
+
+server.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\nError: Port ${PORT} is already in use.`);
+    console.error(`Another process is listening on this port. Either:`);
+    console.error(`  1. Stop the other process using port ${PORT}`);
+    console.error(`  2. Set a different port: PORT=3002 npm run dev\n`);
+    process.exit(1);
+  }
+  throw err;
 });
 
 export { app, db };
