@@ -1,13 +1,21 @@
 # Quick Reference — Vibe Trial Balance
 
 ## First Time Setup
+
+### Linux / macOS / Git Bash
+```bash
+git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git && cd Vibe-Trial-Balance && bash setup.sh
+```
+
+### Windows (PowerShell as Administrator)
 ```powershell
-# Run PowerShell as Administrator, then:
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\setup.ps1
 ```
 This installs Git, Node.js, Docker, PostgreSQL, all dependencies, and seeds the database.
 Safe to run multiple times — it skips anything already done.
+
+Both scripts automatically detect **port conflicts** and suggest alternatives if ports 5432, 5050, 3001, or 5173 are already in use.
 
 ---
 
@@ -15,21 +23,10 @@ Safe to run multiple times — it skips anything already done.
 
 ### Start everything:
 ```powershell
-.\start.ps1
+.\start.ps1          # Windows
+npm run dev           # Any platform
 ```
 Opens backend on http://localhost:3001 and frontend on http://localhost:5173.
-
-### Test a branch from Claude Code:
-```powershell
-.\test-branch.ps1 build/phase-2
-```
-Switches to the branch, installs deps, runs migrations, starts servers.
-
-### Go back to main after testing:
-```powershell
-git checkout main
-git stash pop          # if you had uncommitted changes
-```
 
 ---
 
@@ -76,6 +73,23 @@ Default admin account (created by seed):
 - Password: `admin`
 - **Change this immediately after first login**
 
+New passwords must be at least 8 characters with uppercase, lowercase, and a number.
+
+---
+
+## Environment Variables
+
+The server reads `.env` from `server/.env`. Key variables:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `PORT` | `3001` | Backend server port |
+| `DB_HOST` | `127.0.0.1` | PostgreSQL host |
+| `DB_PORT` | `5432` | PostgreSQL port |
+| `JWT_SECRET` | *(dev default)* | **Required in production** |
+| `ENCRYPTION_KEY` | *(falls back to JWT_SECRET)* | **Required in production** — set a unique value |
+| `ALLOWED_ORIGIN` | `http://localhost:5173` | **Required in production** — set to your domain |
+
 ---
 
 ## Troubleshooting
@@ -83,8 +97,8 @@ Default admin account (created by seed):
 **"Docker Desktop is not running"**
 → Open Docker Desktop from Start Menu. Wait for the whale icon in system tray to stop animating.
 
-**"Port 5432 already in use"**
-→ Another PostgreSQL is running. Either stop it, or edit docker-compose.yml to use port 5433.
+**Port conflict (5432, 5050, 3001, or 5173 in use)**
+→ The setup/start scripts automatically detect this and suggest alternative ports. If running manually, check `netstat` for the conflicting process and either stop it or change the port in `docker-compose.yml` / `server/.env`.
 
 **"Cannot find module" errors**
 → Run `npm install` in the directory that's failing (root, server/, or client/).
@@ -97,3 +111,12 @@ Default admin account (created by seed):
 
 **Frontend shows blank page or API errors**
 → Make sure the backend is running (check http://localhost:3001/api/v1/health).
+
+**"FATAL: JWT_SECRET environment variable is required in production"**
+→ Set `JWT_SECRET` to a random 64+ character string in `server/.env`. The server refuses to start without it when `NODE_ENV=production`.
+
+**"FATAL: ENCRYPTION_KEY environment variable is required in production"**
+→ Set `ENCRYPTION_KEY` to a separate random string in `server/.env`. Must be different from `JWT_SECRET`.
+
+**"FATAL: ALLOWED_ORIGIN environment variable is required in production"**
+→ Set `ALLOWED_ORIGIN` to your exact domain (e.g., `https://tb.yourfirm.com`) in `server/.env`.

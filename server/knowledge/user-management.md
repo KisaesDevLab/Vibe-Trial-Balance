@@ -52,4 +52,10 @@ The `mcp_agent` user is created automatically by the database migration. It appe
 - Multiple users can be logged in simultaneously with no conflicts
 
 ## Password Requirements
-The app enforces basic password requirements (minimum length). For security, use unique passwords per user — never share the admin password.
+Passwords must meet all of the following:
+- **Minimum 8 characters** (maximum 128)
+- At least **one uppercase letter** (A–Z)
+- At least **one lowercase letter** (a–z)
+- At least **one number** (0–9)
+
+For security, use unique passwords per user — never share the admin password. The default `admin` password should be changed immediately after first login.

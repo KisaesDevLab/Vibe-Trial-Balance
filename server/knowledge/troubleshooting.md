@@ -26,7 +26,7 @@
 ## AI Classification Not Working
 **Symptom**: Clicking "Classify with AI" does nothing, or shows an error.
 
-**Fix**: The Claude API key must be configured. Ask an admin to go to **Admin > Settings** and enter a valid Anthropic API key. The key should start with `sk-ant-`.
+**Fix**: An AI provider must be configured. Ask an admin to go to **Admin > Settings > AI Provider** and configure one of: Claude (Anthropic API key starting with `sk-ant-`), Ollama (local server URL), or an OpenAI-compatible server. Click **Test Connection** to verify.
 
 ## Can't Unlock Period (Unlock Button Missing)
 **Cause**: Only **admin** users can unlock a period. Preparers and reviewers do not have this permission.
@@ -45,8 +45,22 @@
 
 ## Login Issues
 - Ensure Caps Lock is off
+- Passwords must be at least 8 characters with an uppercase letter, a lowercase letter, and a number
 - Contact your admin to reset your password at **Admin > Users**
 - If you see "Token expired", log out and log back in
+- If you see "Rate limited", wait 15 minutes — the login endpoint limits to 10 attempts per 15 minutes per IP
+
+## Server Won't Start ("Port already in use")
+The server exits with a helpful message if the port is already in use. Either:
+1. Stop the other process using the port
+2. Set a different port in `server/.env`: `PORT=3002`
+3. Use the setup scripts (`setup.sh` / `setup.ps1`) which automatically detect port conflicts and suggest alternatives
+
+## Production Startup Failures
+In production (`NODE_ENV=production`), the server requires these environment variables or it will refuse to start:
+- `JWT_SECRET` — set to a random 64+ character string
+- `ENCRYPTION_KEY` — set to a separate random string (not the same as JWT_SECRET)
+- `ALLOWED_ORIGIN` — set to your exact domain (e.g., `https://tb.yourfirm.com`)
 
 ## MCP / Claude Desktop Connection Issues
 

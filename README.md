@@ -59,17 +59,17 @@ Create a `.env` file in `server/` (or set these as system environment variables)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NODE_ENV` | *(none)* | Set to `production` for production deployments — enforces `JWT_SECRET` requirement |
+| `NODE_ENV` | *(none)* | Set to `production` for production deployments — enforces required env vars |
 | `PORT` | `3001` | Server listen port |
 | `DB_HOST` | `127.0.0.1` | PostgreSQL host |
 | `DB_PORT` | `5432` | PostgreSQL port |
 | `DB_NAME` | `vibe_tb_db` | Database name |
 | `DB_USER` | `vibetb` | Database user |
 | `DB_PASSWORD` | `localdev123` | Database password |
-| `JWT_SECRET` | `local-dev-secret-12345` | **Required in production** — server refuses to start without it when `NODE_ENV=production` |
+| `JWT_SECRET` | `local-dev-secret-12345` | **Required in production** — server refuses to start without it |
 | `JWT_EXPIRY` | `8h` | JWT token lifetime |
-| `ALLOWED_ORIGIN` | `http://localhost:5173` | CORS allowed origin (set to your domain in production) |
-| `ENCRYPTION_KEY` | *(falls back to JWT_SECRET)* | Encryption key for API keys stored in the database. Set a separate value for best security. |
+| `ALLOWED_ORIGIN` | `http://localhost:5173` | **Required in production** — server refuses to start without it |
+| `ENCRYPTION_KEY` | *(falls back to JWT_SECRET)* | **Required in production** — must be separate from JWT_SECRET |
 | `ANTHROPIC_API_KEY` | *(none)* | Optional — can also be set in Admin > Settings |
 | `APP_BASE_URL` | `http://localhost:3001` | Used in MCP integration for self-referencing URLs |
 
@@ -105,7 +105,7 @@ npm run dev                                  # Start both servers
 
 **URLs:** Frontend http://localhost:5173 | API http://localhost:3001 | pgAdmin http://localhost:5050
 
-**Default login:** `admin` / `admin` — change immediately.
+**Default login:** `admin` / `admin` — change immediately. New passwords require 8+ characters with uppercase, lowercase, and a number.
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed commands and troubleshooting.
 
@@ -442,13 +442,13 @@ The app has built-in backup (Admin > Backup & Restore), but also set up external
 
 #### 5. Security checklist
 
-- [ ] Set `NODE_ENV=production` in your `.env` file
-- [ ] Change default `admin` / `admin` password immediately
-- [ ] Set a strong `JWT_SECRET` (64+ random characters) — server refuses to start without it in production
-- [ ] Set a strong `ENCRYPTION_KEY` (separate from JWT_SECRET) for API key encryption at rest
+- [ ] Set `NODE_ENV=production` in `server/.env`
+- [ ] Change default `admin` / `admin` password immediately (new passwords require 8+ chars, uppercase, lowercase, number)
+- [ ] Set a strong `JWT_SECRET` (64+ random characters) — **server refuses to start without it in production**
+- [ ] Set a strong `ENCRYPTION_KEY` (separate from JWT_SECRET) — **server refuses to start without it in production**
+- [ ] Set `ALLOWED_ORIGIN` to your exact domain (no wildcards) — **server refuses to start without it in production**
 - [ ] Set a strong `DB_PASSWORD`
 - [ ] Configure HTTPS (Caddy, Certbot, or cloud load balancer)
-- [ ] Set `ALLOWED_ORIGIN` to your exact domain (no wildcards)
 - [ ] Enable firewall (UFW, cloud security groups)
 - [ ] Set up external database backups
 - [ ] Regenerate your MCP token after upgrading (Admin > Settings > MCP Integration)
