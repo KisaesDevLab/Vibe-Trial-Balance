@@ -21,3 +21,7 @@ coverage/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Internal planning docs
+*_BUILD_PLAN*.md
+specs/*-plan.md
