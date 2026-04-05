@@ -11,8 +11,8 @@ $ErrorActionPreference = "Stop"
 # ============================================================
 # CONFIG - Edit these before running
 # ============================================================
-$GITHUB_REPO = "https://github.com/YOUR_USERNAME/vibe-tb.git"
-$PROJECT_DIR = "$env:USERPROFILE\Projects\vibe-tb"
+$GITHUB_REPO = "https://github.com/KisaesDevLab/Vibe-Trial-Balance.git"
+$PROJECT_DIR = "$env:USERPROFILE\Projects\Vibe-Trial-Balance"
 
 $DB_USER = "vibetb"
 $DB_PASS = "localdev123"
@@ -235,11 +235,11 @@ else {
 
 Write-Step "5/7" "Checking configuration files"
 
-if (Test-Path ".env") {
-    Write-Skip ".env file exists"
+if (Test-Path "server\.env") {
+    Write-Skip "server/.env file exists"
 }
 else {
-    Write-Info "Creating .env with dev defaults..."
+    Write-Info "Creating server/.env with dev defaults..."
     $randomSuffix = Get-Random -Maximum 999999
     $envLines = @(
         "# Database (matches docker-compose.yml)",
@@ -251,17 +251,18 @@ else {
         "",
         "# Auth",
         "JWT_SECRET=local-dev-secret-$randomSuffix",
-        "JWT_EXPIRY=1h",
+        "JWT_EXPIRY=8h",
         "",
-        "# Anthropic API (add your key when you reach Phase 5)",
+        "# Anthropic API (optional — can also configure in Admin > Settings)",
         "ANTHROPIC_API_KEY=",
         "",
         "# Server",
         "PORT=3001",
-        "NODE_ENV=development"
+        "NODE_ENV=development",
+        "ALLOWED_ORIGIN=http://localhost:5173"
     )
-    $envLines | Set-Content -Path ".env" -Encoding UTF8
-    Write-OK "Created .env"
+    $envLines | Set-Content -Path "server\.env" -Encoding UTF8
+    Write-OK "Created server/.env"
 }
 
 if (Test-Path "docker-compose.yml") {
@@ -445,7 +446,5 @@ if (Test-Path "client\package.json") {
 Write-Host "  Or start both at once:" -ForegroundColor Cyan
 Write-Host "    npm run dev" -ForegroundColor White
 Write-Host ""
-Write-Host "  Next step:" -ForegroundColor Yellow
-Write-Host "  Open Claude Code at claude.ai/code, connect your repo," -ForegroundColor Yellow
-Write-Host "  and tell it: Read specs/plan.md. Start Phase 1." -ForegroundColor Yellow
+Write-Host "  Default login:  admin / admin  (change immediately)" -ForegroundColor Yellow
 Write-Host ""

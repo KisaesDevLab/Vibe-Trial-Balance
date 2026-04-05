@@ -94,7 +94,7 @@ Write-Host "  ============================================" -ForegroundColor Gre
 Write-Host ""
 Write-Host "  Frontend : http://localhost:5173" -ForegroundColor White
 Write-Host "  Backend  : http://localhost:3001" -ForegroundColor White
-Write-Host "  Login    : admin / admin"         -ForegroundColor Cyan
+Write-Host "  Login    : admin / admin (change immediately)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Press Ctrl+C to stop." -ForegroundColor Yellow
 Write-Host ""
