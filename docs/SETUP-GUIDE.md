@@ -64,7 +64,7 @@ Vibe Trial Balance is a self-hosted tax preparation and accounting workpaper app
 | PDF Generation | pdfmake (server-side) |
 | Hosting | Raspberry Pi 5, Docker, or any Linux/Windows server |
 
-**License:** Elastic License 2.0 (ELv2) — free for personal and internal firm use. See [LICENSE](../LICENSE) for full text.
+**License:** PolyForm Internal Use 1.0.0 — free for personal and internal firm use; distribution is not permitted. See [LICENSE](../LICENSE) for full text.
 
 ---
 

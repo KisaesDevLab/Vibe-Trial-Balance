@@ -1,13 +1,13 @@
 # Vibe Trial Balance - Claude Code Project Memory
 
-## License Compliance (ELv2)
+## License Compliance (PolyForm Internal Use 1.0.0)
 
-This project is licensed under the **Elastic License 2.0** (ELv2). Enforce these rules in every coding session:
+This project is licensed under the **PolyForm Internal Use License 1.0.0**. Enforce these rules in every coding session:
 
 ### When adding dependencies
 - Check the license before running `npm install`. Allowed: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, BlueOak-1.0.0, Unlicense.
 - Review required before adding: LGPL-*, MPL-2.0, GPL-3.0-or-later, CC-BY-4.0.
-- Never add: GPL-2.0-only, SSPL-1.0, AGPL-3.0 (copyleft incompatible with ELv2), Proprietary, Commercial.
+- Never add: GPL-2.0-only, SSPL-1.0, AGPL-3.0 (copyleft incompatible with our license), Proprietary, Commercial.
 - After installing, run `npx license-checker --excludePrivatePackages --summary` in the relevant workspace and confirm no new denied licenses appear.
 - Update `scripts/license-policy.json` if a new package needs a `knownIssues` entry.
 
@@ -15,15 +15,14 @@ This project is licensed under the **Elastic License 2.0** (ELv2). Enforce these
 - Every new `.ts` or `.tsx` file created under `client/src/` or `server/src/` must begin with:
   ```
   // Copyright 2025-2026 Kisaes LLC
-  // Licensed under the Elastic License 2.0 (ELv2); you may not use this file
-  // except in compliance with the Elastic License 2.0.
-  // See LICENSE file in the project root for full license text.
+  // Licensed under the PolyForm Internal Use License 1.0.0.
+  // You may not distribute this software. See LICENSE for terms.
   ```
 - Do not add headers to generated files, migration files, or config files.
 
-### Source code visibility
-- The UI footer must contain a visible link to the source code repository.
-- Do not remove or hide the source code link from the footer or About page.
+### Distribution restriction
+- The PolyForm Internal Use License does not permit distributing the software to any third party in any form. Do not add features, build artifacts, or workflows that would publish, redistribute, or hand off the codebase or binaries to outside parties.
+- Client-facing access (clients getting their own login to a hosted instance) requires a Commercial License from Kisaes LLC — see `COMMERCIAL_LICENSE.md`.
 
 ### Known open issues (see scripts/license-policy.json for detail)
 - `buffers@0.1.1` — no license; transitive via exceljs. Do not upgrade exceljs without verifying this resolves.

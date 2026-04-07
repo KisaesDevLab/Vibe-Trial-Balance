@@ -2,7 +2,7 @@
 
 A self-hosted tax preparation and accounting workpaper application for small CPA firms. Manage trial balances, journal entries, bank transactions, tax code assignments, financial statements, and client engagements — with AI-powered diagnostics, classification, and PDF import.
 
-**License:** Elastic License 2.0 (ELv2) ([full text](LICENSE)) — free for personal and internal firm use. [Commercial license](COMMERCIAL_LICENSE.md) required for client-facing access. [FAQ](docs/LICENSING_FAQ.md)
+**License:** PolyForm Internal Use 1.0.0 ([full text](LICENSE)) — free for personal and internal firm use; distribution is not permitted. [Commercial license](COMMERCIAL_LICENSE.md) required for client-facing access. [FAQ](docs/LICENSING_FAQ.md)
 
 ---
 
@@ -452,7 +452,7 @@ The app has built-in backup (Admin > Backup & Restore), but also set up external
 - [ ] Enable firewall (UFW, cloud security groups)
 - [ ] Set up external database backups
 - [ ] Regenerate your MCP token after upgrading (Admin > Settings > MCP Integration)
-- [ ] Review ELv2 compliance: LICENSE file included, source code link in app footer
+- [ ] Review PolyForm Internal Use compliance: LICENSE file included, no third-party distribution of the software
 
 ---
 
@@ -494,12 +494,12 @@ See `server/knowledge/mcp-integration.md` for the full tool/resource/prompt refe
 
 ## License
 
-This project is licensed under the **Elastic License 2.0** (ELv2).
+This project is licensed under the **PolyForm Internal Use License 1.0.0**.
 
-- **Free for:** Personal use, internal firm use, self-hosting, modification
-- **Requires commercial license:** Providing client-facing access (clients get their own login)
-- **Not permitted:** Offering the software as a hosted/managed SaaS to third parties
-- The [LICENSE](LICENSE) file contains the full ELv2 text.
+- **Free for:** Personal use, internal firm use, self-hosting, and modification for your own internal business operations
+- **Not permitted:** Distributing the software (original or modified) to any third party in any form
+- **Requires commercial license:** Providing client-facing access (clients get their own login) or any other use beyond internal business operations
+- The [LICENSE](LICENSE) file contains the full PolyForm Internal Use 1.0.0 text. The canonical text is also at <https://polyformproject.org/licenses/internal-use/1.0.0>.
 - See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for commercial licensing terms.
 - See [docs/LICENSING_FAQ.md](docs/LICENSING_FAQ.md) for common questions.
 - All dependencies are MIT/Apache-2.0/BSD/ISC compatible (verified via `./scripts/license-audit.sh`).

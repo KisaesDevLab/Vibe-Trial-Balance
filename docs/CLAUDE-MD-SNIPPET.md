@@ -5,9 +5,9 @@ before the Workflow Rules section).
 
 ---
 
-## License Compliance (ELv2)
+## License Compliance (PolyForm Internal Use 1.0.0)
 
-This project is licensed under the **Elastic License 2.0** (ELv2).
+This project is licensed under the **PolyForm Internal Use License 1.0.0**.
 Enforce these rules in every coding session:
 
 ### When adding dependencies
@@ -25,15 +25,18 @@ Enforce these rules in every coding session:
   must begin with:
   ```
   // Copyright 2025-2026 Kisaes LLC
-  // Licensed under the Elastic License 2.0 (ELv2); you may not use this file
-  // except in compliance with the Elastic License 2.0.
-  // See LICENSE file in the project root for full license text.
+  // Licensed under the PolyForm Internal Use License 1.0.0.
+  // You may not distribute this software. See LICENSE for terms.
   ```
 - Do not add headers to generated files, migration files, or config files.
 
-### Source code visibility
-- The UI footer must contain a visible link to the source code repository.
-- Do not remove or hide the source code link from the footer or About page.
+### Distribution restriction
+- The PolyForm Internal Use License does not permit distributing the software
+  to any third party in any form. Do not add features, build artifacts, or
+  workflows that would publish, redistribute, or hand off the codebase or
+  binaries to outside parties.
+- Client-facing access (clients getting their own login to a hosted instance)
+  requires a Commercial License from Kisaes LLC — see `COMMERCIAL_LICENSE.md`.
 
 ### Known open issues (tracked in scripts/license-policy.json)
 - `buffers@0.1.1` — no license; transitive via exceljs. Do not upgrade exceljs

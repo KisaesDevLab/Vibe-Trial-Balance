@@ -8,10 +8,11 @@
 
 ## 1. Purpose
 
-This Commercial License Agreement ("Agreement") supplements the Elastic License 2.0
-(ELv2) under which Vibe Trial Balance is made available. It grants additional rights
-not covered by ELv2, specifically the right to provide third-party end users (clients)
-with direct access to a hosted instance of the software.
+This Commercial License Agreement ("Agreement") supplements the PolyForm Internal
+Use License 1.0.0 under which Vibe Trial Balance is made available. It grants
+additional rights not covered by that license, specifically the right to provide
+third-party end users (clients) with direct access to an instance of the software,
+and it sets out protections around license-key functionality in the software.
 
 ---
 
@@ -29,7 +30,8 @@ with direct access to a hosted instance of the software.
 
 ## 3. Uses That Do NOT Require a Commercial License
 
-The following uses are permitted under the standard ELv2 license at no additional cost:
+The following uses are permitted under the standard PolyForm Internal Use License
+1.0.0 at no additional cost:
 
 - **Individual use** for personal or business bookkeeping
 - **Accounting firm internal use** — trial balance work, crosswalk management, report
@@ -39,6 +41,11 @@ The following uses are permitted under the standard ELv2 license at no additiona
 - **Modifying the software** for internal use, including custom integrations,
   templates, and workflows
 - **Self-hosting** on any infrastructure (Raspberry Pi, cloud VPS, office server, etc.)
+
+The PolyForm Internal Use License 1.0.0 does **not** permit distribution of the
+software to any third party in any form. Distribution of the source code, binaries,
+or modified copies is not permitted under any circumstances and is outside the scope
+of this Commercial License.
 
 ---
 
@@ -84,12 +91,19 @@ the Licensee:
 
 This Commercial License does **not** include:
 
-- The right to redistribute the source code of the Licensed Software
+- The right to distribute the source code or binaries of the Licensed Software
 - The right to white-label or resell the Licensed Software to other firms
 - The right to compete with Kisaes LLC as a SaaS vendor offering the Licensed Software
   (or a substantially similar derivative) to the general public
-- The right to remove or obscure Kisaes LLC attribution, licensing notices, or
-  source code links
+- The right to remove or obscure Kisaes LLC attribution or licensing notices
+
+## 7A. License Key Protection
+
+The Licensee shall not move, change, disable, bypass, or otherwise circumvent any
+license key functionality in the Licensed Software, and shall not remove, disable,
+or obscure any functionality in the Licensed Software that is protected by a license
+key. Any such action is a material breach of this Agreement and terminates the
+Licensee's rights under this Commercial License immediately.
 
 ---
 
@@ -100,7 +114,8 @@ This Commercial License does **not** include:
 - Kisaes LLC may terminate this Agreement if the Licensee breaches any term and fails
   to cure within 30 days of written notice.
 - Upon termination, the Licensee must cease providing Client Access but may continue
-  using the Licensed Software under the standard ELv2 terms for internal use.
+  using the Licensed Software under the standard PolyForm Internal Use License 1.0.0
+  terms for internal business operations.
 
 ---
 

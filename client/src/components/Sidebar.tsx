@@ -1,7 +1,6 @@
 // Copyright 2025-2026 Kisaes LLC
-// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
-// except in compliance with the Elastic License 2.0.
-// See LICENSE file in the project root for full license text.
+// Licensed under the PolyForm Internal Use License 1.0.0.
+// You may not distribute this software. See LICENSE for terms.
 
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
@@ -253,10 +252,10 @@ export function Sidebar() {
             </button>
           </div>
         </div>
-        {/* ELv2 source disclosure */}
+        {/* License footer */}
         <div className="pt-1.5 border-t border-gray-700/40">
           <p className="text-[9px] text-gray-600 leading-tight">
-            ELv2 &middot;{' '}
+            PolyForm Internal Use 1.0.0 &middot;{' '}
             <a
               href="https://github.com/KisaesDevLab/Vibe-Trial-Balance"
               target="_blank"

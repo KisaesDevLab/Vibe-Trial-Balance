@@ -1,8 +1,9 @@
 {
-  "_comment": "Machine-readable license policy for vibe-tb (Elastic License 2.0).",
-  "_updated": "2026-04-05",
+  "_comment": "Machine-readable license policy for vibe-tb (PolyForm Internal Use License 1.0.0).",
+  "_updated": "2026-04-06",
 
-  "projectLicense": "Elastic-2.0",
+  "projectLicense": "PolyForm-Internal-Use-1.0.0",
+  "projectLicenseUrl": "https://polyformproject.org/licenses/internal-use/1.0.0",
 
   "allowed": [
     "MIT",
@@ -72,11 +73,11 @@
     }
   ],
 
-  "elv2Requirements": {
+  "licenseRequirements": {
     "licenseFile": {
       "required": true,
       "path": "LICENSE",
-      "status": "PRESENT — full Elastic License 2.0 text"
+      "status": "PRESENT — full PolyForm Internal Use 1.0.0 text with Kisaes LLC licensor preamble"
     },
     "noticeFile": {
       "required": true,
@@ -85,12 +86,17 @@
     },
     "sourceHeaders": {
       "required": true,
-      "status": "COMPLETE — all source files have ELv2 headers",
-      "note": "ELv2 requires that licensing notices not be removed or obscured."
+      "status": "COMPLETE — all source files have PolyForm Internal Use headers",
+      "note": "Header references LICENSE and the no-distribution clause."
+    },
+    "noDistribution": {
+      "required": true,
+      "status": "ENFORCED — PolyForm Internal Use does not permit distributing the software in any form",
+      "note": "Client-facing access requires the supplemental Commercial License (see COMMERCIAL_LICENSE.md)."
     },
     "sourceCodeLink": {
       "required": false,
-      "description": "Not legally required by ELv2, but kept for transparency.",
+      "description": "Not legally required by PolyForm Internal Use, but kept for transparency.",
       "status": "IMPLEMENTED — Source Code link in Sidebar footer (Sidebar.tsx)",
       "note": "Link points to GitHub repo."
     }

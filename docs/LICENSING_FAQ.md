@@ -3,13 +3,14 @@
 ## Can I use this for free?
 
 **Yes.** Vibe Trial Balance is free for personal use and internal firm use under the
-Elastic License 2.0 (ELv2). You can download, install, modify, and self-host it at
-no cost.
+PolyForm Internal Use License 1.0.0. You can download, install, modify, and self-host
+it at no cost.
 
 ## Can my staff use it to prepare trial balances for clients?
 
 **Yes.** As long as your firm controls the instance and your staff are the ones
-logging in, this is standard internal use and is fully covered by ELv2.
+logging in, this is standard internal business use and is fully covered by the
+PolyForm Internal Use License.
 
 ## Can I give my clients their own login?
 
@@ -17,17 +18,22 @@ logging in, this is standard internal use and is fully covered by ELv2.
 direct access for your clients (so they can log in themselves), you need a Commercial
 License from Kisaes LLC. Contact licensing@kisaes.com for details.
 
-## Can I fork and modify it?
+## Can I modify the code for my firm's needs?
 
-**Yes.** You are free to fork, modify, and use the software under ELv2 terms. If you
-distribute modified copies, you must include prominent notices stating that you have
-modified the software, and you must include the ELv2 license text.
+**Yes.** You are free to modify the software and create derivative works for your own
+internal business use under the PolyForm Internal Use License.
+
+## Can I share my modified version with another firm?
+
+**No.** The PolyForm Internal Use License does not permit distribution of the software
+in any form — original or modified — to any third party. Each firm that wants to use
+Vibe Trial Balance must obtain its own copy directly from Kisaes LLC.
 
 ## Can I fork and host it as a SaaS?
 
-**No.** This is the core restriction of ELv2. You may not provide the software to
-third parties as a hosted or managed service where the service provides users with
-access to any substantial set of the features or functionality of the software.
+**No.** The PolyForm Internal Use License limits use to the internal business
+operations of you and your company. Offering the software as a hosted service to the
+general public is outside the scope of the license.
 
 ## Can I add my own crosswalk mappings and keep them private?
 
@@ -36,31 +42,37 @@ license covers the software itself, not the data you create with it.
 
 ## Is this open source?
 
-**It's source-available.** The full source code is publicly available on GitHub and
-free to use under ELv2 terms. However, ELv2 is not an OSI-approved open source
-license because it includes the managed-service restriction.
+**No.** The source code is publicly viewable, but the PolyForm Internal Use License
+1.0.0 is not an OSI-approved open source license — it is a source-available license
+that permits internal business use only and does not permit distribution.
 
-## What changed from BSL-1.1?
+## What changed from the previous license?
 
-Previously, Vibe Trial Balance was licensed under the Business Source License 1.1
-(BSL-1.1), which converted to Apache-2.0 after four years. ELv2 provides:
+Vibe Trial Balance has migrated to the PolyForm Internal Use License 1.0.0. Compared
+to previous source-available licenses we have used:
 
-- **Permanent protection** — no conversion timer; the managed-service restriction
-  stays in place indefinitely
-- **Simpler terms** — ELv2 is shorter and more straightforward than BSL-1.1
-- **Same freedoms** — free for personal and internal firm use, self-hosting, and
-  modification
+- **No distribution** — the new license does not permit redistributing the software
+  to third parties in any form
+- **Permanent terms** — no conversion timer; the restrictions stay in place
+  indefinitely
+- **Plain-English, lawyer-drafted** — PolyForm is a recognized standard license
+  maintained by licensing lawyers at the PolyForm Project
+- **Same freedoms for end users** — free for personal and internal firm use,
+  self-hosting, and modification for your own use
 
 ## What happens if I violate the license?
 
-Standard copyright remedies apply. If the licensor notifies you of a violation and
-you cease the violation within 30 days, your license is reinstated retroactively.
-Repeated violations result in permanent termination.
+If you are notified in writing that you have violated the license, you have 32 days
+from receiving notice to come into full compliance and take practical steps to
+correct past violations. If you do, your license continues. Otherwise, all your
+licenses under the PolyForm Internal Use License end immediately.
 
 ## Where can I read the full license?
 
-The complete ELv2 text is in the [LICENSE](../LICENSE) file in the project root.
-The commercial license template is in [COMMERCIAL_LICENSE.md](../COMMERCIAL_LICENSE.md).
+The complete PolyForm Internal Use License 1.0.0 text is in the [LICENSE](../LICENSE)
+file in the project root, and at
+<https://polyformproject.org/licenses/internal-use/1.0.0>. The commercial license
+template is in [COMMERCIAL_LICENSE.md](../COMMERCIAL_LICENSE.md).
 
 ## Who do I contact for commercial licensing?
 

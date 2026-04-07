@@ -1,7 +1,6 @@
 // Copyright 2025-2026 Kisaes LLC
-// Licensed under the Elastic License 2.0 (ELv2); you may not use this file
-// except in compliance with the Elastic License 2.0.
-// See LICENSE file in the project root for full license text.
+// Licensed under the PolyForm Internal Use License 1.0.0.
+// You may not distribute this software. See LICENSE for terms.
 
 export function Spinner({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
   const classes = { sm: 'w-4 h-4', md: 'w-6 h-6', lg: 'w-8 h-8' };

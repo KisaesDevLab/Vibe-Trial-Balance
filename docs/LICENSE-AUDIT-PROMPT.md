@@ -11,8 +11,9 @@ accepting external contributions, or after adding multiple dependencies.
 You are performing a comprehensive license compliance audit of
 **vibe-tb** — a self-hosted accounting/tax-workpaper application
 served over a network (Raspberry Pi 5, Nginx). The project license is
-**Elastic License 2.0** (ELv2). Work through all 10 sections below. For each
-section, report findings with severity (CRITICAL / HIGH / MEDIUM / LOW / PASS).
+**PolyForm Internal Use License 1.0.0**. Work through all 10 sections below.
+For each section, report findings with severity (CRITICAL / HIGH / MEDIUM /
+LOW / PASS).
 
 Reference file: `scripts/license-policy.json` — the authoritative policy.
 
@@ -21,12 +22,12 @@ Reference file: `scripts/license-policy.json` — the authoritative policy.
 ### Section 1 — LICENSE File
 
 1. Check whether `LICENSE` exists in the project root.
-2. Confirm it contains the full Elastic License 2.0 text with correct details
-   (Licensor: Kisaes LLC, Software: Vibe Trial Balance).
+2. Confirm it contains the full PolyForm Internal Use License 1.0.0 text with
+   the licensor preamble (Licensor: Kisaes LLC, Software: Vibe Trial Balance).
 3. Confirm the `NOTICE` file exists with correct copyright and attribution.
 
-**Expected result:** `LICENSE` exists, contains full ELv2 text with correct
-licensor and software identification.
+**Expected result:** `LICENSE` exists, contains full PolyForm Internal Use
+1.0.0 text with the Kisaes LLC licensor preamble.
 
 ---
 
@@ -37,29 +38,33 @@ licensor and software identification.
    Minimum acceptable header:
    ```
    // Copyright 2025-2026 Kisaes LLC
-   // Licensed under the Elastic License 2.0 (ELv2); you may not use this file
-   // except in compliance with the Elastic License 2.0.
-   // See LICENSE file in the project root for full license text.
+   // Licensed under the PolyForm Internal Use License 1.0.0.
+   // You may not distribute this software. See LICENSE for terms.
    ```
 3. List any files missing headers.
 4. Note: generated files (e.g. Vite build output, migration auto-generators)
    are exempt.
 
-**Expected result:** All hand-written source files have ELv2 headers.
+**Expected result:** All hand-written source files have PolyForm Internal Use
+headers.
 
 ---
 
-### Section 3 — Source Code Visibility
+### Section 3 — License Notices and No-Distribution
 
-ELv2 requires that licensing notices not be removed or obscured.
+The PolyForm Internal Use License does not permit distributing the software in
+any form. Verify that licensing notices are present and that the project does
+not advertise or facilitate distribution to third parties.
 
-1. Search `client/src/` for any UI component, page, or footer that links to
-   the source code repository (GitHub, etc.).
+1. Search `client/src/` for any UI component, page, or footer that references
+   the license or links to the canonical source code repository.
 2. Check whether the LICENSE text is accessible to users of the application.
-3. Check `CLAUDE.md` and `README.md` for documented compliance.
+3. Check `CLAUDE.md` and `README.md` for documented compliance and the absence
+   of any "redistribute" / "open source" language.
 
-**Expected result:** A visible link to the source code repo exists in the
-application UI footer. The LICENSE file is included in distribution.
+**Expected result:** A visible license/source link exists in the application
+UI footer (or About page). README and CLAUDE.md describe the no-distribution
+clause and the supplemental Commercial License for client-facing access.
 
 ---
 
@@ -95,8 +100,9 @@ application UI footer. The LICENSE file is included in distribution.
      a newer version of the chain resolves this.
 
    **BlueOak-1.0.0** (jackspeak, minipass, sax, path-scurry, package-json-from-dist):
-   - BlueOak-1.0.0 is a permissive license compatible with ELv2. Classify
-     as PASS after confirming the text matches the BlueOak 1.0.0 standard.
+   - BlueOak-1.0.0 is a permissive license compatible with the PolyForm
+     Internal Use License. Classify as PASS after confirming the text matches
+     the BlueOak 1.0.0 standard.
 
    **MIT\*** (chainsaw, traverse, png-js):
    - The asterisk means license-checker found the MIT text in the README, not
@@ -134,13 +140,16 @@ carry significantly lower compliance risk.
 
 ### Section 8 — Copyleft Dependency Check
 
-ELv2 is a source-available license, not copyleft. Verify that no dependency
-carries copyleft obligations that would conflict with ELv2 distribution:
+PolyForm Internal Use is a source-available license, not copyleft. Verify that
+no dependency carries copyleft obligations that would conflict with our
+no-distribution model:
 
-- AGPL-3.0 dependencies are NOT compatible (would require releasing under AGPL).
+- AGPL-3.0 dependencies are NOT compatible (the network-use clause would
+  effectively force AGPL terms on the whole product, conflicting with the
+  PolyForm Internal Use license).
 - GPL-2.0-only is NOT compatible.
-- GPL-3.0-or-later requires review — acceptable if elected as runtime dependency
-  only and not statically linked.
+- GPL-3.0-or-later requires review — acceptable if elected as a runtime
+  dependency only and not statically linked.
 - LGPL packages used as libraries (not modified and statically linked) are
   generally acceptable.
 - Proprietary / commercial licenses are NOT compatible.
@@ -158,7 +167,7 @@ This application integrates three AI providers. Verify:
 3. `@modelcontextprotocol/sdk` — confirm MIT or Apache-2.0
 
 These packages process sensitive financial data. Confirm their licenses permit
-use in an ELv2 licensed application without additional terms.
+use in a PolyForm Internal Use licensed application without additional terms.
 
 ---
 
@@ -170,7 +179,7 @@ Produce a structured compliance report with the following format:
 ## License Audit Report — vibe-tb
 Date: <today>
 Auditor: Claude Code
-Project License: Elastic License 2.0 (ELv2)
+Project License: PolyForm Internal Use License 1.0.0
 
 ### CRITICAL Issues (must fix before any distribution)
 [list]
