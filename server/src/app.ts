@@ -4,9 +4,11 @@
 
 import 'dotenv/config';
 import express from 'express';
+import type { Request } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
 import authRoutes from './routes/auth';
 import clientRoutes from './routes/clients';
 import { coaCollectionRouter, coaItemRouter } from './routes/chartOfAccounts';
@@ -56,6 +58,11 @@ if (isProduction && !process.env.ALLOWED_ORIGIN) {
   process.exit(1);
 }
 
+// Respect X-Forwarded-For from a trusted reverse proxy (e.g. Nginx on the Pi).
+// This lets rate-limit fall back to real client IP for unauthenticated paths
+// instead of all requests sharing the proxy IP.
+app.set('trust proxy', 1);
+
 app.use(helmet());
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',
@@ -63,21 +70,42 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
-// Global rate limiter — 200 requests per 15 minutes per IP
+// Rate-limit bucketing key: prefer the JWT userId (decoded, not verified — we
+// only care about grouping, not trust), fall back to client IP. This prevents
+// an entire office behind one NAT/VPN IP from sharing a single rate-limit
+// bucket when many users are authenticated.
+function rateLimitKey(req: Request): string {
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith('Bearer ')) {
+    try {
+      const decoded = jwt.decode(authHeader.slice(7)) as { userId?: number } | null;
+      if (decoded?.userId) return `u:${decoded.userId}`;
+    } catch {
+      // fall through to IP
+    }
+  }
+  // express 4 normalizes req.ip when trust proxy is set; fall back to the
+  // unconnected socket's address, then a static string if that's also absent.
+  return `ip:${req.ip ?? req.socket?.remoteAddress ?? 'unknown'}`;
+}
+
+// Global rate limiter — 200 requests per 15 minutes per user (or per IP if unauth)
 app.use('/api/', rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: rateLimitKey,
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } },
 }));
 
-// Stricter limits for file upload / AI endpoints — 20 per hour per IP
+// Stricter limits for file upload / AI endpoints — 20 per hour per user
 const uploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: rateLimitKey,
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many upload/AI requests. Please try again later.' } },
 });
 app.use('/api/v1/import/', uploadLimiter);

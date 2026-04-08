@@ -82,104 +82,112 @@ async function createBackup(
 ): Promise<BackupHistoryRow> {
   const { clientId, periodId, triggerType = 'manual' } = options;
 
-  // Resolve names
-  let clientName: string | null = null;
-  let periodName: string | null = null;
-
-  if (clientId) {
-    const c = await db('clients').where('id', clientId).first('name');
-    clientName = c?.name ?? null;
-  }
-  if (periodId) {
-    const p = await db('periods').where('id', periodId).first('period_name');
-    periodName = p?.period_name ?? null;
-  }
-
-  // Resolve username for manifest
-  let username = 'system';
-  if (userId) {
-    const u = await db('app_users').where('id', userId).first('username');
-    username = u?.username ?? 'system';
-  }
-
-  // Collect table data
+  // Collect table data inside a REPEATABLE READ transaction so that every
+  // SELECT sees the same snapshot — otherwise a user committing a JE or TB
+  // edit mid-backup can produce an internally inconsistent archive.
   const tableData: Record<string, unknown[]> = {};
   const recordCounts: Record<string, number> = {};
+  let clientName: string | null = null;
+  let periodName: string | null = null;
+  let username = 'system';
 
-  async function dump(table: string, rows: unknown[]) {
-    tableData[table] = rows;
-    recordCounts[table] = rows.length;
-  }
+  await db.transaction(
+    async (trx) => {
+      async function dump(table: string, rows: unknown[]) {
+        tableData[table] = rows;
+        recordCounts[table] = rows.length;
+      }
 
-  if (level === 'full') {
-    await dump('app_users', await db('app_users').select('*'));
-    await dump('clients', await db('clients').select('*'));
-    await dump('periods', await db('periods').select('*'));
-    await dump('chart_of_accounts', await db('chart_of_accounts').select('*'));
-    await dump('trial_balance', await db('trial_balance').select('*'));
-    await dump('journal_entries', await db('journal_entries').select('*'));
-    await dump('journal_entry_lines', await db('journal_entry_lines').select('*'));
-    await dump('bank_transactions', await db('bank_transactions').select('*'));
-    await dump('classification_rules', await db('classification_rules').select('*'));
-    await dump('variance_notes', await db('variance_notes').select('*'));
-    await dump('document_imports', await db('document_imports').select('*'));
-    await dump('tax_codes', await db('tax_codes').select('*'));
-    await dump('tax_code_software_maps', await db('tax_code_software_maps').select('*'));
-    const hasSettings = await db.schema.hasTable('app_settings');
-    if (hasSettings) {
-      await dump('app_settings', await db('app_settings').select('*'));
-    }
-  } else if (level === 'settings') {
-    await dump('tax_codes', await db('tax_codes').select('*'));
-    await dump('tax_code_software_maps', await db('tax_code_software_maps').select('*'));
-    await dump('app_users', await db('app_users').select('*'));
-    const hasSettings = await db.schema.hasTable('app_settings');
-    if (hasSettings) {
-      await dump('app_settings', await db('app_settings').select('*'));
-    }
-  } else if (level === 'client' && clientId) {
-    const client = await db('clients').where('id', clientId).select('*');
-    await dump('clients', client);
-    const periodRows = await db('periods').where('client_id', clientId).select('*');
-    await dump('periods', periodRows);
-    const periodIds = periodRows.map((p: { id: number }) => p.id);
-    await dump('chart_of_accounts', await db('chart_of_accounts').where('client_id', clientId).select('*'));
-    const coaRows = await db('chart_of_accounts').where('client_id', clientId).select('id');
-    const coaIds = coaRows.map((r: { id: number }) => r.id);
-    await dump('trial_balance', periodIds.length > 0 ? await db('trial_balance').whereIn('period_id', periodIds).select('*') : []);
-    await dump('journal_entries', periodIds.length > 0 ? await db('journal_entries').whereIn('period_id', periodIds).select('*') : []);
-    const jeRows = periodIds.length > 0 ? await db('journal_entries').whereIn('period_id', periodIds).select('id') : [];
-    const jeIds = jeRows.map((r: { id: number }) => r.id);
-    await dump('journal_entry_lines', jeIds.length > 0 ? await db('journal_entry_lines').whereIn('journal_entry_id', jeIds).select('*') : []);
-    await dump('bank_transactions', await db('bank_transactions').where('client_id', clientId).select('*'));
-    await dump('classification_rules', await db('classification_rules').where('client_id', clientId).select('*'));
-    await dump('variance_notes', coaIds.length > 0 ? await db('variance_notes').whereIn('account_id', coaIds).select('*') : []);
-    await dump('document_imports', periodIds.length > 0 ? await db('document_imports').whereIn('period_id', periodIds).select('*') : []);
-  } else if (level === 'period' && periodId) {
-    const period = await db('periods').where('id', periodId).first('*');
-    const cId = period?.client_id;
-    const client = cId ? await db('clients').where('id', cId).select('*') : [];
-    await dump('clients', client);
-    await dump('periods', period ? [period] : []);
-    await dump('chart_of_accounts', cId ? await db('chart_of_accounts').where('client_id', cId).select('*') : []);
-    const coaRows = cId ? await db('chart_of_accounts').where('client_id', cId).select('id') : [];
-    const coaIds = coaRows.map((r: { id: number }) => r.id);
-    await dump('trial_balance', await db('trial_balance').where('period_id', periodId).select('*'));
-    const jeRows = await db('journal_entries').where('period_id', periodId).select('*');
-    await dump('journal_entries', jeRows);
-    const jeIds = jeRows.map((r: { id: number }) => r.id);
-    await dump('journal_entry_lines', jeIds.length > 0 ? await db('journal_entry_lines').whereIn('journal_entry_id', jeIds).select('*') : []);
-    await dump('bank_transactions', cId ? await db('bank_transactions').where('client_id', cId).where('period_id', periodId).select('*') : []);
-    await dump('variance_notes', coaIds.length > 0 ? await db('variance_notes').where('period_id', periodId).whereIn('account_id', coaIds).select('*') : []);
-    await dump('document_imports', await db('document_imports').where('period_id', periodId).select('*'));
-  }
+      // Resolve names inside the txn too so they stay consistent with the dump.
+      if (clientId) {
+        const c = await trx('clients').where('id', clientId).first('name');
+        clientName = c?.name ?? null;
+      }
+      if (periodId) {
+        const p = await trx('periods').where('id', periodId).first('period_name');
+        periodName = p?.period_name ?? null;
+      }
+      if (userId) {
+        const u = await trx('app_users').where('id', userId).first('username');
+        username = u?.username ?? 'system';
+      }
 
-  // Build filename
+      if (level === 'full') {
+        await dump('app_users', await trx('app_users').select('*'));
+        await dump('clients', await trx('clients').select('*'));
+        await dump('periods', await trx('periods').select('*'));
+        await dump('chart_of_accounts', await trx('chart_of_accounts').select('*'));
+        await dump('trial_balance', await trx('trial_balance').select('*'));
+        await dump('journal_entries', await trx('journal_entries').select('*'));
+        await dump('journal_entry_lines', await trx('journal_entry_lines').select('*'));
+        await dump('bank_transactions', await trx('bank_transactions').select('*'));
+        await dump('classification_rules', await trx('classification_rules').select('*'));
+        await dump('variance_notes', await trx('variance_notes').select('*'));
+        await dump('document_imports', await trx('document_imports').select('*'));
+        await dump('tax_codes', await trx('tax_codes').select('*'));
+        await dump('tax_code_software_maps', await trx('tax_code_software_maps').select('*'));
+        const hasSettings = await trx.schema.hasTable('app_settings');
+        if (hasSettings) {
+          await dump('app_settings', await trx('app_settings').select('*'));
+        }
+      } else if (level === 'settings') {
+        await dump('tax_codes', await trx('tax_codes').select('*'));
+        await dump('tax_code_software_maps', await trx('tax_code_software_maps').select('*'));
+        await dump('app_users', await trx('app_users').select('*'));
+        const hasSettings = await trx.schema.hasTable('app_settings');
+        if (hasSettings) {
+          await dump('app_settings', await trx('app_settings').select('*'));
+        }
+      } else if (level === 'client' && clientId) {
+        const client = await trx('clients').where('id', clientId).select('*');
+        await dump('clients', client);
+        const periodRows = await trx('periods').where('client_id', clientId).select('*');
+        await dump('periods', periodRows);
+        const periodIds = periodRows.map((p: { id: number }) => p.id);
+        await dump('chart_of_accounts', await trx('chart_of_accounts').where('client_id', clientId).select('*'));
+        const coaRows = await trx('chart_of_accounts').where('client_id', clientId).select('id');
+        const coaIds = coaRows.map((r: { id: number }) => r.id);
+        await dump('trial_balance', periodIds.length > 0 ? await trx('trial_balance').whereIn('period_id', periodIds).select('*') : []);
+        await dump('journal_entries', periodIds.length > 0 ? await trx('journal_entries').whereIn('period_id', periodIds).select('*') : []);
+        const jeRows = periodIds.length > 0 ? await trx('journal_entries').whereIn('period_id', periodIds).select('id') : [];
+        const jeIds = jeRows.map((r: { id: number }) => r.id);
+        await dump('journal_entry_lines', jeIds.length > 0 ? await trx('journal_entry_lines').whereIn('journal_entry_id', jeIds).select('*') : []);
+        await dump('bank_transactions', await trx('bank_transactions').where('client_id', clientId).select('*'));
+        await dump('classification_rules', await trx('classification_rules').where('client_id', clientId).select('*'));
+        await dump('variance_notes', coaIds.length > 0 ? await trx('variance_notes').whereIn('account_id', coaIds).select('*') : []);
+        await dump('document_imports', periodIds.length > 0 ? await trx('document_imports').whereIn('period_id', periodIds).select('*') : []);
+      } else if (level === 'period' && periodId) {
+        const period = await trx('periods').where('id', periodId).first('*');
+        const cId = period?.client_id;
+        const client = cId ? await trx('clients').where('id', cId).select('*') : [];
+        await dump('clients', client);
+        await dump('periods', period ? [period] : []);
+        await dump('chart_of_accounts', cId ? await trx('chart_of_accounts').where('client_id', cId).select('*') : []);
+        const coaRows = cId ? await trx('chart_of_accounts').where('client_id', cId).select('id') : [];
+        const coaIds = coaRows.map((r: { id: number }) => r.id);
+        await dump('trial_balance', await trx('trial_balance').where('period_id', periodId).select('*'));
+        const jeRows = await trx('journal_entries').where('period_id', periodId).select('*');
+        await dump('journal_entries', jeRows);
+        const jeIds = jeRows.map((r: { id: number }) => r.id);
+        await dump('journal_entry_lines', jeIds.length > 0 ? await trx('journal_entry_lines').whereIn('journal_entry_id', jeIds).select('*') : []);
+        await dump('bank_transactions', cId ? await trx('bank_transactions').where('client_id', cId).where('period_id', periodId).select('*') : []);
+        await dump('variance_notes', coaIds.length > 0 ? await trx('variance_notes').where('period_id', periodId).whereIn('account_id', coaIds).select('*') : []);
+        await dump('document_imports', await trx('document_imports').where('period_id', periodId).select('*'));
+      }
+    },
+    { isolationLevel: 'repeatable read' },
+  );
+
+  // Build filename. TypeScript narrows these to `null` across the async
+  // closure above even though the callback assigns to them, so force the
+  // wider type via assertion.
+  const resolvedClientName = clientName as string | null;
+  const resolvedPeriodName = periodName as string | null;
   const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-  const suffix = clientName
-    ? `_${clientName.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}`
-    : periodName
-    ? `_${periodName.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}`
+  const suffix = resolvedClientName
+    ? `_${resolvedClientName.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}`
+    : resolvedPeriodName
+    ? `_${resolvedPeriodName.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}`
     : '';
   const filename = `backup_${level}${suffix}_${ts}.tbak`;
   const filePath = path.join(BACKUP_DIR, filename);
@@ -192,9 +200,9 @@ async function createBackup(
     createdAt: new Date().toISOString(),
     createdBy: username,
     clientId: clientId ?? null,
-    clientName: clientName ?? null,
+    clientName: resolvedClientName,
     periodId: periodId ?? null,
-    periodName: periodName ?? null,
+    periodName: resolvedPeriodName,
     recordCounts,
     checksum: '',
   };
@@ -233,9 +241,9 @@ async function createBackup(
       backup_type: level,
       backup_level: level,
       client_id: clientId ?? null,
-      client_name: clientName,
+      client_name: resolvedClientName,
       period_id: periodId ?? null,
-      period_name: periodName,
+      period_name: resolvedPeriodName,
       filename,
       file_size: fileSize,
       checksum,
@@ -277,6 +285,15 @@ async function readManifest(filePath: string): Promise<Record<string, unknown>> 
 
 type IdMap = Map<string, Map<number, number>>;
 
+// Chunk a long array into batches of `size` — lets us bulk-insert without
+// hitting Postgres parameter limits (~65k placeholders per INSERT).
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+const BATCH_SIZE = 500;
+
 async function restoreAsNew(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
@@ -295,7 +312,7 @@ async function restoreAsNew(
 
   let newClientId = 0;
 
-  // 1. clients
+  // 1. clients — row-by-row because we check for name collisions
   const clientsData = tables['clients'] as Array<Record<string, unknown>> | undefined;
   if (clientsData && clientsData.length > 0) {
     const clientMap = registerMap('clients');
@@ -313,114 +330,150 @@ async function restoreAsNew(
       clientMap.set(oldId, newId);
       newClientId = newId;
     }
+
+    // Take a per-client advisory lock so a second concurrent restore onto the
+    // same target client serializes cleanly rather than corrupting state.
+    // pg_advisory_xact_lock releases automatically at transaction end.
+    await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, newClientId]);
   }
 
-  // 2. periods
+  // 2. periods — bulk insert, preserving old->new id order
   const periodsData = tables['periods'] as Array<Record<string, unknown>> | undefined;
   if (periodsData && periodsData.length > 0) {
     const periodMap = registerMap('periods');
-    for (const row of periodsData) {
-      const oldId = row.id as number;
-      const newClientId2 = getNewId('clients', row.client_id as number);
-      const [inserted] = await trx('periods')
-        .insert({ ...row, id: undefined, client_id: newClientId2 })
-        .returning('id');
-      const newId = (inserted as { id: number }).id;
-      periodMap.set(oldId, newId);
-    }
-  }
-
-  // 3. chart_of_accounts
-  const coaData = tables['chart_of_accounts'] as Array<Record<string, unknown>> | undefined;
-  if (coaData && coaData.length > 0) {
-    const coaMap = registerMap('chart_of_accounts');
-    for (const row of coaData) {
-      const oldId = row.id as number;
-      const newCId = getNewId('clients', row.client_id as number);
-      const [inserted] = await trx('chart_of_accounts')
-        .insert({ ...row, id: undefined, client_id: newCId })
-        .returning('id');
-      const newId = (inserted as { id: number }).id;
-      coaMap.set(oldId, newId);
-    }
-  }
-
-  // 4. trial_balance
-  const tbData = tables['trial_balance'] as Array<Record<string, unknown>> | undefined;
-  if (tbData && tbData.length > 0) {
-    for (const row of tbData) {
-      const newPeriodId = getNewId('periods', row.period_id as number);
-      const newAccountId = getNewId('chart_of_accounts', row.account_id as number);
-      await trx('trial_balance').insert({ ...row, id: undefined, period_id: newPeriodId, account_id: newAccountId });
-    }
-  }
-
-  // 5. journal_entries
-  const jeData = tables['journal_entries'] as Array<Record<string, unknown>> | undefined;
-  if (jeData && jeData.length > 0) {
-    const jeMap = registerMap('journal_entries');
-    for (const row of jeData) {
-      const oldId = row.id as number;
-      const newPeriodId = getNewId('periods', row.period_id as number);
-      const [inserted] = await trx('journal_entries')
-        .insert({ ...row, id: undefined, period_id: newPeriodId })
-        .returning('id');
-      const newId = (inserted as { id: number }).id;
-      jeMap.set(oldId, newId);
-    }
-  }
-
-  // 6. journal_entry_lines
-  const jelData = tables['journal_entry_lines'] as Array<Record<string, unknown>> | undefined;
-  if (jelData && jelData.length > 0) {
-    for (const row of jelData) {
-      const newJeId = getNewId('journal_entries', row.journal_entry_id as number);
-      const newAccountId = getNewId('chart_of_accounts', row.account_id as number);
-      await trx('journal_entry_lines').insert({
-        ...row,
-        id: undefined,
-        journal_entry_id: newJeId,
-        account_id: newAccountId,
+    const prepared = periodsData.map((row) => ({
+      ...row,
+      id: undefined,
+      client_id: getNewId('clients', row.client_id as number),
+    }));
+    for (const batch of chunk(prepared, BATCH_SIZE)) {
+      const indexInWhole = prepared.indexOf(batch[0]);
+      const inserted = await trx('periods').insert(batch).returning('id');
+      inserted.forEach((r, i) => {
+        const oldId = periodsData[indexInWhole + i].id as number;
+        periodMap.set(oldId, (r as { id: number }).id);
       });
     }
   }
 
-  // 7. bank_transactions
+  // 3. chart_of_accounts — bulk insert
+  const coaData = tables['chart_of_accounts'] as Array<Record<string, unknown>> | undefined;
+  if (coaData && coaData.length > 0) {
+    const coaMap = registerMap('chart_of_accounts');
+    const prepared = coaData.map((row) => ({
+      ...row,
+      id: undefined,
+      client_id: getNewId('clients', row.client_id as number),
+    }));
+    for (const batch of chunk(prepared, BATCH_SIZE)) {
+      const indexInWhole = prepared.indexOf(batch[0]);
+      const inserted = await trx('chart_of_accounts').insert(batch).returning('id');
+      inserted.forEach((r, i) => {
+        const oldId = coaData[indexInWhole + i].id as number;
+        coaMap.set(oldId, (r as { id: number }).id);
+      });
+    }
+  }
+
+  // 4. trial_balance — bulk insert (no id mapping needed downstream)
+  const tbData = tables['trial_balance'] as Array<Record<string, unknown>> | undefined;
+  if (tbData && tbData.length > 0) {
+    const rows = tbData.map((row) => ({
+      ...row,
+      id: undefined,
+      period_id: getNewId('periods', row.period_id as number),
+      account_id: getNewId('chart_of_accounts', row.account_id as number),
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('trial_balance').insert(batch);
+    }
+  }
+
+  // 5. journal_entries — bulk insert, tracking old->new id
+  const jeData = tables['journal_entries'] as Array<Record<string, unknown>> | undefined;
+  if (jeData && jeData.length > 0) {
+    const jeMap = registerMap('journal_entries');
+    const prepared = jeData.map((row) => ({
+      ...row,
+      id: undefined,
+      period_id: getNewId('periods', row.period_id as number),
+    }));
+    for (const batch of chunk(prepared, BATCH_SIZE)) {
+      const indexInWhole = prepared.indexOf(batch[0]);
+      const inserted = await trx('journal_entries').insert(batch).returning('id');
+      inserted.forEach((r, i) => {
+        const oldId = jeData[indexInWhole + i].id as number;
+        jeMap.set(oldId, (r as { id: number }).id);
+      });
+    }
+  }
+
+  // 6. journal_entry_lines — bulk insert
+  const jelData = tables['journal_entry_lines'] as Array<Record<string, unknown>> | undefined;
+  if (jelData && jelData.length > 0) {
+    const rows = jelData.map((row) => ({
+      ...row,
+      id: undefined,
+      journal_entry_id: getNewId('journal_entries', row.journal_entry_id as number),
+      account_id: getNewId('chart_of_accounts', row.account_id as number),
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('journal_entry_lines').insert(batch);
+    }
+  }
+
+  // 7. bank_transactions — bulk insert
   const btData = tables['bank_transactions'] as Array<Record<string, unknown>> | undefined;
   if (btData && btData.length > 0) {
-    for (const row of btData) {
-      const newCId = getNewId('clients', row.client_id as number);
-      const newAccountId = row.account_id ? getNewId('chart_of_accounts', row.account_id as number) : null;
-      await trx('bank_transactions').insert({ ...row, id: undefined, client_id: newCId, account_id: newAccountId });
+    const rows = btData.map((row) => ({
+      ...row,
+      id: undefined,
+      client_id: getNewId('clients', row.client_id as number),
+      account_id: row.account_id ? getNewId('chart_of_accounts', row.account_id as number) : null,
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('bank_transactions').insert(batch);
     }
   }
 
-  // 8. classification_rules
+  // 8. classification_rules — bulk insert
   const rulesData = tables['classification_rules'] as Array<Record<string, unknown>> | undefined;
   if (rulesData && rulesData.length > 0) {
-    for (const row of rulesData) {
-      const newCId = getNewId('clients', row.client_id as number);
-      const newAccountId = row.account_id ? getNewId('chart_of_accounts', row.account_id as number) : null;
-      await trx('classification_rules').insert({ ...row, id: undefined, client_id: newCId, account_id: newAccountId });
+    const rows = rulesData.map((row) => ({
+      ...row,
+      id: undefined,
+      client_id: getNewId('clients', row.client_id as number),
+      account_id: row.account_id ? getNewId('chart_of_accounts', row.account_id as number) : null,
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('classification_rules').insert(batch);
     }
   }
 
-  // 9. variance_notes
+  // 9. variance_notes — bulk insert
   const vnData = tables['variance_notes'] as Array<Record<string, unknown>> | undefined;
   if (vnData && vnData.length > 0) {
-    for (const row of vnData) {
-      const newAccountId = getNewId('chart_of_accounts', row.account_id as number);
-      const newPeriodId = getNewId('periods', row.period_id as number);
-      await trx('variance_notes').insert({ ...row, id: undefined, account_id: newAccountId, period_id: newPeriodId });
+    const rows = vnData.map((row) => ({
+      ...row,
+      id: undefined,
+      account_id: getNewId('chart_of_accounts', row.account_id as number),
+      period_id: getNewId('periods', row.period_id as number),
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('variance_notes').insert(batch);
     }
   }
 
-  // 10. document_imports
+  // 10. document_imports — bulk insert
   const diData = tables['document_imports'] as Array<Record<string, unknown>> | undefined;
   if (diData && diData.length > 0) {
-    for (const row of diData) {
-      const newPeriodId = getNewId('periods', row.period_id as number);
-      await trx('document_imports').insert({ ...row, id: undefined, period_id: newPeriodId });
+    const rows = diData.map((row) => ({
+      ...row,
+      id: undefined,
+      period_id: getNewId('periods', row.period_id as number),
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('document_imports').insert(batch);
     }
   }
 
@@ -438,6 +491,11 @@ async function restoreReplace(
   targetClientId: number,
   trx: Knex.Transaction,
 ): Promise<void> {
+  // Take a per-client advisory lock first so concurrent restores on the same
+  // client serialize. Any other session holding the lock (e.g. another
+  // restore) blocks here until the current txn ends.
+  await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, targetClientId]);
+
   // Delete existing client (cascade handles related tables)
   await trx('clients').where('id', targetClientId).delete();
 
@@ -445,11 +503,6 @@ async function restoreReplace(
   if (!clientsData || clientsData.length === 0) return;
 
   const oldClientId = clientsData[0].id as number;
-  const buildIdMap = (oldId: number, newId: number): IdMap => {
-    const m: IdMap = new Map();
-    m.set('clients', new Map([[oldId, newId]]));
-    return m;
-  };
 
   function remapClientId(row: Record<string, unknown>): Record<string, unknown> {
     if (row.client_id === oldClientId) return { ...row, client_id: targetClientId };
@@ -462,111 +515,156 @@ async function restoreReplace(
   const periodIdMap = new Map<number, number>();
   const coaIdMap = new Map<number, number>();
   const jeIdMap = new Map<number, number>();
-  const allIdMap = buildIdMap(oldClientId, targetClientId);
-  allIdMap.set('periods', periodIdMap);
-  allIdMap.set('chart_of_accounts', coaIdMap);
-  allIdMap.set('journal_entries', jeIdMap);
 
+  // periods — bulk
   const periodsData = tables['periods'] as Array<Record<string, unknown>> | undefined;
-  if (periodsData) {
-    for (const row of periodsData) {
-      const oldId = row.id as number;
-      const [ins] = await trx('periods').insert(remapClientId({ ...row, id: undefined })).returning('id');
-      periodIdMap.set(oldId, (ins as { id: number }).id);
+  if (periodsData && periodsData.length > 0) {
+    const prepared = periodsData.map((row) => remapClientId({ ...row, id: undefined }));
+    for (const batch of chunk(prepared, BATCH_SIZE)) {
+      const indexInWhole = prepared.indexOf(batch[0]);
+      const ins = await trx('periods').insert(batch).returning('id');
+      ins.forEach((r, i) => {
+        periodIdMap.set(periodsData[indexInWhole + i].id as number, (r as { id: number }).id);
+      });
     }
   }
 
+  // chart_of_accounts — bulk
   const coaData = tables['chart_of_accounts'] as Array<Record<string, unknown>> | undefined;
-  if (coaData) {
-    for (const row of coaData) {
-      const oldId = row.id as number;
-      const [ins] = await trx('chart_of_accounts').insert(remapClientId({ ...row, id: undefined })).returning('id');
-      coaIdMap.set(oldId, (ins as { id: number }).id);
+  if (coaData && coaData.length > 0) {
+    const prepared = coaData.map((row) => remapClientId({ ...row, id: undefined }));
+    for (const batch of chunk(prepared, BATCH_SIZE)) {
+      const indexInWhole = prepared.indexOf(batch[0]);
+      const ins = await trx('chart_of_accounts').insert(batch).returning('id');
+      ins.forEach((r, i) => {
+        coaIdMap.set(coaData[indexInWhole + i].id as number, (r as { id: number }).id);
+      });
     }
   }
 
+  // trial_balance — bulk
   const tbData = tables['trial_balance'] as Array<Record<string, unknown>> | undefined;
-  if (tbData) {
-    for (const row of tbData) {
-      await trx('trial_balance').insert({
-        ...row,
-        id: undefined,
-        period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
-        account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
-      });
+  if (tbData && tbData.length > 0) {
+    const rows = tbData.map((row) => ({
+      ...row,
+      id: undefined,
+      period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
+      account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('trial_balance').insert(batch);
     }
   }
 
+  // journal_entries — bulk
   const jeData = tables['journal_entries'] as Array<Record<string, unknown>> | undefined;
-  if (jeData) {
-    for (const row of jeData) {
-      const oldId = row.id as number;
-      const [ins] = await trx('journal_entries').insert({
-        ...row,
-        id: undefined,
-        period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
-      }).returning('id');
-      jeIdMap.set(oldId, (ins as { id: number }).id);
+  if (jeData && jeData.length > 0) {
+    const prepared = jeData.map((row) => ({
+      ...row,
+      id: undefined,
+      period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
+    }));
+    for (const batch of chunk(prepared, BATCH_SIZE)) {
+      const indexInWhole = prepared.indexOf(batch[0]);
+      const ins = await trx('journal_entries').insert(batch).returning('id');
+      ins.forEach((r, i) => {
+        jeIdMap.set(jeData[indexInWhole + i].id as number, (r as { id: number }).id);
+      });
     }
   }
 
+  // journal_entry_lines — bulk
   const jelData = tables['journal_entry_lines'] as Array<Record<string, unknown>> | undefined;
-  if (jelData) {
-    for (const row of jelData) {
-      await trx('journal_entry_lines').insert({
-        ...row,
-        id: undefined,
-        journal_entry_id: jeIdMap.get(row.journal_entry_id as number) ?? row.journal_entry_id,
-        account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
-      });
+  if (jelData && jelData.length > 0) {
+    const rows = jelData.map((row) => ({
+      ...row,
+      id: undefined,
+      journal_entry_id: jeIdMap.get(row.journal_entry_id as number) ?? row.journal_entry_id,
+      account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('journal_entry_lines').insert(batch);
     }
   }
 
+  // bank_transactions — bulk
   const btData = tables['bank_transactions'] as Array<Record<string, unknown>> | undefined;
-  if (btData) {
-    for (const row of btData) {
-      await trx('bank_transactions').insert({
-        ...row,
-        id: undefined,
-        client_id: targetClientId,
-        account_id: row.account_id ? (coaIdMap.get(row.account_id as number) ?? row.account_id) : null,
-      });
+  if (btData && btData.length > 0) {
+    const rows = btData.map((row) => ({
+      ...row,
+      id: undefined,
+      client_id: targetClientId,
+      account_id: row.account_id ? (coaIdMap.get(row.account_id as number) ?? row.account_id) : null,
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('bank_transactions').insert(batch);
     }
   }
 
+  // classification_rules — bulk
   const rulesData = tables['classification_rules'] as Array<Record<string, unknown>> | undefined;
-  if (rulesData) {
-    for (const row of rulesData) {
-      const newAccountId = row.account_id ? (coaIdMap.get(row.account_id as number) ?? row.account_id) : null;
-      await trx('classification_rules').insert(remapClientId({ ...row, id: undefined, account_id: newAccountId }));
+  if (rulesData && rulesData.length > 0) {
+    const rows = rulesData.map((row) => remapClientId({
+      ...row,
+      id: undefined,
+      account_id: row.account_id ? (coaIdMap.get(row.account_id as number) ?? row.account_id) : null,
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('classification_rules').insert(batch);
     }
   }
 
+  // variance_notes — bulk
   const vnData = tables['variance_notes'] as Array<Record<string, unknown>> | undefined;
-  if (vnData) {
-    for (const row of vnData) {
-      await trx('variance_notes').insert({
-        ...row,
-        id: undefined,
-        account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
-        period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
-      });
+  if (vnData && vnData.length > 0) {
+    const rows = vnData.map((row) => ({
+      ...row,
+      id: undefined,
+      account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
+      period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('variance_notes').insert(batch);
     }
   }
 
+  // document_imports — bulk
   const diData = tables['document_imports'] as Array<Record<string, unknown>> | undefined;
-  if (diData) {
-    for (const row of diData) {
-      await trx('document_imports').insert({
-        ...row,
-        id: undefined,
-        period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
-      });
+  if (diData && diData.length > 0) {
+    const rows = diData.map((row) => ({
+      ...row,
+      id: undefined,
+      period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
+    }));
+    for (const batch of chunk(rows, BATCH_SIZE)) {
+      await trx('document_imports').insert(batch);
     }
   }
 }
 
-async function restoreSettings(tables: Record<string, unknown[]>, trx: Knex.Transaction): Promise<void> {
+interface RestoreSettingsReport {
+  taxCodesUpserted: number;
+  taxCodeMapsUpserted: number;
+  appSettingsReplaced: boolean;
+  usersCreated: string[];
+  usersSkipped: string[];
+}
+
+async function restoreSettings(
+  tables: Record<string, unknown[]>,
+  trx: Knex.Transaction,
+): Promise<RestoreSettingsReport> {
+  const report: RestoreSettingsReport = {
+    taxCodesUpserted: 0,
+    taxCodeMapsUpserted: 0,
+    appSettingsReplaced: false,
+    usersCreated: [],
+    usersSkipped: [],
+  };
+
+  // Serialize settings restores so two admins can't race each other.
+  await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, 0]);
+
   // Tax codes: upsert by (return_form, activity_type, tax_code)
   const taxCodesData = tables['tax_codes'] as Array<Record<string, unknown>> | undefined;
   if (taxCodesData && taxCodesData.length > 0) {
@@ -575,6 +673,7 @@ async function restoreSettings(tables: Record<string, unknown[]>, trx: Knex.Tran
         .insert({ ...row })
         .onConflict(['return_form', 'activity_type', 'tax_code'])
         .merge();
+      report.taxCodesUpserted++;
     }
   }
 
@@ -583,6 +682,7 @@ async function restoreSettings(tables: Record<string, unknown[]>, trx: Knex.Tran
   if (mapsData && mapsData.length > 0) {
     for (const row of mapsData) {
       await trx('tax_code_software_maps').insert({ ...row }).onConflict(['tax_code_id', 'software']).merge();
+      report.taxCodeMapsUpserted++;
     }
   }
 
@@ -595,19 +695,28 @@ async function restoreSettings(tables: Record<string, unknown[]>, trx: Knex.Tran
       for (const row of settingsData) {
         await trx('app_settings').insert(row);
       }
+      report.appSettingsReplaced = true;
     }
   }
 
-  // Users: match by username, insert new ones (skip existing)
+  // Users: match by username, insert new ones. Existing usernames are left
+  // alone (we don't want to silently overwrite a live account's password) —
+  // but we now return the skipped list so the admin knows what wasn't merged.
   const usersData = tables['app_users'] as Array<Record<string, unknown>> | undefined;
   if (usersData && usersData.length > 0) {
     for (const row of usersData) {
-      const existing = await trx('app_users').where('username', row.username as string).first('id');
-      if (!existing) {
+      const username = row.username as string;
+      const existing = await trx('app_users').where('username', username).first('id');
+      if (existing) {
+        report.usersSkipped.push(username);
+      } else {
         await trx('app_users').insert({ ...row, id: undefined });
+        report.usersCreated.push(username);
       }
     }
   }
+
+  return report;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -854,6 +963,7 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
     }
     let newClientId: number | null = null;
     let idMappings: Record<string, Record<number, number>> = {};
+    let settingsReport: RestoreSettingsReport | null = null;
 
     // Pre-restore backup for replace mode
     if (mode === 'replace' && targetClientId) {
@@ -874,11 +984,21 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         await restoreReplace(tables, targetClientId, trx);
         newClientId = targetClientId;
       } else if (mode === 'settings') {
-        await restoreSettings(tables, trx);
+        settingsReport = await restoreSettings(tables, trx);
       } else {
         throw new Error(`Unknown restore mode: ${mode}`);
       }
     });
+
+    // Clean up the uploaded restore temp file now that we've used it. Backups
+    // loaded by backupId are kept (they live in backups/ not backups/temp).
+    if (tempFile) {
+      try {
+        await fs.promises.unlink(filePath);
+      } catch {
+        // best-effort; stale temp files can be swept later
+      }
+    }
 
     // Log restore history
     await db('restore_history').insert({
@@ -897,6 +1017,7 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         mode,
         newClientId,
         idMappings,
+        settingsReport,
       },
       error: null,
     });

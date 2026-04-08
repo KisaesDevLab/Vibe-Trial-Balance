@@ -214,6 +214,10 @@ export function TrialBalancePage() {
       return res.data;
     },
     enabled: selectedPeriodId !== null,
+    // TB is multi-user editable — keep the stale window short so other users'
+    // edits show up quickly, and refetch whenever the tab regains focus.
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: true,
   });
 
   const { data: tickmarkLibrary } = useQuery({
@@ -402,8 +406,8 @@ export function TrialBalancePage() {
   });
 
   const balanceMutation = useMutation({
-    mutationFn: ({ accountId, debit, credit }: { accountId: number; debit: number; credit: number }) =>
-      updateBalance(selectedPeriodId!, accountId, debit, credit),
+    mutationFn: ({ accountId, debit, credit, expectedUpdatedAt }: { accountId: number; debit: number; credit: number; expectedUpdatedAt: string | null }) =>
+      updateBalance(selectedPeriodId!, accountId, debit, credit, expectedUpdatedAt),
     onMutate: async ({ accountId, debit, credit }) => {
       await qc.cancelQueries({ queryKey });
       const prev = qc.getQueryData<TBRow[]>(queryKey);
@@ -427,6 +431,19 @@ export function TrialBalancePage() {
       return { prev };
     },
     onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(queryKey, ctx.prev); },
+    onSuccess: (res) => {
+      // Surface stale-write conflicts so the user knows to reload before re-entering.
+      if (res.error?.code === 'STALE_WRITE') {
+        // eslint-disable-next-line no-alert
+        window.alert(res.error.message);
+      } else if (res.data) {
+        // Write the new updated_at into cache so follow-up edits from the
+        // same session use a fresh expectedUpdatedAt and don't self-conflict.
+        qc.setQueryData<TBRow[]>(queryKey, (old) =>
+          old?.map((r) => (r.account_id === res.data!.accountId ? { ...r, row_updated_at: res.data!.updatedAt } : r)),
+        );
+      }
+    },
     onSettled: () => qc.invalidateQueries({ queryKey }),
   });
 
@@ -462,6 +479,7 @@ export function TrialBalancePage() {
         accountId: row.account_id,
         debit: field === 'unadjusted_debit' ? cents : row.unadjusted_debit,
         credit: field === 'unadjusted_credit' ? cents : row.unadjusted_credit,
+        expectedUpdatedAt: row.row_updated_at ?? null,
       });
     },
     [balanceMutation],
@@ -523,6 +541,7 @@ export function TrialBalancePage() {
           accountId: rowData.account_id,
           debit: net > 0 ? net : 0,
           credit: net < 0 ? -net : 0,
+          expectedUpdatedAt: rowData.row_updated_at ?? null,
         });
         break;
       }

@@ -54,7 +54,7 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
         is_active: true,
       })
       .returning('*');
-    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'client', entityId: client.id, action: 'create', description: `Created client "${client.name}"` });
+    await logAudit({ userId: req.user!.userId, periodId: null, clientId: client.id, entityType: 'client', entityId: client.id, action: 'create', description: `Created client "${client.name}"` });
     res.status(201).json({ data: client, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'clients');
@@ -117,7 +117,7 @@ router.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
         .json({ data: null, error: { code: 'NOT_FOUND', message: 'Client not found' } });
       return;
     }
-    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'client', entityId: id, action: 'update', description: `Updated client "${updated.name}"` });
+    await logAudit({ userId: req.user!.userId, periodId: null, clientId: id, entityType: 'client', entityId: id, action: 'update', description: `Updated client "${updated.name}"` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'clients');
@@ -125,6 +125,10 @@ router.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
 });
 
 router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Only admins can deactivate clients.' } });
+    return;
+  }
   const id = Number(req.params.id);
   if (isNaN(id)) {
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } });
@@ -142,7 +146,7 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => 
         .json({ data: null, error: { code: 'NOT_FOUND', message: 'Client not found' } });
       return;
     }
-    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'client', entityId: id, action: 'delete', description: `Deactivated client #${id}` });
+    await logAudit({ userId: req.user!.userId, periodId: null, clientId: id, entityType: 'client', entityId: id, action: 'delete', description: `Deactivated client #${id}` });
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'clients');

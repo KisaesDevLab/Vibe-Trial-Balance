@@ -23,14 +23,20 @@ export async function ensureTrialBalanceRows(
   const existingSet = new Set(existing.map(Number));
   const missing = unique.filter((id) => !existingSet.has(id));
   if (missing.length === 0) return;
-  await trx('trial_balance').insert(
-    missing.map((accountId) => ({
-      period_id: periodId,
-      account_id: accountId,
-      unadjusted_debit: 0,
-      unadjusted_credit: 0,
-      prior_year_debit: 0,
-      prior_year_credit: 0,
-    })),
-  );
+  // onConflict ignore: another concurrent transaction may have inserted the
+  // same (period_id, account_id) row after our pluck. Without this, the second
+  // txn hits the unique constraint and rolls back the entire JE write.
+  await trx('trial_balance')
+    .insert(
+      missing.map((accountId) => ({
+        period_id: periodId,
+        account_id: accountId,
+        unadjusted_debit: 0,
+        unadjusted_credit: 0,
+        prior_year_debit: 0,
+        prior_year_credit: 0,
+      })),
+    )
+    .onConflict(['period_id', 'account_id'])
+    .ignore();
 }

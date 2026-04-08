@@ -17,6 +17,10 @@ export interface TBRow {
   is_active: boolean;
   preparer_notes: string | null;
   reviewer_notes: string | null;
+  // ISO timestamp of the underlying trial_balance row — sent back with PUT as
+  // expectedUpdatedAt so the server can reject stale writes with a 409.
+  // Optional because some derived TBRow-like objects don't carry it.
+  row_updated_at?: string | null;
   unadjusted_debit: number;
   unadjusted_credit: number;
   prior_year_debit: number;
@@ -62,13 +66,26 @@ export const importPriorYearBalances = (periodId: number, rows: TBImportRow[]) =
     { method: 'POST', body: JSON.stringify({ rows }) },
   );
 
+export interface UpdateBalanceResult {
+  periodId: number;
+  accountId: number;
+  unadjustedDebit: number;
+  unadjustedCredit: number;
+  updatedAt: string | null;
+}
+
 export const updateBalance = (
   periodId: number,
   accountId: number,
   unadjustedDebit: number,
   unadjustedCredit: number,
+  expectedUpdatedAt?: string | null,
 ) =>
-  apiFetch<unknown>(`/periods/${periodId}/trial-balance/${accountId}`, {
+  apiFetch<UpdateBalanceResult>(`/periods/${periodId}/trial-balance/${accountId}`, {
     method: 'PUT',
-    body: JSON.stringify({ unadjustedDebit, unadjustedCredit }),
+    body: JSON.stringify({
+      unadjustedDebit,
+      unadjustedCredit,
+      ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}),
+    }),
   });

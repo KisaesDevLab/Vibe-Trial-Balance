@@ -24,11 +24,12 @@ auditLogRouter.get('/', adminOnly, async (req: AuthRequest, res: Response): Prom
   const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 200);
   const offset = (page - 1) * limit;
 
-  const { entity_type, action, from, to } = req.query as Record<string, string | undefined>;
+  const { entity_type, action, from, to, client_id } = req.query as Record<string, string | undefined>;
 
   try {
     let query = db('audit_log')
       .leftJoin('app_users', 'app_users.id', 'audit_log.user_id')
+      .leftJoin('clients', 'clients.id', 'audit_log.client_id')
       .select(
         'audit_log.id',
         'audit_log.user_id',
@@ -37,8 +38,10 @@ auditLogRouter.get('/', adminOnly, async (req: AuthRequest, res: Response): Prom
         'audit_log.action',
         'audit_log.description',
         'audit_log.period_id',
+        'audit_log.client_id',
         'audit_log.created_at',
         'app_users.display_name as username',
+        'clients.name as client_name',
       )
       .orderBy('audit_log.created_at', 'desc');
 
@@ -51,6 +54,13 @@ auditLogRouter.get('/', adminOnly, async (req: AuthRequest, res: Response): Prom
     if (action) {
       query = query.where('audit_log.action', 'ilike', `%${action}%`);
       countQuery = countQuery.where('action', 'ilike', `%${action}%`);
+    }
+    if (client_id) {
+      const cid = Number(client_id);
+      if (!isNaN(cid)) {
+        query = query.where('audit_log.client_id', cid);
+        countQuery = countQuery.where('client_id', cid);
+      }
     }
     if (from) {
       query = query.where('audit_log.created_at', '>=', from);

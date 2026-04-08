@@ -6,7 +6,7 @@ import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import bcrypt from 'bcrypt';
 import { db } from '../db';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { authMiddleware, AuthRequest, invalidateAuthCache } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
 
@@ -115,6 +115,9 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'User not found' } });
       return;
     }
+    // Role or is_active change must take effect immediately for an already-
+    // authenticated target user, so drop their cached auth lookup.
+    invalidateAuthCache(id);
     const changedFields = Object.keys(updates).filter(k => k !== 'updated_at');
     const hasPasswordChange = changedFields.includes('password_hash');
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: id, action: 'update', description: `Updated user "${updated.username}" — ${hasPasswordChange ? 'password changed' : changedFields.join(', ')}` });
@@ -143,6 +146,7 @@ usersRouter.delete('/:id', adminOnly, async (req: AuthRequest, res: Response): P
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'User not found' } });
       return;
     }
+    invalidateAuthCache(id);
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: id, action: 'delete', description: `Deactivated user "${updated.username}"` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {

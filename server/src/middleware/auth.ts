@@ -5,16 +5,29 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET } from '../lib/jwtConfig';
+import { db } from '../db';
 
 export interface AuthRequest extends Request {
   user?: { userId: number; username: string; role: string };
 }
 
-export function authMiddleware(
+// Tiny in-process cache so every API request doesn't become a DB round-trip
+// just to re-check is_active. Entries expire quickly, so deactivation takes
+// effect within CACHE_TTL_MS of the admin's action.
+const CACHE_TTL_MS = 30 * 1000;
+interface CachedUser { role: string; expiresAt: number }
+const activeUserCache = new Map<number, CachedUser>();
+
+/** Invalidate a cached auth lookup. Call after updating a user's role or is_active. */
+export function invalidateAuthCache(userId: number): void {
+  activeUserCache.delete(userId);
+}
+
+export async function authMiddleware(
   req: AuthRequest,
   res: Response,
   next: NextFunction,
-): void {
+): Promise<void> {
   const authHeader = req.headers.authorization;
 
   if (!authHeader?.startsWith('Bearer ')) {
@@ -26,19 +39,57 @@ export function authMiddleware(
 
   const token = authHeader.slice(7);
 
+  let payload: { userId: number; username: string; role: string };
   try {
-    const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as {
+    payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as {
       userId: number;
       username: string;
       role: string;
     };
-    req.user = payload;
-    next();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`[auth] JWT verification failed: ${msg}`);
     res
       .status(401)
       .json({ data: null, error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token' } });
+    return;
+  }
+
+  // Re-check is_active and current role from the DB so that deactivation or
+  // role changes take effect without waiting for the JWT to expire.
+  try {
+    const now = Date.now();
+    const cached = activeUserCache.get(payload.userId);
+    let currentRole: string;
+
+    if (cached && cached.expiresAt > now) {
+      currentRole = cached.role;
+    } else {
+      const row = await db('app_users')
+        .where({ id: payload.userId, is_active: true })
+        .first('role');
+      if (!row) {
+        activeUserCache.delete(payload.userId);
+        res
+          .status(401)
+          .json({ data: null, error: { code: 'UNAUTHORIZED', message: 'Account is inactive.' } });
+        return;
+      }
+      currentRole = row.role as string;
+      activeUserCache.set(payload.userId, { role: currentRole, expiresAt: now + CACHE_TTL_MS });
+    }
+
+    req.user = {
+      userId: payload.userId,
+      username: payload.username,
+      role: currentRole,
+    };
+    next();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[auth] DB lookup failed: ${msg}`);
+    res
+      .status(500)
+      .json({ data: null, error: { code: 'SERVER_ERROR', message: 'Auth check failed.' } });
   }
 }

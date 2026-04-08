@@ -20,6 +20,8 @@ export async function assertPeriodUnlocked(periodId: number, trx?: Knex.Transact
 interface AuditEntry {
   userId: number | null;
   periodId: number | null;
+  /** Optional client_id. If not set and periodId is, it will be resolved automatically. */
+  clientId?: number | null;
   entityType: string;
   entityId?: number | null;
   action: string;
@@ -33,12 +35,25 @@ interface AuditEntry {
 export async function logAudit(entry: AuditEntry, trx?: Knex.Transaction): Promise<void> {
   const q = trx ?? db;
   try {
+    // If the caller didn't supply clientId but did supply periodId, resolve
+    // it now so the audit row survives downstream period/client remapping.
+    let clientId = entry.clientId ?? null;
+    if (clientId === null && entry.periodId !== null) {
+      try {
+        const row = await q('periods').where({ id: entry.periodId }).first('client_id');
+        clientId = (row?.client_id as number | undefined) ?? null;
+      } catch {
+        clientId = null;
+      }
+    }
+
     if (trx) {
       await trx.raw('SAVEPOINT audit_savepoint');
     }
     await q('audit_log').insert({
       user_id: entry.userId ?? null,
       period_id: entry.periodId ?? null,
+      client_id: clientId,
       entity_type: entry.entityType,
       entity_id: entry.entityId ?? null,
       action: entry.action,

@@ -59,56 +59,73 @@ tbPeriodRouter.post('/initialize', async (req: AuthRequest, res: Response): Prom
     return;
   }
   try {
-    await assertPeriodUnlocked(periodId);
-    const period = await db('periods').where({ id: periodId }).first('client_id');
-    if (!period) {
+    let initialized = 0;
+    let removed = 0;
+    let notFound = false;
+    await db.transaction(async (trx) => {
+      // Lock the period row for the duration of the transaction so that a
+      // concurrent lock attempt can't slip in between the assert and the write.
+      await trx.raw('SELECT id FROM periods WHERE id = ? FOR UPDATE', [periodId]);
+      await assertPeriodUnlocked(periodId, trx);
+      const period = await trx('periods').where({ id: periodId }).first('client_id');
+      if (!period) {
+        notFound = true;
+        return;
+      }
+      const accounts = await trx('chart_of_accounts')
+        .where({ client_id: period.client_id, is_active: true })
+        .select('id');
+
+      if (accounts.length === 0) return;
+
+      const existing = await trx('trial_balance')
+        .where({ period_id: periodId })
+        .pluck('account_id');
+      const existingSet = new Set(existing.map(Number));
+
+      const toInsert = accounts
+        .filter((a: { id: number }) => !existingSet.has(a.id))
+        .map((a: { id: number }) => ({
+          period_id: periodId,
+          account_id: a.id,
+          unadjusted_debit: 0,
+          unadjusted_credit: 0,
+          updated_by: req.user!.userId,
+        }));
+
+      if (toInsert.length > 0) {
+        await trx('trial_balance')
+          .insert(toInsert)
+          .onConflict(['period_id', 'account_id'])
+          .ignore();
+        initialized = toInsert.length;
+      }
+
+      // Remove zero-balance rows for accounts now inactive in COA
+      const inactiveIds = await trx('chart_of_accounts')
+        .where({ client_id: period.client_id, is_active: false })
+        .pluck('id');
+      if (inactiveIds.length > 0) {
+        removed = await trx('trial_balance')
+          .where({ period_id: periodId })
+          .whereIn('account_id', inactiveIds.map(Number))
+          .where({ unadjusted_debit: 0, unadjusted_credit: 0 })
+          .delete();
+      }
+
+      await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'create', description: `Initialized TB from COA — ${initialized} rows created, ${removed} inactive removed` }, trx);
+    });
+    if (notFound) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
       return;
     }
-    const accounts = await db('chart_of_accounts')
-      .where({ client_id: period.client_id, is_active: true })
-      .select('id');
-
-    if (accounts.length === 0) {
-      res.json({ data: { initialized: 0 }, error: null });
+    res.json({ data: { initialized, removed }, error: null });
+  } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked' } });
       return;
     }
-
-    const existing = await db('trial_balance')
-      .where({ period_id: periodId })
-      .pluck('account_id');
-    const existingSet = new Set(existing.map(Number));
-
-    const toInsert = accounts
-      .filter((a: { id: number }) => !existingSet.has(a.id))
-      .map((a: { id: number }) => ({
-        period_id: periodId,
-        account_id: a.id,
-        unadjusted_debit: 0,
-        unadjusted_credit: 0,
-        updated_by: req.user!.userId,
-      }));
-
-    if (toInsert.length > 0) {
-      await db('trial_balance').insert(toInsert);
-    }
-
-    // Remove zero-balance rows for accounts now inactive in COA
-    const inactiveIds = await db('chart_of_accounts')
-      .where({ client_id: period.client_id, is_active: false })
-      .pluck('id');
-    let removed = 0;
-    if (inactiveIds.length > 0) {
-      removed = await db('trial_balance')
-        .where({ period_id: periodId })
-        .whereIn('account_id', inactiveIds.map(Number))
-        .where({ unadjusted_debit: 0, unadjusted_credit: 0 })
-        .delete();
-    }
-
-    await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'create', description: `Initialized TB from COA — ${toInsert.length} rows created, ${removed} inactive removed` });
-    res.json({ data: { initialized: toInsert.length, removed }, error: null });
-  } catch (err: unknown) {
     sendServerError(res, err, 'trial-balance');
   }
 });
@@ -141,21 +158,23 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
     return;
   }
   try {
-    await assertPeriodUnlocked(periodId);
-    const period = await db('periods').where({ id: periodId }).first('client_id');
-    if (!period) {
-      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
-      return;
-    }
-    const accounts = await db('chart_of_accounts')
-      .where({ client_id: period.client_id, is_active: true })
-      .select('id', 'account_number');
-    const accountMap = new Map<string, number>(accounts.map((a: { id: number; account_number: string }) => [a.account_number, a.id]));
-
     let upserted = 0;
     let skipped = 0;
-    const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
+    let notFound = false;
     await db.transaction(async (trx) => {
+      await trx.raw('SELECT id FROM periods WHERE id = ? FOR UPDATE', [periodId]);
+      await assertPeriodUnlocked(periodId, trx);
+      const period = await trx('periods').where({ id: periodId }).first('client_id');
+      if (!period) {
+        notFound = true;
+        return;
+      }
+      const accounts = await trx('chart_of_accounts')
+        .where({ client_id: period.client_id, is_active: true })
+        .select('id', 'account_number');
+      const accountMap = new Map<string, number>(accounts.map((a: { id: number; account_number: string }) => [a.account_number, a.id]));
+
+      const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
       for (const row of result.data.rows) {
         const accountId = accountMap.get(row.accountNumber);
         if (!accountId) { skipped++; continue; }
@@ -166,7 +185,7 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
             unadjusted_debit: row.debit,
             unadjusted_credit: row.credit,
             updated_by: req.user!.userId,
-            updated_at: db.fn.now(),
+            updated_at: trx.fn.now(),
           })
           .onConflict(['period_id', 'account_id'])
           .merge(['unadjusted_debit', 'unadjusted_credit', 'updated_by', 'updated_at']);
@@ -196,10 +215,19 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
           }
         }
       }
+      await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported unadjusted balances — ${upserted} upserted, ${skipped} skipped` }, trx);
     });
-    await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported unadjusted balances — ${upserted} upserted, ${skipped} skipped` });
+    if (notFound) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
+      return;
+    }
     res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
   } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked' } });
+      return;
+    }
     sendServerError(res, err, 'trial-balance');
   }
 });
@@ -225,21 +253,23 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
     return;
   }
   try {
-    await assertPeriodUnlocked(periodId);
-    const period = await db('periods').where({ id: periodId }).first('client_id');
-    if (!period) {
-      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
-      return;
-    }
-    const accounts = await db('chart_of_accounts')
-      .where({ client_id: period.client_id, is_active: true })
-      .select('id', 'account_number');
-    const accountMap = new Map<string, number>(accounts.map((a: { id: number; account_number: string }) => [a.account_number, a.id]));
-
     let upserted = 0;
     let skipped = 0;
-    const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
+    let notFound = false;
     await db.transaction(async (trx) => {
+      await trx.raw('SELECT id FROM periods WHERE id = ? FOR UPDATE', [periodId]);
+      await assertPeriodUnlocked(periodId, trx);
+      const period = await trx('periods').where({ id: periodId }).first('client_id');
+      if (!period) {
+        notFound = true;
+        return;
+      }
+      const accounts = await trx('chart_of_accounts')
+        .where({ client_id: period.client_id, is_active: true })
+        .select('id', 'account_number');
+      const accountMap = new Map<string, number>(accounts.map((a: { id: number; account_number: string }) => [a.account_number, a.id]));
+
+      const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
       for (const row of result.data.rows) {
         const accountId = accountMap.get(row.accountNumber);
         if (!accountId) { skipped++; continue; }
@@ -252,7 +282,7 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
             prior_year_debit: row.debit,
             prior_year_credit: row.credit,
             updated_by: req.user!.userId,
-            updated_at: db.fn.now(),
+            updated_at: trx.fn.now(),
           })
           .onConflict(['period_id', 'account_id'])
           .merge(['prior_year_debit', 'prior_year_credit', 'updated_by', 'updated_at']);
@@ -282,10 +312,19 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
           }
         }
       }
+      await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported prior year balances — ${upserted} upserted, ${skipped} skipped` }, trx);
     });
-    await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported prior year balances — ${upserted} upserted, ${skipped} skipped` });
+    if (notFound) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
+      return;
+    }
     res.json({ data: { upserted, skipped, total: result.data.rows.length }, error: null });
   } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked' } });
+      return;
+    }
     sendServerError(res, err, 'trial-balance');
   }
 });
@@ -294,6 +333,10 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
 const balanceSchema = z.object({
   unadjustedDebit: z.number().int().min(0),
   unadjustedCredit: z.number().int().min(0),
+  // Optional: when set, the row's current updated_at must match. This is the
+  // optimistic-concurrency guard that turns a silent last-write-wins into an
+  // explicit 409 the client can recover from.
+  expectedUpdatedAt: z.string().datetime({ offset: true }).optional(),
 });
 
 tbPeriodRouter.put('/:accountId', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -308,24 +351,66 @@ tbPeriodRouter.put('/:accountId', async (req: AuthRequest, res: Response): Promi
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
     return;
   }
-  const { unadjustedDebit, unadjustedCredit } = result.data;
+  const { unadjustedDebit, unadjustedCredit, expectedUpdatedAt } = result.data;
 
   try {
-    await assertPeriodUnlocked(periodId);
-    await db('trial_balance')
-      .insert({
-        period_id: periodId,
-        account_id: accountId,
-        unadjusted_debit: unadjustedDebit,
-        unadjusted_credit: unadjustedCredit,
-        updated_by: req.user!.userId,
-        updated_at: db.fn.now(),
-      })
-      .onConflict(['period_id', 'account_id'])
-      .merge(['unadjusted_debit', 'unadjusted_credit', 'updated_by', 'updated_at']);
+    let newUpdatedAt: string | null = null;
+    let conflictActual: string | null = null;
+    await db.transaction(async (trx) => {
+      await assertPeriodUnlocked(periodId, trx);
 
-    await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: accountId, action: 'update', description: `Updated balance — Dr: ${unadjustedDebit} Cr: ${unadjustedCredit}` });
-    res.json({ data: { periodId, accountId, unadjustedDebit, unadjustedCredit }, error: null });
+      // Optimistic concurrency check: if the client sent an expectedUpdatedAt,
+      // the row must still have that timestamp. Otherwise another user has
+      // written the same cell since we loaded it and we must refuse.
+      if (expectedUpdatedAt) {
+        const current = await trx('trial_balance')
+          .where({ period_id: periodId, account_id: accountId })
+          .first('updated_at');
+        if (current) {
+          const actualIso = new Date(current.updated_at as string | Date).toISOString();
+          const expectedIso = new Date(expectedUpdatedAt).toISOString();
+          if (actualIso !== expectedIso) {
+            conflictActual = actualIso;
+            return;
+          }
+        }
+        // If no row exists yet, the expectedUpdatedAt was for a row we thought
+        // existed — treat that as a conflict too.
+        else {
+          conflictActual = '';
+          return;
+        }
+      }
+
+      const [row] = await trx('trial_balance')
+        .insert({
+          period_id: periodId,
+          account_id: accountId,
+          unadjusted_debit: unadjustedDebit,
+          unadjusted_credit: unadjustedCredit,
+          updated_by: req.user!.userId,
+          updated_at: trx.fn.now(),
+        })
+        .onConflict(['period_id', 'account_id'])
+        .merge(['unadjusted_debit', 'unadjusted_credit', 'updated_by', 'updated_at'])
+        .returning('updated_at');
+      newUpdatedAt = row?.updated_at ? new Date(row.updated_at as string | Date).toISOString() : null;
+
+      await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: accountId, action: 'update', description: `Updated balance — Dr: ${unadjustedDebit} Cr: ${unadjustedCredit}` }, trx);
+    });
+
+    if (conflictActual !== null) {
+      res.status(409).json({
+        data: null,
+        error: {
+          code: 'STALE_WRITE',
+          message: 'This cell was changed by another user since you loaded it. Reload and re-enter your edit.',
+        },
+      });
+      return;
+    }
+
+    res.json({ data: { periodId, accountId, unadjustedDebit, unadjustedCredit, updatedAt: newUpdatedAt }, error: null });
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     if (e.code === 'PERIOD_LOCKED') {

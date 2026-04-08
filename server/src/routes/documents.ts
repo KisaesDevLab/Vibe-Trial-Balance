@@ -14,6 +14,7 @@ import { Router, Response } from 'express';
 import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
@@ -130,13 +131,15 @@ documentsCollectionRouter.post(
       const uploadsDir = getUploadsDir(clientId);
       ensureDir(uploadsDir);
 
-      const timestamp = Date.now();
       // Sanitize original name: replace spaces/special chars
       const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const storedFilename = `${timestamp}_${safeName}`;
+      // Use timestamp + random suffix so two concurrent uploads of the same
+      // filename in the same millisecond can't collide and silently clobber.
+      const uniqueSuffix = crypto.randomBytes(6).toString('hex');
+      const storedFilename = `${Date.now()}_${uniqueSuffix}_${safeName}`;
       const filePath = path.join(uploadsDir, storedFilename);
 
-      fs.writeFileSync(filePath, req.file.buffer);
+      await fs.promises.writeFile(filePath, req.file.buffer);
 
       const [doc] = await db('client_documents')
         .insert({
