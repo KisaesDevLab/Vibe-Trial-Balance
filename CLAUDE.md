@@ -22,6 +22,7 @@ This project is licensed under the **PolyForm Internal Use License 1.0.0**. Enfo
 
 ### Distribution restriction
 - The PolyForm Internal Use License does not permit distributing the software to any third party in any form. Do not add features, build artifacts, or workflows that would publish, redistribute, or hand off the codebase or binaries to outside parties.
+- **Authorized exception — public Docker images.** The copyright holder (Kisaes LLC) has expressly permitted publishing Docker images to `ghcr.io/kisaesdevlab/vibe-tb-*` via the `.github/workflows/docker-publish.yml` workflow. Maintaining or extending that workflow, the image-based compose file, or README references to the registry is allowed. Any *other* redistribution channel (npm publish, release binaries, source mirrors, etc.) still requires the owner's explicit authorization.
 - Client-facing access (clients getting their own login to a hosted instance) requires a Commercial License from Kisaes LLC — see `COMMERCIAL_LICENSE.md`.
 
 ### Known open issues (see scripts/license-policy.json for detail)

@@ -12,8 +12,9 @@ A self-hosted tax preparation and accounting workpaper application for small CPA
 - [Architecture](#architecture)
 - [Environment Variables](#environment-variables)
 - [Development Setup (Windows)](#development-setup-windows)
+- [Deployment: Docker — Prebuilt Images](#deployment-docker--prebuilt-images) ← recommended
 - [Deployment: Raspberry Pi](#deployment-raspberry-pi)
-- [Deployment: Docker (Internal Network)](#deployment-docker-internal-network)
+- [Deployment: Docker (Build from Source)](#deployment-docker-build-from-source)
 - [Deployment: Docker (Cloud / VPS)](#deployment-docker-cloud--vps)
 - [AI Provider Configuration](#ai-provider-configuration)
 - [Backup & Restore](#backup--restore)
@@ -111,6 +112,88 @@ See [QUICKSTART.md](QUICKSTART.md) for detailed commands and troubleshooting.
 
 ---
 
+## Deployment: Docker — Prebuilt Images
+
+The fastest path to a running installation. Multi-arch images (`linux/amd64` and `linux/arm64`, so the same images run on a Pi) are published to GitHub Container Registry by the `Build and Publish Docker Images` workflow on every push to `main` and every `v*` tag.
+
+| Image | Pull command |
+|-------|--------------|
+| Server | `docker pull ghcr.io/kisaesdevlab/vibe-tb-server:latest` |
+| Client | `docker pull ghcr.io/kisaesdevlab/vibe-tb-client:latest` |
+
+Available tags:
+- `latest` — current main
+- `v1.2.3`, `v1.2`, `v1` — release tags
+- `sha-abcdef1` — specific commit (use for reproducible pins in production)
+
+### 1. Get the compose file and the env template
+
+```bash
+# Pick an install directory on the host
+mkdir -p /opt/vibe-tb && cd /opt/vibe-tb
+
+curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/docker-compose.prod.images.yml
+curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/.env.example
+cp .env.example .env
+```
+
+### 2. Fill in the required secrets
+
+Edit `.env` and set:
+
+```bash
+DB_PASSWORD=$(openssl rand -hex 24)
+JWT_SECRET=$(openssl rand -hex 32)
+ENCRYPTION_KEY=$(openssl rand -hex 32)
+ALLOWED_ORIGIN=http://YOUR_SERVER_IP_OR_HOSTNAME   # or https://tb.yourfirm.com
+# Optional: IMAGE_TAG=v1.2.3   — pin to a release instead of `latest`
+```
+
+Compose will refuse to start if any required value is missing.
+
+### 3. Start it
+
+```bash
+docker compose -f docker-compose.prod.images.yml up -d
+```
+
+On first boot the server runs migrations and seeds the default `admin` / `admin` account. **Change the admin password immediately after first login.**
+
+### 4. Verify
+
+```bash
+docker compose -f docker-compose.prod.images.yml ps      # db, server, client all "Up"
+curl http://localhost:3001/api/v1/health                 # {"status":"ok","database":"connected",...}
+```
+
+Open the app at `http://YOUR_SERVER_IP` (port 80).
+
+### 5. Update to a newer version
+
+```bash
+cd /opt/vibe-tb
+docker compose -f docker-compose.prod.images.yml pull
+docker compose -f docker-compose.prod.images.yml up -d
+```
+
+With `IMAGE_TAG=latest`, `pull` fetches whatever `main` currently points to. For reproducible production, pin `IMAGE_TAG` to a specific `v*` tag or `sha-*` and bump it deliberately.
+
+### 6. Data persistence
+
+Three named volumes survive recreations and updates:
+
+- `pgdata` — the PostgreSQL data directory
+- `uploads` — documents uploaded through the app (`server/uploads`)
+- `backups` — `.tbak` archives written by the scheduled backup job (`server/backups`)
+
+Back these up at the host level (e.g., `docker run --rm -v pgdata:/src alpine tar …`) in addition to using the app's in-product backup.
+
+### Raspberry Pi note
+
+The published images include `linux/arm64`, so the same `docker-compose.prod.images.yml` runs on a Pi 5 without any changes. Follow the steps above on the Pi — no compile step needed.
+
+---
+
 ## Deployment: Raspberry Pi
 
 The primary production target. Runs directly on the OS with Nginx as a reverse proxy and PM2 for process management.
@@ -199,144 +282,36 @@ ollama pull qwq:32b                         # Reasoning model for support chat
 
 ---
 
-## Deployment: Docker (Internal Network)
+## Deployment: Docker (Build from Source)
 
-For running on an office server, NAS, or any machine on your local network.
+Use this path only when you need a local modification baked in. Otherwise the [prebuilt images](#deployment-docker--prebuilt-images) path above is faster and produces identical containers.
 
-### 1. Create `docker-compose.prod.yml`
-
-```yaml
-services:
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: vibetb
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
-      POSTGRES_DB: vibe_tb_db
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vibetb -d vibe_tb_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  server:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      PORT: 3001
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_NAME: vibe_tb_db
-      DB_USER: vibetb
-      DB_PASSWORD: ${DB_PASSWORD:-changeme}
-      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
-      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-    volumes:
-      - uploads:/app/server/uploads
-      - backups:/app/server/backups
-    ports:
-      - "3001:3001"
-
-  client:
-    build:
-      context: .
-      dockerfile: Dockerfile.client
-    restart: unless-stopped
-    depends_on:
-      - server
-    ports:
-      - "80:80"
-
-volumes:
-  pgdata:
-  uploads:
-  backups:
-```
-
-### 2. Create `Dockerfile.server`
-
-```dockerfile
-FROM node:20-alpine
-
-WORKDIR /app
-COPY package.json package-lock.json ./
-COPY server/package.json server/
-RUN cd server && npm install --production
-
-COPY server/ server/
-RUN cd server && npx tsc
-
-# For scanned PDF support (optional — adds ~50MB)
-RUN apk add --no-cache poppler-utils
-
-EXPOSE 3001
-CMD ["sh", "-c", "cd server && npx knex migrate:latest --knexfile knexfile.js && node dist/app.js"]
-```
-
-### 3. Create `Dockerfile.client`
-
-```dockerfile
-FROM node:20-alpine AS build
-WORKDIR /app
-COPY package.json package-lock.json ./
-COPY client/package.json client/
-RUN cd client && npm install
-COPY client/ client/
-RUN cd client && npm run build
-
-FROM nginx:alpine
-COPY --from=build /app/client/dist /usr/share/nginx/html
-COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
-# Adjust nginx.conf: change root to /usr/share/nginx/html
-# and proxy_pass to http://server:3001
-EXPOSE 80
-```
-
-### 4. Create `.env` for production
+### 1. Clone and prepare the environment
 
 ```bash
-NODE_ENV=production
-DB_PASSWORD=your_strong_password_here
-JWT_SECRET=your_random_64_char_secret_here
-ENCRYPTION_KEY=your_separate_random_secret_here
-ALLOWED_ORIGIN=http://your-server-ip
-ANTHROPIC_API_KEY=sk-ant-...       # Optional — can configure in app Settings instead
+git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git /opt/vibe-tb
+cd /opt/vibe-tb
+cp .env.example .env
+# Edit .env — set DB_PASSWORD, JWT_SECRET, ENCRYPTION_KEY, ALLOWED_ORIGIN.
 ```
 
-### 5. Build and run
+### 2. Build and run
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-### 6. Verify
+The checked-in `docker-compose.prod.yml` references `Dockerfile.server` and `Dockerfile.client` from this repo — no inline edits needed. It enforces the same required-secret contract as the prebuilt path.
+
+### 3. Verify
 
 ```bash
-docker compose -f docker-compose.prod.yml ps       # All services "Up"
-curl http://localhost:3001/api/v1/health             # {"status":"ok"}
+docker compose -f docker-compose.prod.yml ps
+curl http://localhost:3001/api/v1/health
 ```
 
-Access the app at `http://YOUR_SERVER_IP`.
+### 4. Updates
 
-### 7. Seed the admin user (first time only)
-
-```bash
-docker compose -f docker-compose.prod.yml exec server \
-  sh -c "cd server && npx knex seed:run --knexfile knexfile.js"
-```
-
-### 8. Updates
-
-One-line update:
 ```bash
 git pull && docker compose -f docker-compose.prod.yml up -d --build
 ```
@@ -345,7 +320,7 @@ git pull && docker compose -f docker-compose.prod.yml up -d --build
 
 ## Deployment: Docker (Cloud / VPS)
 
-Same Docker setup as internal, with additional hardening for internet-facing deployments.
+Same Docker setup as internal, with additional hardening for internet-facing deployments. Either the prebuilt-image path or the build-from-source path works; prefer the prebuilt images with `IMAGE_TAG` pinned to a `v*` release for reproducibility.
 
 ### Additional steps for cloud
 
