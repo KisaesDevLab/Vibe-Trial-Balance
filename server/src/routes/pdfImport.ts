@@ -7,6 +7,7 @@ import multer from 'multer';
 import pdfParse from 'pdf-parse';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { logAiUsage } from '../lib/aiUsage';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
@@ -312,11 +313,9 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    // Check period is not locked
-    if (period.locked_at) {
-      res.status(403).json({ data: null, error: { code: 'PERIOD_LOCKED', message: 'Period is locked' } });
-      return;
-    }
+    // The authoritative lock check runs inside the transaction below via
+    // assertPeriodUnlocked + SELECT FOR UPDATE. A pre-check here would race
+    // with concurrent period-lock writers.
 
     // Pre-load existing COA accounts to avoid try/catch inside transaction
     const existingCoa = await db('chart_of_accounts')
@@ -341,6 +340,10 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
 
     // Wrap all writes in a single transaction — all succeed or all roll back
     const stats = await db.transaction(async (trx) => {
+      // Serialize against period-lock writers and re-check lock status.
+      await trx.raw('SELECT id FROM periods WHERE id = ? FOR UPDATE', [periodId]);
+      await assertPeriodUnlocked(periodId, trx);
+
       let accountsCreated = 0;
       let accountsMatched = 0;
       let rowsImported = 0;
@@ -451,6 +454,11 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       error: null,
     });
   } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked' } });
+      return;
+    }
     sendServerError(res, err, 'pdf-import');
   }
 });

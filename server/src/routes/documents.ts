@@ -174,12 +174,22 @@ documentsItemRouter.get('/:id/download', async (req: AuthRequest, res: Response)
       return;
     }
 
-    if (!fs.existsSync(doc.file_path as string)) {
+    // Resolve the stored path against the uploads root and reject anything
+    // that escapes it. file_path in the DB is historical data — treat it as
+    // untrusted.
+    const uploadsRoot = path.resolve(__dirname, '../../uploads');
+    const resolvedPath = path.resolve(doc.file_path as string);
+    if (!resolvedPath.startsWith(uploadsRoot + path.sep) && resolvedPath !== uploadsRoot) {
+      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Path outside uploads root' } });
+      return;
+    }
+
+    if (!fs.existsSync(resolvedPath)) {
       res.status(404).json({ data: null, error: { code: 'FILE_MISSING', message: 'File not found on disk' } });
       return;
     }
 
-    const fileBuffer = fs.readFileSync(doc.file_path as string);
+    const fileBuffer = fs.readFileSync(resolvedPath);
     res.setHeader('Content-Type', doc.file_type as string);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(doc.filename as string)}"`);
     res.setHeader('Content-Length', fileBuffer.length);
@@ -204,9 +214,21 @@ documentsItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Prom
       return;
     }
 
-    // Delete file from filesystem
-    if (fs.existsSync(doc.file_path as string)) {
-      fs.unlinkSync(doc.file_path as string);
+    // Only the uploader or an admin can delete. Reviewers/preparers shouldn't
+    // be able to nuke another preparer's workpapers by guessing IDs.
+    const isAdmin = req.user?.role === 'admin';
+    const isUploader = req.user?.userId === (doc.uploaded_by as number | null);
+    if (!isAdmin && !isUploader) {
+      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Only the uploader or an admin can delete this document.' } });
+      return;
+    }
+
+    // Guard the on-disk unlink against a poisoned file_path — same envelope
+    // as the download handler.
+    const uploadsRoot = path.resolve(__dirname, '../../uploads');
+    const resolvedPath = path.resolve(doc.file_path as string);
+    if ((resolvedPath.startsWith(uploadsRoot + path.sep) || resolvedPath === uploadsRoot) && fs.existsSync(resolvedPath)) {
+      fs.unlinkSync(resolvedPath);
     }
 
     await db('client_documents').where({ id: docId }).delete();

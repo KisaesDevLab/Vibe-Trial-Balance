@@ -5,4 +5,10 @@
 import knex from 'knex';
 import config from '../knexfile';
 
-export const db = knex(config['development']);
+const env = process.env.NODE_ENV === 'production' ? 'production' : 'development';
+const envConfig = config[env];
+if (!envConfig) {
+  throw new Error(`No knex config for NODE_ENV="${env}"`);
+}
+
+export const db = knex(envConfig);

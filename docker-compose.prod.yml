@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: vibetb
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env (no default allowed in production)}
       POSTGRES_DB: vibe_tb_db
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -23,16 +23,18 @@ services:
       db:
         condition: service_healthy
     environment:
+      NODE_ENV: production
       PORT: 3001
       DB_HOST: db
       DB_PORT: 5432
       DB_NAME: vibe_tb_db
       DB_USER: vibetb
-      DB_PASSWORD: ${DB_PASSWORD:-changeme}
-      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env (use `openssl rand -hex 32`)}
       JWT_EXPIRY: ${JWT_EXPIRY:-8h}
-      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost}
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set in .env (use `openssl rand -hex 32`)}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:?ALLOWED_ORIGIN must be set in .env (e.g. https://your-host)}
+      APP_BASE_URL: ${APP_BASE_URL:-${ALLOWED_ORIGIN}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - uploads:/app/server/uploads

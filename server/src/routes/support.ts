@@ -61,9 +61,20 @@ supportRouter.post('/chat', async (req: AuthRequest, res: Response): Promise<voi
   };
 
   try {
-    // Determine or create conversation
+    // Determine or create conversation. When resuming, verify the conversation
+    // belongs to the requesting user — otherwise any authenticated user could
+    // read another user's chat by passing their conversationId.
     let conversationId: number = incomingConvId ?? 0;
-    if (!conversationId) {
+    if (incomingConvId) {
+      const owned = await db('support_conversations')
+        .where({ id: incomingConvId, user_id: userId })
+        .first('id');
+      if (!owned) {
+        writeEvent({ type: 'error', message: 'Conversation not found.' });
+        res.end();
+        return;
+      }
+    } else {
       const [newConv] = await db('support_conversations')
         .insert({
           user_id: userId,
@@ -77,7 +88,7 @@ supportRouter.post('/chat', async (req: AuthRequest, res: Response): Promise<voi
     // Emit start event with conversationId
     writeEvent({ type: 'start', conversationId });
 
-    // Load prior messages if resuming a conversation
+    // Load prior messages if resuming a conversation (ownership already verified above)
     type DbMessage = { role: string; content: string };
     const priorMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
     if (incomingConvId) {

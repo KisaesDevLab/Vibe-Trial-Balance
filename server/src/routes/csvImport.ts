@@ -7,6 +7,7 @@ import multer from 'multer';
 import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { logAiUsage } from '../lib/aiUsage';
 import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
@@ -726,11 +727,9 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    // Check period is not locked
-    if (period.locked_at) {
-      res.status(403).json({ data: null, error: { code: 'PERIOD_LOCKED', message: 'Period is locked' } });
-      return;
-    }
+    // Note: the definitive lock check happens inside the transaction below via
+    // assertPeriodUnlocked + SELECT FOR UPDATE. A pre-check here would be a
+    // TOCTOU race with a concurrent period lock, so we skip it.
 
     // Pre-load existing COA accounts to avoid try/catch inside transaction
     const existingCoa = await db('chart_of_accounts')
@@ -754,6 +753,11 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
 
     // Wrap all writes in a single transaction — all succeed or all roll back
     const stats = await db.transaction(async (trx) => {
+      // Serialize against concurrent period-lock / roll-forward writers and
+      // assert the period isn't locked as of the moment we start inserting.
+      await trx.raw('SELECT id FROM periods WHERE id = ? FOR UPDATE', [periodId]);
+      await assertPeriodUnlocked(periodId, trx);
+
       let accountsCreated = 0;
       let accountsMatched = 0;
       let rowsImported = 0;
@@ -889,6 +893,11 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       error: null,
     });
   } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    if (e.code === 'PERIOD_LOCKED') {
+      res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked' } });
+      return;
+    }
     sendServerError(res, err, 'csv-import');
   }
 });

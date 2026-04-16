@@ -262,15 +262,52 @@ async function createBackup(
 // Restore helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Guards against zip-bomb / pathological archives on restore. Totals are
+// tracked across all extracted table files — a crafted .tbak that claims
+// to hold a billion rows can otherwise OOM the Pi.
+const MAX_RESTORE_ENTRIES = 200;
+const MAX_RESTORE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
+const MAX_RESTORE_TABLE_BYTES = 512 * 1024 * 1024;             // 512 MiB per table
+
 async function readZipContents(filePath: string): Promise<Record<string, unknown[]>> {
   const tables: Record<string, unknown[]> = {};
   const dir = await unzipper.Open.file(filePath);
+
+  if (dir.files.length > MAX_RESTORE_ENTRIES) {
+    throw Object.assign(
+      new Error(`Backup archive has ${dir.files.length} entries (max ${MAX_RESTORE_ENTRIES})`),
+      { code: 'INVALID_BACKUP' },
+    );
+  }
+
+  let totalBytes = 0;
   for (const file of dir.files) {
-    if (file.path.startsWith('tables/') && file.path.endsWith('.json')) {
-      const tableName = path.basename(file.path, '.json');
-      const content = await file.buffer();
-      tables[tableName] = JSON.parse(content.toString('utf8')) as unknown[];
+    // Reject entries whose path tries to escape the archive root.
+    if (file.path.includes('..') || path.isAbsolute(file.path)) {
+      throw Object.assign(new Error(`Backup contains unsafe path: ${file.path}`), { code: 'INVALID_BACKUP' });
     }
+    if (!file.path.startsWith('tables/') || !file.path.endsWith('.json')) continue;
+
+    // unzipper exposes both compressed and uncompressed sizes; the
+    // uncompressedSize field is reported by the ZIP's central directory.
+    const declaredSize = (file as unknown as { uncompressedSize?: number }).uncompressedSize ?? 0;
+    if (declaredSize > MAX_RESTORE_TABLE_BYTES) {
+      throw Object.assign(
+        new Error(`Backup table "${file.path}" is ${declaredSize} bytes (max ${MAX_RESTORE_TABLE_BYTES})`),
+        { code: 'INVALID_BACKUP' },
+      );
+    }
+    totalBytes += declaredSize;
+    if (totalBytes > MAX_RESTORE_UNCOMPRESSED_BYTES) {
+      throw Object.assign(
+        new Error(`Backup archive exceeds ${MAX_RESTORE_UNCOMPRESSED_BYTES} bytes uncompressed`),
+        { code: 'INVALID_BACKUP' },
+      );
+    }
+
+    const tableName = path.basename(file.path, '.json');
+    const content = await file.buffer();
+    tables[tableName] = JSON.parse(content.toString('utf8')) as unknown[];
   }
   return tables;
 }
@@ -650,9 +687,20 @@ interface RestoreSettingsReport {
   usersSkipped: string[];
 }
 
+interface RestoreSettingsOptions {
+  /**
+   * When true, settings-level restore will materialize app_users from the
+   * backup (inserting new usernames, skipping existing ones). Only safe when
+   * the archive originated from a known-trusted backup of this same instance.
+   * Defaults to false so a malicious .tbak can't inject admin accounts.
+   */
+  allowUsers?: boolean;
+}
+
 async function restoreSettings(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
+  options: RestoreSettingsOptions = {},
 ): Promise<RestoreSettingsReport> {
   const report: RestoreSettingsReport = {
     taxCodesUpserted: 0,
@@ -699,19 +747,28 @@ async function restoreSettings(
     }
   }
 
-  // Users: match by username, insert new ones. Existing usernames are left
-  // alone (we don't want to silently overwrite a live account's password) —
-  // but we now return the skipped list so the admin knows what wasn't merged.
+  // Users: only restored when the caller explicitly opts in. Blocks the
+  // attack where an admin uploads a crafted .tbak containing an attacker's
+  // password_hash for a new username — which would otherwise silently give
+  // them a login.
   const usersData = tables['app_users'] as Array<Record<string, unknown>> | undefined;
   if (usersData && usersData.length > 0) {
-    for (const row of usersData) {
-      const username = row.username as string;
-      const existing = await trx('app_users').where('username', username).first('id');
-      if (existing) {
-        report.usersSkipped.push(username);
-      } else {
-        await trx('app_users').insert({ ...row, id: undefined });
-        report.usersCreated.push(username);
+    if (options.allowUsers) {
+      for (const row of usersData) {
+        const username = row.username as string;
+        const existing = await trx('app_users').where('username', username).first('id');
+        if (existing) {
+          report.usersSkipped.push(username);
+        } else {
+          await trx('app_users').insert({ ...row, id: undefined });
+          report.usersCreated.push(username);
+        }
+      }
+    } else {
+      // Report every username we refused to touch so the operator understands
+      // why their user list didn't come back.
+      for (const row of usersData) {
+        report.usersSkipped.push(row.username as string);
       }
     }
   }
@@ -855,7 +912,12 @@ backupRouter.delete('/:backupId', async (req: AuthRequest, res: Response): Promi
 // Restore routes
 // ─────────────────────────────────────────────────────────────────────────────
 
-const upload = multer({ dest: TEMP_DIR });
+// 500 MB ceiling for uploaded .tbak archives — bounded so an admin mis-click or
+// a rogue browser upload can't fill the disk. Matches nginx client_max_body_size.
+const upload = multer({
+  dest: TEMP_DIR,
+  limits: { fileSize: 500 * 1024 * 1024, files: 1 },
+});
 
 // POST /api/v1/restore/upload
 restoreRouter.post(
@@ -984,7 +1046,11 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         await restoreReplace(tables, targetClientId, trx);
         newClientId = targetClientId;
       } else if (mode === 'settings') {
-        settingsReport = await restoreSettings(tables, trx);
+        // Only trust app_users rows when we're restoring a backup we produced
+        // (looked up by backupId). Ad-hoc uploaded .tbak files never get to
+        // create accounts.
+        const allowUsers = !!backupRecord;
+        settingsReport = await restoreSettings(tables, trx, { allowUsers });
       } else {
         throw new Error(`Unknown restore mode: ${mode}`);
       }
@@ -1023,6 +1089,7 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
     });
   } catch (err: unknown) {
     const internal = err instanceof Error ? err.message : 'Unknown error';
+    const code = (err as { code?: string }).code;
     // Log failure
     try {
       await db('restore_history').insert({
@@ -1033,6 +1100,10 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         restored_by: (req as AuthRequest).user?.userId ?? null,
       });
     } catch (_e) { /* ignore */ }
+    if (code === 'INVALID_BACKUP') {
+      res.status(400).json({ data: null, error: { code: 'INVALID_BACKUP', message: internal } });
+      return;
+    }
     sendServerError(res, err, 'backup');
   }
 });

@@ -1,24 +1,39 @@
-FROM node:20-alpine
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
-# Install poppler-utils for scanned PDF vision-mode support
-RUN apk add --no-cache poppler-utils
-
-# Install server dependencies
+# Full install (including devDependencies) so we have `tsc` at build time.
 COPY server/package.json server/package-lock.json* server/
-RUN cd server && npm install --production
+RUN cd server && npm ci
 
-# Copy server source and build
+# Build TypeScript to dist/
 COPY server/ server/
 RUN cd server && npx tsc
 
-# Create directories for uploads and backups
+# Strip dev deps so only production runtime is copied into the final image.
+RUN cd server && npm prune --omit=dev
+
+
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+# poppler-utils is needed for scanned-PDF vision support.
+RUN apk add --no-cache poppler-utils
+
+# Copy pruned node_modules, built dist, config files, and runtime assets.
+COPY --from=build /app/server/node_modules  server/node_modules
+COPY --from=build /app/server/dist          server/dist
+COPY --from=build /app/server/migrations    server/migrations
+COPY --from=build /app/server/seeds         server/seeds
+COPY --from=build /app/server/knowledge     server/knowledge
+COPY --from=build /app/server/knexfile.js   server/knexfile.js
+COPY --from=build /app/server/package.json  server/package.json
+COPY server/docker-entrypoint.sh            server/docker-entrypoint.sh
+RUN chmod +x server/docker-entrypoint.sh
+
 RUN mkdir -p server/uploads server/backups
 
 EXPOSE 3001
-
-COPY server/docker-entrypoint.sh server/docker-entrypoint.sh
-RUN chmod +x server/docker-entrypoint.sh
 
 CMD ["sh", "server/docker-entrypoint.sh"]
