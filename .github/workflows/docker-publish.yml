@@ -1,5 +1,10 @@
 name: Build and Publish Docker Images
 
+# Native per-arch runners avoid QEMU emulation for arm64 — a cross-compiled
+# `npm ci` under emulation takes hours and blows the runner timeout. Each
+# platform builds on its own host and produces a digest-only push; a final
+# merge job assembles the multi-arch manifest under the human-readable tags.
+
 on:
   push:
     branches: [main]
@@ -20,9 +25,11 @@ env:
   IMAGE_OWNER: kisaesdevlab
 
 jobs:
+  # ─── Per-platform builds ──────────────────────────────────────────────────
   build:
-    name: Build ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.name }} (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -34,16 +41,33 @@ jobs:
           - name: server
             image: vibe-tb-server
             dockerfile: Dockerfile.server
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - name: server
+            image: vibe-tb-server
+            dockerfile: Dockerfile.server
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
           - name: client
             image: vibe-tb-client
             dockerfile: Dockerfile.client
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - name: client
+            image: vibe-tb-client
+            dockerfile: Dockerfile.client
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
     steps:
+      - name: Normalize platform pair
+        id: pair
+        run: |
+          platform="${{ matrix.platform }}"
+          echo "pair=${platform//\//-}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -55,11 +79,86 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image tags
+      - name: Extract labels
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}
+          labels: |
+            org.opencontainers.image.title=Vibe Trial Balance — ${{ matrix.name }}
+            org.opencontainers.image.description=Self-hosted tax preparation and accounting workpaper application (${{ matrix.name }} tier)
+            org.opencontainers.image.vendor=Kisaes LLC
+            org.opencontainers.image.licenses=LicenseRef-PolyForm-Internal-Use-1.0.0
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}#deployment-docker--prebuilt-images
+
+      - name: Build and push by digest
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.name }}-${{ steps.pair.outputs.pair }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ steps.pair.outputs.pair }}
+          provenance: false
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.push.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.name }}-${{ steps.pair.outputs.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ─── Manifest merge (one per image) ───────────────────────────────────────
+  merge:
+    name: Merge manifest — ${{ matrix.image.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - { name: server, repo: vibe-tb-server }
+          - { name: client, repo: vibe-tb-client }
+
+    steps:
+      - name: Download per-arch digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digests-${{ matrix.image.name }}-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image.repo }}
           tags: |
             type=ref,event=branch
             type=sha,prefix=sha-,format=short
@@ -68,23 +167,14 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }}
-          labels: |
-            org.opencontainers.image.title=Vibe Trial Balance — ${{ matrix.name }}
-            org.opencontainers.image.description=Self-hosted tax preparation and accounting workpaper application (${{ matrix.name }} tier)
-            org.opencontainers.image.vendor=Kisaes LLC
-            org.opencontainers.image.licenses=LicenseRef-PolyForm-Internal-Use-1.0.0
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}#deployment-docker-prebuilt-images
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-          provenance: false
+      - name: Create multi-arch manifest and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image.repo }}@sha256:%s ' *)
+
+      - name: Inspect published image
+        run: |
+          docker buildx imagetools inspect \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image.repo }}:${{ steps.meta.outputs.version }}
