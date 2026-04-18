@@ -546,7 +546,9 @@ Write-Host "  Frontend:  http://localhost:$PORT_CLIENT" -ForegroundColor White
 Write-Host "  Backend:   http://localhost:$PORT_SERVER" -ForegroundColor White
 Write-Host ""
 
-# Pull the bootstrap admin password back out of server/.env so the user can see it.
+# Pull the bootstrap admin password back out of server/.env and write it to a
+# plain FIRST_LOGIN.txt that Notepad opens automatically — asking a user to
+# navigate into server/.env is not realistic for non-technical users.
 $adminPw = $null
 if (Test-Path "server\.env") {
     foreach ($line in Get-Content "server\.env") {
@@ -554,12 +556,31 @@ if (Test-Path "server\.env") {
     }
 }
 if ($adminPw) {
+    $loginFile = Join-Path (Get-Location) "FIRST_LOGIN.txt"
+    @(
+        "Vibe Trial Balance - one-time login",
+        "-----------------------------------",
+        "",
+        "URL:       http://localhost:$PORT_CLIENT",
+        "Username:  admin",
+        "Password:  $adminPw",
+        "",
+        "You will be required to choose your own password on first sign-in.",
+        "This file can be safely deleted after you change the password.",
+        ""
+    ) | Set-Content -Path $loginFile -Encoding UTF8
+
     Write-Host "  ----------------------------------------------------------" -ForegroundColor Yellow
     Write-Host "    First-time login (change required on first sign-in):" -ForegroundColor Yellow
     Write-Host "      Username:  admin" -ForegroundColor White
     Write-Host "      Password:  $adminPw" -ForegroundColor White
     Write-Host "  ----------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "    Also saved in server\.env under INITIAL_ADMIN_PASSWORD." -ForegroundColor Gray
+    Write-Host "    Saved to FIRST_LOGIN.txt in the project folder." -ForegroundColor Gray
+    Write-Host "    Opening that file now — keep it open while you sign in." -ForegroundColor Gray
+
+    # Open in Notepad so the user can read it without opening a terminal or
+    # navigating to a hidden .env file.
+    Start-Process notepad.exe -ArgumentList $loginFile -ErrorAction SilentlyContinue
 } else {
     Write-Host "  The app prints the admin password on its first run — watch the" -ForegroundColor Yellow
     Write-Host "  server console output when you run 'npm run dev'." -ForegroundColor Yellow

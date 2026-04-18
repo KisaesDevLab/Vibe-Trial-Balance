@@ -39,3 +39,4 @@ installer/Output/
 # Internal planning docs
 *_BUILD_PLAN*.md
 specs/*-plan.md
+FIRST_LOGIN.txt

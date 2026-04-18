@@ -124,15 +124,22 @@ echo.
 echo   App:     http://localhost
 if "%FIRST_BOOT%"=="first" (
     echo.
-    echo   One-time login ^(you'll be asked to change the password^):
+    echo   First-time login ^(you'll be asked to pick a new password^):
     echo     Username:  admin
     echo     Password:  %ADMIN_PW%
     echo.
     if exist FIRST_LOGIN.txt (
-        echo   Also saved in %CD%\FIRST_LOGIN.txt
+        echo   Opening FIRST_LOGIN.txt so you can copy-paste the password.
+        echo   Keep that window open until you've signed in and changed the password.
+        start "" notepad.exe "%CD%\FIRST_LOGIN.txt"
     )
 ) else (
-    echo   Login:   use your admin account ^(temp password already rotated^)
+    echo   Login:   use your admin account
+    :: The user has rotated the password, so FIRST_LOGIN.txt is stale noise.
+    :: Sweep it so the next launch doesn't show misleading credentials.
+    if exist FIRST_LOGIN.txt (
+        del /q FIRST_LOGIN.txt >nul 2>&1
+    )
 )
 echo.
 

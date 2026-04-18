@@ -69,19 +69,23 @@ Opens backend on http://localhost:3001 and frontend on http://localhost:5173.
 
 ## App Login
 The first time you boot a fresh database, an `admin` account is created with a
-**random** password. You'll see it in one of these places:
+**random** password. You don't need to hunt for it:
 
-- **Setup script output** — last block printed by `setup.ps1` / `setup.sh`.
-- **`server/.env`** — stored as `INITIAL_ADMIN_PASSWORD`.
-- **Docker install** — `FIRST_LOGIN.txt` inside the install folder, and the Start-Menu launcher shows it on first run.
-- **Fallback** — the seed prints the password once to the server's stdout. For Docker-based installs this is visible via `docker compose logs server`.
+- **`FIRST_LOGIN.txt`** is saved in the project folder (dev setup) or the
+  install folder (Windows installer) and opens automatically in Notepad /
+  TextEdit when setup finishes. Copy the password from there.
+- The **setup script** also prints the same password in its final banner, so
+  you can see it in the terminal.
+- If you closed the file and the terminal, the password is still in
+  `server/.env` under `INITIAL_ADMIN_PASSWORD`, or (for Docker installs) visible
+  via `docker compose logs server | findstr FIRST-BOOT`.
 
 On first sign-in the app forces you to pick your own password (8+ chars, one
-uppercase, one lowercase, one number). After rotation the `INITIAL_ADMIN_PASSWORD`
-value is stale — safe to leave, or delete the line.
+uppercase, one lowercase, one number). After you rotate, `FIRST_LOGIN.txt` is
+auto-deleted by the next run of the start/launch script.
 
-Want a deterministic bootstrap password? Set `INITIAL_ADMIN_PASSWORD=...` in
-your `.env` before first boot.
+Power users: set `INITIAL_ADMIN_PASSWORD=...` in `.env` before first boot to
+choose your own bootstrap password instead of a random one.
 
 ---
 

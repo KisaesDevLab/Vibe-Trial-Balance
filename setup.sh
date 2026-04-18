@@ -275,20 +275,43 @@ echo -e "  Server:  ${CYAN}http://localhost:${PORT_SERVER}${NC}"
 echo -e "  pgAdmin: ${CYAN}http://localhost:${PORT_PGADMIN}${NC}  (admin@local.dev / admin)"
 echo ""
 
-# Surface the first-boot admin password. Prefer the value in server/.env (what
-# setup just wrote); fall back to a hint if the user reused an existing file.
+# Surface the first-boot admin password. The password also lives in server/.env
+# as INITIAL_ADMIN_PASSWORD, but asking a non-technical user to read a hidden
+# dotfile is unreasonable, so we also write a plain FIRST_LOGIN.txt at the
+# project root and try to open it in the default text editor.
 if [ -f "server/.env" ]; then
   ADMIN_PW=$(grep -E '^INITIAL_ADMIN_PASSWORD=' server/.env | head -1 | cut -d= -f2-)
 else
   ADMIN_PW=""
 fi
 if [ -n "$ADMIN_PW" ]; then
+  cat > FIRST_LOGIN.txt <<EOF
+Vibe Trial Balance - one-time login
+-----------------------------------
+
+URL:       http://localhost:${PORT_CLIENT}
+Username:  admin
+Password:  ${ADMIN_PW}
+
+You will be required to choose your own password on first sign-in.
+This file can be safely deleted after you change the password.
+EOF
+
   echo -e "  ${YELLOW}──────────────────────────────────────────────────────${NC}"
   echo -e "    ${YELLOW}First-time login (change required on first sign-in):${NC}"
   echo -e "      Username:  ${CYAN}admin${NC}"
   echo -e "      Password:  ${CYAN}${ADMIN_PW}${NC}"
   echo -e "  ${YELLOW}──────────────────────────────────────────────────────${NC}"
-  echo -e "    Also saved in server/.env under INITIAL_ADMIN_PASSWORD."
+  echo -e "    Saved to ${CYAN}FIRST_LOGIN.txt${NC} in the project folder."
+
+  # Try to open the file in whatever text viewer the OS has a default for.
+  # Fails silently on headless servers / CI — the terminal banner above is
+  # still enough for technical users.
+  if command -v open >/dev/null 2>&1; then
+    open FIRST_LOGIN.txt 2>/dev/null || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open FIRST_LOGIN.txt >/dev/null 2>&1 || true
+  fi
 else
   echo -e "  ${YELLOW}The app prints the admin password on its first run — watch${NC}"
   echo -e "  ${YELLOW}the server console output when you run 'npm run dev'.${NC}"

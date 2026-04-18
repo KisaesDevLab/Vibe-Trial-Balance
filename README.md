@@ -108,7 +108,7 @@ npm run dev                                  # Start both servers
 
 **URLs:** Frontend http://localhost:5173 | API http://localhost:3001 | pgAdmin http://localhost:5050
 
-**First-time login:** the setup script generates a random admin password and writes it to `server/.env` as `INITIAL_ADMIN_PASSWORD`; it's also printed in the last block of the setup output. You'll be forced to pick a new password on first sign-in. New passwords require 8+ characters with uppercase, lowercase, and a number.
+**First-time login:** the setup script generates a random admin password and writes it to `FIRST_LOGIN.txt` in the project folder (also opens it automatically in Notepad / TextEdit). It's also printed in the final banner of the setup output, and stored in `server/.env` as `INITIAL_ADMIN_PASSWORD`. You'll be forced to pick a new password on first sign-in; new passwords require 8+ characters with uppercase, lowercase, and a number. After you rotate, the next `start.ps1` / `launch.bat` run auto-deletes `FIRST_LOGIN.txt`.
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed commands and troubleshooting.
 
