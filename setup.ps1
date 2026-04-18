@@ -326,8 +326,23 @@ if (Test-Path "server\.env") {
     Write-Info "Updated server/.env with resolved ports"
 }
 else {
-    Write-Info "Creating server/.env with dev defaults..."
-    $randomSuffix = Get-Random -Maximum 999999
+    Write-Info "Creating server/.env with generated secrets..."
+    # Generate 64-hex secrets (the server enforces JWT_SECRET >= 32 chars and
+    # fails to boot otherwise). Using RNGCryptoServiceProvider for real randomness.
+    function New-HexSecret([int]$bytes) {
+        $buf = New-Object byte[] $bytes
+        ([System.Security.Cryptography.RandomNumberGenerator]::Create()).GetBytes($buf)
+        return -join ($buf | ForEach-Object { $_.ToString('x2') })
+    }
+    function New-InitialAdminPassword {
+        $buf = New-Object byte[] 18
+        ([System.Security.Cryptography.RandomNumberGenerator]::Create()).GetBytes($buf)
+        # Base64 with url-safe chars, no padding — readable + transcribable
+        return [Convert]::ToBase64String($buf).TrimEnd('=').Replace('+','A').Replace('/','B')
+    }
+    $jwtSecret = New-HexSecret 32
+    $encKey    = New-HexSecret 32
+    $initialAdminPassword = New-InitialAdminPassword
     $envLines = @(
         "# Database (matches docker-compose.yml)",
         "DB_HOST=127.0.0.1",
@@ -336,9 +351,15 @@ else {
         "DB_USER=$DB_USER",
         "DB_PASSWORD=$DB_PASS",
         "",
-        "# Auth",
-        "JWT_SECRET=local-dev-secret-$randomSuffix",
+        "# Auth — generated at setup time. Keep secret; do not commit.",
+        "JWT_SECRET=$jwtSecret",
         "JWT_EXPIRY=8h",
+        "ENCRYPTION_KEY=$encKey",
+        "",
+        "# Bootstrap admin password — used once on first seed. You'll be forced to",
+        "# change it on first login. Safe to leave here; it's only used when the",
+        "# database is empty.",
+        "INITIAL_ADMIN_PASSWORD=$initialAdminPassword",
         "",
         "# Anthropic API (optional — can also configure in Admin > Settings)",
         "ANTHROPIC_API_KEY=",
@@ -349,7 +370,7 @@ else {
         "ALLOWED_ORIGIN=http://localhost:$PORT_CLIENT"
     )
     $envLines | Set-Content -Path "server\.env" -Encoding UTF8
-    Write-OK "Created server/.env"
+    Write-OK "Created server/.env with random JWT_SECRET, ENCRYPTION_KEY, and admin password"
 }
 
 if (Test-Path "docker-compose.yml") {
@@ -524,5 +545,23 @@ Write-Host ""
 Write-Host "  Frontend:  http://localhost:$PORT_CLIENT" -ForegroundColor White
 Write-Host "  Backend:   http://localhost:$PORT_SERVER" -ForegroundColor White
 Write-Host ""
-Write-Host "  Default login:  admin / admin  (change immediately)" -ForegroundColor Yellow
+
+# Pull the bootstrap admin password back out of server/.env so the user can see it.
+$adminPw = $null
+if (Test-Path "server\.env") {
+    foreach ($line in Get-Content "server\.env") {
+        if ($line -match "^INITIAL_ADMIN_PASSWORD=(.+)$") { $adminPw = $Matches[1]; break }
+    }
+}
+if ($adminPw) {
+    Write-Host "  ----------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "    First-time login (change required on first sign-in):" -ForegroundColor Yellow
+    Write-Host "      Username:  admin" -ForegroundColor White
+    Write-Host "      Password:  $adminPw" -ForegroundColor White
+    Write-Host "  ----------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "    Also saved in server\.env under INITIAL_ADMIN_PASSWORD." -ForegroundColor Gray
+} else {
+    Write-Host "  The app prints the admin password on its first run — watch the" -ForegroundColor Yellow
+    Write-Host "  server console output when you run 'npm run dev'." -ForegroundColor Yellow
+}
 Write-Host ""

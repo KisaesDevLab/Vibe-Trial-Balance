@@ -137,8 +137,29 @@ cd "$APP_DIR"
 # ── Create server/.env with resolved ports ──────────────────────────────────
 
 if [ ! -f "server/.env" ]; then
-  info "Creating server/.env..."
-  RANDOM_SUFFIX=$((RANDOM % 999999))
+  info "Creating server/.env with generated secrets..."
+  # The server rejects JWT_SECRET shorter than 32 chars, so generate full 64-hex
+  # secrets from a real CSPRNG. Fall back gracefully if openssl isn't available.
+  gen_hex() {
+    if command -v openssl >/dev/null 2>&1; then
+      openssl rand -hex "$1"
+    elif [ -r /dev/urandom ]; then
+      head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'
+    else
+      # Last-resort fallback — still long enough to pass the 32-char floor.
+      date +%s%N | sha256sum | head -c $(( $1 * 2 ))
+    fi
+  }
+  gen_admin_pw() {
+    if command -v openssl >/dev/null 2>&1; then
+      openssl rand -base64 18 | tr -d '=+/' | head -c 24
+    else
+      head -c 18 /dev/urandom | base64 | tr -d '=+/' | head -c 24
+    fi
+  }
+  JWT_SECRET_VAL=$(gen_hex 32)
+  ENC_KEY_VAL=$(gen_hex 32)
+  INITIAL_ADMIN_PW=$(gen_admin_pw)
   cat > server/.env <<ENVEOF
 # Database (matches docker-compose.yml)
 DB_HOST=127.0.0.1
@@ -147,9 +168,14 @@ DB_NAME=vibe_tb_db
 DB_USER=vibetb
 DB_PASSWORD=localdev123
 
-# Auth
-JWT_SECRET=local-dev-secret-$RANDOM_SUFFIX
+# Auth — generated at setup time. Keep secret; do not commit.
+JWT_SECRET=$JWT_SECRET_VAL
 JWT_EXPIRY=8h
+ENCRYPTION_KEY=$ENC_KEY_VAL
+
+# Bootstrap admin password — used once on first seed. You'll be forced to change
+# it on first login. Safe to leave here; only used when the DB is empty.
+INITIAL_ADMIN_PASSWORD=$INITIAL_ADMIN_PW
 
 # Anthropic API (optional — can also configure in Admin > Settings)
 ANTHROPIC_API_KEY=
@@ -159,7 +185,7 @@ PORT=$PORT_SERVER
 NODE_ENV=development
 ALLOWED_ORIGIN=http://localhost:$PORT_CLIENT
 ENVEOF
-  log "Created server/.env"
+  log "Created server/.env with random JWT_SECRET, ENCRYPTION_KEY, and admin password"
 else
   info "server/.env already exists — updating ports if changed..."
   # Update PORT, DB_PORT, and ALLOWED_ORIGIN if ports differ from defaults
@@ -248,5 +274,23 @@ echo -e "  Client:  ${CYAN}http://localhost:${PORT_CLIENT}${NC}"
 echo -e "  Server:  ${CYAN}http://localhost:${PORT_SERVER}${NC}"
 echo -e "  pgAdmin: ${CYAN}http://localhost:${PORT_PGADMIN}${NC}  (admin@local.dev / admin)"
 echo ""
-echo -e "  Default login:  ${CYAN}admin / admin${NC}  (change immediately)"
+
+# Surface the first-boot admin password. Prefer the value in server/.env (what
+# setup just wrote); fall back to a hint if the user reused an existing file.
+if [ -f "server/.env" ]; then
+  ADMIN_PW=$(grep -E '^INITIAL_ADMIN_PASSWORD=' server/.env | head -1 | cut -d= -f2-)
+else
+  ADMIN_PW=""
+fi
+if [ -n "$ADMIN_PW" ]; then
+  echo -e "  ${YELLOW}──────────────────────────────────────────────────────${NC}"
+  echo -e "    ${YELLOW}First-time login (change required on first sign-in):${NC}"
+  echo -e "      Username:  ${CYAN}admin${NC}"
+  echo -e "      Password:  ${CYAN}${ADMIN_PW}${NC}"
+  echo -e "  ${YELLOW}──────────────────────────────────────────────────────${NC}"
+  echo -e "    Also saved in server/.env under INITIAL_ADMIN_PASSWORD."
+else
+  echo -e "  ${YELLOW}The app prints the admin password on its first run — watch${NC}"
+  echo -e "  ${YELLOW}the server console output when you run 'npm run dev'.${NC}"
+fi
 echo ""

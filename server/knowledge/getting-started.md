@@ -7,7 +7,7 @@
 
 If you see "Token expired", log out and log back in. Contact your admin if you need a password reset.
 
-Default credentials for a fresh installation: **admin / admin** — change this immediately after first login. New passwords must be at least 8 characters and include an uppercase letter, a lowercase letter, and a number.
+First-time admin login: the installer / setup script generates a random password and either shows it on the final install screen (Windows) or writes it to `server/.env` as `INITIAL_ADMIN_PASSWORD` (dev). The app forces you to pick your own password on first sign-in. Passwords must be at least 8 characters and include an uppercase letter, a lowercase letter, and a number.
 
 ## Step 0: Configure AI Provider (Admin)
 Before using AI features (diagnostics, auto-assign, classification, PDF import):

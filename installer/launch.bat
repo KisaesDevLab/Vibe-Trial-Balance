@@ -8,7 +8,7 @@ echo     Vibe Trial Balance - Starting Up
 echo   ============================================
 echo.
 
-:: Check Docker Desktop is running
+:: ── Docker Desktop must be running ─────────────────────────────────────────
 echo   Checking Docker Desktop...
 docker info >nul 2>&1
 if errorlevel 1 (
@@ -22,41 +22,99 @@ if errorlevel 1 (
 )
 echo   [OK] Docker Desktop is running
 
-:: Check if containers are already running
+:: ── Port 80 conflict detection ─────────────────────────────────────────────
+:: The client nginx container binds to port 80. If something else (IIS, Skype
+:: classic, another local web server) is listening, the container will fail
+:: with a cryptic bind error — we detect it here and surface a human message
+:: before Docker gets involved.
+powershell -Command "$c = Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue; if ($c) { $p = Get-Process -Id $c[0].OwningProcess -ErrorAction SilentlyContinue; if ($p) { Write-Output ('BLOCKED_BY: ' + $p.ProcessName) } else { Write-Output 'BLOCKED_BY: unknown' } } else { Write-Output 'FREE' }" > "%TEMP%\vibetb_port80.txt" 2>nul
+set /p PORT80_STATUS=<"%TEMP%\vibetb_port80.txt"
+del "%TEMP%\vibetb_port80.txt" 2>nul
+echo %PORT80_STATUS% | findstr /i "BLOCKED_BY" >nul
+if not errorlevel 1 (
+    echo.
+    echo   [!] Port 80 on this computer is already in use.
+    echo       %PORT80_STATUS%
+    echo.
+    echo       Stop the conflicting program (common culprits: IIS, Skype Classic,
+    echo       or another local web server) and run this script again.
+    echo.
+    pause
+    exit /b 1
+)
+
+:: ── Start the containers (building on first run) ───────────────────────────
 docker compose -f docker-compose.prod.yml ps --format "{{.Name}}" 2>nul | findstr /i "vibetb" >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] Containers are already running
     goto :healthy
 )
 
-:: Start containers (build on first run, cached after)
-echo   Starting containers (first run may take 3-5 minutes)...
+echo   Starting containers...
+echo   ^(First run builds the images locally and can take 5-10 minutes on a fresh machine.
+echo    Subsequent starts are fast.^)
 docker compose -f docker-compose.prod.yml up -d --build
 if errorlevel 1 (
     echo.
-    echo   [ERROR] Failed to start containers. Check Docker Desktop logs.
+    echo   [ERROR] Failed to start containers.
+    echo           Review the output above. Most common causes:
+    echo             * Docker Desktop still initializing — wait 30s and retry.
+    echo             * Missing .env file — reinstall to regenerate it.
+    echo             * Disk full.
     pause
     exit /b 1
 )
 
 :healthy
-echo   Waiting for app to become ready...
+:: ── Wait for the health endpoint to report ready ───────────────────────────
+:: Budget: 10 minutes. On first boot the server must run migrations, seed the
+:: DB, and start Node before /api/v1/health returns 200.
+echo.
+echo   Waiting for the app to come online (up to 10 minutes on first launch)...
 set ATTEMPTS=0
 
 :wait
 set /a ATTEMPTS+=1
-if %ATTEMPTS% gtr 60 (
+if %ATTEMPTS% gtr 200 (
     echo.
-    echo   [ERROR] App did not start within 3 minutes.
-    echo          Check: docker compose -f docker-compose.prod.yml logs
+    echo   [ERROR] App did not start within 10 minutes.
+    echo          Something failed during boot. Run this to inspect logs:
+    echo            docker compose -f docker-compose.prod.yml logs --tail 100
     pause
     exit /b 1
 )
 timeout /t 3 /nobreak >nul
 
-:: Use PowerShell to test health endpoint (curl may not be available)
 powershell -Command "try { $r = Invoke-WebRequest -Uri 'http://localhost/api/v1/health' -UseBasicParsing -TimeoutSec 3; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
 if errorlevel 1 goto wait
+
+:: ── Surface the first-boot admin password ──────────────────────────────────
+:: Source of truth, in priority order:
+::   1) FIRST_LOGIN.txt written by the installer
+::   2) INITIAL_ADMIN_PASSWORD line in .env
+::   3) The seed's "FIRST-BOOT ADMIN PASSWORD" line in docker server logs
+:: The user only needs it on their very first launch; on subsequent runs the
+:: DB already has a rotated password and we suppress the banner.
+set ADMIN_PW=
+if exist FIRST_LOGIN.txt (
+    for /f "tokens=2,* delims=: " %%A in ('findstr /i "Password" FIRST_LOGIN.txt') do (
+        if "%%A"=="" ( set ADMIN_PW=%%B ) else ( set ADMIN_PW=%%A )
+    )
+)
+if "%ADMIN_PW%"=="" (
+    if exist .env (
+        for /f "tokens=2 delims==" %%A in ('findstr /b "INITIAL_ADMIN_PASSWORD=" .env') do set ADMIN_PW=%%A
+    )
+)
+:: Only show the banner if the DB still has a temp password. Query the server
+:: with the candidate password; if it returns mustChangePassword=true we know
+:: the user hasn't rotated yet.
+set FIRST_BOOT=
+if not "%ADMIN_PW%"=="" (
+    powershell -Command "try { $body = @{username='admin'; password=$env:ADMIN_PW} | ConvertTo-Json -Compress; $r = Invoke-RestMethod -Uri 'http://localhost/api/v1/auth/login' -Method POST -ContentType 'application/json' -Body $body -TimeoutSec 5; if ($r.data.user.mustChangePassword) { Write-Output 'first' } else { Write-Output 'rotated' } } catch { Write-Output 'unknown' }" > "%TEMP%\vibetb_auth.txt" 2>nul
+    set /p FIRST_BOOT=<"%TEMP%\vibetb_auth.txt"
+    del "%TEMP%\vibetb_auth.txt" 2>nul
+)
 
 echo.
 echo   ============================================
@@ -64,12 +122,23 @@ echo     Vibe Trial Balance is running!
 echo   ============================================
 echo.
 echo   App:     http://localhost
-echo   Login:   admin / admin  (change immediately)
+if "%FIRST_BOOT%"=="first" (
+    echo.
+    echo   One-time login ^(you'll be asked to change the password^):
+    echo     Username:  admin
+    echo     Password:  %ADMIN_PW%
+    echo.
+    if exist FIRST_LOGIN.txt (
+        echo   Also saved in %CD%\FIRST_LOGIN.txt
+    )
+) else (
+    echo   Login:   use your admin account ^(temp password already rotated^)
+)
 echo.
 
-:: Open browser
+:: Open the app in the default browser
 start http://localhost
 
 echo   Press any key to close this window.
-echo   (The app keeps running in the background.)
+echo   ^(The app keeps running in the background.^)
 pause >nul

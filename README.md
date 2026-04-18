@@ -67,12 +67,14 @@ Create a `.env` file in `server/` (or set these as system environment variables)
 | `DB_NAME` | `vibe_tb_db` | Database name |
 | `DB_USER` | `vibetb` | Database user |
 | `DB_PASSWORD` | `localdev123` | Database password |
-| `JWT_SECRET` | `local-dev-secret-12345` | **Required in production** — server refuses to start without it |
+| `JWT_SECRET` | *(none)* | **Required everywhere** — must be ≥32 chars. Server refuses to start without it. Generate with `openssl rand -hex 32` |
 | `JWT_EXPIRY` | `8h` | JWT token lifetime |
 | `ALLOWED_ORIGIN` | `http://localhost:5173` | **Required in production** — server refuses to start without it |
-| `ENCRYPTION_KEY` | *(falls back to JWT_SECRET)* | **Required in production** — must be separate from JWT_SECRET |
+| `ENCRYPTION_KEY` | *(falls back to JWT_SECRET in dev)* | **Required in production** — must be separate from JWT_SECRET. Generate with `openssl rand -hex 32` |
+| `INITIAL_ADMIN_PASSWORD` | *(random, printed once)* | Bootstrap admin password. If unset before first seed, a random one is generated and printed to stdout. User is forced to rotate on first login. |
 | `ANTHROPIC_API_KEY` | *(none)* | Optional — can also be set in Admin > Settings |
 | `APP_BASE_URL` | `http://localhost:3001` | Used in MCP integration for self-referencing URLs |
+| `STRICT_AI_URL_SAFETY` | `false` | Set to `true` to block outbound AI/OCR URLs that resolve to RFC1918 / loopback / link-local. Cloud-metadata IPs are always blocked regardless. |
 
 ---
 
@@ -106,7 +108,7 @@ npm run dev                                  # Start both servers
 
 **URLs:** Frontend http://localhost:5173 | API http://localhost:3001 | pgAdmin http://localhost:5050
 
-**Default login:** `admin` / `admin` — change immediately. New passwords require 8+ characters with uppercase, lowercase, and a number.
+**First-time login:** the setup script generates a random admin password and writes it to `server/.env` as `INITIAL_ADMIN_PASSWORD`; it's also printed in the last block of the setup output. You'll be forced to pick a new password on first sign-in. New passwords require 8+ characters with uppercase, lowercase, and a number.
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed commands and troubleshooting.
 
