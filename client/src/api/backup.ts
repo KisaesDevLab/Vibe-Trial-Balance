@@ -58,6 +58,7 @@ export interface BackupManifest {
 
 export interface UploadPreview {
   tempFile: string;
+  uploadNonce: string;
   manifest: BackupManifest;
 }
 
@@ -153,6 +154,7 @@ export async function uploadBackupFile(file: File): Promise<{ data: UploadPrevie
 export const executeRestore = (payload: {
   backupId?: number;
   tempFile?: string;
+  uploadNonce?: string;
   mode: string;
   targetClientId?: number;
 }) =>

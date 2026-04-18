@@ -70,7 +70,6 @@ Source: "{#SourceRoot}\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\server\package.json"; DestDir: "{app}\server"; Flags: ignoreversion
 Source: "{#SourceRoot}\server\package-lock.json"; DestDir: "{app}\server"; Flags: ignoreversion
 Source: "{#SourceRoot}\server\tsconfig.json"; DestDir: "{app}\server"; Flags: ignoreversion
-Source: "{#SourceRoot}\server\knexfile.ts"; DestDir: "{app}\server"; Flags: ignoreversion
 Source: "{#SourceRoot}\server\knexfile.js"; DestDir: "{app}\server"; Flags: ignoreversion
 Source: "{#SourceRoot}\server\src\*"; DestDir: "{app}\server\src"; Flags: ignoreversion recursesubdirs
 Source: "{#SourceRoot}\server\migrations\*"; DestDir: "{app}\server\migrations"; Flags: ignoreversion recursesubdirs

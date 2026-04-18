@@ -124,27 +124,51 @@ periodItemRouter.post('/:id/lock', async (req: AuthRequest, res: Response): Prom
     return;
   }
   try {
-    // Check TB is balanced before allowing lock
-    const tbRows = await db('v_adjusted_trial_balance').where({ period_id: id });
-    if (tbRows.length > 0) {
-      const bkDr = tbRows.reduce((s: number, r: Record<string,unknown>) => s + Number(r.book_adjusted_debit), 0);
-      const bkCr = tbRows.reduce((s: number, r: Record<string,unknown>) => s + Number(r.book_adjusted_credit), 0);
-      if (Math.abs(bkDr - bkCr) > 0) {
-        const diff = (Math.abs(bkDr - bkCr) / 100).toFixed(2);
-        res.status(409).json({ data: null, error: { code: 'TB_OUT_OF_BALANCE', message: `Trial balance is out of balance by $${diff}. Resolve before locking.` } });
-        return;
+    // Wrap lock acquisition + balance check in a single transaction with a row-level
+    // lock on the period. Otherwise two concurrent lock requests, or a write landing
+    // between the balance check and the UPDATE, can seal an out-of-balance period.
+    const result = await db.transaction(async (trx) => {
+      const existing = await trx('periods').where({ id }).forUpdate().first('id', 'locked_at', 'period_name');
+      if (!existing) return { kind: 'not_found' as const };
+      if (existing.locked_at) {
+        // Already locked — return current state idempotently
+        const full = await trx('periods').where({ id }).first();
+        return { kind: 'already' as const, row: full };
       }
-    }
-    const [updated] = await db('periods')
-      .where({ id })
-      .update({ locked_at: db.fn.now(), locked_by: req.user!.userId })
-      .returning('*');
-    if (!updated) {
+
+      // Re-read TB inside the trx so a concurrent write can't change it mid-way.
+      // Use BigInt for the sum so 2^53-cent thresholds can't silently overflow.
+      const tbRows = await trx('v_adjusted_trial_balance').where({ period_id: id });
+      if (tbRows.length > 0) {
+        let bkDr = 0n;
+        let bkCr = 0n;
+        for (const r of tbRows as Record<string, unknown>[]) {
+          bkDr += BigInt((r.book_adjusted_debit ?? 0) as number | string);
+          bkCr += BigInt((r.book_adjusted_credit ?? 0) as number | string);
+        }
+        if (bkDr !== bkCr) {
+          const diffCents = bkDr > bkCr ? bkDr - bkCr : bkCr - bkDr;
+          const diff = (Number(diffCents) / 100).toFixed(2);
+          return { kind: 'unbalanced' as const, diff };
+        }
+      }
+      const [updated] = await trx('periods')
+        .where({ id })
+        .update({ locked_at: trx.fn.now(), locked_by: req.user!.userId })
+        .returning('*');
+      await logAudit({ userId: req.user!.userId, periodId: id, entityType: 'period', entityId: id, action: 'lock', description: `Locked period "${updated.period_name}"` }, trx);
+      return { kind: 'ok' as const, row: updated };
+    });
+
+    if (result.kind === 'not_found') {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
       return;
     }
-    await logAudit({ userId: req.user!.userId, periodId: id, entityType: 'period', entityId: id, action: 'lock', description: `Locked period "${updated.period_name}"` });
-    res.json({ data: updated, error: null });
+    if (result.kind === 'unbalanced') {
+      res.status(409).json({ data: null, error: { code: 'TB_OUT_OF_BALANCE', message: `Trial balance is out of balance by $${result.diff}. Resolve before locking.` } });
+      return;
+    }
+    res.json({ data: result.row, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'periods');
   }

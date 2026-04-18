@@ -14,6 +14,7 @@ export interface AuthUser {
   username: string;
   displayName: string;
   role: string;
+  mustChangePassword?: boolean;
 }
 
 interface AuthStore {

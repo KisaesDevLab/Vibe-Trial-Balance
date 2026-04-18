@@ -64,6 +64,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
           username: user.username,
           displayName: user.display_name,
           role: user.role,
+          mustChangePassword: !!user.must_change_password,
         },
       },
       error: null,
@@ -77,7 +78,7 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res: Response): Promi
   try {
     const user = await db('app_users')
       .where({ id: req.user!.userId, is_active: true })
-      .select('id', 'username', 'display_name', 'role')
+      .select('id', 'username', 'display_name', 'role', 'must_change_password')
       .first();
 
     if (!user) {
@@ -93,9 +94,51 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res: Response): Promi
         username: user.username,
         displayName: user.display_name,
         role: user.role,
+        mustChangePassword: !!user.must_change_password,
       },
       error: null,
     });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'auth');
+  }
+});
+
+// POST /api/v1/auth/change-password — any authenticated user can rotate their own
+// password. Clears the must_change_password flag so the forced-rotation UI goes away.
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8).max(200),
+});
+
+router.post('/change-password', authMiddleware, async (req: AuthRequest, res: Response): Promise<void> => {
+  const parsed = changePasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      data: null,
+      error: { code: 'VALIDATION_ERROR', message: 'New password must be at least 8 characters.' },
+    });
+    return;
+  }
+  try {
+    const me = await db('app_users').where({ id: req.user!.userId, is_active: true }).first();
+    if (!me) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'User not found' } });
+      return;
+    }
+    if (!(await bcrypt.compare(parsed.data.currentPassword, me.password_hash))) {
+      res.status(401).json({ data: null, error: { code: 'INVALID_CREDENTIALS', message: 'Current password is incorrect.' } });
+      return;
+    }
+    if (parsed.data.newPassword === parsed.data.currentPassword) {
+      res.status(400).json({ data: null, error: { code: 'SAME_PASSWORD', message: 'New password must differ from the current one.' } });
+      return;
+    }
+    const hash = await bcrypt.hash(parsed.data.newPassword, 12);
+    await db('app_users').where({ id: me.id }).update({
+      password_hash: hash,
+      must_change_password: false,
+    });
+    res.json({ data: { ok: true }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'auth');
   }

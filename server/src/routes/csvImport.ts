@@ -124,17 +124,41 @@ function parseAliases(val: unknown): string[] {
 
 // ── Amount parsing helpers ───────────────────────────────────────────────────
 
+// Parse a dollars-and-cents string to integer cents using string arithmetic.
+// `parseFloat('1.005') * 100 === 100.49999999999999` rounds the wrong direction —
+// we take the 3rd fractional digit ≥5 as the half-up rule instead.
 function parseAmountToCents(raw: string | null | undefined): number {
-  if (!raw || raw.trim() === '' || raw.trim() === '-') return 0;
-  let s = raw.trim();
-  // Handle parentheses negatives: (1,234.56) → -1234.56
-  const isNeg = s.startsWith('(') && s.endsWith(')');
-  if (isNeg) s = '-' + s.slice(1, -1);
-  // Strip currency symbols and commas
-  s = s.replace(/[$,\s]/g, '');
-  const n = parseFloat(s);
-  if (isNaN(n)) return 0;
-  return Math.round(n * 100);
+  if (raw === null || raw === undefined) return 0;
+  let s = String(raw).trim();
+  if (s === '' || s === '-') return 0;
+  let sign = 1;
+  const paren = /^\((.*)\)$/.exec(s);
+  if (paren) { sign = -1; s = paren[1]; }
+  s = s.replace(/[\s,$£€¥]/g, '');
+  if (s.startsWith('+')) s = s.slice(1);
+  if (s.startsWith('-')) { sign = -sign; s = s.slice(1); }
+  if (!/^\d*(\.\d*)?$/.test(s) || s === '' || s === '.') return 0;
+  const [intPart = '0', fracRaw = ''] = s.split('.');
+  let fracPart = fracRaw.slice(0, 2).padEnd(2, '0');
+  let carry = 0;
+  if (fracRaw.length >= 3 && fracRaw.charCodeAt(2) - 48 >= 5) {
+    const bumped = Number(fracPart) + 1;
+    if (bumped === 100) { fracPart = '00'; carry = 1; } else fracPart = String(bumped).padStart(2, '0');
+  }
+  let intFinal = intPart;
+  if (carry) {
+    const digits = intPart.split('').reverse();
+    let c = 1;
+    for (let i = 0; i < digits.length && c > 0; i++) {
+      const n = Number(digits[i]) + c;
+      digits[i] = String(n % 10);
+      c = Math.floor(n / 10);
+    }
+    if (c > 0) digits.push(String(c));
+    intFinal = digits.reverse().join('');
+  }
+  const cents = Number(`${intFinal}${fracPart}`);
+  return isFinite(cents) ? sign * cents : 0;
 }
 
 // ── Fallback column detection (no AI) ───────────────────────────────────────

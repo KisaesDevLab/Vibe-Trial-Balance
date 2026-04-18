@@ -2,8 +2,9 @@
 // Licensed under the PolyForm Internal Use License 1.0.0.
 // You may not distribute this software. See LICENSE for terms.
 
-import knex from 'knex';
-import config from '../knexfile';
+import knex, { Knex } from 'knex';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const config = require('../knexfile') as Record<string, Knex.Config>;
 
 const env = process.env.NODE_ENV === 'production' ? 'production' : 'development';
 const envConfig = config[env];

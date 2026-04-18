@@ -20,3 +20,10 @@ export function login(username: string, password: string) {
 export function getMe() {
   return apiFetch<AuthUser>('/auth/me');
 }
+
+export function changePassword(currentPassword: string, newPassword: string) {
+  return apiFetch<{ ok: true }>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}

@@ -68,6 +68,24 @@ function centsToAmt(cents: number | null | undefined): number {
   return (cents ?? 0) / 100;
 }
 
+/**
+ * Guard every string cell against CSV/Excel formula injection (CWE-1236).
+ * Excel / Google Sheets / LibreOffice treat cells that start with =, +, -, @, TAB, or CR
+ * as formulas when opened — a malicious account name like `=WEBSERVICE("https://...")`
+ * would exfiltrate data when a preparer opens the export. Prefix those cells with a
+ * single-quote so the leading character is shown literally instead of parsed.
+ * Numbers and non-strings pass through unchanged.
+ */
+function sanitizeCell<T>(value: T): T | string {
+  if (typeof value !== 'string' || value.length === 0) return value;
+  const first = value.charCodeAt(0);
+  // = + - @ \t \r
+  if (first === 0x3D || first === 0x2B || first === 0x2D || first === 0x40 || first === 0x09 || first === 0x0D) {
+    return `'${value}`;
+  }
+  return value;
+}
+
 
 /**
  * Compute the natural net balance for a TB row in dollars.
@@ -101,7 +119,7 @@ async function buildExcel(
   headerRow.alignment = { horizontal: 'center' };
 
   for (const row of rowData) {
-    const dataRow = ws.addRow(columns.map((c) => row[c.key]));
+    const dataRow = ws.addRow(columns.map((c) => sanitizeCell(row[c.key])));
     for (let i = 0; i < columns.length; i++) {
       if (columns[i].numFmt) dataRow.getCell(i + 1).numFmt = columns[i].numFmt!;
     }
@@ -206,12 +224,13 @@ function consolidateRows(rows: Record<string, unknown>[], consolidateIds: Set<nu
 
   const consolidated: Record<string, unknown>[] = [];
   for (const [, grp] of groups) {
-    let bookDr = 0, bookCr = 0, taxDr = 0, taxCr = 0;
+    // Sum as BigInt so totals that span many accounts can't lose precision around 2^53.
+    let bookDr = 0n, bookCr = 0n, taxDr = 0n, taxCr = 0n;
     for (const r of grp.rows) {
-      bookDr += Number(r.book_adjusted_debit ?? 0);
-      bookCr += Number(r.book_adjusted_credit ?? 0);
-      taxDr  += Number(r.tax_adjusted_debit ?? 0);
-      taxCr  += Number(r.tax_adjusted_credit ?? 0);
+      bookDr += BigInt((r.book_adjusted_debit ?? 0) as number | string);
+      bookCr += BigInt((r.book_adjusted_credit ?? 0) as number | string);
+      taxDr  += BigInt((r.tax_adjusted_debit ?? 0) as number | string);
+      taxCr  += BigInt((r.tax_adjusted_credit ?? 0) as number | string);
     }
 
     const f = grp.first;
@@ -226,10 +245,12 @@ function consolidateRows(rows: Record<string, unknown>[], consolidateIds: Set<nu
       account_number: acctNum,
       account_name: acctName,
       // software_code and software_description remain from the first row (the tax line mapping)
-      book_adjusted_debit: bookDr,
-      book_adjusted_credit: bookCr,
-      tax_adjusted_debit: taxDr,
-      tax_adjusted_credit: taxCr,
+      // Convert back to Number at the boundary. BigInt → Number is safe for any cents
+      // value under 2^53 (~$90 trillion) and downstream consumers expect numbers.
+      book_adjusted_debit: Number(bookDr),
+      book_adjusted_credit: Number(bookCr),
+      tax_adjusted_debit: Number(taxDr),
+      tax_adjusted_credit: Number(taxCr),
     });
   }
 
@@ -444,10 +465,10 @@ exportsRouter.get('/cch', async (req: AuthRequest, res: Response): Promise<void>
 
     for (const r of rows) {
       const row = ws.addRow({
-        acct:    r.account_number,
-        name:    r.account_name,
-        code:    r.software_code ?? '',
-        desc:    r.software_description ?? '',
+        acct:    sanitizeCell(r.account_number),
+        name:    sanitizeCell(r.account_name),
+        code:    sanitizeCell(r.software_code ?? ''),
+        desc:    sanitizeCell(r.software_description ?? ''),
         bookAmt: centsToAmt(Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)),
         taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
       });
@@ -689,10 +710,10 @@ exportsRouter.get('/working-tb', async (req: AuthRequest, res: Response): Promis
 
     const ws = wb.addWorksheet('Working Trial Balance');
 
-    // Title rows
-    ws.addRow([`${info.client_name} — ${info.name}`]);
+    // Title rows — sanitize in case client/period names include formula-leading chars
+    ws.addRow([sanitizeCell(`${info.client_name} — ${info.name}`)]);
     ws.getRow(1).font = { bold: true, size: 12 };
-    ws.addRow([`Working Trial Balance as of ${fmtDate(info.end_date)}`]);
+    ws.addRow([sanitizeCell(`Working Trial Balance as of ${fmtDate(info.end_date)}`)]);
     ws.addRow([]);
 
     ws.columns = [
@@ -734,9 +755,9 @@ exportsRouter.get('/working-tb', async (req: AuthRequest, res: Response): Promis
         : (Number(r.tax_adjusted_credit ?? 0) - Number(r.tax_adjusted_debit ?? 0))   / 100;
 
       const dataRow = ws.addRow([
-        r.account_number,
-        r.account_name,
-        r.category,
+        sanitizeCell(r.account_number),
+        sanitizeCell(r.account_name),
+        sanitizeCell(r.category),
         Number(r.unadjusted_debit   ?? 0) / 100,
         Number(r.unadjusted_credit  ?? 0) / 100,
         Number(r.book_adj_debit     ?? 0) / 100,

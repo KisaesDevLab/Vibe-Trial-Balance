@@ -16,10 +16,11 @@
  * POST /api/v1/restore/execute                -> execute restore
  * GET  /api/v1/restore/history                -> list restore history
  */
-import { Router, Response, Request } from 'express';
+import { Router, Response, Request, NextFunction } from 'express';
 import archiver from 'archiver';
 import unzipper from 'unzipper';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -28,6 +29,45 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import type { Knex } from 'knex';
 import { sendServerError } from '../lib/safeError';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Restore upload session cache
+//
+// When an admin uploads a .tbak via /restore/upload we stage it under TEMP_DIR
+// and hand back a basename. /restore/execute then resolves that basename and runs
+// the restore. Without binding, any admin (or any admin session with a CSRF-ish
+// vector) could point execute at another admin's staged file. We therefore
+// associate each staged file with (uploaderId, randomNonce) and require the
+// executing admin to supply both a matching nonce and be the same uploader.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface RestoreUploadSession { uploaderId: number; nonce: string; expiresAt: number; }
+const restoreUploadSessions = new Map<string, RestoreUploadSession>();
+const UPLOAD_SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+function rememberUploadSession(tempBase: string, uploaderId: number, nonce: string): void {
+  restoreUploadSessions.set(tempBase, { uploaderId, nonce, expiresAt: Date.now() + UPLOAD_SESSION_TTL_MS });
+}
+function consumeUploadSession(tempBase: string, uploaderId: number, nonce: string): boolean {
+  const entry = restoreUploadSessions.get(tempBase);
+  if (!entry) return false;
+  if (entry.expiresAt < Date.now()) { restoreUploadSessions.delete(tempBase); return false; }
+  if (entry.uploaderId !== uploaderId) return false;
+  // Constant-time comparison on the nonce so a leaked filename can't be brute forced
+  const a = Buffer.from(entry.nonce, 'utf8');
+  const b = Buffer.from(String(nonce ?? ''), 'utf8');
+  if (a.length !== b.length) return false;
+  if (!crypto.timingSafeEqual(a, b)) return false;
+  restoreUploadSessions.delete(tempBase);
+  return true;
+}
+// Periodic sweep — cheap, no-op if the map is empty.
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of restoreUploadSessions) {
+    if (v.expiresAt < now) restoreUploadSessions.delete(k);
+  }
+}, 10 * 60 * 1000).unref();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Directories
@@ -227,10 +267,17 @@ async function createBackup(
     archive.finalize();
   });
 
-  // Compute checksum
-  const fileBuffer = fs.readFileSync(filePath);
-  const checksum = 'sha256:' + crypto.createHash('sha256').update(fileBuffer).digest('hex');
-  const fileSize = fileBuffer.length;
+  // Compute checksum via streaming hash — avoids pulling the whole .tbak into
+  // memory, which matters for full backups that can reach several hundred MB.
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const checksum: string = await new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve('sha256:' + hash.digest('hex')));
+    stream.on('error', reject);
+  });
 
   // Update manifest with checksum (re-zip would be needed for perfect integrity; store in DB instead)
   manifest.checksum = checksum;
@@ -338,7 +385,17 @@ async function restoreAsNew(
   const idMap: IdMap = new Map();
 
   function getNewId(table: string, oldId: number): number {
-    return idMap.get(table)?.get(oldId) ?? oldId;
+    // Fail loudly rather than silently fall through to the old ID — if the backup
+    // references a parent row we never mapped, returning `oldId` would point the
+    // new child at an unrelated (possibly different-client) existing row.
+    const mapped = idMap.get(table)?.get(oldId);
+    if (mapped === undefined) {
+      throw Object.assign(
+        new Error(`Restore consistency error: ${table} id ${oldId} referenced but not remapped. The backup is missing a parent row.`),
+        { code: 'RESTORE_BROKEN_REF', status: 400 },
+      );
+    }
+    return mapped;
   }
 
   function registerMap(table: string): Map<number, number> {
@@ -919,16 +976,32 @@ const upload = multer({
   limits: { fileSize: 500 * 1024 * 1024, files: 1 },
 });
 
+// Narrow rate-limit in front of /restore/upload — 500 MB uploads are expensive,
+// so bound them independently of the global bucket to 5/hour per authenticated
+// admin (keyed by userId so shared-IP teams don't block each other).
+const restoreUploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => {
+    const userId = (req as AuthRequest).user?.userId;
+    return userId ? `user:${userId}` : (req.ip ?? 'unknown');
+  },
+  message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many restore uploads in the last hour. Wait before retrying.' } },
+});
+
 // POST /api/v1/restore/upload
 restoreRouter.post(
   '/upload',
-  (req: Request, res: Response, next: () => void) => {
+  (req: Request, res: Response, next: NextFunction): void => {
     if ((req as AuthRequest).user?.role !== 'admin') {
       res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
       return;
     }
     next();
   },
+  restoreUploadLimiter,
   upload.single('file'),
   async (req: AuthRequest, res: Response): Promise<void> => {
     try {
@@ -944,12 +1017,16 @@ restoreRouter.post(
       // Read manifest
       const manifest = await readManifest(tbakPath);
 
-      // Verify checksum (stored in DB, not in archive itself since we add checksum after)
-      // Just return manifest and temp path for preview
+      // Bind this staged file to the uploading admin + a one-time nonce. /restore/execute
+      // verifies both before touching the file. Ad-hoc filenames are no longer enough.
+      const tempBase = path.basename(tbakPath);
+      const nonce = crypto.randomBytes(24).toString('base64url');
+      rememberUploadSession(tempBase, req.user!.userId, nonce);
 
       res.json({
         data: {
-          tempFile: path.basename(tbakPath),
+          tempFile: tempBase,
+          uploadNonce: nonce,
           manifest,
         },
         error: null,
@@ -964,9 +1041,10 @@ restoreRouter.post(
 restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<void> => {
   if (!requireAdmin(req, res)) return;
   try {
-    const { backupId, tempFile, mode, targetClientId } = req.body as {
+    const { backupId, tempFile, uploadNonce, mode, targetClientId } = req.body as {
       backupId?: number;
       tempFile?: string;
+      uploadNonce?: string;
       mode: string;
       targetClientId?: number;
     };
@@ -984,6 +1062,15 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
     } else if (tempFile) {
       // Validate no path traversal
       const safeName = path.basename(tempFile);
+      // Tie the temp file to the admin who uploaded it + a one-time nonce —
+      // a second admin cannot execute a file staged by a different session.
+      if (!consumeUploadSession(safeName, req.user!.userId, uploadNonce ?? '')) {
+        res.status(403).json({
+          data: null,
+          error: { code: 'RESTORE_SESSION_INVALID', message: 'This upload was not made by your session, has expired, or the nonce is wrong. Re-upload the file.' },
+        });
+        return;
+      }
       filePath = path.join(TEMP_DIR, safeName);
     } else {
       res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'backupId or tempFile required' } });
@@ -995,10 +1082,16 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
       return;
     }
 
-    // Verify checksum for known backups (backupId path)
+    // Verify checksum for known backups (backupId path). Hash via a stream so the
+    // entire .tbak (possibly hundreds of MB) is never held in memory at once.
     if (backupRecord?.checksum) {
-      const fileBuffer = fs.readFileSync(filePath);
-      const actual = 'sha256:' + crypto.createHash('sha256').update(fileBuffer).digest('hex');
+      const actual: string = await new Promise((resolve, reject) => {
+        const hash = crypto.createHash('sha256');
+        const stream = fs.createReadStream(filePath);
+        stream.on('data', (chunk) => hash.update(chunk));
+        stream.on('end', () => resolve('sha256:' + hash.digest('hex')));
+        stream.on('error', reject);
+      });
       if (actual !== backupRecord.checksum) {
         res.status(400).json({
           data: null,

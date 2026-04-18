@@ -63,6 +63,9 @@ usersRouter.post('/', adminOnly, async (req: AuthRequest, res: Response): Promis
       password_hash: hash,
       role,
       is_active: true,
+      // Admin-provisioned accounts must rotate on first login — the creating admin
+      // necessarily knows the initial password.
+      must_change_password: true,
     }).returning(['id', 'username', 'display_name', 'role', 'is_active', 'created_at']);
 
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: user.id, action: 'create', description: `Created user "${username}" (role: ${role})` });
@@ -106,7 +109,13 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
   if (parsed.data.displayName !== undefined) updates.display_name = parsed.data.displayName;
   if (parsed.data.role !== undefined) updates.role = parsed.data.role;
   if (parsed.data.isActive !== undefined) updates.is_active = parsed.data.isActive;
-  if (parsed.data.password) updates.password_hash = await bcrypt.hash(parsed.data.password, 12);
+  if (parsed.data.password) {
+    updates.password_hash = await bcrypt.hash(parsed.data.password, 12);
+    // Admin-initiated password reset: force target user to rotate on next login.
+    // Exception: if the admin is resetting their own password here, the change-password
+    // flow is a better fit — but this endpoint still requires rotation for safety.
+    updates.must_change_password = true;
+  }
 
   try {
     const [updated] = await db('app_users').where({ id }).update(updates)

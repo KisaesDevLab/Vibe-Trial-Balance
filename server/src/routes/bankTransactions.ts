@@ -11,7 +11,7 @@ import type { Knex } from 'knex';
 import { createHash } from 'crypto';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { logAudit } from '../lib/periodGuard';
+import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { logAiUsage } from '../lib/aiUsage';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { getLLMProvider } from '../lib/aiClient';
@@ -20,6 +20,54 @@ import { sendServerError } from '../lib/safeError';
 
 function txHash(date: string, description: string, amount: number): string {
   return createHash('sha256').update(`${date}|${description}|${amount}`).digest('hex').slice(0, 64);
+}
+
+// Parse a dollar-and-cents string ("10.07", "-1,234.50", "$ (10.05)") to integer cents.
+// Uses string arithmetic, not float — `parseFloat('1.005') * 100` rounds the wrong way.
+// Returns null if the input is not a valid number.
+function parseDollarsToCents(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  let s = String(raw).trim();
+  if (!s) return null;
+  // Accounting parentheses → negative
+  let sign = 1;
+  const paren = /^\((.*)\)$/.exec(s);
+  if (paren) { sign = -1; s = paren[1]; }
+  // Strip currency symbols, thousands separators, whitespace
+  s = s.replace(/[\s,$£€¥]/g, '');
+  if (s.startsWith('+')) s = s.slice(1);
+  if (s.startsWith('-')) { sign = -sign; s = s.slice(1); }
+  if (!/^\d*(\.\d*)?$/.test(s) || s === '' || s === '.') return null;
+  const [intPart = '0', fracPartRaw = ''] = s.split('.');
+  // Pad/truncate fractional to exactly 2 digits, half-up on 3rd digit
+  let fracPart = fracPartRaw.slice(0, 2).padEnd(2, '0');
+  if (fracPartRaw.length >= 3) {
+    const third = fracPartRaw.charCodeAt(2) - 48;
+    if (third >= 5) {
+      // round up the 2-digit fraction; carry into integer part if it becomes 100
+      const bumped = Number(fracPart) + 1;
+      if (bumped === 100) {
+        fracPart = '00';
+        // add 1 to intPart as string to avoid Number overflow at extreme sizes
+        const digits = intPart.split('').reverse();
+        let carry = 1;
+        for (let i = 0; i < digits.length && carry > 0; i++) {
+          const n = Number(digits[i]) + carry;
+          digits[i] = String(n % 10);
+          carry = Math.floor(n / 10);
+        }
+        if (carry > 0) digits.push(String(carry));
+        const newInt = digits.reverse().join('');
+        const cents = Number(newInt + fracPart);
+        return isFinite(cents) ? sign * cents : null;
+      } else {
+        fracPart = String(bumped).padStart(2, '0');
+      }
+    }
+  }
+  const combined = `${intPart}${fracPart}`;
+  const cents = Number(combined);
+  return isFinite(cents) ? sign * cents : null;
 }
 
 // ---- Journal entry sync helper ----
@@ -36,7 +84,38 @@ async function syncTxJE(
   const tx = await trx('bank_transactions').where({ id: txId, client_id: clientId }).first();
   if (!tx) return;
 
-  // Delete any existing auto-generated JE
+  // If there's an existing linked JE, check that JE's OWN period is unlocked before
+  // touching it. Otherwise a caller could detach a JE from a sealed period by moving
+  // the bank transaction to a different period.
+  let existingJePeriodId: number | null = null;
+  if (tx.journal_entry_id) {
+    const existingJe = await trx('journal_entries')
+      .where({ id: tx.journal_entry_id })
+      .first('period_id');
+    existingJePeriodId = (existingJe?.period_id as number | null) ?? null;
+    if (existingJePeriodId) {
+      await assertPeriodUnlocked(existingJePeriodId, trx);
+    }
+  }
+
+  // If there's no period to sync against, just clear any stale JE link.
+  if (!tx.period_id) {
+    if (tx.journal_entry_id) {
+      await trx('journal_entry_lines').where({ journal_entry_id: tx.journal_entry_id }).delete();
+      await trx('journal_entries').where({ id: tx.journal_entry_id }).delete();
+      await trx('bank_transactions').where({ id: txId }).update({ journal_entry_id: null });
+    }
+    return;
+  }
+
+  // Lock the target period row as serialization point (also prevents duplicate
+  // entry_numbers) AND fail-fast if the target period is locked. Skip if we
+  // already locked the same period above for the existing JE.
+  if (existingJePeriodId !== tx.period_id) {
+    await assertPeriodUnlocked(tx.period_id, trx);
+  }
+
+  // Delete any existing auto-generated JE (lock on its period already acquired above)
   if (tx.journal_entry_id) {
     await trx('journal_entry_lines').where({ journal_entry_id: tx.journal_entry_id }).delete();
     await trx('journal_entries').where({ id: tx.journal_entry_id }).delete();
@@ -44,14 +123,13 @@ async function syncTxJE(
   }
 
   // Need all three fields to create a JE
-  if (!tx.account_id || !tx.source_account_id || !tx.period_id || tx.amount === 0) return;
+  if (!tx.account_id || !tx.source_account_id || tx.amount === 0) return;
 
-  const absAmount = Math.abs(Number(tx.amount));
-  const debitAccountId  = tx.amount > 0 ? tx.source_account_id : tx.account_id;
-  const creditAccountId = tx.amount > 0 ? tx.account_id : tx.source_account_id;
-
-  // Lock the period row as serialization point to prevent duplicate entry_numbers
-  await trx.raw('SELECT id FROM periods WHERE id = ? FOR UPDATE', [tx.period_id]);
+  const txAmount = BigInt(tx.amount);
+  const absAmountBig = txAmount < 0n ? -txAmount : txAmount;
+  const absAmount = Number(absAmountBig);
+  const debitAccountId  = txAmount > 0n ? tx.source_account_id : tx.account_id;
+  const creditAccountId = txAmount > 0n ? tx.account_id : tx.source_account_id;
   const lastEntry = await trx('journal_entries')
     .where({ period_id: tx.period_id, entry_type: 'trans' })
     .max('entry_number as max')
@@ -273,12 +351,12 @@ function parseOfx(fileBuffer: Buffer): ParsedTx[] {
       const check = ofxTagXml(b, 'CHECKNUM');
       if (!date || !amt) continue;
       const parsedDate = ofxDate(date);
-      const parsedAmt = parseFloat(amt.replace(/[^0-9.\-]/g, ''));
-      if (!parsedDate || isNaN(parsedAmt)) continue;
+      const parsedCents = parseDollarsToCents(amt);
+      if (!parsedDate || parsedCents === null) continue;
       results.push({
         transaction_date: parsedDate,
         description: name || null,
-        amount: Math.round(parsedAmt * 100),
+        amount: parsedCents,
         check_number: check || null,
       });
     }
@@ -297,12 +375,12 @@ function parseOfx(fileBuffer: Buffer): ParsedTx[] {
       const check = ofxTagSgml(b, 'CHECKNUM');
       if (!date || !amt) continue;
       const parsedDate = ofxDate(date);
-      const parsedAmt = parseFloat(amt.replace(/[^0-9.\-]/g, ''));
-      if (!parsedDate || isNaN(parsedAmt)) continue;
+      const parsedCents = parseDollarsToCents(amt);
+      if (!parsedDate || parsedCents === null) continue;
       results.push({
         transaction_date: parsedDate,
         description: name || null,
-        amount: Math.round(parsedAmt * 100),
+        amount: parsedCents,
         check_number: check || null,
       });
     }
@@ -376,20 +454,21 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
             const transaction_date = parseFlexDate(dateRaw);
             if (!transaction_date) return;
 
-            // Amount: explicit signed column, or debit/credit split, or auto-detect
-            let amtDollars: number;
+            // Amount: explicit signed column, or debit/credit split, or auto-detect.
+            // All arithmetic happens in integer cents — parseFloat introduces rounding errors.
+            let amtCents: number | null;
             if (amountCol && row[amountCol] !== undefined) {
-              amtDollars = parseFloat(row[amountCol].replace(/[^0-9.\-]/g, ''));
+              amtCents = parseDollarsToCents(row[amountCol]);
             } else if (debitCol || creditCol) {
-              const dr = debitCol ? parseFloat((row[debitCol] ?? '0').replace(/[^0-9.\-]/g, '')) || 0 : 0;
-              const cr = creditCol ? parseFloat((row[creditCol] ?? '0').replace(/[^0-9.\-]/g, '')) || 0 : 0;
-              amtDollars = dr - cr;
+              const drC = debitCol ? (parseDollarsToCents(row[debitCol]) ?? 0) : 0;
+              const crC = creditCol ? (parseDollarsToCents(row[creditCol]) ?? 0) : 0;
+              amtCents = drC - crC;
             } else {
               const raw = pick(row, '', ['Amount', 'amount', 'Debit', 'debit']);
-              amtDollars = parseFloat(raw.replace(/[^0-9.\-]/g, ''));
+              amtCents = parseDollarsToCents(raw);
             }
 
-            if (isNaN(amtDollars)) return;
+            if (amtCents === null) return;
 
             rows.push({
               client_id: clientId,
@@ -397,7 +476,7 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
               source_account_id: sourceAccountId,
               transaction_date,
               description: descRaw.trim() || null,
-              amount: Math.round(amtDollars * 100),
+              amount: amtCents,
               check_number: checkRaw.trim() || null,
               classification_status: 'unclassified',
             });
@@ -547,6 +626,14 @@ btCollectionRouter.post('/batch-delete', async (req: AuthRequest, res: Response)
 
       const jeIds = txs.map((t: { journal_entry_id: number | null }) => t.journal_entry_id).filter(Boolean) as number[];
       if (jeIds.length > 0) {
+        // Any JE we are about to delete belongs to some period — every one of those
+        // periods must be unlocked before we can mutate them.
+        const jePeriods = await trx('journal_entries')
+          .whereIn('id', jeIds)
+          .distinct('period_id');
+        for (const p of jePeriods) {
+          if (p.period_id) await assertPeriodUnlocked(p.period_id as number, trx);
+        }
         await trx('journal_entry_lines').whereIn('journal_entry_id', jeIds).delete();
         await trx('journal_entries').whereIn('id', jeIds).delete();
       }
@@ -945,6 +1032,10 @@ btCollectionRouter.delete('/:id', async (req: AuthRequest, res: Response): Promi
       const tx = await trx('bank_transactions').where({ id, client_id: clientId }).first('journal_entry_id');
       if (!tx) throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
       if (tx.journal_entry_id) {
+        const existingJe = await trx('journal_entries').where({ id: tx.journal_entry_id }).first('period_id');
+        if (existingJe?.period_id) {
+          await assertPeriodUnlocked(existingJe.period_id as number, trx);
+        }
         await trx('journal_entry_lines').where({ journal_entry_id: tx.journal_entry_id }).delete();
         await trx('journal_entries').where({ id: tx.journal_entry_id }).delete();
       }

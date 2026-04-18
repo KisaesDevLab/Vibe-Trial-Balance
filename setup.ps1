@@ -461,7 +461,7 @@ if (Test-Path "server\package.json") {
     if (Test-Path "server\migrations") {
         Write-Info "Running database migrations..."
         Push-Location server
-        npx knex migrate:latest --knexfile knexfile.ts 2>&1 | ForEach-Object { Write-Info "  $_" }
+        npx knex migrate:latest --knexfile knexfile.js 2>&1 | ForEach-Object { Write-Info "  $_" }
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "Migration failed. Check the error above."
             Pop-Location
@@ -478,7 +478,7 @@ if (Test-Path "server\package.json") {
     if (Test-Path "server\seeds") {
         Write-Info "Seeding database with default data..."
         Push-Location server
-        npx knex seed:run --knexfile knexfile.ts 2>&1 | ForEach-Object { Write-Info "  $_" }
+        npx knex seed:run --knexfile knexfile.js 2>&1 | ForEach-Object { Write-Info "  $_" }
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "Seeding failed. Check the error above."
             Pop-Location

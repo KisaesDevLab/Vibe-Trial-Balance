@@ -8,6 +8,7 @@ import pdfParse from 'pdf-parse';
 import { createHash } from 'crypto';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { logAiUsage } from '../lib/aiUsage';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
@@ -525,6 +526,12 @@ bankStatementPdfRouter.post('/confirm', async (req: AuthRequest, res: Response):
     let duplicates = 0;
 
     await db.transaction(async (trx) => {
+      // If a period was supplied, lock it and fail fast if it's sealed. Imports into
+      // a locked period must not create bank transactions (and later JEs).
+      if (periodId) {
+        await assertPeriodUnlocked(periodId, trx);
+      }
+
       for (const tx of transactions) {
         if (!tx.date || !tx.description || tx.amount === 0) continue;
 
@@ -536,8 +543,11 @@ bankStatementPdfRouter.post('/confirm', async (req: AuthRequest, res: Response):
           finalDesc = `${tx.payeeName} — ${tx.description}`;
         }
 
-        try {
-          await trx('bank_transactions').insert({
+        // Use ON CONFLICT IGNORE rather than try/catch: a raw unique-violation inside
+        // a PG transaction aborts the whole trx (25P02), which would silently drop
+        // every remaining row after the first duplicate.
+        const inserted = await trx('bank_transactions')
+          .insert({
             client_id: clientId,
             period_id: periodId ?? null,
             source_account_id: sourceAccountId,
@@ -548,17 +558,13 @@ bankStatementPdfRouter.post('/confirm', async (req: AuthRequest, res: Response):
             classification_status: 'unclassified',
             import_hash: hash,
             entry_source: 'import',
-          });
-          imported++;
-        } catch (insertErr: unknown) {
-          const e = insertErr as { constraint?: string; code?: string };
-          // Unique constraint violation = duplicate
-          if (e.constraint === 'ubt_client_import_hash' || e.code === '23505') {
-            duplicates++;
-          } else {
-            throw insertErr;
-          }
-        }
+          })
+          .onConflict(['client_id', 'import_hash'])
+          .ignore()
+          .returning('id');
+
+        if (inserted.length > 0) imported++;
+        else duplicates++;
       }
     });
 

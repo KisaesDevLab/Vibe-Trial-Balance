@@ -45,25 +45,28 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
   }
 
   try {
-    const sourcePeriod = await db('periods').where({ id: sourceId }).first();
-    if (!sourcePeriod) {
-      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Source period not found' } });
-      return;
-    }
+    const result = await db.transaction(async (trx): Promise<{ kind: 'not_found' } | { kind: 'unbalanced'; diff: string } | { kind: 'ok'; row: Record<string, unknown> }> => {
+      // Lock the source period row inside the trx so concurrent JE writes against it
+      // can't land between our balance check and the roll-forward copy.
+      const sourcePeriod = await trx('periods').where({ id: sourceId }).forUpdate().first();
+      if (!sourcePeriod) return { kind: 'not_found' };
 
-    // ── Pre-check: source period TB must be in balance ───────────────────
-    const sourceCheck = await db('v_adjusted_trial_balance').where({ period_id: sourceId });
-    if (sourceCheck.length > 0) {
-      const srcDr = sourceCheck.reduce((s: number, r: Record<string, unknown>) => s + Number(r.book_adjusted_debit), 0);
-      const srcCr = sourceCheck.reduce((s: number, r: Record<string, unknown>) => s + Number(r.book_adjusted_credit), 0);
-      if (Math.abs(srcDr - srcCr) > 0) {
-        const diff = (Math.abs(srcDr - srcCr) / 100).toFixed(2);
-        res.status(409).json({ data: null, error: { code: 'TB_OUT_OF_BALANCE', message: `Source period trial balance is out of balance by $${diff}. Resolve before rolling forward.` } });
-        return;
+      // ── Pre-check: source period TB must be in balance. Use BigInt to avoid
+      //    precision loss on very large firm aggregates.
+      const sourceCheck = await trx('v_adjusted_trial_balance').where({ period_id: sourceId });
+      if (sourceCheck.length > 0) {
+        let srcDr = 0n;
+        let srcCr = 0n;
+        for (const r of sourceCheck as Record<string, unknown>[]) {
+          srcDr += BigInt((r.book_adjusted_debit ?? 0) as number | string);
+          srcCr += BigInt((r.book_adjusted_credit ?? 0) as number | string);
+        }
+        if (srcDr !== srcCr) {
+          const diffCents = srcDr > srcCr ? srcDr - srcCr : srcCr - srcDr;
+          return { kind: 'unbalanced', diff: (Number(diffCents) / 100).toFixed(2) };
+        }
       }
-    }
 
-    const newPeriod = await db.transaction(async (trx) => {
       // Clear current flag if needed
       if (isCurrent) {
         await trx('periods').where({ client_id: sourcePeriod.client_id }).update({ is_current: false });
@@ -256,10 +259,15 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
       // ── Post-check: new period TB must be in balance ──────────────────
       const newTbCheck = await trx('v_adjusted_trial_balance').where({ period_id: period.id });
       if (newTbCheck.length > 0) {
-        const newDr = newTbCheck.reduce((s: number, r: Record<string, unknown>) => s + Number(r.book_adjusted_debit), 0);
-        const newCr = newTbCheck.reduce((s: number, r: Record<string, unknown>) => s + Number(r.book_adjusted_credit), 0);
-        if (Math.abs(newDr - newCr) > 0) {
-          const diff = (Math.abs(newDr - newCr) / 100).toFixed(2);
+        let newDr = 0n;
+        let newCr = 0n;
+        for (const r of newTbCheck as Record<string, unknown>[]) {
+          newDr += BigInt((r.book_adjusted_debit ?? 0) as number | string);
+          newCr += BigInt((r.book_adjusted_credit ?? 0) as number | string);
+        }
+        if (newDr !== newCr) {
+          const diffCents = newDr > newCr ? newDr - newCr : newCr - newDr;
+          const diff = (Number(diffCents) / 100).toFixed(2);
           throw Object.assign(
             new Error(`Rolled-forward period is out of balance by $${diff}. This may indicate a data issue — the roll forward has been cancelled.`),
             { code: 'TB_OUT_OF_BALANCE', status: 409 },
@@ -276,10 +284,18 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
         description: `Rolled forward from "${sourcePeriod.period_name}" (mode: ${mode}) — ${tbRows.length} TB accounts, ${jeCopied} recurring JEs, ${tbTickmarks.length} tickmark assignments copied`,
       }, trx);
 
-      return { period, tbCount: tbRows.length, jeCopied };
+      return { kind: 'ok', row: { period, tbCount: tbRows.length, jeCopied } as Record<string, unknown> };
     });
 
-    res.status(201).json({ data: newPeriod, error: null });
+    if (result.kind === 'not_found') {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Source period not found' } });
+      return;
+    }
+    if (result.kind === 'unbalanced') {
+      res.status(409).json({ data: null, error: { code: 'TB_OUT_OF_BALANCE', message: `Source period trial balance is out of balance by $${result.diff}. Resolve before rolling forward.` } });
+      return;
+    }
+    res.status(201).json({ data: result.row, error: null });
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     if (e.code === 'TB_OUT_OF_BALANCE') {

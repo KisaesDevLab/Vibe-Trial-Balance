@@ -189,11 +189,15 @@ documentsItemRouter.get('/:id/download', async (req: AuthRequest, res: Response)
       return;
     }
 
-    const fileBuffer = fs.readFileSync(resolvedPath);
+    // Stream rather than buffer — a 25 MB file loaded into memory per concurrent
+    // download is fine on a dev box but bleeds the Pi's heap under load.
+    const stat = fs.statSync(resolvedPath);
     res.setHeader('Content-Type', doc.file_type as string);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(doc.filename as string)}"`);
-    res.setHeader('Content-Length', fileBuffer.length);
-    res.send(fileBuffer);
+    res.setHeader('Content-Length', stat.size);
+    const stream = fs.createReadStream(resolvedPath);
+    stream.on('error', (streamErr) => sendServerError(res, streamErr, 'documents'));
+    stream.pipe(res);
   } catch (err: unknown) {
     sendServerError(res, err, 'documents');
   }

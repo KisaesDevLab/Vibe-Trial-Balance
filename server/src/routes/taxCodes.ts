@@ -401,20 +401,40 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   }
 
   try {
-    const [updated] = await db('tax_codes')
-      .where({ id })
-      .update({ ...toRow(result.data), updated_at: db.fn.now() })
-      .returning('id');
-    if (!updated) {
-      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tax code not found' } });
-      return;
-    }
+    await db.transaction(async (trx) => {
+      // Snapshot the existing tax_code string before overwriting so we can keep the
+      // legacy chart_of_accounts.tax_line cache in sync.
+      const prev = await trx('tax_codes').where({ id }).first('tax_code');
+      if (!prev) {
+        throw Object.assign(new Error('Tax code not found'), { code: 'NOT_FOUND' });
+      }
+      const newRow = toRow(result.data);
+      await trx('tax_codes')
+        .where({ id })
+        .update({ ...newRow, updated_at: trx.fn.now() });
+
+      // If the canonical tax_code string changed, cascade the rename into every
+      // COA row that points at this tax code so legacy exports / reports (which
+      // still read the denormalized string) don't display a stale code.
+      const newCode = newRow.tax_code as string | undefined;
+      if (newCode && newCode !== prev.tax_code) {
+        await trx('chart_of_accounts')
+          .where({ tax_code_id: id })
+          .update({ tax_line: newCode, updated_at: trx.fn.now() });
+      }
+    });
+
     if (result.data.maps !== undefined) {
       await upsertMaps(id, result.data.maps);
     }
     const full = await fetchWithMaps(id);
     res.json({ data: full, error: null });
   } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    if (e.code === 'NOT_FOUND') {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tax code not found' } });
+      return;
+    }
     res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
   }
 });

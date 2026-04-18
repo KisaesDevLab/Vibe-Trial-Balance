@@ -5,11 +5,30 @@
 import { Knex } from 'knex';
 import { db } from '../db';
 
-/** Throws a 409-coded error if the period is locked. Pass a transaction or the global db. */
+/** Throws a 409-coded error if the period is locked, or a 404 if the period doesn't exist.
+ *
+ *  When called with a transaction, takes a row-level FOR UPDATE lock on the `periods` row
+ *  so the caller's subsequent writes cannot race a concurrent lock/unlock. This closes a
+ *  TOCTOU window where another transaction would mark the period locked between our check
+ *  and our write. Callers performing mutations MUST pass a trx.
+ *
+ *  When called without a trx, performs a plain read — acceptable only for read-only paths
+ *  (reports / comparisons) where a stale answer is fine.
+ */
 export async function assertPeriodUnlocked(periodId: number, trx?: Knex.Transaction): Promise<void> {
   const q = trx ?? db;
-  const period = await q('periods').where({ id: periodId }).first('locked_at');
-  if (period?.locked_at) {
+  let query = q('periods').where({ id: periodId });
+  if (trx) {
+    query = query.forUpdate();
+  }
+  const period = await query.first('id', 'locked_at');
+  if (!period) {
+    throw Object.assign(
+      new Error('Period not found.'),
+      { code: 'PERIOD_NOT_FOUND', status: 404 },
+    );
+  }
+  if (period.locked_at) {
     throw Object.assign(
       new Error('This period is locked and cannot be modified. Unlock it first.'),
       { code: 'PERIOD_LOCKED', status: 409 },

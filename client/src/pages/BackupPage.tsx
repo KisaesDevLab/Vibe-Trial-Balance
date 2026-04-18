@@ -342,8 +342,9 @@ function RestoreSection({ clients }: { clients: Client[] }) {
 
   const restoreMutation = useMutation({
     mutationFn: () => {
-      const payload: { tempFile?: string; mode: string; targetClientId?: number } = {
+      const payload: { tempFile?: string; uploadNonce?: string; mode: string; targetClientId?: number } = {
         tempFile: preview?.tempFile,
+        uploadNonce: preview?.uploadNonce,
         mode,
       };
       if (targetClientId) payload.targetClientId = targetClientId as number;

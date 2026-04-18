@@ -207,7 +207,7 @@ jeItemRouter.put('/:id/lines', async (req: AuthRequest, res: Response): Promise<
 
   try {
     await db.transaction(async (trx) => {
-      const je = await trx('journal_entries').where({ id }).first('period_id');
+      const je = await trx('journal_entries').where({ id }).first('period_id', 'entry_number', 'entry_type');
       if (!je) throw Object.assign(new Error('Journal entry not found'), { code: 'NOT_FOUND', status: 404 });
       await assertPeriodUnlocked(je.period_id, trx);
       await trx('journal_entry_lines').where({ journal_entry_id: id }).delete();
@@ -220,8 +220,20 @@ jeItemRouter.put('/:id/lines', async (req: AuthRequest, res: Response): Promise<
         })),
       );
 
+      // Bump parent JE updated_at so downstream views / clients can see the change
+      await trx('journal_entries').where({ id }).update({ updated_at: trx.fn.now() });
+
       // Ensure trial_balance rows exist for all referenced accounts
       await ensureTrialBalanceRows(trx, je.period_id, lines.map((l) => l.accountId));
+
+      await logAudit({
+        userId: req.user!.userId,
+        periodId: je.period_id,
+        entityType: 'journal_entry',
+        entityId: id,
+        action: 'update',
+        description: `Replaced lines on ${je.entry_type} JE #${je.entry_number}`,
+      }, trx);
     });
     res.json({ data: { id, lines }, error: null });
   } catch (err: unknown) {
@@ -310,7 +322,26 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
         const btUpdates: Record<string, unknown> = {};
         if (entryDate !== undefined) btUpdates.transaction_date = entryDate;
         if (description !== undefined) btUpdates.description = description;
-        if (lines) btUpdates.amount = lines.reduce((s, l) => s + l.debit, 0);
+        if (lines) {
+          // Derive signed amount from the source account's side. Sign convention:
+          //   amount > 0 → source is debited (money IN to bank)
+          //   amount < 0 → source is credited (money OUT)
+          // Summing debits alone always yields a positive magnitude and loses the sign
+          // after a direction flip.
+          const bt = await trx('bank_transactions').where({ journal_entry_id: id }).first('source_account_id');
+          if (bt?.source_account_id) {
+            const srcLine = lines.find((l) => l.accountId === bt.source_account_id);
+            if (srcLine) {
+              const magnitude = srcLine.debit + srcLine.credit;
+              btUpdates.amount = srcLine.debit > 0 ? magnitude : -magnitude;
+            } else {
+              // Source account no longer referenced by this JE — fall back to magnitude only
+              btUpdates.amount = lines.reduce((s, l) => s + l.debit, 0);
+            }
+          } else {
+            btUpdates.amount = lines.reduce((s, l) => s + l.debit, 0);
+          }
+        }
         if (Object.keys(btUpdates).length > 0) {
           await trx('bank_transactions').where({ journal_entry_id: id }).update(btUpdates);
         }
@@ -343,23 +374,36 @@ jeItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<voi
     return;
   }
   try {
-    const existing = await db('journal_entries').where({ id }).first('entry_type', 'period_id', 'entry_number');
-    if (!existing) {
-      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
-      return;
-    }
-    await assertPeriodUnlocked(existing.period_id);
-    const [deleted] = await db('journal_entries').where({ id }).delete().returning('id');
-    if (!deleted) {
-      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
-      return;
-    }
-    await logAudit({ userId: req.user!.userId, periodId: existing.period_id, entityType: 'journal_entry', entityId: id, action: 'delete', description: `Deleted ${existing.entry_type} JE #${existing.entry_number}` });
-    res.json({ data: { id }, error: null });
+    const deleted = await db.transaction(async (trx) => {
+      const existing = await trx('journal_entries').where({ id }).first('entry_type', 'period_id', 'entry_number');
+      if (!existing) {
+        throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
+      }
+      await assertPeriodUnlocked(existing.period_id, trx);
+      // Cascade: lines, then any bank_transactions link, then the JE itself.
+      await trx('journal_entry_lines').where({ journal_entry_id: id }).delete();
+      await trx('bank_transactions').where({ journal_entry_id: id }).update({ journal_entry_id: null });
+      const [row] = await trx('journal_entries').where({ id }).delete().returning('id');
+      if (!row) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
+      await logAudit({
+        userId: req.user!.userId,
+        periodId: existing.period_id,
+        entityType: 'journal_entry',
+        entityId: id,
+        action: 'delete',
+        description: `Deleted ${existing.entry_type} JE #${existing.entry_number}`,
+      }, trx);
+      return row.id as number;
+    });
+    res.json({ data: { id: deleted }, error: null });
   } catch (err: unknown) {
     const e = err as { code?: string; message?: string };
     if (e.code === 'PERIOD_LOCKED') {
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
+      return;
+    }
+    if (e.code === 'NOT_FOUND') {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });
       return;
     }
     sendServerError(res, err, 'journal-entries');

@@ -17,11 +17,18 @@ services:
       POSTGRES_DB: vibe_tb_db
     volumes:
       - pgdata:/var/lib/postgresql/data
+    mem_limit: 1g
+    mem_reservation: 256m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vibetb -d vibe_tb_db"]
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   server:
     image: ghcr.io/kisaesdevlab/vibe-tb-server:${IMAGE_TAG:-latest}
@@ -44,20 +51,47 @@ services:
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:?ALLOWED_ORIGIN must be set in .env (e.g. https://your-host)}
       APP_BASE_URL: ${APP_BASE_URL:-${ALLOWED_ORIGIN}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      STRICT_AI_URL_SAFETY: ${STRICT_AI_URL_SAFETY:-}
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=1024}
     volumes:
       - uploads:/app/server/uploads
       - backups:/app/server/backups
-    ports:
-      - "3001:3001"
+    # The server is NOT published to the host — client (nginx) reaches it on the
+    # internal compose network. Publishing 3001 would bypass nginx's rate limit
+    # and backup body-size cap.
+    expose:
+      - "3001"
+    mem_limit: 1536m
+    mem_reservation: 384m
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3001/api/v1/health', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   client:
     image: ghcr.io/kisaesdevlab/vibe-tb-client:${IMAGE_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
     depends_on:
-      - server
+      server:
+        condition: service_healthy
     ports:
       - "80:80"
+    mem_limit: 128m
+    mem_reservation: 32m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   pgdata:

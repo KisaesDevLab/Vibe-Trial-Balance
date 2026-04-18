@@ -15,6 +15,7 @@
  */
 
 import { db } from '../db';
+import { assertSafeOutboundUrl } from './urlSafety';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -134,6 +135,7 @@ export async function ocrPage(
   base64Image: string,
 ): Promise<OcrPageResult> {
   const url = `${settings.baseUrl}/v1/chat/completions`;
+  await assertSafeOutboundUrl(url);
   const body = JSON.stringify({
     model: settings.model,
     temperature: 0,
@@ -246,6 +248,7 @@ export async function ocrPages(
  */
 export async function testOcrConnection(settings: OcrSettings): Promise<void> {
   const url = `${settings.baseUrl}/v1/models`;
+  await assertSafeOutboundUrl(url);
   const response = await fetch(url, {
     method: 'GET',
     headers: { 'Accept': 'application/json' },

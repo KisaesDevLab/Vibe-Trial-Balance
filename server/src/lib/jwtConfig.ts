@@ -4,20 +4,34 @@
 
 /**
  * Centralized JWT configuration.
- * In production (NODE_ENV=production), JWT_SECRET MUST be set via environment variable.
- * In development, falls back to a local-only default with a console warning.
+ *
+ * JWT_SECRET is REQUIRED in every environment. We deliberately do not provide a
+ * development fallback — that used to be a well-known string baked into the
+ * binary, and an operator who launched without `NODE_ENV=production` (easy to
+ * forget) would silently sign real tokens with a public secret.
+ *
+ * The only valid setup path is: generate once with `openssl rand -hex 32`,
+ * store in `.env`, and load it through the process environment.
  */
 
-const isProduction = process.env.NODE_ENV === 'production';
+const providedSecret = process.env.JWT_SECRET;
 
-if (isProduction && !process.env.JWT_SECRET) {
-  console.error('\nFATAL: JWT_SECRET environment variable is required in production.\n');
+if (!providedSecret) {
+  console.error(
+    '\nFATAL: JWT_SECRET environment variable is required.\n' +
+    '  Generate one with:  openssl rand -hex 32\n' +
+    '  Add to your .env:   JWT_SECRET=...\n',
+  );
   process.exit(1);
 }
 
-if (!isProduction && !process.env.JWT_SECRET) {
-  console.warn('\n⚠️  WARNING: JWT_SECRET env var not set. Using insecure default — set JWT_SECRET before deploying.\n');
+if (providedSecret.length < 32) {
+  console.error(
+    '\nFATAL: JWT_SECRET is too short (need ≥ 32 characters of entropy).\n' +
+    '  Regenerate with:  openssl rand -hex 32\n',
+  );
+  process.exit(1);
 }
 
-export const JWT_SECRET: string = process.env.JWT_SECRET ?? 'local-dev-secret-12345';
+export const JWT_SECRET: string = providedSecret;
 export const JWT_EXPIRY: string = process.env.JWT_EXPIRY ?? '8h';

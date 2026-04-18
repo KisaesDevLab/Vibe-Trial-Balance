@@ -157,7 +157,7 @@ Write-OK "Dependencies installed"
 
 Write-Info "Running database migrations..."
 Push-Location server
-$migOut = npx tsx ./node_modules/knex/bin/cli.js migrate:latest --knexfile knexfile.ts 2>&1
+$migOut = npx knex migrate:latest --knexfile knexfile.js 2>&1
 $migExit = $LASTEXITCODE
 Pop-Location
 
