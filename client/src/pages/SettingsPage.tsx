@@ -221,6 +221,7 @@ export function SettingsPage() {
     openaiCompatVisionOverride: '',
     timeoutMs: 120000,
     ocrEnabled: false,
+    ocrProvider: 'llamacpp' as const,
     ocrBaseUrl: '',
     ocrModel: 'glm-ocr',
     ocrTimeoutMs: 120000,
@@ -681,7 +682,7 @@ export function SettingsPage() {
             {/* OCR Pre-processing */}
             <div className="mb-4 border border-purple-200 dark:border-purple-800 rounded p-3 bg-purple-50/30 dark:bg-purple-900/10">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-xs font-medium text-gray-600 dark:text-gray-400">OCR Pre-processing (Ollama)</p>
+                <p className="text-xs font-medium text-gray-600 dark:text-gray-400">OCR Pre-processing</p>
                 <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 cursor-pointer">
                   <input
                     type="checkbox"
@@ -693,24 +694,38 @@ export function SettingsPage() {
                 </label>
               </div>
               <p className="text-[10px] text-gray-400 dark:text-gray-500 mb-3">
-                Use a local OCR model (e.g. GLM-OCR on Ollama) to extract text from PDF images before sending to the main AI.
-                Improves accuracy for scanned documents and keeps image data local. Uses Ollama&apos;s native /api/generate endpoint.
+                Use a local vision model (e.g. GLM-OCR) to extract text from PDF images before sending to the main AI.
+                Improves accuracy for scanned documents and keeps image data local. Both backends speak the OpenAI
+                <code className="mx-1 px-1 rounded bg-purple-100 dark:bg-purple-900/40 text-[10px]">/v1/chat/completions</code>
+                wire format.
               </p>
               <div className="grid grid-cols-2 gap-3 mb-2">
                 <div>
-                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">OCR Base URL</label>
-                  <input
-                    value={effectiveLlm.ocrBaseUrl}
-                    onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), ocrBaseUrl: e.target.value }))}
-                    placeholder="http://192.168.1.100:11434"
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">OCR Backend</label>
+                  <select
+                    value={effectiveLlm.ocrProvider}
+                    onChange={(e) => {
+                      const value = e.target.value as 'llamacpp' | 'ollama-openai';
+                      setLlmEdits((p) => {
+                        const prev = p ?? {};
+                        const next: Partial<typeof effectiveLlm> = { ...prev, ocrProvider: value };
+                        // Seed a sensible default URL when switching if the field is empty.
+                        if (!effectiveLlm.ocrBaseUrl) {
+                          next.ocrBaseUrl = value === 'llamacpp' ? 'http://localhost:8080' : 'http://localhost:11434';
+                        }
+                        return next;
+                      });
+                    }}
                     className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
-                  />
-                  <p className="text-[10px] text-gray-400 mt-0.5">Can differ from the main Ollama URL</p>
-                  {effectiveLlm.ocrBaseUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(effectiveLlm.ocrBaseUrl) && (
-                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
-                      Non-localhost URL: PDF page images will be sent over the network to this server. Ensure this is a trusted endpoint on a secure network.
-                    </p>
-                  )}
+                  >
+                    <option value="llamacpp">llama.cpp server</option>
+                    <option value="ollama-openai">Ollama (OpenAI-compatible)</option>
+                  </select>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    {effectiveLlm.ocrProvider === 'llamacpp'
+                      ? 'llama-server from llama.cpp (recommended for GLM-OCR)'
+                      : 'Ollama exposes /v1/chat/completions on the same port as its native API'}
+                  </p>
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">OCR Model</label>
@@ -720,8 +735,29 @@ export function SettingsPage() {
                     placeholder="glm-ocr"
                     className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
                   />
-                  <p className="text-[10px] text-gray-400 mt-0.5">Default: glm-ocr</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    {effectiveLlm.ocrProvider === 'llamacpp'
+                      ? 'Often ignored by llama.cpp (one model per server). Used for logging.'
+                      : 'Ollama tag name (e.g. glm-ocr, minicpm-v). Default: glm-ocr'}
+                  </p>
                 </div>
+              </div>
+              <div className="mb-2">
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">OCR Base URL</label>
+                <input
+                  value={effectiveLlm.ocrBaseUrl}
+                  onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), ocrBaseUrl: e.target.value }))}
+                  placeholder={effectiveLlm.ocrProvider === 'llamacpp' ? 'http://localhost:8080' : 'http://localhost:11434'}
+                  className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
+                />
+                <p className="text-[10px] text-gray-400 mt-0.5">
+                  Requests are POSTed to <code className="px-1 rounded bg-purple-100 dark:bg-purple-900/40">{'{base}/v1/chat/completions'}</code>.
+                </p>
+                {effectiveLlm.ocrBaseUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(effectiveLlm.ocrBaseUrl) && (
+                  <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
+                    Non-localhost URL: PDF page images will be sent over the network to this server. Ensure this is a trusted endpoint on a secure network.
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-3 mb-2">
                 <label className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">Per-page timeout (ms)</label>
@@ -735,7 +771,6 @@ export function SettingsPage() {
               </div>
               <p className="text-[10px] text-gray-400 dark:text-gray-500 mb-2">
                 OCR is CPU-intensive. Expect ~30-60 seconds per page on typical hardware. GPU acceleration significantly improves speed.
-                Context window is automatically set to 16384 for image processing.
               </p>
               {effectiveLlm.ocrEnabled && (
                 <div className="flex items-center gap-2">
@@ -754,7 +789,7 @@ export function SettingsPage() {
                 </div>
               )}
               <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2">
-                Independent from the main AI provider. You can use Claude/OpenAI for data extraction while using local Ollama for OCR.
+                Independent from the main AI provider. You can use Claude/OpenAI for data extraction while using a local llama.cpp or Ollama server for OCR.
               </p>
             </div>
 

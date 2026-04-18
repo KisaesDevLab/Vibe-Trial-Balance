@@ -58,7 +58,9 @@ export interface LLMProviderSettings {
   chunkCharLimit: number;
   /** Whether OCR pre-processing is enabled */
   ocrEnabled: boolean;
-  /** Ollama base URL for OCR (may differ from main Ollama URL) */
+  /** OCR backend: 'llamacpp' (default) or 'ollama-openai' — both use OpenAI /v1/chat/completions */
+  ocrProvider: 'llamacpp' | 'ollama-openai';
+  /** OCR server base URL (llama.cpp server or Ollama OpenAI-compat endpoint) */
   ocrBaseUrl: string;
   /** OCR model name (default: glm-ocr) */
   ocrModel: string;

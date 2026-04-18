@@ -61,6 +61,50 @@ PDFs without a text layer — scanned pages, photocopies, or images — require 
 
 If vision is not available, the app shows a clear error message explaining what's needed rather than failing silently.
 
+### OCR Pre-processing (Optional, Admin-Configured)
+For scanned PDFs — especially dense bank and credit card statements — you can route page images through a dedicated local OCR model **before** the data-extraction AI sees them. The OCR model produces raw text with preserved columns and row structure; that text is then sent to your main AI provider for structured extraction.
+
+**When OCR pre-processing helps**
+- Dense statements where vision models sometimes miss rows (100+ transactions per page)
+- Scans with small fonts, faint print, or skewed pages
+- When your main AI provider is text-only (no vision) but you still need to import scanned PDFs
+
+**How to enable (admin)**
+1. Go to **Admin > Settings > AI Provider** and scroll to the **OCR Pre-processing** card
+2. Toggle **Enable**
+3. Choose a backend:
+   - **llama.cpp server** (recommended) — `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp), usually on port 8080
+   - **Ollama (OpenAI-compatible)** — any Ollama instance with a vision model pulled, on port 11434
+4. Enter the **OCR Base URL** (e.g., `http://localhost:8080` or `http://localhost:11434`)
+5. Enter the **OCR Model** name (default: `glm-ocr`; other good choices: `minicpm-v`, `qwen3-vl`)
+6. Click **Test OCR Connection** to verify the server responds
+7. Click **Save**
+
+Both backends speak the OpenAI `/v1/chat/completions` wire format, so a single client handles both.
+
+**Using OCR at import time**
+When OCR is configured, the PDF import dialog shows a **Use OCR pre-processing** checkbox (only for scanned / image-based PDFs). Tick it before clicking **Analyze PDF**. The import flow is:
+1. `pdftoppm` renders each page to a PNG (up to 20 pages per PDF)
+2. Each page is sent sequentially to the OCR server for text extraction
+3. The combined OCR text replaces the normal extracted text and is sent to the main AI for structured parsing
+
+**Performance expectations**
+- OCR is CPU/GPU-bound. Expect **30–60 seconds per page** on consumer hardware
+- A 10-page statement can take 5–10 minutes end to end
+- GPU acceleration (CUDA, Metal, ROCm) significantly improves speed
+- Processing is intentionally sequential — parallelism doesn't help and can crash the backend
+- The per-page timeout defaults to 120 seconds; raise it in Settings if your model is slower
+
+**Output sizing**
+- The OCR call is capped at 16,384 completion tokens, sized to fit even a very dense credit card statement page (~120 transactions, or ~50 international transactions with FX detail lines)
+- If OCR stops early (token limit reached), the import dialog surfaces a per-page warning and the page's partial text is still passed to the AI
+
+**Fallback behavior**
+- If OCR is enabled but fails for a specific request, the app falls back to the standard (non-OCR) extraction flow and surfaces a warning
+- If the OCR run produces less than ~50 chars of text total, the app assumes OCR didn't work and also falls back
+
+**Privacy note**: OCR runs entirely on the server you configure. No image data leaves your network unless you explicitly point the Base URL at a remote, non-localhost endpoint. Non-localhost URLs trigger a warning in Settings.
+
 ### Verification Panel
 After a PDF import, a **verification panel** appears on the Trial Balance page showing:
 - Line-by-line comparison of extracted vs. system values
@@ -69,7 +113,7 @@ After a PDF import, a **verification panel** appears on the Trial Balance page s
 
 ### Best Results
 - Digital PDFs give the highest accuracy with any provider
-- Scanned PDFs work best with Claude or a high-quality Ollama vision model
+- Scanned PDFs work best with Claude, a high-quality Ollama vision model, or OCR pre-processing via llama.cpp / Ollama feeding into a text-only provider
 - Simple two-column layouts (account / amount) work best
 - Multi-column layouts with Dr/Cr columns are also supported
 - Ensure the PDF is not password-protected

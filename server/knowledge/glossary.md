@@ -67,6 +67,9 @@ A self-hosted AI model runner. Install it on any machine (including Raspberry Pi
 ## Normal Balance
 The direction of balance (Debit or Credit) that increases an account. Assets and Expenses normally have debit balances. Liabilities, Equity, and Income normally have credit balances.
 
+## OCR Pre-processing
+An optional step in PDF import that sends each rendered page image through a dedicated local OCR model (typically GLM-OCR) **before** the main AI sees it. Produces raw text with preserved layout, which is then fed to the extraction model. Useful for dense scanned statements and for allowing a text-only main provider (e.g., a non-vision OpenAI-compat server) to handle scanned PDFs. Supports two backends — **llama.cpp server** and **Ollama's OpenAI-compatible endpoint** — both using the `/v1/chat/completions` wire format. Configured at Admin > Settings > AI Provider > OCR Pre-processing. Independent from the main AI provider configuration.
+
 ## OFX
 Open Financial Exchange — a standard file format used by most banks for exporting transaction history. The preferred import format for bank transactions.
 
@@ -119,7 +122,7 @@ A spreadsheet-style screen for manually entering bank transactions in bulk. Feat
 A text explanation added to an account in the Period Comparison view explaining why a balance changed between periods. Notes appear on the Flux Analysis PDF.
 
 ## Vision Mode
-A PDF import mode used for scanned documents that have no text layer. The app renders each page to a PNG image using `pdftoppm` and sends the images to a vision-capable AI model for extraction. Requires: (1) a vision-capable model (Claude, or an Ollama/OpenAI-compat model with vision), and (2) `poppler-utils` installed on the server.
+A PDF import mode used for scanned documents that have no text layer. The app renders each page to a PNG image using `pdftoppm` and sends the images to a vision-capable AI model for extraction. Requires: (1) a vision-capable model (Claude, or an Ollama/OpenAI-compat model with vision), and (2) `poppler-utils` installed on the server. Related but distinct from **OCR Pre-processing**, which inserts an extra local OCR step between image rendering and the main AI — use OCR Pre-processing when your main provider is text-only or when the vision model is missing transactions on dense statements.
 
 ## Workpaper Package
 A bundled PDF containing multiple selected reports (TB report, financial statements, AJE listing, etc.) for client delivery or engagement file archiving.

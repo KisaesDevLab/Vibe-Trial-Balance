@@ -117,6 +117,39 @@ If prior year columns are missing after roll-forward, check that the source peri
 ## Engagement Tasks Not Copied to New Period
 This is intentional — engagement tasks are not copied during roll-forward. Each period starts with a blank checklist. Create tasks fresh for each period, or copy them manually.
 
+## OCR Pre-processing: "Test OCR Connection" Fails
+**Symptom**: The OCR Base URL is set, but clicking **Test OCR Connection** returns a connection error.
+
+**Causes and fixes**:
+- **Backend not running**: Start `llama-server` (for llama.cpp) or `ollama serve` (for Ollama) on the configured host/port. Verify by hitting `<baseUrl>/v1/models` in a browser — both backends surface a model list at that endpoint.
+- **Wrong port**: llama.cpp defaults to `:8080`, Ollama to `:11434`. Double-check the Base URL matches the backend actually running.
+- **Firewall / bind address**: If the OCR server is on another machine, it must bind to `0.0.0.0` (not `127.0.0.1`) and the firewall must allow inbound traffic on the port.
+- **Wrong model name**: If the `/v1/models` response comes back OK but the configured model isn't in the list, the server logs a warning. Requests still work on llama.cpp (which typically serves one model per process regardless of the `model` field), but fix the name for clarity. On Ollama, `ollama pull <model>` to install it.
+
+## OCR Pre-processing: Each Page Takes Forever or Times Out
+**Symptom**: OCR import runs for minutes without progress, or pages show "OCR processing failed" warnings.
+
+**Causes and fixes**:
+- **Per-page timeout too low**: Default is 120,000 ms (2 min). Raise it at **Admin > Settings > OCR Pre-processing > Per-page timeout** if your model takes longer on first load or on complex pages.
+- **CPU-only inference**: OCR on consumer CPUs routinely takes 60+ seconds per page. GPU acceleration (CUDA on NVIDIA, Metal on Apple Silicon, ROCm on AMD) is dramatically faster — enable it in your llama.cpp or Ollama build.
+- **Model not loaded into RAM yet**: The first page of a session bears the cold-start load cost. Subsequent pages are much faster. Consider warming the model before import by running `Test OCR Connection`.
+- **Swap thrashing**: Models larger than available RAM will swap, reducing throughput 10–100×. Use a quantized model that fits in memory (Q4/Q5 GGUFs for llama.cpp).
+
+## OCR Pre-processing: Pages Return Warning "OCR may have stopped early (token limit)"
+**Cause**: The OCR model hit the 16,384-token output ceiling before finishing the page.
+
+**Fix**: The per-page output cap is sized for dense business credit card statements (~120 transactions) and should be sufficient for any realistic single page. If you're actually hitting it, your page likely has unusual content (multi-page tables collapsed onto one rendered page, extreme column density). Split the source PDF into smaller chunks before importing, or open an issue with a sample.
+
+## OCR Pre-processing: "OCR produced very little text — falling back"
+**Cause**: The OCR model ran but returned less than ~50 characters of usable output. Usually means the image was blank, the model refused to OCR (non-document content), or the model is misconfigured.
+
+**Fix**:
+- Open the source PDF and confirm each page actually contains document content (not a blank separator)
+- Try a different OCR model (e.g., switch from `glm-ocr` to `minicpm-v` or `qwen3-vl`)
+- If the model is genuinely text-capable but new to you, run `Test OCR Connection` to confirm the backend recognizes it
+
+The import still completes — the app automatically falls back to the standard (non-OCR) extraction flow when OCR produces no usable text.
+
 ## Transaction Entry: Posted Rows Not Appearing in Bank Transactions
 **Cause**: The client selector in the sidebar may differ from the client in Transaction Entry, or the date filter on Bank Transactions is excluding the newly posted transactions.
 

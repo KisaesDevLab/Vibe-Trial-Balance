@@ -463,7 +463,7 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
     'llm.openai_compat_vision_override',
     'llm.vision_provider', 'llm.vision_model',
     'llm.timeout_ms',
-    'llm.ocr_enabled', 'llm.ocr_base_url', 'llm.ocr_model', 'llm.ocr_timeout_ms',
+    'llm.ocr_enabled', 'llm.ocr_provider', 'llm.ocr_base_url', 'llm.ocr_model', 'llm.ocr_timeout_ms',
     'ai.max_tokens_default', 'ai.max_tokens_bank_statement', 'ai.chunk_char_limit',
   ];
   try {
@@ -497,6 +497,7 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
         visionModel:                 s['llm.vision_model']                   || '',
         timeoutMs:                   Number(s['llm.timeout_ms'])              || 120000,
         ocrEnabled:                  s['llm.ocr_enabled'] === 'true',
+        ocrProvider:                 (s['llm.ocr_provider'] === 'ollama-openai' ? 'ollama-openai' : 'llamacpp'),
         ocrBaseUrl:                  s['llm.ocr_base_url']                   || '',
         ocrModel:                    s['llm.ocr_model']                      || 'glm-ocr',
         ocrTimeoutMs:                Number(s['llm.ocr_timeout_ms'])         || 120000,
@@ -536,6 +537,7 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     visionModel:                z.string().max(200).optional(),
     timeoutMs:                  z.number().int().min(1000).max(600000).optional(),
     ocrEnabled:                 z.boolean().optional(),
+    ocrProvider:                z.enum(['llamacpp', 'ollama-openai']).optional(),
     ocrBaseUrl:                 z.string().max(500).refine(
       (v) => !v || /^https?:\/\/.+/.test(v),
       { message: 'OCR Base URL must be a valid HTTP or HTTPS URL' },
@@ -642,6 +644,7 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     'llm.vision_model':                  d.visionModel,
     'llm.timeout_ms':                    d.timeoutMs !== undefined ? String(d.timeoutMs) : undefined,
     'llm.ocr_enabled':                   d.ocrEnabled !== undefined ? String(d.ocrEnabled) : undefined,
+    'llm.ocr_provider':                  d.ocrProvider,
     'llm.ocr_base_url':                  d.ocrBaseUrl,
     'llm.ocr_model':                     d.ocrModel,
     'llm.ocr_timeout_ms':               d.ocrTimeoutMs !== undefined ? String(d.ocrTimeoutMs) : undefined,

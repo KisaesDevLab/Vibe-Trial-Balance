@@ -75,6 +75,13 @@ Vision-capable models can process scanned PDFs by converting pages to images. Th
 - **Ollama/OpenAI-compat**: Auto-detected from model name (looks for keywords like `vl`, `vision`, `llava`, `moondream`). If your model supports vision but isn't detected, set the **Vision capability** dropdown to **Enabled** in Settings.
 - **Server requirement**: The server must have `poppler-utils` installed (`sudo apt install poppler-utils`) for PDF-to-image conversion. On Windows dev machines, scanned PDF import is not available.
 
+## OCR Pre-processing (Optional)
+Independent from the main AI provider. You can run a local OCR model (llama.cpp server or Ollama's OpenAI-compatible endpoint) to convert scanned PDF pages to raw text **before** your main AI sees them. This is especially useful when:
+- Your main provider is text-only (no vision) but you still need to import scanned statements
+- The vision model is missing rows on dense bank or credit card statements (100+ transactions per page)
+
+Configured in the **OCR Pre-processing** card at Admin > Settings > AI Provider. Both supported backends use the same OpenAI `/v1/chat/completions` wire format. See the "CSV/PDF Import" article for the full setup walkthrough and per-page performance expectations.
+
 ## How the App Uses AI
 Every AI call goes through the same abstraction. The provider you choose affects nothing about the user experience — only the backend processing changes:
 
@@ -125,3 +132,4 @@ When configured with **Ollama** (self-hosted), no data leaves your network. All 
 - **Scanned PDF fails with "Install poppler-utils"**: Run `sudo apt install poppler-utils` on the server
 - **Vision not detected for your model**: Set the Vision capability dropdown to **Enabled** manually
 - **Slow responses**: Increase the Timeout setting; local models on CPU can be significantly slower than cloud APIs
+- **OCR pre-processing issues**: See the "OCR Pre-processing" entries in the Troubleshooting article — covers failed connection tests, per-page timeouts, token-limit warnings, and fallback behavior

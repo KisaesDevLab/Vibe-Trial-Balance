@@ -358,7 +358,7 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
                       className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
                     />
                     <span>Use OCR pre-processing</span>
-                    <span className="text-xs text-gray-400">(local Ollama — {ocrStatus?.model})</span>
+                    <span className="text-xs text-gray-400">(local OCR — {ocrStatus?.model})</span>
                   </label>
                   {useOcr && (
                     <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 ml-6">
@@ -387,7 +387,7 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
                   feature="AI Bank Statement PDF Import"
                   piiItems={[
                     ...AI_PII.bankStatementPdf,
-                    ...(useOcr ? [{ label: 'OCR processing', detail: 'Page images will also be sent to the configured OCR server (Ollama) for text extraction before AI analysis' }] : []),
+                    ...(useOcr ? [{ label: 'OCR processing', detail: 'Page images will also be sent to the configured OCR server (llama.cpp or Ollama) for text extraction before AI analysis' }] : []),
                   ]}
                   onCancel={() => setShowConsent(false)}
                   onConfirm={() => { setShowConsent(false); handleAnalyze(); }}
