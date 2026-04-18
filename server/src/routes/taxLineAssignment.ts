@@ -455,6 +455,18 @@ taxLineAssignmentRouter.put('/bulk-confirm', async (req: AuthRequest, res: Respo
   try {
     const results: Array<{ accountId: number; success: boolean; error?: string }> = [];
 
+    // Pre-load valid tax codes once so each row's taxCodeId is validated
+    // against the actual table, not just trusted from an AI payload. An AI
+    // that hallucinates an id — or one that crosses return_form boundaries —
+    // should be rejected per-row rather than crashing the whole batch on FK.
+    const validTaxCodes = new Map<number, string>();
+    {
+      const rows = await db('tax_codes').select('id', 'tax_code');
+      for (const r of rows as Array<{ id: number; tax_code: string }>) {
+        validTaxCodes.set(r.id, r.tax_code);
+      }
+    }
+
     await db.transaction(async (trx) => {
       for (const assignment of assignments) {
         const { accountId, taxCodeId, source, confidence } = assignment;
@@ -464,20 +476,26 @@ taxLineAssignmentRouter.put('/bulk-confirm', async (req: AuthRequest, res: Respo
           continue;
         }
 
+        let resolvedTaxLine: string | null = null;
+        if (taxCodeId != null) {
+          if (!validTaxCodes.has(taxCodeId)) {
+            results.push({ accountId, success: false, error: `Invalid taxCodeId ${taxCodeId}` });
+            continue;
+          }
+          resolvedTaxLine = validTaxCodes.get(taxCodeId) ?? null;
+        }
+
+        const finiteConfidence = typeof confidence === 'number' && Number.isFinite(confidence)
+          ? Math.max(0, Math.min(1, confidence))
+          : null;
+
         const updates: Record<string, unknown> = {
           tax_code_id: taxCodeId ?? null,
+          tax_line: resolvedTaxLine,
           tax_line_source: source ?? 'ai',
-          tax_line_confidence: confidence != null ? confidence : null,
+          tax_line_confidence: finiteConfidence,
           updated_at: trx.fn.now(),
         };
-
-        // Dual-write: look up tax_code string
-        if (taxCodeId != null) {
-          const tc = await trx('tax_codes').where({ id: taxCodeId }).first('tax_code');
-          updates.tax_line = tc?.tax_code ?? null;
-        } else {
-          updates.tax_line = null;
-        }
 
         const [updated] = await trx('chart_of_accounts')
           .where({ id: accountId, client_id: Number(clientId) })

@@ -12,9 +12,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createMcpServer } from './mcp/server';
 
 async function main() {
-  const server = createMcpServer();
+  const server = createMcpServer('stdio');
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // Exit cleanly if the parent process (Claude Desktop) closes our stdin.
+  // Without this we hold DB connections open forever.
+  process.stdin.on('close', () => process.exit(0));
+  process.stdin.on('end', () => process.exit(0));
   // Server is now running — stdio transport keeps it alive
 }
 

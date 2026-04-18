@@ -94,13 +94,29 @@ function safeEval(expr: string): number {
 
 export function evalAmountExpr(raw: string): string {
   // Strip currency symbols, commas, and spaces for parsing
-  const s = raw.trim().replace(/[$,\s]/g, '');
+  let s = raw.trim().replace(/[$,\s]/g, '');
   if (!s) return raw;
+
+  // Accounting convention: "(1,234.56)" means negative $1,234.56. Detect
+  // pure-magnitude parens and convert to a leading minus BEFORE the math
+  // parser treats `(...)` as grouping. Without this, users entering credits
+  // as `(250.00)` in the debit column had the sign silently dropped. Also
+  // handles a leading sign outside the parens (e.g. "-(100)" → "-(-100)" is
+  // just "100", "+(100)" → "-100").
+  const parenMatch = /^([+\-]?)\(([0-9]+(?:\.[0-9]+)?)\)$/.exec(s);
+  if (parenMatch) {
+    const outerSign = parenMatch[1];
+    // Inside-parens magnitude is always negated per accounting convention.
+    // An outer '-' negates again (double negative → positive); outer '+' or
+    // no sign leaves it negative.
+    const sign = outerSign === '-' ? '' : '-';
+    s = sign + parenMatch[2];
+  }
 
   // Check whether there's actually an operator to evaluate.
   // Skip a leading +/- sign (negative amounts like "-85.00") when looking.
   const body = s.replace(/^[+\-]/, '');
-  if (!/[+\-*/]/.test(body)) return raw;
+  if (!/[+\-*/]/.test(body)) return parenMatch ? s : raw;
 
   // Safety gate: only digits, decimal point, operators, and parentheses allowed
   if (!/^[0-9+\-*/.()]+$/.test(s)) return raw;

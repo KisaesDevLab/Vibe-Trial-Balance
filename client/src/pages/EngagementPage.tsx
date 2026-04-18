@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useUIStore } from '../store/uiStore';
+import { confirmAction } from '../components/ConfirmDialog';
 import { listUsers } from '../api/users';
 import { listPeriods } from '../api/periods';
 import {
@@ -371,7 +372,7 @@ function ChecklistTab({ periodId }: { periodId: number }) {
                 <td className="px-3 py-2 text-right whitespace-nowrap">
                   <button onClick={() => setModal(task)}
                     className="text-xs text-teal-600 hover:text-teal-800 dark:text-teal-400 dark:hover:text-teal-300 mr-3">Edit</button>
-                  <button onClick={() => { if (confirm('Delete this task?')) deleteMut.mutate(task.id); }}
+                  <button onClick={async () => { if (await confirmAction({ message: 'Delete this task?', tone: 'danger' })) deleteMut.mutate(task.id); }}
                     className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Delete</button>
                 </td>
               </tr>

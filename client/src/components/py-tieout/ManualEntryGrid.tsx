@@ -79,7 +79,7 @@ export function ManualEntryGrid({ periodId, clientId, onClose, onSuccess }: Prop
         .sort((a, b) => {
           const catDiff = (CATEGORY_ORDER[a.category] ?? 9) - (CATEGORY_ORDER[b.category] ?? 9);
           if (catDiff !== 0) return catDiff;
-          return a.account_number.localeCompare(b.account_number);
+          return a.account_number.localeCompare(b.account_number, undefined, { numeric: true });
         });
 
       setRows(sorted.map((a) => {
@@ -152,7 +152,7 @@ export function ManualEntryGrid({ periodId, clientId, onClose, onSuccess }: Prop
             <h2 className="text-base font-semibold dark:text-white">Manual PY Entry</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Enter prior year balances (positive = debit, negative = credit). Supports paste from Excel.</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         <div className="flex-1 overflow-auto px-5 py-3">

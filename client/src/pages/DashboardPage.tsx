@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getDashboard, type AuditEntry } from '../api/dashboard';
 import { lockPeriod, unlockPeriod } from '../api/periods';
 import { useUIStore } from '../store/uiStore';
+import { confirmAction } from '../components/ConfirmDialog';
 
 function fmt(cents: number): string {
   return (Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -153,7 +154,7 @@ export function DashboardPage() {
             </>
           ) : (
             <button
-              onClick={() => { if (confirm('Lock this period? No changes can be made until it is unlocked.')) lockMutation.mutate(); }}
+              onClick={async () => { if (await confirmAction({ message: 'Lock this period? No changes can be made until it is unlocked.', confirmLabel: 'Lock' })) lockMutation.mutate(); }}
               disabled={lockBusy}
               className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-40"
             >

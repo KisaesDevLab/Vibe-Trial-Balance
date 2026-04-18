@@ -7,6 +7,7 @@ import { z } from 'zod';
 import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 const router = Router();
 router.use(authMiddleware);
@@ -134,7 +135,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const rows = await query;
     res.json({ data: rows, error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -190,7 +191,7 @@ router.get('/available', async (req: AuthRequest, res: Response): Promise<void> 
 
     res.json({ data: rows, error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -267,7 +268,7 @@ router.get('/export', async (req: AuthRequest, res: Response): Promise<void> => 
     await wb.xlsx.write(res);
     res.end();
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -287,7 +288,7 @@ router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     }
     res.json({ data: row, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -305,7 +306,7 @@ router.post('/import/preview', async (req: AuthRequest, res: Response): Promise<
     const rows = parseCsvToRows(csv);
     res.json({ data: rows, error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -324,7 +325,7 @@ router.post('/import', async (req: AuthRequest, res: Response): Promise<void> =>
     const result = await applyUpsertRows(rows);
     res.json({ data: result, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -358,7 +359,7 @@ router.post('/bulk', async (req: AuthRequest, res: Response): Promise<void> => {
 
     res.json({ data: { inserted: inserted.length, updated: updated.length, insertedIds: inserted, updatedIds: updated }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -380,7 +381,7 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
     const full = await fetchWithMaps(newRow.id);
     res.status(201).json({ data: full, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -435,7 +436,7 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tax code not found' } });
       return;
     }
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -475,7 +476,7 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => 
     }
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -493,7 +494,7 @@ router.get('/:id/mappings', async (req: AuthRequest, res: Response): Promise<voi
       .orderBy('tax_software');
     res.json({ data: maps, error: null, meta: { count: maps.length } });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -528,7 +529,7 @@ router.post('/:id/mappings', async (req: AuthRequest, res: Response): Promise<vo
     }).returning('*');
     res.status(201).json({ data: row, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -564,7 +565,7 @@ router.put('/mappings/:mapId', async (req: AuthRequest, res: Response): Promise<
     }
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 
@@ -585,7 +586,7 @@ router.delete('/mappings/:mapId', async (req: AuthRequest, res: Response): Promi
     }
     res.json({ data: { id: mapId }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxCodes');
   }
 });
 

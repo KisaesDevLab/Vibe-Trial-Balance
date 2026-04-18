@@ -14,6 +14,7 @@ import {
 import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { AiConsentDialog, AI_PII } from './AiConsentDialog';
 import { getOcrStatus } from '../api/settings';
+import { checkFileSize } from '../utils/fileLimits';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -206,16 +207,22 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
 
   // ── File handling ──────────────────────────────────────────────────────────
 
+  const acceptPdf = (file: File | undefined): void => {
+    if (!file) return;
+    if (!checkFileSize(file, 'pdf')) return;
+    setSelectedFile(file);
+    setError(null);
+  };
+
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) { setSelectedFile(file); setError(null); }
+    acceptPdf(e.target.files?.[0]);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const file = e.dataTransfer.files[0];
-    if (file && file.type === 'application/pdf') { setSelectedFile(file); setError(null); }
+    if (file && file.type === 'application/pdf') acceptPdf(file);
   };
 
   // ── Analyze ────────────────────────────────────────────────────────────────
@@ -298,7 +305,7 @@ export function BankStatementPdfImportDialog({ clientId, periodId, onClose, onSu
               </p>
             )}
           </div>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         <div className="px-5 py-4 overflow-auto flex-1">

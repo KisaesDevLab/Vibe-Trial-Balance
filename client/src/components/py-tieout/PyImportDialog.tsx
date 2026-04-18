@@ -10,6 +10,7 @@ import { QuickAddAccountModal } from '../QuickAddAccountModal';
 import { analyzeCsv, type CsvMatchRow } from '../../api/csvImport';
 import { listAccounts, type Account } from '../../api/chartOfAccounts';
 import { confirmCsvPyImport } from '../../api/pyComparison';
+import { checkFileSize } from '../../utils/fileLimits';
 
 type Stage = 'consent' | 'upload' | 'analyzing' | 'preview' | 'confirming' | 'done';
 
@@ -45,8 +46,10 @@ export function PyImportDialog({ periodId, clientId, onClose, onSuccess }: Props
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const kind = file.name.match(/\.xlsx?$/i) ? 'excel' : 'csv';
+    if (!checkFileSize(file, kind)) return;
     setSourceFilename(file.name);
-    setSourceType(file.name.match(/\.xlsx?$/i) ? 'excel' : 'csv');
+    setSourceType(kind);
     setStage('analyzing');
     setError(null);
     try {
@@ -131,7 +134,7 @@ export function PyImportDialog({ periodId, clientId, onClose, onSuccess }: Props
               {stage === 'confirming' && 'Importing...'}
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         <div className="flex-1 overflow-auto px-5 py-4">

@@ -20,6 +20,7 @@ import {
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { DateInput } from '../components/DateInput';
+import { confirmAction } from '../components/ConfirmDialog';
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
   return (
@@ -27,7 +28,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <h2 className="text-base font-semibold dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4">{children}</div>
       </div>
@@ -415,7 +416,7 @@ export function PeriodsPage() {
                           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400">Locked</span>
                           {isAdmin && (
                             <button
-                              onClick={() => { if (confirm(`Unlock "${p.period_name}"? Changes will be permitted again.`)) unlockMutation.mutate(p.id); }}
+                              onClick={async () => { if (await confirmAction({ message: `Unlock "${p.period_name}"? Changes will be permitted again.`, confirmLabel: 'Unlock' })) unlockMutation.mutate(p.id); }}
                               title="Unlock this period to allow changes"
                               className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400"
                             >
@@ -425,7 +426,7 @@ export function PeriodsPage() {
                         </div>
                       ) : (
                         <button
-                          onClick={() => { if (confirm(`Lock "${p.period_name}"? No changes can be made until unlocked.`)) { setLockError(null); lockMutation.mutate(p.id); } }}
+                          onClick={async () => { if (await confirmAction({ message: `Lock "${p.period_name}"? No changes can be made until unlocked.`, confirmLabel: 'Lock' })) { setLockError(null); lockMutation.mutate(p.id); } }}
                           title="Lock this period"
                           className="text-xs text-gray-400 dark:text-gray-500 hover:text-amber-600 dark:hover:text-amber-400"
                         >
@@ -455,7 +456,7 @@ export function PeriodsPage() {
                         Edit
                       </button>
                       <button
-                        onClick={() => { if (confirm(`Delete "${p.period_name}"?`)) deleteMutation.mutate(p.id); }}
+                        onClick={async () => { if (await confirmAction({ message: `Delete "${p.period_name}"?`, tone: 'danger' })) deleteMutation.mutate(p.id); }}
                         disabled={!!p.locked_at}
                         title={p.locked_at ? 'Period is locked. Unlock it to delete.' : 'Delete period'}
                         className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-40 disabled:cursor-not-allowed"

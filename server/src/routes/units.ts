@@ -6,6 +6,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const unitsRouter = Router({ mergeParams: true });
 unitsRouter.use(authMiddleware);
@@ -57,7 +58,7 @@ unitsRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
 
     res.json({ data, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'units');
   }
 });
 
@@ -78,7 +79,7 @@ unitsRouter.get('/:unit/accounts', async (req: AuthRequest, res: Response): Prom
     const accounts = await q.orderBy('account_number', 'asc');
     res.json({ data: accounts, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'units');
   }
 });
 
@@ -98,7 +99,7 @@ unitsRouter.post('/rename', async (req: AuthRequest, res: Response): Promise<voi
       .update({ unit: parsed.data.to, updated_at: db.fn.now() });
     res.json({ data: { updated: count }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'units');
   }
 });
 
@@ -118,7 +119,7 @@ unitsRouter.post('/merge', async (req: AuthRequest, res: Response): Promise<void
       .update({ unit: parsed.data.into, updated_at: db.fn.now() });
     res.json({ data: { updated: count }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'units');
   }
 });
 
@@ -138,7 +139,7 @@ unitsRouter.post('/clear', async (req: AuthRequest, res: Response): Promise<void
       .update({ unit: null, updated_at: db.fn.now() });
     res.json({ data: { updated: count }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'units');
   }
 });
 
@@ -163,7 +164,7 @@ unitsRouter.post('/bulk-assign', async (req: AuthRequest, res: Response): Promis
       .update({ unit: parsed.data.unit, updated_at: db.fn.now() });
     res.json({ data: { updated: count }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'units');
   }
 });
 
@@ -246,7 +247,7 @@ unitsRouter.post('/clone', async (req: AuthRequest, res: Response): Promise<void
 
     res.status(201).json({ data: { inserted: inserts.length }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'units');
   }
 });
 
@@ -326,6 +327,6 @@ unitsRouter.post('/clone-selected', async (req: AuthRequest, res: Response): Pro
 
     res.status(201).json({ data: { inserted: inserts.length }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'units');
   }
 });

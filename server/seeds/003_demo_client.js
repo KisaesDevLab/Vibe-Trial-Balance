@@ -3,6 +3,12 @@
  * Run with: npx knex seed:run --specific=003_demo_client.js
  */
 exports.seed = async function (knex) {
+  // Never seed demo data into production — this used to land "Demo Company LLC"
+  // next to real books on every fresh Pi install. Gate explicitly.
+  if (process.env.NODE_ENV === 'production' && process.env.SEED_DEMO_DATA !== 'true') {
+    return;
+  }
+
   // Check if demo client already exists
   const existing = await knex('clients').where({ name: 'Demo Company LLC' }).first();
   if (existing) return;

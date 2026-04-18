@@ -5,6 +5,7 @@
 import { Router, Response } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const cashFlowRouter = Router({ mergeParams: true });
 cashFlowRouter.use(authMiddleware);
@@ -64,15 +65,49 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
       return sum;
     }, 0);
 
-    // Non-cash add-backs (expense accounts tagged non_cash)
+    // Non-cash add-backs: ONLY revenue/expense accounts tagged non_cash
+    // (e.g. Depreciation Expense). Contra-asset accounts like Accumulated
+    // Depreciation must NOT land here — otherwise the same economic activity
+    // is added back twice.
     const nonCashItems = parsed
-      .filter(r => r.cash_flow_category === 'non_cash')
+      .filter(r =>
+        r.cash_flow_category === 'non_cash' &&
+        (r.category === 'revenue' || r.category === 'expenses'),
+      )
       .map(r => ({
         account_id:     r.account_id,
         account_number: r.account_number,
         account_name:   r.account_name,
-        amount: bookNet(r as Record<string, unknown>),
+        // For expense non-cash items (depreciation), bookNet is positive and
+        // gets added back (cash wasn't used). For revenue non-cash items
+        // (accrued revenue booked but not collected), bookNet is positive
+        // and must be subtracted. Sign: expenses add, revenue subtracts.
+        amount: r.category === 'expenses'
+          ? bookNet(r as Record<string, unknown>)
+          : -bookNet(r as Record<string, unknown>),
       }));
+
+    // Surface accounts we couldn't classify so the preparer can fix mappings.
+    // Any BS account (asset/liab/equity) without a cash_flow_category is a
+    // potential silent omission. We also flag non_cash accounts that were
+    // rejected above because their category didn't match.
+    const unmappedAccounts = parsed
+      .filter(r => {
+        const isBsAccount = r.category === 'assets' || r.category === 'liabilities' || r.category === 'equity';
+        const noCategory = !r.cash_flow_category || r.cash_flow_category === '';
+        const badNonCash = r.cash_flow_category === 'non_cash' &&
+          r.category !== 'revenue' && r.category !== 'expenses';
+        return (isBsAccount && noCategory) || badNonCash;
+      })
+      .map(r => ({
+        account_id:     r.account_id,
+        account_number: r.account_number,
+        account_name:   r.account_name,
+        category:       r.category,
+        current_category: r.cash_flow_category ?? null,
+        change_cents:   cashImpact(r as Record<string, unknown>),
+      }))
+      .filter(r => r.change_cents !== 0);
 
     // Working capital changes
     const workingCapital = parsed
@@ -120,6 +155,12 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
     const beginningCash = cashRows.reduce((s, r) => s + priorNet(r), 0);
     const endingCash    = cashRows.reduce((s, r) => s + bookNet(r),  0);
 
+    // Reconciliation check: ending cash should equal beginning cash + net change.
+    // Drift > $1 (100 cents) indicates a real cash-flow mapping error, not float noise.
+    const expectedEnding = beginningCash + netChange;
+    const reconciliationDiff = endingCash - expectedEnding;
+    const reconciled = Math.abs(reconciliationDiff) <= 100;
+
     res.json({
       data: {
         operating: { netIncome, nonCashItems, workingCapital, total: totalOperating },
@@ -128,10 +169,13 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
         netChange,
         beginningCash,
         endingCash,
+        reconciled,
+        reconciliationDiff,
+        unmappedAccounts,
       },
       error: null,
     });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'cashFlow.get');
   }
 });

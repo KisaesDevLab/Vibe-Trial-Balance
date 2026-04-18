@@ -10,8 +10,12 @@ RUN cd client && npm install
 COPY client/ client/
 RUN cd client && npm run build
 
-# Serve with Nginx
+# Serve with Nginx. nginx:alpine runs the master as root (required to bind :80)
+# but worker processes already drop to the unprivileged `nginx` user per the
+# default config. Add a healthcheck so compose can detect a hung worker.
 FROM nginx:alpine
 COPY --from=build /app/client/dist /usr/share/nginx/html
 COPY deploy/nginx-docker.conf /etc/nginx/conf.d/default.conf
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
 EXPOSE 80

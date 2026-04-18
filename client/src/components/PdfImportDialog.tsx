@@ -17,6 +17,7 @@ import {
 } from '../api/pdfImport';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { AiConsentDialog, AI_PII } from './AiConsentDialog';
+import { checkFileSize } from '../utils/fileLimits';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -213,20 +214,24 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
 
   const handleDragLeave = useCallback(() => setDragOver(false), []);
 
+  const acceptPdf = (file: File | undefined): void => {
+    if (!file) return;
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setAnalyzeError('Please drop a PDF file (.pdf)');
+      return;
+    }
+    if (!checkFileSize(file, 'pdf')) return;
+    setSelectedFile(file);
+  };
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type === 'application/pdf') {
-      setSelectedFile(file);
-    } else if (file) {
-      setAnalyzeError('Please drop a PDF file (.pdf)');
-    }
+    acceptPdf(e.dataTransfer.files?.[0]);
   }, []);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) setSelectedFile(file);
+    acceptPdf(e.target.files?.[0]);
   };
 
   // ── Analyze ────────────────────────────────────────────────────────────────
@@ -452,7 +457,7 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
           <>
             <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Import from PDF</h2>
-              <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+              <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
             </div>
             <div className="p-6 space-y-4">
               <div className="flex gap-3">
@@ -483,7 +488,7 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
           <>
             <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700 shrink-0">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Import from PDF</h2>
-              <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+              <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
             </div>
             <div className="p-6 space-y-4">
               <div
@@ -577,7 +582,7 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                   <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">{analysis.detectedPeriod}</span>
                 )}
               </div>
-              <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+              <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
             </div>
 
             {/* Message thread */}
@@ -693,7 +698,7 @@ export function PdfImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                   <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">{analysis.detectedPeriod}</span>
                 )}
               </div>
-              <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+              <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
             </div>
 
             {/* Warnings */}

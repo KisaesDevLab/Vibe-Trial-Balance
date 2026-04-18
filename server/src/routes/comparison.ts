@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked } from '../lib/periodGuard';
+import { sendServerError } from '../lib/safeError';
 
 export const comparisonRouter = Router({ mergeParams: true });
 comparisonRouter.use(authMiddleware);
@@ -40,72 +41,100 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    // Fetch both periods' balances
+    // Fetch both periods' balances. We need FULL rows for both so accounts
+    // that exist in the compare period but were deactivated in the current
+    // period still appear (previously silently dropped — which broke
+    // year-over-year expense totals when a closed-out account disappeared).
     const [currentRows, compareRows] = await Promise.all([
       db('v_adjusted_trial_balance as vtb')
         .where('vtb.period_id', periodId)
-        .where('vtb.is_active', true)
         .select(
           'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
-          'vtb.category', 'vtb.normal_balance',
+          'vtb.category', 'vtb.normal_balance', 'vtb.is_active',
           'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
         )
         .orderBy('vtb.account_number', 'asc'),
       db('v_adjusted_trial_balance as vtb')
         .where('vtb.period_id', comparePeriodId)
-        .where('vtb.is_active', true)
-        .select('vtb.account_id', 'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit'),
+        .select(
+          'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
+          'vtb.category', 'vtb.normal_balance', 'vtb.is_active',
+          'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
+        ),
     ]);
 
-    // Map compare period balances by account_id
-    const compareMap = new Map<number, { dr: number; cr: number }>();
-    for (const r of compareRows as Record<string, unknown>[]) {
-      compareMap.set(Number(r.account_id), {
-        dr: Number(r.book_adjusted_debit),
-        cr: Number(r.book_adjusted_credit),
-      });
-    }
+    type Row = Record<string, unknown>;
+
+    // Index both periods by account_id. Union the key sets so every account
+    // in either period appears in the output.
+    const currentMap = new Map<number, Row>();
+    for (const r of currentRows as Row[]) currentMap.set(Number(r.account_id), r);
+    const compareMap = new Map<number, Row>();
+    for (const r of compareRows as Row[]) compareMap.set(Number(r.account_id), r);
 
     // Fetch variance notes for this comparison pair
     const notes = await db('variance_notes')
       .where({ period_id: periodId, compare_period_id: comparePeriodId })
       .select('account_id', 'note');
     const notesMap = new Map<number, string>();
-    for (const n of notes as Record<string, unknown>[]) notesMap.set(Number(n.account_id), String(n.note));
+    for (const n of notes as Row[]) notesMap.set(Number(n.account_id), String(n.note));
 
-    // Build rows
-    const rows = (currentRows as Record<string, unknown>[]).map((r) => {
-      const currDr = Number(r.book_adjusted_debit);
-      const currCr = Number(r.book_adjusted_credit);
-      const nb     = r.normal_balance as string;
-      const currentBalance = netBal(currDr, currCr, nb);
+    // Walk union, preferring the current-period row for metadata; fall back
+    // to compare-period metadata for deactivated/removed accounts.
+    const allAccountIds = new Set<number>([
+      ...Array.from(currentMap.keys()),
+      ...Array.from(compareMap.keys()),
+    ]);
 
-      const cmp = compareMap.get(Number(r.account_id));
-      const compareBalance = cmp ? netBal(cmp.dr, cmp.cr, nb) : 0;
+    const rows = Array.from(allAccountIds).map((accountId) => {
+      const cur = currentMap.get(accountId);
+      const cmp = compareMap.get(accountId);
+      const meta = cur ?? cmp!;
+      const nb = String(meta.normal_balance);
+
+      const currentBalance = cur
+        ? netBal(Number(cur.book_adjusted_debit), Number(cur.book_adjusted_credit), nb)
+        : 0;
+      const compareBalance = cmp
+        ? netBal(Number(cmp.book_adjusted_debit), Number(cmp.book_adjusted_credit), nb)
+        : 0;
 
       const varianceAmount = currentBalance - compareBalance;
-      const variancePct =
-        compareBalance !== 0
-          ? Math.round((varianceAmount / Math.abs(compareBalance)) * 1000) / 10
-          : currentBalance !== 0 ? null : 0;
+      // Variance %: null when we can't compute a meaningful rate (prior is
+      // zero). `0` when both sides are zero (no movement). Clients render
+      // null as "N/A" or "New"/"Closed" as appropriate.
+      let variancePct: number | null;
+      if (compareBalance !== 0) {
+        variancePct = Math.round((varianceAmount / Math.abs(compareBalance)) * 1000) / 10;
+      } else if (currentBalance === 0) {
+        variancePct = 0;
+      } else {
+        variancePct = null;
+      }
 
       return {
-        account_id:      Number(r.account_id),
-        account_number:  r.account_number as string,
-        account_name:    r.account_name as string,
-        category:        r.category as string,
+        account_id:      accountId,
+        account_number:  String(meta.account_number),
+        account_name:    String(meta.account_name),
+        category:        String(meta.category),
         normal_balance:  nb,
+        is_active:       Boolean(meta.is_active),
+        in_current:      !!cur,
+        in_compare:      !!cmp,
         current_balance: currentBalance,
         compare_balance: compareBalance,
         variance_amount: varianceAmount,
         variance_pct:    variancePct,
-        note:            notesMap.get(Number(r.account_id)) ?? null,
+        note:            notesMap.get(accountId) ?? null,
       };
-    });
+    })
+    // Stable sort by account number for consistent rendering. `numeric: true`
+    // makes "200" sort before "1000" instead of the lexical "1000" < "200".
+    .sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
 
     res.json({ data: { period, comparePeriod, rows }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'comparison');
   }
 });
 
@@ -156,6 +185,6 @@ comparisonRouter.put('/variance-notes/:accountId', async (req: AuthRequest, res:
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked' } });
       return;
     }
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'comparison');
   }
 });

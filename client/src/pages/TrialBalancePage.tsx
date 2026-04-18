@@ -44,6 +44,7 @@ import {
 } from '../api/tickmarks';
 import { listImports, type DocumentImport } from '../api/pdfImport';
 import { downloadXlsx } from '../utils/downloadXlsx';
+import { checkFileSize } from '../utils/fileLimits';
 import { openTBPopout } from './TBPopoutPage';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -432,10 +433,11 @@ export function TrialBalancePage() {
     },
     onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(queryKey, ctx.prev); },
     onSuccess: (res) => {
-      // Surface stale-write conflicts so the user knows to reload before re-entering.
-      if (res.error?.code === 'STALE_WRITE') {
-        // eslint-disable-next-line no-alert
-        window.alert(res.error.message);
+      // Errors (including STALE_WRITE) surface via the global mutation-cache
+      // toast — no extra alert needed. On STALE_WRITE the cache is already
+      // rolled back by onError so there's nothing to patch.
+      if (res.error) {
+        return;
       } else if (res.data) {
         // Write the new updated_at into cache so follow-up edits from the
         // same session use a fresh expectedUpdatedAt and don't self-conflict.
@@ -1719,6 +1721,9 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Excel files handled via exceljs later in this file — allow larger size.
+    const kind = /\.(xlsx|xls|xlsm)$/i.test(file.name) ? 'excel' : 'csv';
+    if (!checkFileSize(file, kind)) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
@@ -1797,7 +1802,7 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
             <h2 className="text-base font-semibold dark:text-white">{title}</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Step {step} of 2 — {step === 1 ? 'Select CSV file' : 'Map columns'}</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         <div className="px-5 py-4">
@@ -1918,7 +1923,7 @@ function TickmarkModal({ row, library, assigned, onClose, onToggle }: {
             <h2 className="text-base font-semibold dark:text-white">{row.account_number} — {row.account_name}</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Assign Tickmarks</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-3 space-y-1 max-h-80 overflow-y-auto">
           {library.length === 0 ? (
@@ -1974,7 +1979,7 @@ function NotesModal({ row, onClose, onSave }: {
             <h2 className="text-base font-semibold dark:text-white">{row.account_number} — {row.account_name}</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Workpaper Notes</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4 space-y-4">
           <div>

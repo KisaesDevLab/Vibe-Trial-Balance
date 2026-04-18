@@ -8,6 +8,7 @@ import {
   listSystemTickmarks, createSystemTickmark, updateSystemTickmark, deleteSystemTickmark,
   TICKMARK_COLOR_CLASSES, type SystemTickmark, type TickmarkInput, type TickmarkColor,
 } from '../api/tickmarks';
+import { confirmAction } from '../components/ConfirmDialog';
 
 const COLORS: TickmarkColor[] = ['gray', 'blue', 'green', 'red', 'purple', 'amber'];
 
@@ -214,8 +215,8 @@ export function SystemTickmarksPage() {
                         Edit
                       </button>
                       <button
-                        onClick={() => {
-                          if (confirm('Delete this default tickmark? Existing client libraries are not affected.'))
+                        onClick={async () => {
+                          if (await confirmAction({ message: 'Delete this default tickmark? Existing client libraries are not affected.', tone: 'danger' }))
                             deleteMut.mutate(tm.id);
                         }}
                         className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"

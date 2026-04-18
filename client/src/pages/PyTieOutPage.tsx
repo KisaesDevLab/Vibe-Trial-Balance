@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useUIStore } from '../store/uiStore';
+import { confirmAction } from '../components/ConfirmDialog';
 import { getComparison, clearPyData } from '../api/pyComparison';
 import { ComparisonTable } from '../components/py-tieout/ComparisonTable';
 import { AjePanel } from '../components/py-tieout/AjePanel';
@@ -49,7 +50,8 @@ export function PyTieOutPage() {
   };
 
   const handleClear = async () => {
-    if (!selectedPeriodId || !confirm('Clear all PY comparison data? Previously created AJEs will not be affected.')) return;
+    if (!selectedPeriodId) return;
+    if (!await confirmAction({ message: 'Clear all PY comparison data? Previously created AJEs will not be affected.', tone: 'danger' })) return;
     setClearing(true);
     try {
       await clearPyData(selectedPeriodId);

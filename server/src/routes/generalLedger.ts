@@ -81,9 +81,10 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
       linesByAccount.set(line.account_id, existing);
     }
 
-    // Build result sorted by account_number
+    // Build result sorted by account_number. Numeric-aware so "1000" lands
+    // after "200" rather than the lexical reverse.
     const accounts = [...accountOrder.values()].sort((a, b) =>
-      a.account_number.localeCompare(b.account_number),
+      a.account_number.localeCompare(b.account_number, undefined, { numeric: true }),
     );
 
     const result = accounts.map((acct) => {

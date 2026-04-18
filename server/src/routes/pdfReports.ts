@@ -18,6 +18,9 @@ import {
   generateTaxBasisPlPdf,
   generateTaxReturnOrderPdf,
   generateFluxAnalysisPdf,
+  generateCashFlowPdf,
+  generateM1Pdf,
+  generateTaxBasisSchedulePdf,
 } from '../pdf/reportGenerators';
 
 export const pdfReportsRouter = Router({ mergeParams: true });
@@ -248,6 +251,60 @@ pdfReportsRouter.get('/periods/:periodId/tax-basis-pl', async (req: AuthRequest,
   try {
     const buffer = await generateTaxBasisPlPdf(db, periodId);
     sendPdf(res, buffer, `tax-basis-pl-${periodId}.pdf`, isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/reports/periods/:periodId/cash-flow
+// ─────────────────────────────────────────────────────────────────────────────
+pdfReportsRouter.get('/periods/:periodId/cash-flow', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = getPeriodId(req);
+  if (periodId === null) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  try {
+    const buffer = await generateCashFlowPdf(db, periodId);
+    sendPdf(res, buffer, `cash-flow-${periodId}.pdf`, isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/reports/periods/:periodId/tax-basis-schedule
+// ─────────────────────────────────────────────────────────────────────────────
+pdfReportsRouter.get('/periods/:periodId/tax-basis-schedule', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = getPeriodId(req);
+  if (periodId === null) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  try {
+    const buffer = await generateTaxBasisSchedulePdf(db, periodId);
+    sendPdf(res, buffer, `tax-basis-schedule-${periodId}.pdf`, isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/reports/periods/:periodId/m1
+// ─────────────────────────────────────────────────────────────────────────────
+pdfReportsRouter.get('/periods/:periodId/m1', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = getPeriodId(req);
+  if (periodId === null) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  try {
+    const buffer = await generateM1Pdf(db, periodId);
+    sendPdf(res, buffer, `m1-reconciliation-${periodId}.pdf`, isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });

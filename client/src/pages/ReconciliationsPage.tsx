@@ -21,6 +21,7 @@ import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { listPeriods } from '../api/periods';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { DateInput } from '../components/DateInput';
+import { confirmAction } from '../components/ConfirmDialog';
 
 function fmt(cents: number): string {
   const abs = Math.abs(cents);
@@ -90,7 +91,7 @@ function NewReconciliationModal({
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <h2 className="text-base font-semibold dark:text-white">New Bank Reconciliation</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
           {isPeriodLocked && (
@@ -531,7 +532,7 @@ export function ReconciliationsPage() {
                       <td className="px-4 py-2.5 text-right">
                         {isAdmin && r.status === 'completed' && (
                           <button
-                            onClick={() => { if (confirm(`Reopen "${r.account_name}" reconciliation dated ${r.statement_date}?`)) reopenMutation.mutate(r.id); }}
+                            onClick={async () => { if (await confirmAction({ message: `Reopen "${r.account_name}" reconciliation dated ${r.statement_date}?`, confirmLabel: 'Reopen' })) reopenMutation.mutate(r.id); }}
                             disabled={reopenMutation.isPending}
                             className="text-xs text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 mr-2 disabled:opacity-50"
                           >
@@ -546,7 +547,7 @@ export function ReconciliationsPage() {
                         </button>
                         {r.status === 'open' && (
                           <button
-                            onClick={() => { if (confirm('Delete this reconciliation?')) deleteMutation.mutate(r.id); }}
+                            onClick={async () => { if (await confirmAction({ message: 'Delete this reconciliation?', tone: 'danger' })) deleteMutation.mutate(r.id); }}
                             className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                           >
                             Delete

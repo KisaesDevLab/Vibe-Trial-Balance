@@ -112,6 +112,32 @@ app.use('/api/v1/import/', uploadLimiter);
 app.use('/api/v1/support/chat', uploadLimiter);
 app.use('/api/v1/periods/:periodId/diagnostics', uploadLimiter);
 
+// Reviewer accounts are read-only. Block mutating HTTP methods at the API
+// boundary using the JWT claim's role. Full auth validation still happens
+// inside each router's authMiddleware — this is just a fast gate that prevents
+// reviewers from reaching any write handler. We deliberately don't hit the DB
+// here; if a reviewer was just promoted to staff, there is a ≤30s window
+// (matching the auth cache TTL) before writes are accepted.
+app.use('/api/v1', (req, res, next) => {
+  const method = req.method.toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return next(); // let authMiddleware send 401
+  try {
+    const decoded = jwt.decode(authHeader.slice(7)) as { role?: string } | null;
+    if (decoded?.role === 'reviewer') {
+      res.status(403).json({
+        data: null,
+        error: { code: 'READ_ONLY', message: 'Reviewer accounts cannot modify data.' },
+      });
+      return;
+    }
+  } catch {
+    // fall through — authMiddleware will handle bad tokens
+  }
+  next();
+});
+
 app.get('/api/v1/health', async (_req, res) => {
   try {
     const result = await db.raw('SELECT NOW() AS now');
@@ -176,6 +202,24 @@ app.use('/api/v1/clients/:clientId/payees', payeesRouter);
 app.use('/api/v1/clients/:clientId/units', unitsRouter);
 app.use('/api/v1/periods/:periodId/py-comparison', pyComparisonRouter);
 app.use('/mcp', mcpRouter);
+
+// 404 for any /api/* path not matched above.
+app.use('/api', (req, res) => {
+  res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: `No route matches ${req.method} ${req.path}` } });
+});
+
+// Global error handler — last line of defense for any handler that either
+// throws synchronously or escapes an async try/catch. Express 4 will not
+// auto-catch async rejections; routes must either use try/catch or next(err).
+// This keeps us from hanging the socket and from leaking stack traces.
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (res.headersSent) {
+    // Stream already started; nothing useful to send. Just destroy.
+    res.destroy(err);
+    return;
+  }
+  sendServerError(res, err, 'global');
+});
 
 const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

@@ -45,6 +45,7 @@ import { TransactionEntryPage } from './pages/TransactionEntryPage';
 import { UnitsPage } from './pages/UnitsPage';
 import { PyTieOutPage } from './pages/PyTieOutPage';
 import { TBPopoutPage } from './pages/TBPopoutPage';
+import { NotFoundPage } from './pages/NotFoundPage';
 import { useAuthStore } from './store/uiStore';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -106,6 +107,7 @@ export default function App() {
           <Route path="system-tickmarks" element={<SystemTickmarksPage />} />
           <Route path="transaction-entry" element={<TransactionEntryPage />} />
           <Route path="units" element={<UnitsPage />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Route>
         <Route path="/tb-popout" element={<ProtectedRoute><TBPopoutPage /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />

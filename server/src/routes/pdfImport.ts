@@ -324,6 +324,25 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
     const existingByNumber = new Map<string, number>(
       existingCoa.map((a: { id: number; account_number: string }) => [a.account_number.trim(), a.id])
     );
+    // Cross-client safety: `matchedAccountId` comes from the AI analyze step.
+    // If the AI hallucinates an ID or returns an ID that belongs to a
+    // different client (global PK on chart_of_accounts), we must refuse it
+    // rather than silently insert TB rows pointing at another client's COA.
+    const validAccountIds = new Set<number>(existingCoa.map((a: { id: number }) => a.id));
+    for (const m of matches) {
+      if (m.action !== 'skip' && m.matchedAccountId !== null && m.matchedAccountId !== undefined) {
+        if (!validAccountIds.has(m.matchedAccountId)) {
+          res.status(422).json({
+            data: null,
+            error: {
+              code: 'INVALID_ACCOUNT_ID',
+              message: `Match references account ${m.matchedAccountId} which does not belong to this client. The AI suggestion is stale or invalid — re-run analysis.`,
+            },
+          });
+          return;
+        }
+      }
+    }
 
     // Detect conflicts: user-supplied account numbers that already exist in COA for non-matched rows
     const createNewRows = matches.filter((m) => m.action === 'create_new');

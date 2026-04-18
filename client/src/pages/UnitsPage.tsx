@@ -37,7 +37,7 @@ function RenameModal({ unit, clientId, onClose }: { unit: string; clientId: numb
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-sm">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <h2 className="text-base font-semibold dark:text-white">Rename Unit</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4 space-y-3">
           <p className="text-sm text-gray-600 dark:text-gray-400">Rename <strong>{unit}</strong> — all accounts will be updated.</p>
@@ -78,7 +78,7 @@ function MergeModal({ unit, allUnits, clientId, onClose }: { unit: string; allUn
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-sm">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <h2 className="text-base font-semibold dark:text-white">Merge Unit</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4 space-y-3">
           <p className="text-sm text-gray-600 dark:text-gray-400">
@@ -121,7 +121,7 @@ function ClearModal({ unit, count, clientId, onClose }: { unit: string; count: n
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-sm">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <h2 className="text-base font-semibold dark:text-white">Clear Unit Tag</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4 space-y-3">
           <p className="text-sm text-gray-600 dark:text-gray-400">
@@ -180,7 +180,7 @@ function AccountDrawer({
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700 shrink-0">
           <h2 className="text-base font-semibold dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="overflow-y-auto flex-1">
           {isLoading ? (
@@ -353,7 +353,7 @@ function CreateUnitModal({
           <h2 className="text-base font-semibold dark:text-white">
             {step === 'select' ? 'Create Unit' : `Preview — ${newUnit}`}
           </h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         {step === 'select' ? (
@@ -656,7 +656,7 @@ function BulkAssignModal({
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700 shrink-0">
           <h2 className="text-base font-semibold dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         <div className="px-5 py-3 border-b dark:border-gray-700 shrink-0 space-y-2">

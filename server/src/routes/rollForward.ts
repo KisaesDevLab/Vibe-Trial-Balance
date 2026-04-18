@@ -111,7 +111,23 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
         }
       } else if (mode === 'close_income') {
         // Mode 2: Roll balance sheet accounts forward; close revenue/expense
-        // net to the retained earnings account
+        // net to the retained earnings account.
+        // First, validate the user-supplied RE account: it must exist on this
+        // client, be active, and live in the equity category. Otherwise we'd
+        // silently close net income into (say) an AR account.
+        if (!retainedEarningsAccountId) {
+          throw new Error('retainedEarningsAccountId is required for close_income mode');
+        }
+        const reAccount = await trx('chart_of_accounts')
+          .where({ id: retainedEarningsAccountId, client_id: sourcePeriod.client_id, is_active: true })
+          .first('id', 'category');
+        if (!reAccount) {
+          throw new Error(`Retained earnings account ${retainedEarningsAccountId} not found on this client`);
+        }
+        if (reAccount.category !== 'equity') {
+          throw new Error(`Retained earnings account must be in the 'equity' category (got '${reAccount.category}')`);
+        }
+
         const bsInserts: { period_id: number; account_id: number; unadjusted_debit: number; unadjusted_credit: number; prior_year_debit: number; prior_year_credit: number; updated_by: number }[] = [];
         let netIncomeDebit = 0;
         let netIncomeCredit = 0;

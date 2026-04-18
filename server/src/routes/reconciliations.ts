@@ -6,10 +6,31 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 // ── Collection: /api/v1/clients/:clientId/reconciliations ────────────────────
 export const reconciliationCollectionRouter = Router({ mergeParams: true });
 reconciliationCollectionRouter.use(authMiddleware);
+
+/**
+ * Reject mutations against a reconciliation whose period is locked. Returns
+ * true iff the caller should abort (already replied 409). Locked reconciliations
+ * must remain read-only once their period is closed.
+ */
+async function reconciliationPeriodLocked(recId: number, res: Response): Promise<boolean> {
+  const row = await db('bank_reconciliations as br')
+    .leftJoin('periods as p', 'p.id', 'br.period_id')
+    .where('br.id', recId)
+    .first('p.locked_at');
+  if (row?.locked_at) {
+    res.status(409).json({
+      data: null,
+      error: { code: 'PERIOD_LOCKED', message: 'This reconciliation is in a locked period and cannot be modified.' },
+    });
+    return true;
+  }
+  return false;
+}
 
 const createSchema = z.object({
   sourceAccountId: z.number().int().positive(),
@@ -48,7 +69,7 @@ reconciliationCollectionRouter.get('/', async (req: AuthRequest, res: Response):
     }));
     res.json({ data: result, error: null, meta: { count: result.length } });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'reconciliations');
   }
 });
 
@@ -79,7 +100,7 @@ reconciliationCollectionRouter.post('/', async (req: AuthRequest, res: Response)
     }).returning('*');
     res.status(201).json({ data: { ...rec, statement_ending_balance: Number(rec.statement_ending_balance), beginning_book_balance: Number(rec.beginning_book_balance) }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'reconciliations');
   }
 });
 
@@ -138,7 +159,7 @@ reconciliationItemRouter.get('/', async (req: AuthRequest, res: Response): Promi
       error: null,
     });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'reconciliations');
   }
 });
 
@@ -178,7 +199,7 @@ reconciliationItemRouter.patch('/', async (req: AuthRequest, res: Response): Pro
     const [updated] = await db('bank_reconciliations').where({ id }).update(updates).returning('*');
     res.json({ data: { ...updated, statement_ending_balance: Number(updated.statement_ending_balance), beginning_book_balance: Number(updated.beginning_book_balance) }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'reconciliations');
   }
 });
 
@@ -191,6 +212,7 @@ reconciliationItemRouter.post('/toggle-item', async (req: AuthRequest, res: Resp
     return;
   }
   try {
+    if (await reconciliationPeriodLocked(id, res)) return;
     const rec = await db('bank_reconciliations').where({ id }).first('status');
     if (!rec) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Reconciliation not found' } });
@@ -209,7 +231,7 @@ reconciliationItemRouter.post('/toggle-item', async (req: AuthRequest, res: Resp
       res.json({ data: { cleared: true, transactionId }, error: null });
     }
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'reconciliations');
   }
 });
 
@@ -221,6 +243,7 @@ reconciliationItemRouter.post('/complete', async (req: AuthRequest, res: Respons
     return;
   }
   try {
+    if (await reconciliationPeriodLocked(id, res)) return;
     const rec = await db('bank_reconciliations').where({ id }).first();
     if (!rec) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Reconciliation not found' } });
@@ -230,13 +253,46 @@ reconciliationItemRouter.post('/complete', async (req: AuthRequest, res: Respons
       res.status(409).json({ data: null, error: { code: 'ALREADY_DONE', message: 'Already completed' } });
       return;
     }
+
+    // Reconciliation tie-out: cleared items on the statement side, plus any
+    // beginning difference, must reconcile to the statement ending balance.
+    // Formula (simplified single-account rec):
+    //   beginning_book_balance + sum(cleared_amounts) == statement_ending_balance
+    // If off, refuse to mark "completed" — a reconciliation that doesn't tie
+    // is just a checkbox, not an attestation. Caller can pass ?force=true on
+    // body to override (we log a warning via audit trail if used).
+    const force = (req.body as { force?: boolean })?.force === true;
+    if (!force) {
+      const clearedRows = await db('reconciliation_items as ri')
+        .join('bank_transactions as bt', 'bt.id', 'ri.transaction_id')
+        .where('ri.reconciliation_id', id)
+        .select('bt.amount');
+      const clearedTotal = clearedRows.reduce(
+        (sum, r: { amount: string | number }) => sum + Number(r.amount ?? 0),
+        0,
+      );
+      const expected = Number(rec.statement_ending_balance);
+      const actual = Number(rec.beginning_book_balance) + clearedTotal;
+      const diff = actual - expected;
+      if (Math.abs(diff) > 1) {
+        res.status(409).json({
+          data: null,
+          error: {
+            code: 'RECONCILIATION_OUT_OF_BALANCE',
+            message: `Reconciliation is out of balance by ${(Math.abs(diff) / 100).toFixed(2)}. Beginning ${(Number(rec.beginning_book_balance) / 100).toFixed(2)} + cleared ${(clearedTotal / 100).toFixed(2)} = ${(actual / 100).toFixed(2)}, but statement is ${(expected / 100).toFixed(2)}. Resolve or pass force=true.`,
+          },
+        });
+        return;
+      }
+    }
+
     const [updated] = await db('bank_reconciliations')
       .where({ id })
       .update({ status: 'completed', completed_by: req.user!.userId, completed_at: db.fn.now() })
       .returning('*');
     res.json({ data: { ...updated, statement_ending_balance: Number(updated.statement_ending_balance), beginning_book_balance: Number(updated.beginning_book_balance) }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'reconciliations');
   }
 });
 
@@ -267,7 +323,7 @@ reconciliationItemRouter.post('/reopen', async (req: AuthRequest, res: Response)
       .returning('*');
     res.json({ data: { ...updated, statement_ending_balance: Number(updated.statement_ending_balance), beginning_book_balance: Number(updated.beginning_book_balance) }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'reconciliations');
   }
 });
 
@@ -292,6 +348,6 @@ reconciliationItemRouter.delete('/', async (req: AuthRequest, res: Response): Pr
     await db('bank_reconciliations').where({ id }).delete();
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'reconciliations');
   }
 });

@@ -6,6 +6,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const m1CollectionRouter = Router({ mergeParams: true });
 m1CollectionRouter.use(authMiddleware);
@@ -40,7 +41,7 @@ m1CollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'id', order: 'asc' }]);
     res.json({ data: rows.map(r => parseRow(r as Record<string, unknown>)), error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxWorkpapers');
   }
 });
 
@@ -64,7 +65,7 @@ m1CollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<vo
     }).returning('*');
     res.status(201).json({ data: parseRow(row as Record<string, unknown>), error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxWorkpapers');
   }
 });
 
@@ -87,7 +88,7 @@ m1ItemRouter.patch('/', async (req: AuthRequest, res: Response): Promise<void> =
     if (!updated) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Adjustment not found' } }); return; }
     res.json({ data: parseRow(updated as Record<string, unknown>), error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxWorkpapers');
   }
 });
 
@@ -100,6 +101,6 @@ m1ItemRouter.delete('/', async (req: AuthRequest, res: Response): Promise<void> 
     if (!deleted) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Adjustment not found' } }); return; }
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'taxWorkpapers');
   }
 });

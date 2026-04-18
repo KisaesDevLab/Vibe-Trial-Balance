@@ -14,6 +14,8 @@ import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { QuickAddAccountModal } from './QuickAddAccountModal';
 import { DateInput } from './DateInput';
 import { evalAndFormatAmount } from '../utils/evalAmountExpr';
+import { useUnsavedGuard, confirmDiscard } from '../utils/useUnsavedGuard';
+import { confirmAction } from './ConfirmDialog';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -32,10 +34,15 @@ function centsToStr(cents: number): string {
 }
 
 interface FormLine {
+  // Stable per-row identity (see JournalEntryDialog.tsx for rationale).
+  _key: number;
   accountId: number | '';
   debit: string;
   credit: string;
 }
+
+let __jeEditLineKeyCounter = 0;
+const newEditLineKey = () => ++__jeEditLineKeyCounter;
 
 interface Props {
   journalEntryId: number;
@@ -56,6 +63,9 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
   const [isTrans, setIsTrans] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [quickAddLineIdx, setQuickAddLineIdx] = useState<number | null>(null);
+  // Snapshot of form state at load time. Form is "dirty" whenever the current
+  // JSON-serialized state differs from this baseline.
+  const [initialSnapshot, setInitialSnapshot] = useState<string>('');
 
   const { data: jeData, isLoading: jeLoading } = useQuery({
     queryKey: ['journal-entry', journalEntryId],
@@ -79,16 +89,23 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
   // Populate form when JE data loads
   useEffect(() => {
     if (jeData && !loaded) {
-      setEntryType(jeData.entry_type === 'trans' ? 'book' : jeData.entry_type);
-      setEntryDate(jeData.entry_date.slice(0, 10));
-      setDescription(jeData.description ?? '');
+      const initialType = jeData.entry_type === 'trans' ? 'book' : jeData.entry_type;
+      const initialDate = jeData.entry_date.slice(0, 10);
+      const initialDesc = jeData.description ?? '';
+      const initialLines = jeData.lines.map((l) => ({
+        _key: newEditLineKey(),
+        accountId: l.account_id,
+        debit: centsToStr(l.debit),
+        credit: centsToStr(l.credit),
+      }));
+      setEntryType(initialType);
+      setEntryDate(initialDate);
+      setDescription(initialDesc);
       setIsTrans(jeData.entry_type === 'trans');
-      setLines(
-        jeData.lines.map((l) => ({
-          accountId: l.account_id,
-          debit: centsToStr(l.debit),
-          credit: centsToStr(l.credit),
-        })),
+      setLines(initialLines);
+      setInitialSnapshot(
+        JSON.stringify({ entryType: initialType, entryDate: initialDate, description: initialDesc,
+          lines: initialLines.map((l) => ({ accountId: l.accountId, debit: l.debit, credit: l.credit })) }),
       );
       setLoaded(true);
     }
@@ -98,10 +115,18 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
   const totalCredit = lines.reduce((s, l) => s + parseCents(l.credit), 0);
   const balanced = totalDebit === totalCredit && totalDebit > 0;
 
+  const currentSnapshot = JSON.stringify({
+    entryType, entryDate, description,
+    lines: lines.map((l) => ({ accountId: l.accountId, debit: l.debit, credit: l.credit })),
+  });
+  const dirty = loaded && currentSnapshot !== initialSnapshot;
+  useUnsavedGuard(dirty);
+  const handleClose = async () => { if (await confirmDiscard(dirty)) onClose(); };
+
   const setLine = (idx: number, field: keyof FormLine, value: string | number) =>
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, [field]: value } : l)));
 
-  const addLine = () => setLines((prev) => [...prev, { accountId: '', debit: '', credit: '' }]);
+  const addLine = () => setLines((prev) => [...prev, { _key: newEditLineKey(), accountId: '', debit: '', credit: '' }]);
   const removeLine = (idx: number) => setLines((prev) => prev.filter((_, i) => i !== idx));
 
   const saveMutation = useMutation({
@@ -149,8 +174,8 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
     });
   };
 
-  const handleDelete = () => {
-    if (!confirm('Delete this journal entry? This cannot be undone.')) return;
+  const handleDelete = async () => {
+    if (!await confirmAction({ message: 'Delete this journal entry? This cannot be undone.', tone: 'danger' })) return;
     deleteMutation.mutate();
   };
 
@@ -170,7 +195,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
               </p>
             )}
           </div>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={handleClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4 overflow-visible">
           {jeLoading ? (
@@ -227,7 +252,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                     {lines.map((line, idx) => (
-                      <tr key={idx}>
+                      <tr key={line._key}>
                         <td className="px-1 py-1">
                           <AccountSearchDropdown
                             accounts={accounts}
@@ -258,7 +283,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
                         </td>
                         <td className="px-1 py-1 text-center">
                           {lines.length > 2 && (
-                            <button type="button" onClick={() => removeLine(idx)} className="text-gray-400 dark:text-gray-500 hover:text-red-500 text-lg leading-none">&times;</button>
+                            <button type="button" onClick={() => removeLine(idx)} aria-label="Remove line" className="text-gray-400 dark:text-gray-500 hover:text-red-500 text-lg leading-none">&times;</button>
                           )}
                         </td>
                       </tr>
@@ -297,7 +322,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
                   Delete Entry
                 </button>
                 <div className="flex gap-2">
-                  <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
+                  <button type="button" onClick={handleClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
                   <button
                     type="submit"
                     disabled={saveMutation.isPending || !balanced}

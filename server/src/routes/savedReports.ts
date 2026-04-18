@@ -6,6 +6,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const savedReportCollectionRouter = Router({ mergeParams: true });
 savedReportCollectionRouter.use(authMiddleware);
@@ -38,7 +39,7 @@ savedReportCollectionRouter.get('/', async (req: AuthRequest, res: Response): Pr
     const rows = await db('saved_reports').where({ client_id: clientId }).orderBy('name', 'asc');
     res.json({ data: rows, error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'savedReports');
   }
 });
 
@@ -57,7 +58,7 @@ savedReportCollectionRouter.post('/', async (req: AuthRequest, res: Response): P
     }).returning('*');
     res.status(201).json({ data: row, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'savedReports');
   }
 });
 
@@ -75,7 +76,7 @@ savedReportItemRouter.patch('/', async (req: AuthRequest, res: Response): Promis
     if (!updated) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Report not found' } }); return; }
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'savedReports');
   }
 });
 
@@ -88,6 +89,6 @@ savedReportItemRouter.delete('/', async (req: AuthRequest, res: Response): Promi
     if (!deleted) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Report not found' } }); return; }
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'savedReports');
   }
 });

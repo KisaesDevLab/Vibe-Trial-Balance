@@ -6,6 +6,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const varianceNotesRouter = Router({ mergeParams: true });
 varianceNotesRouter.use(authMiddleware);
@@ -18,7 +19,7 @@ varianceNotesRouter.get('/', async (req: AuthRequest, res: Response): Promise<vo
     const rows = await db('variance_notes').where({ period_id: periodId }).orderBy('account_id');
     res.json({ data: rows, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'varianceNotes');
   }
 });
 
@@ -43,6 +44,6 @@ varianceNotesRouter.put('/:accountId', async (req: AuthRequest, res: Response): 
       .returning('*');
     res.json({ data: row, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'varianceNotes');
   }
 });

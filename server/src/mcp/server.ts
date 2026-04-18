@@ -32,9 +32,26 @@ interface RateLimitBucket {
 const rateLimitMap = new Map<string, RateLimitBucket>();
 const RATE_LIMIT_MAX = 100;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+// Opportunistic sweep threshold: once the map grows past this many keys, drop
+// every expired bucket on the next check. Keeps memory bounded without a
+// setInterval that would prevent graceful shutdown. A dedicated MCP caller
+// never needs more than a handful of live buckets; any growth past this is
+// churn from short-lived SSE sessions.
+const RATE_LIMIT_SWEEP_THRESHOLD = 1000;
+
+function sweepExpiredBuckets(now: number): void {
+  for (const [key, bucket] of rateLimitMap) {
+    if (now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
+      rateLimitMap.delete(key);
+    }
+  }
+}
 
 function checkRateLimit(token: string): boolean {
   const now = Date.now();
+  if (rateLimitMap.size > RATE_LIMIT_SWEEP_THRESHOLD) {
+    sweepExpiredBuckets(now);
+  }
   const bucket = rateLimitMap.get(token);
 
   if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
@@ -63,7 +80,11 @@ async function auditMcpTool(toolName: string, description: string, userId?: numb
 
 // ── Create MCP Server ─────────────────────────────────────────────────────────
 
-export function createMcpServer(): Server {
+export function createMcpServer(rateLimitKey = 'default'): Server {
+  // Each transport gets its own server instance; the caller passes a
+  // per-session identifier (HTTP: token fingerprint; stdio: 'stdio') so the
+  // rate-limit bucket is per-caller rather than a single global bucket that
+  // one noisy client could exhaust for everyone.
   const server = new Server(
     { name: 'vibe-tb-mcp', version: '1.0.0' },
     { capabilities: { resources: {}, tools: {}, prompts: {} } },
@@ -404,8 +425,9 @@ export function createMcpServer(): Server {
     const { name, arguments: args } = req.params;
     const mcpUserId = await getMcpAgentUserId();
 
-    // Rate limit check using a simple token identifier
-    if (!checkRateLimit('global')) {
+    // Rate limit check — per-session bucket, so a noisy MCP client cannot
+    // starve others. Previously used a single 'global' key; fixed now.
+    if (!checkRateLimit(rateLimitKey)) {
       return { content: [{ type: 'text', text: 'Rate limit exceeded: max 100 tool calls per minute' }], isError: true };
     }
 

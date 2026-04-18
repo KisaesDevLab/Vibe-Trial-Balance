@@ -157,7 +157,7 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
   if (showGroup('taxAdjusted'))  { grandCells.push(totals.tax_dr, totals.tax_cr); }
   tableBody.push(svc.dataRow(grandCells, { bold: true, shade: true }));
 
-  const balanced = totals.unadj_dr === totals.unadj_cr;
+  const balanced = Math.abs(totals.unadj_dr - totals.unadj_cr) < 1;
 
   const content: Content[] = [
     {
@@ -691,22 +691,37 @@ export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promi
   }
 
   const liabPlusEquity = totalLiab + totalEquity;
-  const balanced = totalAssets === liabPlusEquity;
+  // Tolerance: 1 cent. Values are integer cents from the DB but JS Number
+  // accumulation of ~hundreds of rows can emit trailing-bit drift.
+  const imbalanceCents = totalAssets - liabPlusEquity;
+  const balanced = Math.abs(imbalanceCents) < 1;
 
   tableBody.push(svc.dataRow(
     ['', 'Total Liabilities + Equity', liabPlusEquity],
     { bold: true, shade: true },
   ));
 
+  const bannerText = balanced
+    ? 'Balance sheet is in balance (A = L + E).'
+    : `WARNING — BALANCE SHEET OUT OF BALANCE BY ${svc.formatCents(Math.abs(imbalanceCents))}. Assets: ${svc.formatCents(totalAssets)}  Liabilities + Equity: ${svc.formatCents(liabPlusEquity)}. Do not distribute until investigated.`;
+
   const content: Content[] = [
+    // Prominent top-of-report banner when out of balance — impossible to miss.
+    ...(balanced ? [] : [{
+      text: bannerText,
+      bold: true,
+      fontSize: 10,
+      color: '#ffffff',
+      fillColor: '#c0392b',
+      margin: [0, 0, 0, 6] as [number, number, number, number],
+      alignment: 'center' as const,
+    }]),
     {
       table: { headerRows: 1, widths, body: tableBody },
       layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
     },
     {
-      text: balanced
-        ? 'Balance sheet is in balance (A = L + E).'
-        : `WARNING: Balance sheet out of balance. Assets: ${svc.formatCents(totalAssets)}  Liabilities + Equity: ${svc.formatCents(liabPlusEquity)}`,
+      text: bannerText,
       fontSize: 7,
       color: balanced ? '#27ae60' : '#c0392b',
       margin: [0, 4, 0, 0] as [number, number, number, number],
@@ -773,7 +788,11 @@ export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Prom
     for (const r of codeRows as Record<string, unknown>[]) {
       const dr  = Number(r.tax_adjusted_debit  ?? 0);
       const cr  = Number(r.tax_adjusted_credit ?? 0);
-      const net = dr - cr;
+      // Sign-aware net: debit-normal accounts (assets/expenses) show DR−CR as
+      // positive; credit-normal accounts (liab/equity/revenue) show CR−DR.
+      // Without this, revenue appears negative and the grand total is
+      // meaningless (it just mirrors TB's DR−CR, which sums to zero).
+      const net = r.normal_balance === 'credit' ? cr - dr : dr - cr;
       codeTotal += net;
 
       tableBody.push(svc.dataRow([
@@ -1208,6 +1227,368 @@ export async function generateFluxAnalysisPdf(
     clientName: info.client_name,
     ein:        info.ein ?? undefined,
     periodName: `${info.name} vs. ${comparePeriod.period_name}`,
+    startDate:  fmtDate(info.start_date),
+    endDate:    fmtDate(info.end_date),
+    content,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (l) Cash Flow Statement PDF (indirect method)
+// Mirrors the cashFlowRouter GET logic so the PDF and the on-screen statement
+// agree line-for-line. Kept in sync with server/src/routes/cashFlow.ts —
+// any sign/category change there must land here too.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<Buffer> {
+  const svc  = await PdfTemplateService.fromDb(db);
+  const info = await getPeriodInfo(db, periodId);
+
+  const rows = await db('v_adjusted_trial_balance as tb')
+    .join('chart_of_accounts as c', 'c.id', 'tb.account_id')
+    .where('tb.period_id', periodId)
+    .where('tb.is_active', true)
+    .select(
+      'tb.account_number', 'tb.account_name',
+      'tb.category', 'tb.normal_balance',
+      'tb.book_adjusted_debit', 'tb.book_adjusted_credit',
+      'tb.prior_year_debit', 'tb.prior_year_credit',
+      'c.cash_flow_category',
+    ) as Record<string, unknown>[];
+
+  const bookNet = (r: Record<string, unknown>): number => {
+    const dr = Number(r.book_adjusted_debit  ?? 0);
+    const cr = Number(r.book_adjusted_credit ?? 0);
+    return (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+  };
+  const priorNet = (r: Record<string, unknown>): number => {
+    const dr = Number(r.prior_year_debit  ?? 0);
+    const cr = Number(r.prior_year_credit ?? 0);
+    return (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+  };
+  const cashImpact = (r: Record<string, unknown>): number => {
+    const change = bookNet(r) - priorNet(r);
+    return (r.normal_balance as string) === 'debit' ? -change : change;
+  };
+
+  const netIncome = rows.reduce((sum, r) => {
+    if (r.category === 'revenue')  return sum + bookNet(r);
+    if (r.category === 'expenses') return sum - bookNet(r);
+    return sum;
+  }, 0);
+
+  const nonCashItems = rows
+    .filter(r => r.cash_flow_category === 'non_cash' &&
+      (r.category === 'revenue' || r.category === 'expenses'))
+    .map(r => ({
+      account_number: String(r.account_number),
+      account_name:   String(r.account_name),
+      amount: r.category === 'expenses' ? bookNet(r) : -bookNet(r),
+    }));
+
+  const workingCapital = rows
+    .filter(r => r.cash_flow_category === 'operating')
+    .map(r => ({
+      account_number: String(r.account_number),
+      account_name:   String(r.account_name),
+      amount: cashImpact(r),
+    }));
+
+  const investingItems = rows
+    .filter(r => r.cash_flow_category === 'investing')
+    .map(r => ({
+      account_number: String(r.account_number),
+      account_name:   String(r.account_name),
+      amount: cashImpact(r),
+    }));
+
+  const financingItems = rows
+    .filter(r => r.cash_flow_category === 'financing')
+    .map(r => ({
+      account_number: String(r.account_number),
+      account_name:   String(r.account_name),
+      amount: cashImpact(r),
+    }));
+
+  const totalOperating =
+    netIncome +
+    nonCashItems.reduce((s, i) => s + i.amount, 0) +
+    workingCapital.reduce((s, i) => s + i.amount, 0);
+  const totalInvesting = investingItems.reduce((s, i) => s + i.amount, 0);
+  const totalFinancing = financingItems.reduce((s, i) => s + i.amount, 0);
+  const netChange = totalOperating + totalInvesting + totalFinancing;
+
+  const cashRows = rows.filter(r => r.cash_flow_category === 'cash');
+  const beginningCash = cashRows.reduce((s, r) => s + priorNet(r), 0);
+  const endingCash    = cashRows.reduce((s, r) => s + bookNet(r),  0);
+
+  const cols   = ['Acct #', 'Description', 'Amount'];
+  const widths = [55, '*', 90];
+  const tableBody: TableCell[][] = [svc.headerRow(cols)];
+  let rowIdx = 0;
+
+  const pushDataRow = (cells: (string | number | null)[], opts?: { bold?: boolean; shade?: boolean; indent?: number }): void => {
+    const indent = opts?.indent ?? 0;
+    if (indent > 0 && typeof cells[1] === 'string') {
+      cells[1] = ' '.repeat(indent) + cells[1];
+    }
+    tableBody.push(svc.dataRow(cells, { bold: opts?.bold, shade: opts?.shade, isAlt: !opts?.shade && rowIdx % 2 === 1 }));
+    rowIdx++;
+  };
+
+  // ── Operating ─────────────────────────────────────────────────────────────
+  tableBody.push(svc.sectionHeaderRow('OPERATING ACTIVITIES', cols.length));
+  pushDataRow(['', 'Net Income', netIncome]);
+  if (nonCashItems.length > 0) {
+    pushDataRow(['', 'Adjustments for non-cash items:', null], { bold: true });
+    for (const item of nonCashItems) {
+      pushDataRow([item.account_number, item.account_name, item.amount], { indent: 2 });
+    }
+  }
+  if (workingCapital.length > 0) {
+    pushDataRow(['', 'Changes in working capital:', null], { bold: true });
+    for (const item of workingCapital) {
+      pushDataRow([item.account_number, item.account_name, item.amount], { indent: 2 });
+    }
+  }
+  pushDataRow(['', 'Net Cash from Operating Activities', totalOperating], { bold: true, shade: true });
+
+  // ── Investing ─────────────────────────────────────────────────────────────
+  tableBody.push(svc.sectionHeaderRow('INVESTING ACTIVITIES', cols.length));
+  if (investingItems.length === 0) {
+    pushDataRow(['', '(No accounts mapped to investing)', null]);
+  } else {
+    for (const item of investingItems) {
+      pushDataRow([item.account_number, item.account_name, item.amount]);
+    }
+  }
+  pushDataRow(['', 'Net Cash from Investing Activities', totalInvesting], { bold: true, shade: true });
+
+  // ── Financing ─────────────────────────────────────────────────────────────
+  tableBody.push(svc.sectionHeaderRow('FINANCING ACTIVITIES', cols.length));
+  if (financingItems.length === 0) {
+    pushDataRow(['', '(No accounts mapped to financing)', null]);
+  } else {
+    for (const item of financingItems) {
+      pushDataRow([item.account_number, item.account_name, item.amount]);
+    }
+  }
+  pushDataRow(['', 'Net Cash from Financing Activities', totalFinancing], { bold: true, shade: true });
+
+  // ── Reconciliation ────────────────────────────────────────────────────────
+  tableBody.push(svc.sectionHeaderRow('RECONCILIATION', cols.length));
+  pushDataRow(['', 'Net Change in Cash', netChange], { bold: true });
+  pushDataRow(['', 'Beginning Cash (prior year)', beginningCash]);
+  pushDataRow(['', 'Ending Cash', endingCash], { bold: true, shade: true });
+
+  const expectedEnding = beginningCash + netChange;
+  const reconciliationDiff = endingCash - expectedEnding;
+  const reconciled = Math.abs(reconciliationDiff) <= 100;
+
+  const content: Content[] = [
+    ...(reconciled ? [] : [{
+      text: `WARNING — Ending cash does not tie to beginning + net change. Off by ${svc.formatCents(Math.abs(reconciliationDiff))}. Verify cash-flow mappings.`,
+      bold: true,
+      fontSize: 9,
+      color: '#ffffff',
+      fillColor: '#c0392b',
+      margin: [0, 0, 0, 6] as [number, number, number, number],
+      alignment: 'center' as const,
+    }]),
+    {
+      table: { headerRows: 1, widths, body: tableBody },
+      layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
+    },
+    {
+      text: 'Indirect method. Non-cash add-backs include only income-statement accounts tagged "non-cash" (e.g. depreciation expense).',
+      fontSize: 7,
+      color: '#999999',
+      italics: true,
+      margin: [0, 8, 0, 0] as [number, number, number, number],
+    },
+  ];
+
+  return svc.generateBuffer(svc.buildDocument({
+    title:      'Statement of Cash Flows',
+    clientName: info.client_name,
+    ein:        info.ein ?? undefined,
+    periodName: info.name,
+    startDate:  fmtDate(info.start_date),
+    endDate:    fmtDate(info.end_date),
+    content,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (m) M-1 Book-to-Tax Reconciliation PDF
+// Uses the client-side sign convention: expense-like categories adjust as
+// (book − tax); income-like categories adjust as (tax − book). Kept in sync
+// with TaxWorksheetsPage.tsx.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const M1_INCOME_CATEGORIES = new Set<string>(['Tax-Exempt Income', 'Deferred Revenue']);
+const m1Sign = (c: string | null | undefined): 1 | -1 =>
+  c && M1_INCOME_CATEGORIES.has(c) ? -1 : 1;
+
+export async function generateM1Pdf(db: Knex, periodId: number): Promise<Buffer> {
+  const svc  = await PdfTemplateService.fromDb(db);
+  const info = await getPeriodInfo(db, periodId);
+
+  const adjs = await db('m1_adjustments')
+    .where({ period_id: periodId })
+    .orderBy(['category', 'description']) as Array<{
+      id: number;
+      description: string;
+      category: string | null;
+      book_amount: string | number;
+      tax_amount: string | number;
+    }>;
+
+  // Book net income from TB (revenue − expenses, both positive in IS presentation).
+  const rows = await db('v_adjusted_trial_balance')
+    .where({ period_id: periodId, is_active: true })
+    .whereIn('category', ['revenue', 'expenses'])
+    .select('category', 'book_adjusted_debit', 'book_adjusted_credit');
+
+  let bookNetIncome = 0;
+  for (const r of rows as Array<Record<string, unknown>>) {
+    const dr = Number(r.book_adjusted_debit  ?? 0);
+    const cr = Number(r.book_adjusted_credit ?? 0);
+    if ((r.category as string) === 'revenue') bookNetIncome += cr - dr;
+    else bookNetIncome -= (dr - cr);
+  }
+
+  const totalBookAdj = adjs.reduce((s, a) => s + Number(a.book_amount), 0);
+  const totalTaxAdj  = adjs.reduce((s, a) => s + Number(a.tax_amount),  0);
+  const totalDiff    = adjs.reduce(
+    (s, a) => s + m1Sign(a.category) * (Number(a.book_amount) - Number(a.tax_amount)),
+    0,
+  );
+  const taxableIncome = bookNetIncome + totalDiff;
+
+  const cols   = ['Description', 'Category', 'Book Amount', 'Tax Amount', 'Adj. to NI'];
+  const widths = ['*', 100, 80, 80, 80];
+  const tableBody: TableCell[][] = [svc.headerRow(cols)];
+
+  if (adjs.length === 0) {
+    tableBody.push(svc.dataRow(['(No adjustments recorded)', '', null, null, null]));
+  } else {
+    adjs.forEach((a, i) => {
+      const diff = m1Sign(a.category) * (Number(a.book_amount) - Number(a.tax_amount));
+      tableBody.push(svc.dataRow(
+        [a.description, a.category ?? '', Number(a.book_amount), Number(a.tax_amount), diff],
+        { isAlt: i % 2 === 1 },
+      ));
+    });
+    tableBody.push(svc.dataRow(
+      ['TOTAL ADJUSTMENTS', '', totalBookAdj, totalTaxAdj, totalDiff],
+      { bold: true, shade: true },
+    ));
+  }
+
+  // Summary section
+  const summaryBody: TableCell[][] = [
+    svc.dataRow(['', 'Book Net Income', bookNetIncome], { bold: true }),
+    svc.dataRow(['', 'Total M-1 Adjustments', totalDiff]),
+    svc.dataRow(['', 'Taxable Income (per M-1)', taxableIncome], { bold: true, shade: true }),
+  ];
+
+  const content: Content[] = [
+    {
+      table: { headerRows: 1, widths, body: tableBody },
+      layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
+    },
+    { text: 'Reconciliation', fontSize: 11, bold: true, margin: [0, 14, 0, 4] as [number, number, number, number] },
+    {
+      table: { widths: [30, '*', 100], body: summaryBody },
+      layout: { hLineWidth: (i: number) => i === 0 ? 0 : 1, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
+    },
+    {
+      text: 'Sign convention: expense-like categories add (book − tax); income-like categories (Tax-Exempt Income, Deferred Revenue) add (tax − book).',
+      fontSize: 7,
+      color: '#999999',
+      italics: true,
+      margin: [0, 8, 0, 0] as [number, number, number, number],
+    },
+  ];
+
+  return svc.generateBuffer(svc.buildDocument({
+    title:      'M-1 Book-to-Tax Reconciliation',
+    clientName: info.client_name,
+    ein:        info.ein ?? undefined,
+    periodName: info.name,
+    startDate:  fmtDate(info.start_date),
+    endDate:    fmtDate(info.end_date),
+    content,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (n) Tax Basis Schedule PDF (Book vs Tax per account, by category)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateTaxBasisSchedulePdf(db: Knex, periodId: number): Promise<Buffer> {
+  const svc  = await PdfTemplateService.fromDb(db);
+  const info = await getPeriodInfo(db, periodId);
+
+  const rows = await db('v_adjusted_trial_balance')
+    .where({ period_id: periodId, is_active: true })
+    .orderBy('account_number', 'asc') as Array<Record<string, unknown>>;
+
+  // Match category sign convention from client: assets/expenses = dr-cr,
+  // liabilities/equity/revenue = cr-dr.
+  const netBalance = (r: Record<string, unknown>, which: 'book' | 'tax'): number => {
+    const dr = Number(r[which === 'book' ? 'book_adjusted_debit'  : 'tax_adjusted_debit']  ?? 0);
+    const cr = Number(r[which === 'book' ? 'book_adjusted_credit' : 'tax_adjusted_credit'] ?? 0);
+    const cat = r.category as string;
+    return (cat === 'assets' || cat === 'expenses') ? dr - cr : cr - dr;
+  };
+
+  const CATEGORY_ORDER = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'] as const;
+  const CATEGORY_LABELS: Record<string, string> = {
+    assets: 'Assets', liabilities: 'Liabilities', equity: 'Equity',
+    revenue: 'Revenue', expenses: 'Expenses',
+  };
+
+  const cols   = ['Acct #', 'Account Name', 'Book Balance', 'Tax Balance', 'Difference'];
+  const widths = [50, '*', 85, 85, 85];
+  const tableBody: TableCell[][] = [svc.headerRow(cols)];
+  let rowIdx = 0;
+
+  for (const cat of CATEGORY_ORDER) {
+    const catRows = rows.filter((r) => r.category === cat);
+    if (catRows.length === 0) continue;
+
+    tableBody.push(svc.sectionHeaderRow(CATEGORY_LABELS[cat], cols.length));
+    let bookTotal = 0, taxTotal = 0;
+    for (const r of catRows) {
+      const book = netBalance(r, 'book');
+      const tax  = netBalance(r, 'tax');
+      bookTotal += book;
+      taxTotal  += tax;
+      tableBody.push(svc.dataRow(
+        [String(r.account_number), String(r.account_name), book, tax, tax - book],
+        { isAlt: rowIdx % 2 === 1 },
+      ));
+      rowIdx++;
+    }
+    tableBody.push(svc.dataRow(
+      ['', `Total ${CATEGORY_LABELS[cat]}`, bookTotal, taxTotal, taxTotal - bookTotal],
+      { bold: true, shade: true },
+    ));
+    rowIdx++;
+  }
+
+  const content: Content[] = [{
+    table: { headerRows: 1, widths, body: tableBody },
+    layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
+  }];
+
+  return svc.generateBuffer(svc.buildDocument({
+    title:      'Tax Basis Schedule',
+    clientName: info.client_name,
+    ein:        info.ein ?? undefined,
+    periodName: info.name,
     startDate:  fmtDate(info.start_date),
     endDate:    fmtDate(info.end_date),
     content,

@@ -8,6 +8,7 @@ import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMPro
 import { getMcpTokenStatus, generateMcpToken, revokeMcpToken } from '../api/mcpSettings';
 import { getAiPricing, saveAiPricing, fetchAiPricingFromClaude, getAiUsage, getAiModels, saveAiModels, getAvailableModels, type AiPricingMap } from '../api/aiUsage';
 import { useAuthStore } from '../store/uiStore';
+import { confirmAction } from '../components/ConfirmDialog';
 
 function AdminBadge() {
   return (
@@ -900,7 +901,7 @@ export function SettingsPage() {
                         Replace
                       </button>
                       <button
-                        onClick={() => { if (confirm('Remove the stored API key?')) deleteMutation.mutate(); }}
+                        onClick={async () => { if (await confirmAction({ message: 'Remove the stored API key?', tone: 'danger' })) deleteMutation.mutate(); }}
                         disabled={deleteMutation.isPending}
                         className="px-3 py-1.5 text-sm text-red-500 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
                       >
@@ -1280,8 +1281,8 @@ export function SettingsPage() {
               {isAdmin && (
                 <div className="flex gap-2">
                   <button
-                    onClick={() => {
-                      if (mcpData?.configured && !confirm('This will invalidate the existing token. Continue?')) return;
+                    onClick={async () => {
+                      if (mcpData?.configured && !await confirmAction({ message: 'This will invalidate the existing token. Continue?', confirmLabel: 'Rotate' })) return;
                       setNewMcpToken(null);
                       generateMcpMutation.mutate();
                     }}
@@ -1292,7 +1293,7 @@ export function SettingsPage() {
                   </button>
                   {mcpData?.configured && (
                     <button
-                      onClick={() => { if (confirm('Revoke the MCP token? All connected clients will be disconnected.')) revokeMcpMutation.mutate(); }}
+                      onClick={async () => { if (await confirmAction({ message: 'Revoke the MCP token? All connected clients will be disconnected.', tone: 'danger' })) revokeMcpMutation.mutate(); }}
                       disabled={revokeMcpMutation.isPending}
                       className="px-3 py-1.5 text-sm text-red-500 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
                     >

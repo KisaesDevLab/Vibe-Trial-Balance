@@ -10,6 +10,7 @@ import { QuickAddAccountModal } from '../QuickAddAccountModal';
 import { analyzePdf, type PdfMatchRow } from '../../api/pdfImport';
 import { listAccounts, type Account } from '../../api/chartOfAccounts';
 import { confirmPdfPyImport } from '../../api/pyComparison';
+import { checkFileSize } from '../../utils/fileLimits';
 
 type Stage = 'consent' | 'upload' | 'analyzing' | 'preview' | 'confirming' | 'done';
 
@@ -44,6 +45,7 @@ export function PyPdfImportDialog({ periodId, clientId, onClose, onSuccess }: Pr
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!checkFileSize(file, 'pdf')) return;
     setSourceFilename(file.name);
     setStage('analyzing');
     setError(null);
@@ -129,7 +131,7 @@ export function PyPdfImportDialog({ periodId, clientId, onClose, onSuccess }: Pr
               {stage === 'confirming' && 'Importing...'}
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         <div className="flex-1 overflow-auto px-5 py-4">

@@ -6,8 +6,10 @@ import { useState } from 'react';
 import { evalAmountExpr } from '../utils/evalAmountExpr';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, useAuthStore, pushToast } from '../store/uiStore';
 import { getTrialBalance, TBRow } from '../api/trialBalance';
+import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
+import { confirmAction } from '../components/ConfirmDialog';
 import {
   listM1Adjustments,
   createM1Adjustment,
@@ -159,7 +161,23 @@ function M1Modal({ initial, onClose, onSave }: ModalProps) {
 
 function M1WorksheetTab({ periodId }: { periodId: number }) {
   const qc = useQueryClient();
+  const token = useAuthStore((s) => s.token);
   const [modalAdj, setModalAdj] = useState<M1Adjustment | null | 'new'>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const handleM1Preview = async () => {
+    if (!token) return;
+    setPdfBusy(true);
+    try { await openPdfPreview(pdfReports.m1(periodId) + '?preview=true', token); }
+    catch (e) { pushToast((e as Error).message, 'error'); }
+    finally { setPdfBusy(false); }
+  };
+  const handleM1Download = async () => {
+    if (!token) return;
+    setPdfBusy(true);
+    try { await downloadPdf(pdfReports.m1(periodId), `m1-reconciliation-${periodId}.pdf`, token); }
+    catch (e) { pushToast((e as Error).message, 'error'); }
+    finally { setPdfBusy(false); }
+  };
 
   const { data: adjData } = useQuery({
     queryKey: ['m1', periodId],
@@ -187,9 +205,30 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
     return sum;
   }, 0);
 
+  // M-1 convention: columns represent the magnitude on the books vs the
+  // magnitude allowed/recognized on the return. The sign of the adjustment
+  // to book NI depends on the category:
+  //   - Expense/deduction adjustments (meals, penalties, etc.): book > tax
+  //     means book deducted MORE than tax allows, so tax NI is HIGHER.
+  //     Adjustment = (book − tax), added to book NI.
+  //   - Income adjustments (tax-exempt interest, book-only income): book > tax
+  //     means book recognized income that tax does not, so tax NI is LOWER.
+  //     Adjustment = −(book − tax), i.e. (tax − book), added to book NI.
+  // To keep one row per adjustment, we key off category.
+  const INCOME_CATEGORIES = new Set<string>([
+    'Tax-Exempt Income',
+    'Deferred Revenue',
+  ]);
+  const adjSign = (c: string | null | undefined): 1 | -1 =>
+    c && INCOME_CATEGORIES.has(c) ? -1 : 1;
+
   const totalBookAdj = adjs.reduce((s, a) => s + a.book_amount, 0);
   const totalTaxAdj  = adjs.reduce((s, a) => s + a.tax_amount, 0);
-  const totalDiff    = adjs.reduce((s, a) => s + (a.tax_amount - a.book_amount), 0);
+  // Signed adjustment: expense-like adds (book − tax); income-like adds (tax − book).
+  const totalDiff = adjs.reduce(
+    (s, a) => s + adjSign(a.category) * (a.book_amount - a.tax_amount),
+    0,
+  );
   const taxableIncome = bookNetIncome + totalDiff;
 
   const createMut = useMutation({
@@ -211,13 +250,13 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
     const rows: (string | number)[][] = [
       ['M-1 Book-to-Tax Reconciliation'],
       [],
-      ['Description', 'Category', 'Book Amount', 'Tax Amount', 'Difference'],
+      ['Description', 'Category', 'Book Amount', 'Tax Amount', 'Adj. to NI'],
       ...adjs.map(a => [
         a.description,
         a.category ?? '',
         a.book_amount / 100,
         a.tax_amount  / 100,
-        (a.tax_amount - a.book_amount) / 100,
+        (adjSign(a.category) * (a.book_amount - a.tax_amount)) / 100,
       ]),
       [],
       ['', '', totalBookAdj / 100, totalTaxAdj / 100, totalDiff / 100],
@@ -248,9 +287,13 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
             className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
             Export Excel
           </button>
-          <button onClick={() => window.print()}
-            className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
-            Print / PDF
+          <button onClick={handleM1Preview} disabled={pdfBusy}
+            className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium disabled:opacity-50">
+            Preview PDF
+          </button>
+          <button onClick={handleM1Download} disabled={pdfBusy}
+            className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium disabled:opacity-50">
+            Download PDF
           </button>
           <button onClick={() => setModalAdj('new')}
             className="px-3 py-1.5 text-xs bg-teal-600 text-white rounded hover:bg-teal-700 font-medium">
@@ -268,7 +311,7 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
               <th className={thCls}>Category</th>
               <th className={`${thCls} text-right`}>Book Amount</th>
               <th className={`${thCls} text-right`}>Tax Amount</th>
-              <th className={`${thCls} text-right`}>Difference</th>
+              <th className={`${thCls} text-right`} title="Positive = add to book NI to get tax NI; negative = subtract. Sign follows category.">Adj. to NI</th>
               <th className={thCls}></th>
             </tr>
           </thead>
@@ -281,7 +324,7 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
               </tr>
             )}
             {adjs.map(a => {
-              const diff = a.tax_amount - a.book_amount;
+              const diff = adjSign(a.category) * (a.book_amount - a.tax_amount);
               return (
                 <tr key={a.id} className="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                   <td className={tdCls}>
@@ -303,7 +346,7 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
                   <td className={`${tdCls} text-right`}>
                     <button onClick={() => setModalAdj(a)}
                       className="text-xs text-teal-600 dark:text-teal-400 hover:text-teal-800 dark:hover:text-teal-300 mr-3">Edit</button>
-                    <button onClick={() => { if (confirm('Delete this adjustment?')) deleteMut.mutate(a.id); }}
+                    <button onClick={async () => { if (await confirmAction({ message: 'Delete this adjustment?', tone: 'danger' })) deleteMut.mutate(a.id); }}
                       className="text-xs text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300">Delete</button>
                   </td>
                 </tr>
@@ -381,12 +424,29 @@ const CATEGORY_LABELS: Record<TBRow['category'], string> = {
 };
 
 function TaxBasisTab({ periodId }: { periodId: number }) {
+  const token = useAuthStore((s) => s.token);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const { data: tbData } = useQuery({
     queryKey: ['tb', periodId],
     queryFn:  () => getTrialBalance(periodId),
   });
 
   const rows = tbData?.data ?? [];
+
+  const handlePreview = async () => {
+    if (!token) return;
+    setPdfBusy(true);
+    try { await openPdfPreview(pdfReports.taxBasisSchedule(periodId) + '?preview=true', token); }
+    catch (e) { pushToast((e as Error).message, 'error'); }
+    finally { setPdfBusy(false); }
+  };
+  const handleDownload = async () => {
+    if (!token) return;
+    setPdfBusy(true);
+    try { await downloadPdf(pdfReports.taxBasisSchedule(periodId), `tax-basis-schedule-${periodId}.pdf`, token); }
+    catch (e) { pushToast((e as Error).message, 'error'); }
+    finally { setPdfBusy(false); }
+  };
 
   function exportExcel() {
     const header = ['Account #', 'Account Name', 'Category', 'Book Balance', 'Tax Balance', 'Difference'];
@@ -415,9 +475,13 @@ function TaxBasisTab({ periodId }: { periodId: number }) {
             className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
             Export Excel
           </button>
-          <button onClick={() => window.print()}
-            className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
-            Print / PDF
+          <button onClick={handlePreview} disabled={pdfBusy}
+            className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium disabled:opacity-50">
+            Preview PDF
+          </button>
+          <button onClick={handleDownload} disabled={pdfBusy}
+            className="px-3 py-1.5 text-xs bg-teal-600 text-white rounded hover:bg-teal-700 font-medium disabled:opacity-50">
+            Download PDF
           </button>
         </div>
       </div>

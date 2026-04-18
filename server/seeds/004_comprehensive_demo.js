@@ -7,6 +7,10 @@
  * Tax codes are intentionally left unmapped for AI testing.
  */
 exports.seed = async function (knex) {
+  if (process.env.NODE_ENV === 'production' && process.env.SEED_DEMO_DATA !== 'true') {
+    return;
+  }
+
   const existing = await knex('clients').where({ name: 'Summit Ridge Consulting LLC' }).first();
   if (existing) return;
 

@@ -82,7 +82,7 @@ export class PdfTemplateService {
 
   /** Format cents as $ amount string: (1,234.56) for negative, — for zero */
   formatCents(cents: number | null | undefined): string {
-    if (cents === null || cents === undefined || cents === 0) return '—';
+    if (cents === null || cents === undefined || !Number.isFinite(cents) || cents === 0) return '—';
     const abs = Math.abs(cents);
     const dollars = (abs / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     return cents < 0 ? `(${dollars})` : dollars;

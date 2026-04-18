@@ -114,7 +114,7 @@ export async function getLLMProvider(): Promise<LLMConfig> {
     if (!apiKey) throw new Error('Claude API key not configured. Set it in Admin > Settings.');
     fastModel    = s['ai_model_fast']    || DEFAULT_FAST_MODEL;
     primaryModel = s['ai_model_primary'] || DEFAULT_PRIMARY_MODEL;
-    provider = new ClaudeProvider(new Anthropic({ apiKey }));
+    provider = new ClaudeProvider(new Anthropic({ apiKey, timeout: 120_000, maxRetries: 2 }));
   }
 
   // ── Vision config ──────────────────────────────────────────────────────────
@@ -185,7 +185,7 @@ export function buildProviderFromSettings(
     const apiKey = s['claude_api_key'] ?? process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error('Vision provider is Claude but no API key is configured.');
     return {
-      provider: new ClaudeProvider(new Anthropic({ apiKey })),
+      provider: new ClaudeProvider(new Anthropic({ apiKey, timeout: 120_000, maxRetries: 2 })),
       model: model || s['ai_model_fast'] || DEFAULT_FAST_MODEL,
       providerName: 'claude',
     };

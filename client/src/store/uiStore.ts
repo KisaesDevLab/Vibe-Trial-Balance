@@ -70,3 +70,39 @@ export const useUIStore = create<UIStore>()(
     { name: 'ui-prefs', partialize: (s) => ({ fontSize: s.fontSize, selectedClientId: s.selectedClientId, selectedPeriodId: s.selectedPeriodId, isDarkMode: s.isDarkMode }) },
   ),
 );
+
+// ── Global toast queue ──────────────────────────────────────────────────────
+// Every mutation error is surfaced here. The Toaster component (rendered once
+// at app root) listens and shows each toast for ~5s. Zustand store rather than
+// context so non-component code (apiFetch fallbacks, QueryClient onError) can
+// enqueue without a hook.
+
+export type ToastType = 'success' | 'error' | 'info';
+
+export interface ToastItem {
+  id: number;
+  type: ToastType;
+  message: string;
+}
+
+interface ToastStore {
+  items: ToastItem[];
+  push: (message: string, type?: ToastType) => void;
+  dismiss: (id: number) => void;
+}
+
+let __toastCounter = 0;
+export const useToastStore = create<ToastStore>()((set) => ({
+  items: [],
+  push: (message, type = 'info') => {
+    const id = ++__toastCounter;
+    set((s) => ({ items: [...s.items, { id, type, message }] }));
+    setTimeout(() => set((s) => ({ items: s.items.filter((t) => t.id !== id) })), 5000);
+  },
+  dismiss: (id) => set((s) => ({ items: s.items.filter((t) => t.id !== id) })),
+}));
+
+/** Enqueue a toast from outside React (e.g. QueryClient default handlers). */
+export function pushToast(message: string, type: ToastType = 'info'): void {
+  useToastStore.getState().push(message, type);
+}

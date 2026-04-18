@@ -10,6 +10,7 @@ import {
   TICKMARK_COLOR_CLASSES, type Tickmark, type TickmarkInput, type TickmarkColor,
 } from '../api/tickmarks';
 import { useUIStore, useAuthStore } from '../store/uiStore';
+import { confirmAction } from '../components/ConfirmDialog';
 
 const COLORS: TickmarkColor[] = ['gray', 'blue', 'green', 'red', 'purple', 'amber'];
 
@@ -264,7 +265,7 @@ export function TickmarksPage() {
                         Edit
                       </button>
                       <button
-                        onClick={() => { if (confirm('Delete this tickmark? The symbol will no longer be available in the library, but any existing annotations on trial balance rows will remain.')) deleteMut.mutate(tm.id); }}
+                        onClick={async () => { if (await confirmAction({ message: 'Delete this tickmark? The symbol will no longer be available in the library, but any existing annotations on trial balance rows will remain.', tone: 'danger' })) deleteMut.mutate(tm.id); }}
                         className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                       >
                         Delete

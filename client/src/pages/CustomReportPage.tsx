@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useUIStore } from '../store/uiStore';
+import { confirmAction } from '../components/ConfirmDialog';
 import { listAccounts, Account } from '../api/chartOfAccounts';
 import { getTrialBalance, TBRow } from '../api/trialBalance';
 import {
@@ -447,7 +448,7 @@ export function CustomReportPage() {
                   className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
                   Edit
                 </button>
-                <button onClick={() => { if (confirm(`Delete "${report.name}"?`)) deleteMut.mutate(report.id); }}
+                <button onClick={async () => { if (await confirmAction({ message: `Delete "${report.name}"?`, tone: 'danger' })) deleteMut.mutate(report.id); }}
                   className="px-3 py-1.5 text-xs border border-red-200 text-red-500 rounded hover:bg-red-50 font-medium">
                   Delete
                 </button>

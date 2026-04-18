@@ -258,6 +258,19 @@ btCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<vo
   }
   const { transactionDate, description, amount, checkNumber, periodId, sourceAccountId } = result.data;
   try {
+    // Refuse to create bank-tx rows pointing at a locked period. Without this,
+    // any downstream classification would then try to post into a locked
+    // period and the user sees a cascade of surprise errors.
+    if (periodId) {
+      const periodRow = await db('periods').where({ id: periodId }).first('locked_at');
+      if (periodRow?.locked_at) {
+        res.status(409).json({
+          data: null,
+          error: { code: 'PERIOD_LOCKED', message: 'Cannot add transactions to a locked period.' },
+        });
+        return;
+      }
+    }
     const [row] = await db('bank_transactions').insert({
       client_id: clientId,
       period_id: periodId ?? null,

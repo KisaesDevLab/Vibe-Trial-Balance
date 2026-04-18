@@ -26,6 +26,8 @@ import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 import { downloadXlsx } from '../utils/downloadXlsx';
 import { BankStatementPdfImportDialog } from '../components/BankStatementPdfImportDialog';
 import { AiConsentDialog, AI_PII } from '../components/AiConsentDialog';
+import { checkFileSize } from '../utils/fileLimits';
+import { confirmAction } from '../components/ConfirmDialog';
 
 function fmt(cents: number): string {
   const abs = Math.abs(cents);
@@ -190,6 +192,8 @@ export function BankTransactionsPage() {
   });
 
   const handleFileSelected = (file: File) => {
+    const kind = isOfxFile(file) ? 'ofx' : 'csv';
+    if (!checkFileSize(file, kind)) return;
     setImportFile(file);
     setImportError(null);
     if (isOfxFile(file)) {
@@ -407,9 +411,9 @@ export function BankTransactionsPage() {
           </button>
           {aiSuggestedCount > 0 && (
             <button
-              onClick={() => {
+              onClick={async () => {
                 const aiIds = transactions.filter((t) => t.classification_status === 'ai_suggested').map((t) => t.id);
-                if (!confirm(`Confirm all ${aiIds.length} AI suggestion(s) on this page? This will create journal entries and update the trial balance.`)) return;
+                if (!await confirmAction({ message: `Confirm all ${aiIds.length} AI suggestion(s) on this page? This will create journal entries and update the trial balance.` })) return;
                 confirmAiMutation.mutate(aiIds);
               }}
               disabled={confirmAiMutation.isPending}
@@ -422,7 +426,7 @@ export function BankTransactionsPage() {
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-500 dark:text-gray-400">{selected.size} selected</span>
               <button
-                onClick={() => { if (confirm(`Delete ${selected.size} transaction(s)?`)) batchDeleteMutation.mutate([...selected]); }}
+                onClick={async () => { if (await confirmAction({ message: `Delete ${selected.size} transaction(s)?`, tone: 'danger' })) batchDeleteMutation.mutate([...selected]); }}
                 disabled={batchDeleteMutation.isPending}
                 className="px-3 py-1.5 text-sm bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
               >
@@ -437,9 +441,9 @@ export function BankTransactionsPage() {
               />
               {batchAccountId !== '' && (
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     const categoryName = accounts.find((a) => a.id === batchAccountId)?.account_name ?? String(batchAccountId);
-                    if (!confirm(`Classify ${selected.size} transaction(s) as "${categoryName}"?`)) return;
+                    if (!await confirmAction({ message: `Classify ${selected.size} transaction(s) as "${categoryName}"?` })) return;
                     batchClassifyMutation.mutate({ ids: [...selected], accountId: batchAccountId });
                   }}
                   disabled={batchClassifyMutation.isPending}
@@ -473,9 +477,9 @@ export function BankTransactionsPage() {
               </button>
               {transactions.some((t) => selected.has(t.id) && t.classification_status === 'ai_suggested') && (
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     const aiIds = transactions.filter((t) => selected.has(t.id) && t.classification_status === 'ai_suggested').map((t) => t.id);
-                    if (!confirm(`Confirm ${aiIds.length} AI suggestion(s)? This will create journal entries and update the trial balance.`)) return;
+                    if (!await confirmAction({ message: `Confirm ${aiIds.length} AI suggestion(s)? This will create journal entries and update the trial balance.` })) return;
                     confirmAiMutation.mutate(aiIds);
                   }}
                   disabled={confirmAiMutation.isPending}
@@ -493,7 +497,7 @@ export function BankTransactionsPage() {
       {aiStatus && (
         <div className="mb-3 text-sm text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded px-3 py-2 flex justify-between">
           <span>{aiStatus}</span>
-          <button onClick={() => setAiStatus(null)} className="text-purple-400 hover:text-purple-600 dark:text-purple-500 dark:hover:text-purple-300">&times;</button>
+          <button onClick={() => setAiStatus(null)} aria-label="Dismiss" className="text-purple-400 hover:text-purple-600 dark:text-purple-500 dark:hover:text-purple-300">&times;</button>
         </div>
       )}
 
@@ -543,7 +547,7 @@ export function BankTransactionsPage() {
         <div className="mb-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
           <div className="px-4 py-2 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 flex justify-between items-center">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Classification Rules</span>
-            <button onClick={() => setShowRules(false)} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-lg leading-none">&times;</button>
+            <button onClick={() => setShowRules(false)} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-lg leading-none">&times;</button>
           </div>
           {!rulesData || rulesData.length === 0 ? (
             <div className="px-4 py-4 text-sm text-gray-400 dark:text-gray-500">No rules yet. Rules are created automatically when you confirm or manually classify transactions.</div>
@@ -565,7 +569,7 @@ export function BankTransactionsPage() {
                     <td className="px-4 py-2 text-right text-gray-500 dark:text-gray-400">{r.times_confirmed}×</td>
                     <td className="px-2 py-2 text-center">
                       <button
-                        onClick={() => { if (confirm('Delete this rule?')) deleteRuleMutation.mutate(r.id); }}
+                        onClick={async () => { if (await confirmAction({ message: 'Delete this rule?', tone: 'danger' })) deleteRuleMutation.mutate(r.id); }}
                         className="text-xs text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-400"
                       >Del</button>
                     </td>
@@ -678,7 +682,7 @@ export function BankTransactionsPage() {
                 </td>
                 <td className="px-3 py-2 text-right">
                   <button
-                    onClick={() => { if (confirm('Delete this transaction?')) deleteMutation.mutate(tx.id); }}
+                    onClick={async () => { if (await confirmAction({ message: 'Delete this transaction?', tone: 'danger' })) deleteMutation.mutate(tx.id); }}
                     className="text-xs text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-400"
                   >
                     Del
@@ -744,7 +748,7 @@ export function BankTransactionsPage() {
               <h2 className="text-base font-semibold dark:text-white">
                 Import Transactions{importStep === 'mapping' ? ' — Map Columns' : ''}
               </h2>
-              <button onClick={closeImport} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+              <button onClick={closeImport} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
             </div>
             <div className="px-5 py-4 space-y-4">
               {importError && (

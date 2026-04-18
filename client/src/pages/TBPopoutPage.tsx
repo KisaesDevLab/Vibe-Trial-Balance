@@ -213,7 +213,7 @@ export function TBPopoutPage() {
       .filter(r => r.is_active)
       .sort((a, b) => {
         const c = (CATEGORY_ORDER[a.category] ?? 9) - (CATEGORY_ORDER[b.category] ?? 9);
-        return c !== 0 ? c : a.account_number.localeCompare(b.account_number);
+        return c !== 0 ? c : a.account_number.localeCompare(b.account_number, undefined, { numeric: true });
       }),
     [data],
   );

@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Internal Use License 1.0.0.
 // You may not distribute this software. See LICENSE for terms.
 
+import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
@@ -10,6 +11,13 @@ import { JWT_SECRET } from '../lib/jwtConfig';
 
 export interface McpRequest extends Request {
   mcpUserId?: number;
+  // Short fingerprint of the presented token. Used as a per-caller rate-limit
+  // bucket key — never logged, never sent to the client.
+  mcpTokenFingerprint?: string;
+}
+
+function fingerprint(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex').slice(0, 16);
 }
 
 /** Validates Bearer MCP token from Authorization header. Sets req.mcpUserId if valid. */
@@ -43,6 +51,7 @@ export async function mcpAuthMiddleware(
     if (agentUser) {
       req.mcpUserId = agentUser.id as number;
     }
+    req.mcpTokenFingerprint = fingerprint(token);
 
     next();
   } catch {

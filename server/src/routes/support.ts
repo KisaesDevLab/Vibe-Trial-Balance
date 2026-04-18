@@ -14,14 +14,19 @@ import { sendServerError } from '../lib/safeError';
 export const supportRouter = Router();
 supportRouter.use(authMiddleware);
 
+// Load and cache the knowledge base once at process start. The previous
+// implementation did 16 sync file reads PER chat request — on a Pi that
+// blocks the event loop and stalls other API requests for tens of ms.
+let cachedKnowledge: string | null = null;
 async function loadKnowledgeBase(): Promise<string> {
+  if (cachedKnowledge !== null) return cachedKnowledge;
   const knowledgeDir = path.resolve(__dirname, '../../knowledge');
   let combined = '';
   try {
-    const files = fs.readdirSync(knowledgeDir).filter((f) => f.endsWith('.md'));
+    const files = (await fs.promises.readdir(knowledgeDir)).filter((f) => f.endsWith('.md'));
     for (const file of files) {
       const filePath = path.join(knowledgeDir, file);
-      const content = fs.readFileSync(filePath, 'utf-8');
+      const content = await fs.promises.readFile(filePath, 'utf-8');
       const title = file.replace('.md', '').replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
       combined += `\n\n## Knowledge: ${title}\n\n${content}`;
     }
@@ -29,6 +34,7 @@ async function loadKnowledgeBase(): Promise<string> {
     console.warn('[support] Knowledge base load failed:', err instanceof Error ? err.message : String(err));
     combined = '(Knowledge base unavailable)';
   }
+  cachedKnowledge = combined;
   return combined;
 }
 
@@ -126,6 +132,12 @@ ${knowledge}`;
 
     const { provider, primaryModel } = await getLLMProvider();
 
+    // Bail out of the LLM stream the moment the client disconnects. Without
+    // this, closing the browser tab kept the Anthropic stream running to
+    // completion — racking up token spend and holding pool connections open.
+    let clientClosed = false;
+    req.on('close', () => { clientClosed = true; });
+
     // Stream the response
     let fullText = '';
     const gen = provider.stream({
@@ -137,18 +149,44 @@ ${knowledge}`;
 
     let chunk = await gen.next();
     while (!chunk.done) {
+      if (clientClosed) {
+        // Best-effort abort: tell the generator to stop. Most providers also
+        // honor AbortSignal, but the generic generator contract uses return().
+        try { await gen.return?.(undefined as unknown as { inputTokens: number; outputTokens: number }); } catch { /* ignore */ }
+        break;
+      }
       fullText += chunk.value;
       writeEvent({ type: 'delta', text: chunk.value });
       chunk = await gen.next();
     }
+
+    if (clientClosed) {
+      // Don't try to write/flush — socket is gone. We don't have a final
+      // usage count when aborted mid-stream, so log zeros so the ledger has a
+      // row but the cost tracker doesn't over-attribute.
+      logAiUsage({ endpoint: 'support/chat', model: primaryModel, inputTokens: 0, outputTokens: 0, userId: req.user?.userId, clientId: null });
+      return;
+    }
+
+    // After the while loop exits normally, chunk.done is true and chunk.value
+    // is the final LLMUsage payload from the generator's return value.
+    if (!chunk.done) {
+      // Defensive: shouldn't happen given the loop condition, but keeps the
+      // type narrowing honest.
+      res.end();
+      return;
+    }
     const usage = chunk.value;
     logAiUsage({ endpoint: 'support/chat', model: primaryModel, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, userId: req.user?.userId, clientId: null });
 
-    // Save messages to DB
-    await db('support_messages').insert([
-      { conversation_id: conversationId, role: 'user', content: message.trim() },
-      { conversation_id: conversationId, role: 'assistant', content: fullText },
-    ]);
+    // Save messages to DB in a single transaction so a partial write can't
+    // leave the user's message recorded without the assistant reply.
+    await db.transaction(async (trx) => {
+      await trx('support_messages').insert([
+        { conversation_id: conversationId, role: 'user', content: message.trim() },
+        { conversation_id: conversationId, role: 'assistant', content: fullText },
+      ]);
+    });
 
     writeEvent({ type: 'done', fullText, conversationId });
     res.end();

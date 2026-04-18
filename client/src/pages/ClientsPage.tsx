@@ -13,6 +13,7 @@ import {
   type ClientInput,
 } from '../api/clients';
 import { useUIStore } from '../store/uiStore';
+import { confirmAction } from '../components/ConfirmDialog';
 
 const ENTITY_TYPES = ['1065', '1120', '1120S', '1040_C'] as const;
 const TAX_SOFTWARE = ['ultratax', 'cch', 'lacerte', 'drake'] as const;
@@ -29,7 +30,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <h2 className="text-base font-semibold dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4">{children}</div>
       </div>
@@ -292,7 +293,7 @@ export function ClientsPage() {
                           Edit
                         </button>
                         <button
-                          onClick={() => { if (confirm(`Delete "${c.name}"?`)) deleteMutation.mutate(c.id); }}
+                          onClick={async () => { if (await confirmAction({ message: `Delete "${c.name}"?`, tone: 'danger' })) deleteMutation.mutate(c.id); }}
                           className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                         >
                           Delete

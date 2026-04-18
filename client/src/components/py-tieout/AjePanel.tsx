@@ -41,7 +41,7 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
     return [...accounts].sort((a, b) => {
       if (a.category === 'equity' && b.category !== 'equity') return -1;
       if (a.category !== 'equity' && b.category === 'equity') return 1;
-      return a.account_number.localeCompare(b.account_number);
+      return a.account_number.localeCompare(b.account_number, undefined, { numeric: true });
     });
   }, [accounts]);
 

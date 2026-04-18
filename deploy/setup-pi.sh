@@ -74,10 +74,23 @@ sudo mkdir -p /mnt/ssd/backups
 
 # Set up PostgreSQL. Password is passed through an env var so it is never
 # visible on the command line (would otherwise show in `ps` and shell history).
-sudo -u postgres PG_PASSWORD="$PG_PASSWORD" psql \
-  -v "pg_pw=$PG_PASSWORD" \
-  -c "CREATE USER vibetb WITH PASSWORD :'pg_pw';" \
-  -c "CREATE DATABASE vibe_tb_db OWNER vibetb;"
+# Idempotent: creates only if missing, so re-running this script after a
+# partial failure is safe (e.g. SSH drop during nginx install).
+sudo -u postgres PG_PASSWORD="$PG_PASSWORD" psql -v ON_ERROR_STOP=1 \
+  -v "pg_pw=$PG_PASSWORD" <<'PGSQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vibetb') THEN
+    EXECUTE format('CREATE USER vibetb WITH PASSWORD %L', :'pg_pw');
+  ELSE
+    EXECUTE format('ALTER USER vibetb WITH PASSWORD %L', :'pg_pw');
+  END IF;
+END
+$$;
+SELECT 'CREATE DATABASE vibe_tb_db OWNER vibetb'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'vibe_tb_db')
+\gexec
+PGSQL
 
 # Persist all generated secrets to .env so deploy.sh / ecosystem.config.js can
 # read them. Overwrites any prior generated values but leaves a manually-edited

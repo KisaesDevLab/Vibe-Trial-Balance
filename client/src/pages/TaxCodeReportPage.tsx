@@ -171,7 +171,7 @@ export function TaxCodeReportPage() {
         <div className="space-y-4">
           {sortedGroups.map(([code, codeRows]) => {
             const subtotal = codeRows.reduce((s, r) => s + netBalance(r, colSet), 0);
-            const sorted = [...codeRows].sort((a, b) => a.account_number.localeCompare(b.account_number));
+            const sorted = [...codeRows].sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
             return (
               <div key={code} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
                 <div className={`px-4 py-2 border-b flex items-center justify-between ${code === 'Unassigned' ? 'bg-gray-100 dark:bg-gray-700 border-gray-300 dark:border-gray-600' : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700'}`}>

@@ -5,6 +5,8 @@
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/uiStore';
+import { checkFileSize } from '../utils/fileLimits';
+import { confirmAction } from '../components/ConfirmDialog';
 import { listClients, type Client } from '../api/clients';
 import { listPeriods, type Period } from '../api/periods';
 import {
@@ -253,8 +255,8 @@ function BackupHistorySection({ records }: { records: BackupRecord[] }) {
     }
   };
 
-  const handleDelete = (id: number) => {
-    if (!window.confirm('Delete this backup? This cannot be undone.')) return;
+  const handleDelete = async (id: number) => {
+    if (!await confirmAction({ message: 'Delete this backup? This cannot be undone.', tone: 'danger' })) return;
     setDeletingId(id);
     deleteMutation.mutate(id);
   };
@@ -365,6 +367,7 @@ function RestoreSection({ clients }: { clients: Client[] }) {
   });
 
   const handleFile = async (file: File) => {
+    if (!checkFileSize(file, 'backup')) return;
     setUploadError(null);
     setPreview(null);
     setResult(null);

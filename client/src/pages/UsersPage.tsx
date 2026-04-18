@@ -14,6 +14,7 @@ import {
   type UserPatch,
 } from '../api/users';
 import { useAuthStore } from '../store/uiStore';
+import { confirmAction } from '../components/ConfirmDialog';
 
 const ROLE_BADGE: Record<string, { label: string; cls: string }> = {
   admin:    { label: 'Admin',    cls: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400' },
@@ -27,7 +28,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <h2 className="text-base font-semibold dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4">{children}</div>
       </div>
@@ -222,7 +223,7 @@ export function UsersPage() {
                         </button>
                         {u.is_active && !isSelf ? (
                           <button
-                            onClick={() => { if (confirm(`Deactivate "${u.display_name}"?`)) deactivateMutation.mutate(u.id); }}
+                            onClick={async () => { if (await confirmAction({ message: `Deactivate "${u.display_name}"?`, tone: 'danger', confirmLabel: 'Deactivate' })) deactivateMutation.mutate(u.id); }}
                             className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">
                             Deactivate
                           </button>

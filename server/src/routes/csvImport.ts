@@ -350,6 +350,12 @@ csvImportRouter.post(
       } else {
         rawCsv = req.file.buffer.toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       }
+      // Strip UTF-8 BOM. Excel-saved CSVs prepend \uFEFF to cell [0][0],
+      // which broke account-number matching and every first-column TB import
+      // created duplicate accounts.
+      if (rawCsv.charCodeAt(0) === 0xFEFF) {
+        rawCsv = rawCsv.slice(1);
+      }
       const allLines = rawCsv.split('\n');
       const first30Lines = allLines.slice(0, 30);
 
@@ -762,6 +768,25 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
     const existingByNumber = new Map<string, number>(
       existingCoa.map((a: { id: number; account_number: string }) => [a.account_number.trim(), a.id])
     );
+    // Cross-client safety: reject any matchedAccountId that doesn't belong to
+    // this client. See pdfImport.ts for the same rationale — chart_of_accounts
+    // has a global PK, so an AI-hallucinated id could otherwise write TB rows
+    // into another client's account.
+    const validAccountIds = new Set<number>(existingCoa.map((a: { id: number }) => a.id));
+    for (const m of matches) {
+      if (m.action !== 'skip' && m.matchedAccountId !== null && m.matchedAccountId !== undefined) {
+        if (!validAccountIds.has(m.matchedAccountId)) {
+          res.status(422).json({
+            data: null,
+            error: {
+              code: 'INVALID_ACCOUNT_ID',
+              message: `Match references account ${m.matchedAccountId} which does not belong to this client. Re-run analysis.`,
+            },
+          });
+          return;
+        }
+      }
+    }
 
     // Detect account number collisions among create_new rows before starting transaction
     const createNewRows = matches.filter((m) => m.action === 'create_new' && m.csvAccountNumber?.trim());

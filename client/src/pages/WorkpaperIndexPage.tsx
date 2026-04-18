@@ -125,7 +125,7 @@ export function WorkpaperIndexPage() {
 
     const buildGroupRows = (ref: string, refRows: TBRow[]): string[][] => {
       const sheetRows: string[][] = [];
-      const sorted = [...refRows].sort((a, b) => a.account_number.localeCompare(b.account_number));
+      const sorted = [...refRows].sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
       for (const r of sorted) {
         sheetRows.push([r.account_number, r.account_name, r.category, r.tax_line ?? '', String(netBalance(r, 'book') / 100), String(netBalance(r, 'tax') / 100), getMarksStr(r.account_id), r.preparer_notes ?? '', r.reviewer_notes ?? '']);
       }
@@ -271,7 +271,7 @@ export function WorkpaperIndexPage() {
             </thead>
             <tbody>
               {sortedGroups.map(([ref, refRows]) => {
-                const sorted = [...refRows].sort((a, b) => a.account_number.localeCompare(b.account_number));
+                const sorted = [...refRows].sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
                 const bookSub = refRows.reduce((s, r) => s + netBalance(r, 'book'), 0);
                 const taxSub  = refRows.reduce((s, r) => s + netBalance(r, 'tax'), 0);
                 const isUnassigned = ref === 'Unassigned';

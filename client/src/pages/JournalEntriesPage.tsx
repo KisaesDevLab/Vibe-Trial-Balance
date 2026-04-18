@@ -18,6 +18,7 @@ import { useUIStore } from '../store/uiStore';
 import { listPeriods } from '../api/periods';
 import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 import { DateInput } from '../components/DateInput';
+import { confirmAction } from '../components/ConfirmDialog';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -39,7 +40,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700 shrink-0">
           <h2 className="text-base font-semibold dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4 overflow-auto">{children}</div>
       </div>
@@ -203,7 +204,7 @@ function JEForm({
                 </td>
                 <td className="px-1 py-1 text-center">
                   {lines.length > 2 && (
-                    <button type="button" onClick={() => removeLine(idx)} className="text-gray-400 dark:text-gray-500 hover:text-red-500 text-lg leading-none">&times;</button>
+                    <button type="button" onClick={() => removeLine(idx)} aria-label="Remove line" className="text-gray-400 dark:text-gray-500 hover:text-red-500 text-lg leading-none">&times;</button>
                   )}
                 </td>
               </tr>
@@ -336,7 +337,7 @@ function TransEditForm({
                   <input value={line.credit} onChange={(e) => setLine(idx, 'credit', e.target.value)} onBlur={(e) => setLine(idx, 'credit', evalAndFormatAmount(e.target.value))} placeholder="0.00" className="w-full text-right border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400" />
                 </td>
                 <td className="px-1 py-1 text-center">
-                  {lines.length > 2 && <button type="button" onClick={() => removeLine(idx)} className="text-gray-400 dark:text-gray-500 hover:text-red-500 text-lg leading-none">&times;</button>}
+                  {lines.length > 2 && <button type="button" onClick={() => removeLine(idx)} aria-label="Remove line" className="text-gray-400 dark:text-gray-500 hover:text-red-500 text-lg leading-none">&times;</button>}
                 </td>
               </tr>
             ))}
@@ -549,7 +550,7 @@ export function JournalEntriesPage() {
                     Edit
                   </button>
                   <button
-                    onClick={(e) => { e.stopPropagation(); if (confirm(`Delete this ${entry.entry_type === 'trans' ? 'transaction entry' : 'journal entry'}?${entry.entry_type === 'trans' ? '\n\nThe linked bank transaction will be unclassified.' : ''}`)) deleteMutation.mutate(entry.id); }}
+                    onClick={async (e) => { e.stopPropagation(); if (await confirmAction({ message: `Delete this ${entry.entry_type === 'trans' ? 'transaction entry' : 'journal entry'}?${entry.entry_type === 'trans' ? '\n\nThe linked bank transaction will be unclassified.' : ''}`, tone: 'danger' })) deleteMutation.mutate(entry.id); }}
                     className="text-xs text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-400 mr-2"
                   >
                     Delete

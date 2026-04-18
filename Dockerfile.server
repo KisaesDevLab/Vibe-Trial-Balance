@@ -34,6 +34,12 @@ RUN chmod +x server/docker-entrypoint.sh
 
 RUN mkdir -p server/uploads server/backups
 
+# Drop root. The app only needs read on its own code + rw on uploads/backups.
+# Using a fixed uid/gid so host bind-mounts (for backups) are predictable.
+RUN addgroup -S -g 10001 app && adduser -S -u 10001 -G app app \
+ && chown -R app:app /app
+USER app
+
 EXPOSE 3001
 
 CMD ["sh", "server/docker-entrypoint.sh"]

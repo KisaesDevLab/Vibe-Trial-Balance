@@ -6,6 +6,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 // Tickmark library (per client)
 export const tickmarkLibraryCollectionRouter = Router({ mergeParams: true });
@@ -36,7 +37,7 @@ tickmarkLibraryCollectionRouter.get('/', async (req: AuthRequest, res: Response)
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'id', order: 'asc' }]);
     res.json({ data: rows, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -58,7 +59,7 @@ tickmarkLibraryCollectionRouter.post('/', async (req: AuthRequest, res: Response
     }).returning('*');
     res.status(201).json({ data: row, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -79,7 +80,7 @@ tickmarkLibraryItemRouter.patch('/', async (req: AuthRequest, res: Response): Pr
     if (!updated) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tickmark not found' } }); return; }
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -92,7 +93,7 @@ tickmarkLibraryItemRouter.delete('/', async (req: AuthRequest, res: Response): P
     if (!deleted) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tickmark not found' } }); return; }
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -119,7 +120,7 @@ systemTickmarkCollectionRouter.get('/', async (req: AuthRequest, res: Response):
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'id', order: 'asc' }]);
     res.json({ data: rows, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -138,7 +139,7 @@ systemTickmarkCollectionRouter.post('/', requireAdmin, async (req: AuthRequest, 
     }).returning('*');
     res.status(201).json({ data: row, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -171,7 +172,7 @@ systemTickmarkCollectionRouter.post('/apply/:clientId', requireAdmin, async (req
     }
     res.json({ data: { applied: toInsert.length, skipped: systemRows.length - toInsert.length }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -192,7 +193,7 @@ systemTickmarkItemRouter.patch('/', requireAdmin, async (req: AuthRequest, res: 
     if (!updated) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'System tickmark not found' } }); return; }
     res.json({ data: updated, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -205,7 +206,7 @@ systemTickmarkItemRouter.delete('/', requireAdmin, async (req: AuthRequest, res:
     if (!deleted) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'System tickmark not found' } }); return; }
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -230,7 +231,7 @@ tbTickmarkRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
     }
     res.json({ data: map, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });
 
@@ -252,6 +253,6 @@ tbTickmarkRouter.post('/toggle', async (req: AuthRequest, res: Response): Promis
       res.json({ data: { action: 'assigned' }, error: null });
     }
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'tickmarks');
   }
 });

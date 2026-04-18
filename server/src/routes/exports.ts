@@ -17,6 +17,7 @@ import { Router, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 import { PdfTemplateService } from '../pdf/PdfTemplateService';
 import type { Content, TableCell } from 'pdfmake/interfaces';
 
@@ -197,7 +198,7 @@ function handleExportError(err: unknown, res: Response): void {
     res.status(409).json({ data: null, error: { code: 'DUPLICATE_ACCOUNT', message: e.message } });
     return;
   }
-  res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+  sendServerError(res, err, 'exports');
 }
 
 /**
@@ -378,7 +379,7 @@ exportsRouter.get('/validate', async (req: AuthRequest, res: Response): Promise<
       error: null,
     });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'exports');
   }
 });
 
@@ -643,7 +644,7 @@ exportsRouter.get('/consolidation-settings', async (req: AuthRequest, res: Respo
     }
     res.json({ data: settings, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'exports');
   }
 });
 
@@ -686,7 +687,7 @@ exportsRouter.put('/consolidation-settings', async (req: AuthRequest, res: Respo
 
     res.json({ data: { saved: Object.keys(settings).length }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'exports');
   }
 });
 
@@ -782,7 +783,7 @@ exportsRouter.get('/working-tb', async (req: AuthRequest, res: Response): Promis
     res.setHeader('Content-Disposition', `attachment; filename="working-tb-${periodId}.xlsx"`);
     res.send(Buffer.from(buffer));
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'exports');
   }
 });
 
@@ -916,6 +917,6 @@ exportsRouter.get('/bookkeeper-letter', async (req: AuthRequest, res: Response):
     res.setHeader('Content-Length', String(buffer.length));
     res.send(buffer);
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'exports');
   }
 });

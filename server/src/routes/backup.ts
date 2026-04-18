@@ -179,6 +179,11 @@ async function createBackup(
           await dump('app_settings', await trx('app_settings').select('*'));
         }
       } else if (level === 'client' && clientId) {
+        // Tax codes MUST ride along with COA. chart_of_accounts.tax_code_id
+        // has a FK into tax_codes — restoring onto a fresh DB without
+        // dumping them fails FK validation on the COA insert.
+        await dump('tax_codes', await trx('tax_codes').select('*'));
+        await dump('tax_code_software_maps', await trx('tax_code_software_maps').select('*'));
         const client = await trx('clients').where('id', clientId).select('*');
         await dump('clients', client);
         const periodRows = await trx('periods').where('client_id', clientId).select('*');
@@ -196,7 +201,32 @@ async function createBackup(
         await dump('classification_rules', await trx('classification_rules').where('client_id', clientId).select('*'));
         await dump('variance_notes', coaIds.length > 0 ? await trx('variance_notes').whereIn('account_id', coaIds).select('*') : []);
         await dump('document_imports', periodIds.length > 0 ? await trx('document_imports').whereIn('period_id', periodIds).select('*') : []);
+        // Workpaper / engagement artifacts that the round-2 audit flagged as
+        // silently missing from client backups. Each is table-name-guarded
+        // so restores onto older schemas still work.
+        if (await trx.schema.hasTable('tickmark_library')) {
+          await dump('tickmark_library', await trx('tickmark_library').where('client_id', clientId).select('*'));
+        }
+        if (await trx.schema.hasTable('tb_tickmarks') && periodIds.length > 0) {
+          await dump('tb_tickmarks', await trx('tb_tickmarks').whereIn('period_id', periodIds).select('*'));
+        }
+        if (await trx.schema.hasTable('engagement_tasks') && periodIds.length > 0) {
+          await dump('engagement_tasks', await trx('engagement_tasks').whereIn('period_id', periodIds).select('*'));
+        }
+        if (await trx.schema.hasTable('m1_adjustments') && periodIds.length > 0) {
+          await dump('m1_adjustments', await trx('m1_adjustments').whereIn('period_id', periodIds).select('*'));
+        }
+        if (await trx.schema.hasTable('bank_reconciliations') && periodIds.length > 0) {
+          const reconRows = await trx('bank_reconciliations').whereIn('period_id', periodIds).select('*');
+          await dump('bank_reconciliations', reconRows);
+          const reconIds = reconRows.map((r: { id: number }) => r.id);
+          if (reconIds.length > 0 && await trx.schema.hasTable('reconciliation_items')) {
+            await dump('reconciliation_items', await trx('reconciliation_items').whereIn('reconciliation_id', reconIds).select('*'));
+          }
+        }
       } else if (level === 'period' && periodId) {
+        await dump('tax_codes', await trx('tax_codes').select('*'));
+        await dump('tax_code_software_maps', await trx('tax_code_software_maps').select('*'));
         const period = await trx('periods').where('id', periodId).first('*');
         const cId = period?.client_id;
         const client = cId ? await trx('clients').where('id', cId).select('*') : [];
@@ -213,6 +243,23 @@ async function createBackup(
         await dump('bank_transactions', cId ? await trx('bank_transactions').where('client_id', cId).where('period_id', periodId).select('*') : []);
         await dump('variance_notes', coaIds.length > 0 ? await trx('variance_notes').where('period_id', periodId).whereIn('account_id', coaIds).select('*') : []);
         await dump('document_imports', await trx('document_imports').where('period_id', periodId).select('*'));
+        if (await trx.schema.hasTable('tb_tickmarks')) {
+          await dump('tb_tickmarks', await trx('tb_tickmarks').where('period_id', periodId).select('*'));
+        }
+        if (await trx.schema.hasTable('engagement_tasks')) {
+          await dump('engagement_tasks', await trx('engagement_tasks').where('period_id', periodId).select('*'));
+        }
+        if (await trx.schema.hasTable('m1_adjustments')) {
+          await dump('m1_adjustments', await trx('m1_adjustments').where('period_id', periodId).select('*'));
+        }
+        if (await trx.schema.hasTable('bank_reconciliations')) {
+          const reconRows = await trx('bank_reconciliations').where('period_id', periodId).select('*');
+          await dump('bank_reconciliations', reconRows);
+          const reconIds = reconRows.map((r: { id: number }) => r.id);
+          if (reconIds.length > 0 && await trx.schema.hasTable('reconciliation_items')) {
+            await dump('reconciliation_items', await trx('reconciliation_items').whereIn('reconciliation_id', reconIds).select('*'));
+          }
+        }
       }
     },
     { isolationLevel: 'repeatable read' },
@@ -938,7 +985,18 @@ backupRouter.get('/:backupId/download', async (req: AuthRequest, res: Response):
     }
     res.setHeader('Content-Disposition', `attachment; filename="${record.filename as string}"`);
     res.setHeader('Content-Type', 'application/zip');
-    fs.createReadStream(filePath).pipe(res);
+    const readStream = fs.createReadStream(filePath);
+    readStream.on('error', (streamErr) => {
+      console.error('[backup] download stream error:', streamErr.message);
+      if (!res.headersSent) {
+        sendServerError(res, streamErr, 'backup-download');
+      } else {
+        // Headers already flushed — just tear down the socket. No JSON payload
+        // makes sense mid-stream.
+        res.destroy(streamErr);
+      }
+    });
+    readStream.pipe(res);
   } catch (err: unknown) {
     sendServerError(res, err, 'backup');
   }
@@ -1040,6 +1098,9 @@ restoreRouter.post(
 // POST /api/v1/restore/execute
 restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<void> => {
   if (!requireAdmin(req, res)) return;
+  // Hoisted so the catch block can flip the pre-inserted 'running' row to
+  // 'failed' instead of leaking an orphan row alongside a second failure row.
+  let historyId: number | null = null;
   try {
     const { backupId, tempFile, uploadNonce, mode, targetClientId } = req.body as {
       backupId?: number;
@@ -1129,6 +1190,23 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
       }
     }
 
+    // Insert restore_history BEFORE the data transaction so that a crash
+    // between txn commit and history write doesn't lose all record of the
+    // restore (admin would re-run and double-restore). We UPDATE the row
+    // to 'completed' on success or 'failed' in the catch block.
+    const [historyRow] = await db('restore_history').insert({
+      backup_id: backupRecord?.id ?? null,
+      restore_mode: mode,
+      target_client_id: targetClientId ?? null,
+      new_client_id: null,
+      id_mappings: JSON.stringify({}),
+      status: 'running',
+      restored_by: req.user!.userId,
+    }).returning('id');
+    historyId = typeof historyRow === 'object' && historyRow !== null
+      ? (historyRow as { id: number }).id
+      : Number(historyRow);
+
     await db.transaction(async (trx) => {
       if (mode === 'as_new') {
         const result = await restoreAsNew(tables, trx);
@@ -1159,15 +1237,11 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
       }
     }
 
-    // Log restore history
-    await db('restore_history').insert({
-      backup_id: backupRecord?.id ?? null,
-      restore_mode: mode,
-      target_client_id: targetClientId ?? null,
+    // Flip the history row to completed now that the data txn committed.
+    await db('restore_history').where({ id: historyId }).update({
       new_client_id: newClientId,
       id_mappings: JSON.stringify(idMappings),
       status: 'completed',
-      restored_by: req.user!.userId,
     });
 
     res.json({
@@ -1183,15 +1257,25 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
   } catch (err: unknown) {
     const internal = err instanceof Error ? err.message : 'Unknown error';
     const code = (err as { code?: string }).code;
-    // Log failure
+    // If we already staged a 'running' row, flip it to 'failed' so the
+    // history has exactly one terminal row per attempt. If the failure
+    // happened before the pre-insert, fall back to inserting a 'failed' row
+    // so the attempt is still recorded.
     try {
-      await db('restore_history').insert({
-        backup_id: null,
-        restore_mode: (req.body as { mode?: string }).mode ?? 'unknown',
-        status: 'failed',
-        error_message: internal,
-        restored_by: (req as AuthRequest).user?.userId ?? null,
-      });
+      if (historyId !== null) {
+        await db('restore_history').where({ id: historyId }).update({
+          status: 'failed',
+          error_message: internal,
+        });
+      } else {
+        await db('restore_history').insert({
+          backup_id: null,
+          restore_mode: (req.body as { mode?: string }).mode ?? 'unknown',
+          status: 'failed',
+          error_message: internal,
+          restored_by: (req as AuthRequest).user?.userId ?? null,
+        });
+      }
     } catch (_e) { /* ignore */ }
     if (code === 'INVALID_BACKUP') {
       res.status(400).json({ data: null, error: { code: 'INVALID_BACKUP', message: internal } });

@@ -6,6 +6,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { sendServerError } from '../lib/safeError';
 
 export const engagementCollectionRouter = Router({ mergeParams: true });
 engagementCollectionRouter.use(authMiddleware);
@@ -49,7 +50,7 @@ engagementCollectionRouter.get('/', async (req: AuthRequest, res: Response): Pro
       );
     res.json({ data: rows.map(r => parseRow(r as Record<string, unknown>)), error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'engagement');
   }
 });
 
@@ -74,7 +75,7 @@ engagementCollectionRouter.post('/', async (req: AuthRequest, res: Response): Pr
     }).returning('*');
     res.status(201).json({ data: parseRow(row as Record<string, unknown>), error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'engagement');
   }
 });
 
@@ -107,7 +108,7 @@ engagementItemRouter.patch('/', async (req: AuthRequest, res: Response): Promise
     if (!updated) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Task not found' } }); return; }
     res.json({ data: parseRow(updated as Record<string, unknown>), error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'engagement');
   }
 });
 
@@ -120,7 +121,7 @@ engagementItemRouter.delete('/', async (req: AuthRequest, res: Response): Promis
     if (!deleted) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Task not found' } }); return; }
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'engagement');
   }
 });
 
@@ -148,6 +149,6 @@ engagementSummaryRouter.get('/', async (req: AuthRequest, res: Response): Promis
       );
     res.json({ data: rows, error: null, meta: { count: rows.length } });
   } catch (err: unknown) {
-    res.status(500).json({ data: null, error: { code: 'SERVER_ERROR', message: (err as Error).message } });
+    sendServerError(res, err, 'engagement');
   }
 });

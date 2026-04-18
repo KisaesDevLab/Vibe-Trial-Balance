@@ -36,7 +36,7 @@ export function ComparisonTable({ accounts, selectedIds, onSelectionChange, view
     return list.sort((a, b) => {
       const catDiff = (CATEGORY_ORDER[a.category] ?? 9) - (CATEGORY_ORDER[b.category] ?? 9);
       if (catDiff !== 0) return catDiff;
-      return a.accountNumber.localeCompare(b.accountNumber);
+      return a.accountNumber.localeCompare(b.accountNumber, undefined, { numeric: true });
     });
   }, [accounts, viewMode, searchFilter]);
 

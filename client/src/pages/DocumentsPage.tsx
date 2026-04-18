@@ -5,6 +5,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useUIStore } from '../store/uiStore';
+import { checkFileSize } from '../utils/fileLimits';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import {
   listDocuments,
@@ -144,17 +145,21 @@ function UploadZone({ clientId, onSuccess }: UploadZoneProps) {
     setDragging(false);
   }, []);
 
+  const acceptDoc = (file: File | null): void => {
+    if (!file) { setSelectedFile(null); return; }
+    if (!checkFileSize(file, 'document')) return;
+    setSelectedFile(file);
+    setError(null);
+  };
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) setSelectedFile(file);
+    acceptDoc(e.dataTransfer.files[0] ?? null);
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
-    setSelectedFile(file);
-    setError(null);
+    acceptDoc(e.target.files?.[0] ?? null);
   };
 
   const handleUpload = async () => {

@@ -123,8 +123,8 @@ function TotalRow({ label, cents, priorCents, double: isDouble = false }: { labe
 // ─── Income Statement ─────────────────────────────────────────────────────────
 
 function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
-  const revenue = rows.filter((r) => r.category === 'revenue').sort((a, b) => a.account_number.localeCompare(b.account_number));
-  const expenses = rows.filter((r) => r.category === 'expenses').sort((a, b) => a.account_number.localeCompare(b.account_number));
+  const revenue = rows.filter((r) => r.category === 'revenue').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
+  const expenses = rows.filter((r) => r.category === 'expenses').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
 
   // Revenue positive (cr-dr), expenses positive (dr-cr)
   const totalRevenue = revenue.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
@@ -179,9 +179,9 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 // ─── Balance Sheet ────────────────────────────────────────────────────────────
 
 function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
-  const assets = rows.filter((r) => r.category === 'assets').sort((a, b) => a.account_number.localeCompare(b.account_number));
-  const liabilities = rows.filter((r) => r.category === 'liabilities').sort((a, b) => a.account_number.localeCompare(b.account_number));
-  const equity = rows.filter((r) => r.category === 'equity').sort((a, b) => a.account_number.localeCompare(b.account_number));
+  const assets = rows.filter((r) => r.category === 'assets').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
+  const liabilities = rows.filter((r) => r.category === 'liabilities').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
+  const equity = rows.filter((r) => r.category === 'equity').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
 
   const revenue = rows.filter((r) => r.category === 'revenue');
   const expenses = rows.filter((r) => r.category === 'expenses');
@@ -265,7 +265,7 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 // ─── Statement of Equity ──────────────────────────────────────────────────────
 
 function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
-  const equity = rows.filter((r) => r.category === 'equity').sort((a, b) => a.account_number.localeCompare(b.account_number));
+  const equity = rows.filter((r) => r.category === 'equity').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
   const revenue = rows.filter((r) => r.category === 'revenue');
   const expenses = rows.filter((r) => r.category === 'expenses');
 
@@ -398,7 +398,7 @@ export function FinancialStatementsPage() {
       .sort((a, b) => {
         const catOrder = ['assets','liabilities','equity','revenue','expenses'];
         const ci = catOrder.indexOf(a.category) - catOrder.indexOf(b.category);
-        return ci !== 0 ? ci : a.account_number.localeCompare(b.account_number);
+        return ci !== 0 ? ci : a.account_number.localeCompare(b.account_number, undefined, { numeric: true });
       })
       .map((r) => {
         const isIS = r.category === 'revenue' || r.category === 'expenses';

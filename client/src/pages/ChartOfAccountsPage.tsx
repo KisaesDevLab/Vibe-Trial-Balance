@@ -25,6 +25,8 @@ import {
 import { listClients, type Client } from '../api/clients';
 import { getAvailableTaxCodes, type TaxCode } from '../api/taxCodes';
 import { useUIStore } from '../store/uiStore';
+import { checkFileSize } from '../utils/fileLimits';
+import { confirmAction } from '../components/ConfirmDialog';
 
 const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'] as const;
 const CATEGORY_LABELS: Record<string, string> = {
@@ -353,7 +355,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
           <h2 className="text-base font-semibold dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4">{children}</div>
       </div>
@@ -502,6 +504,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!checkFileSize(file, 'csv')) return;
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -854,10 +857,9 @@ export function ChartOfAccountsPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteAccount(id),
     onSuccess: (r) => {
-      if (r.error) {
-        alert(r.error.message);
-        return;
-      }
+      // Errors surface via the global mutation-cache toast; skip invalidate
+      // on failure so the row doesn't flicker.
+      if (r.error) return;
       qc.invalidateQueries({ queryKey: ['chart-of-accounts', selectedClientId] });
     },
   });
@@ -933,8 +935,8 @@ export function ChartOfAccountsPage() {
             Edit
           </button>
           <button
-            onClick={() => {
-              if (confirm(`Delete "${row.original.account_name}"?`)) {
+            onClick={async () => {
+              if (await confirmAction({ message: `Delete "${row.original.account_name}"?`, tone: 'danger' })) {
                 deleteMutation.mutate(row.original.id);
               }
             }}

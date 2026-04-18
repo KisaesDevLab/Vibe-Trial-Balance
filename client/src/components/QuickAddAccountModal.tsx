@@ -60,7 +60,7 @@ export function QuickAddAccountModal({ clientId, onClose, onCreated }: Props) {
       <div role="dialog" aria-modal="true" className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-sm">
         <div className="flex items-center justify-between px-5 py-3 border-b dark:border-gray-700">
           <h3 className="text-sm font-semibold dark:text-white">Quick Add Account</h3>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <form onSubmit={handleSubmit} className="px-5 py-4 space-y-3">
           {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-xs">{error}</div>}

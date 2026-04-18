@@ -16,6 +16,7 @@ import {
 } from '../api/csvImport';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { AiConsentDialog, AI_PII } from './AiConsentDialog';
+import { checkFileSize } from '../utils/fileLimits';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -175,16 +176,22 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
 
   const handleDragLeave = useCallback(() => setDragOver(false), []);
 
+  const acceptFile = (file: File | undefined): void => {
+    if (!file) return;
+    // Accept either csv or spreadsheet sizes — server figures out the parser.
+    const kind = /\.(xlsx|xls|xlsm)$/i.test(file.name) ? 'excel' : 'csv';
+    if (!checkFileSize(file, kind)) return;
+    setSelectedFile(file);
+  };
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) setSelectedFile(file);
+    acceptFile(e.dataTransfer.files?.[0]);
   }, []);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) setSelectedFile(file);
+    acceptFile(e.target.files?.[0]);
   };
 
   // ── Analyze ────────────────────────────────────────────────────────────────
@@ -429,7 +436,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
               <p className="text-xs text-amber-600 mt-0.5">AI analysis unavailable — using automatic column detection. Please review matches carefully.</p>
             )}
           </div>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         {/* Stage 1: Upload */}

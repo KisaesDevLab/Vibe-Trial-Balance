@@ -5,7 +5,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { AiConsentDialog, AI_PII } from '../components/AiConsentDialog';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, pushToast } from '../store/uiStore';
 import { listClients, type Client } from '../api/clients';
 import { listPeriods, type Period } from '../api/periods';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
@@ -267,9 +267,24 @@ export function TaxMappingPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, taxCodeId }: { id: number; taxCodeId: number | null }) =>
       updateAccount(id, { taxCodeId }),
+    // Snapshot the previous cache BEFORE the optimistic write so we can
+    // restore it verbatim if the server rejects the mutation. Previously the
+    // row flashed green on success but on failure the fake value stuck
+    // around — silently corrupting exports via the dual-write tax_line.
+    onMutate: async (_variables) => {
+      await qc.cancelQueries({ queryKey: ['chart-of-accounts', selectedClientId] });
+      const previous = qc.getQueryData<Account[]>(['chart-of-accounts', selectedClientId]);
+      return { previous };
+    },
+    onError: (_err, _variables, context) => {
+      if (context?.previous) {
+        qc.setQueryData(['chart-of-accounts', selectedClientId], context.previous);
+      }
+      // Reason prefix for the global error toast (rejection path).
+      pushToast('Tax code save failed. Your change has been reverted — please retry.', 'error');
+    },
     onSuccess: (_res, variables) => {
-      qc.invalidateQueries({ queryKey: ['chart-of-accounts', selectedClientId] });
-      // Flash the row
+      // Flash the row to confirm save visually.
       setFlashIds((prev) => new Set(prev).add(variables.id));
       setTimeout(() => {
         setFlashIds((prev) => {
@@ -278,6 +293,9 @@ export function TaxMappingPage() {
           return next;
         });
       }, 1200);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['chart-of-accounts', selectedClientId] });
     },
   });
 

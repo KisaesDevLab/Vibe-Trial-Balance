@@ -10,6 +10,7 @@ import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { QuickAddAccountModal } from './QuickAddAccountModal';
 import { DateInput } from './DateInput';
 import { evalAndFormatAmount } from '../utils/evalAmountExpr';
+import { useUnsavedGuard, confirmDiscard } from '../utils/useUnsavedGuard';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -24,10 +25,17 @@ function parseCents(val: string): number {
 }
 
 interface FormLine {
+  // Stable per-row identity, separate from array index. Prevents React from
+  // reusing DOM nodes across removes — which caused captured onBlur closures
+  // to write debit/credit amounts into the wrong row after a mid-edit remove.
+  _key: number;
   accountId: number | '';
   debit: string;
   credit: string;
 }
+
+let __jeLineKeyCounter = 0;
+const newLineKey = () => ++__jeLineKeyCounter;
 
 interface Props {
   periodId: number;
@@ -40,11 +48,21 @@ interface Props {
 export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose, onSuccess }: Props) {
   const qc = useQueryClient();
   const [entryType, setEntryType] = useState<'book' | 'tax'>('book');
-  const [entryDate, setEntryDate] = useState(periodEndDate ?? new Date().toISOString().slice(0, 10));
+  // Default to local "today" — `new Date().toISOString().slice(0,10)` returns
+  // UTC-midnight's date, which after ~7pm US/Pacific has already rolled over
+  // to tomorrow. That silently filed JEs into the wrong period.
+  const localToday = () => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  const [entryDate, setEntryDate] = useState(periodEndDate ?? localToday());
   const [description, setDescription] = useState('');
   const [lines, setLines] = useState<FormLine[]>([
-    { accountId: '', debit: '', credit: '' },
-    { accountId: '', debit: '', credit: '' },
+    { _key: newLineKey(), accountId: '', debit: '', credit: '' },
+    { _key: newLineKey(), accountId: '', debit: '', credit: '' },
   ]);
   const [error, setError] = useState<string | null>(null);
   const [quickAddLineIdx, setQuickAddLineIdx] = useState<number | null>(null);
@@ -63,10 +81,17 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
   const totalCredit = lines.reduce((s, l) => s + parseCents(l.credit), 0);
   const balanced = totalDebit === totalCredit && totalDebit > 0;
 
+  // Treat the form as dirty once any field deviates from the initial state.
+  const dirty =
+    description !== '' ||
+    lines.some((l) => l.accountId !== '' || l.debit !== '' || l.credit !== '');
+  useUnsavedGuard(dirty);
+  const handleClose = async () => { if (await confirmDiscard(dirty)) onClose(); };
+
   const setLine = (idx: number, field: keyof FormLine, value: string | number) =>
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, [field]: value } : l)));
 
-  const addLine = () => setLines((prev) => [...prev, { accountId: '', debit: '', credit: '' }]);
+  const addLine = () => setLines((prev) => [...prev, { _key: newLineKey(), accountId: '', debit: '', credit: '' }]);
   const removeLine = (idx: number) => setLines((prev) => prev.filter((_, i) => i !== idx));
 
   const mutation = useMutation({
@@ -103,7 +128,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
       <div role="dialog" aria-modal="true" className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-visible">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700 shrink-0">
           <h2 className="text-base font-semibold dark:text-white">New Journal Entry</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={handleClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4 overflow-visible">
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -153,7 +178,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {lines.map((line, idx) => (
-                    <tr key={idx}>
+                    <tr key={line._key}>
                       <td className="px-1 py-1">
                         <AccountSearchDropdown
                           accounts={accounts}
@@ -184,7 +209,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
                       </td>
                       <td className="px-1 py-1 text-center">
                         {lines.length > 2 && (
-                          <button type="button" onClick={() => removeLine(idx)} className="text-gray-400 dark:text-gray-500 hover:text-red-500 text-lg leading-none">&times;</button>
+                          <button type="button" onClick={() => removeLine(idx)} aria-label="Remove line" className="text-gray-400 dark:text-gray-500 hover:text-red-500 text-lg leading-none">&times;</button>
                         )}
                       </td>
                     </tr>
@@ -214,7 +239,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
+              <button type="button" onClick={handleClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
               <button
                 type="submit"
                 disabled={mutation.isPending || !balanced}

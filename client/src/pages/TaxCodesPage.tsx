@@ -5,6 +5,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/uiStore';
+import { checkFileSize } from '../utils/fileLimits';
+import { confirmAction } from '../components/ConfirmDialog';
 import {
   listTaxCodes,
   createTaxCode,
@@ -109,7 +111,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700 shrink-0">
           <h2 className="text-base font-semibold dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
         <div className="px-5 py-4 overflow-y-auto">{children}</div>
       </div>
@@ -316,7 +318,7 @@ function EditPanel({ initial, onSave, onCancel, onDelete, saving, error, mapRefr
               <span className="ml-2 text-xs font-normal text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-2 py-0.5 rounded">System</span>
             )}
           </h3>
-          <button type="button" onClick={onCancel} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button type="button" onClick={onCancel} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
 
         {error && (
@@ -474,6 +476,7 @@ function ImportModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: (
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!checkFileSize(file, 'csv')) return;
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -695,9 +698,9 @@ export function TaxCodesPage() {
     },
   });
 
-  const handleDelete = (code: TaxCode) => {
+  const handleDelete = async (code: TaxCode) => {
     // System codes can be deleted by admin if invalid
-    if (!confirm(`Delete tax code "${code.tax_code}"? This will unmap all accounts using this code. Continue?`)) return;
+    if (!await confirmAction({ message: `Delete tax code "${code.tax_code}"? This will unmap all accounts using this code. Continue?`, tone: 'danger' })) return;
     deleteMutation.mutate(code.id);
   };
 

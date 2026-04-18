@@ -5,6 +5,8 @@
 import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore, useUIStore } from '../store/uiStore';
+import { checkFileSize } from '../utils/fileLimits';
+import { confirmAction } from '../components/ConfirmDialog';
 import {
   listCoaTemplates,
   getCoaTemplate,
@@ -531,6 +533,7 @@ function ImportModal({
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!checkFileSize(file, 'csv')) return;
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -802,7 +805,7 @@ function SuccessBanner({ message, onClose }: { message: string; onClose: () => v
   return (
     <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded px-4 py-3 flex items-center justify-between text-sm text-green-800 dark:text-green-400 mb-4">
       <span>{message}</span>
-      <button onClick={onClose} className="text-green-600 dark:text-green-400 hover:text-green-800 text-base leading-none">&times;</button>
+      <button onClick={onClose} aria-label="Dismiss" className="text-green-600 dark:text-green-400 hover:text-green-800 text-base leading-none">&times;</button>
     </div>
   );
 }
@@ -872,8 +875,8 @@ export function CoaTemplatesPage() {
     },
   });
 
-  const handleDelete = (template: CоaTemplate) => {
-    if (!confirm(`Delete template "${template.name}"? This cannot be undone.`)) return;
+  const handleDelete = async (template: CоaTemplate) => {
+    if (!await confirmAction({ message: `Delete template "${template.name}"? This cannot be undone.`, tone: 'danger' })) return;
     deleteMutation.mutate(template.id);
   };
 

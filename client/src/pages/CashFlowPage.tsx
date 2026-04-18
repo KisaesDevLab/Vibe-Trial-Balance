@@ -4,11 +4,12 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, useAuthStore, pushToast } from '../store/uiStore';
 import { getCashFlow, CashFlowLineItem } from '../api/cashFlow';
 import { listAccounts, updateAccount, Account } from '../api/chartOfAccounts';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
+import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -175,10 +176,27 @@ function Section({ title, items, total, sign = 1 }: {
 // ── Statement Tab ─────────────────────────────────────────────────────────────
 
 function StatementTab({ periodId }: { periodId: number }) {
+  const token = useAuthStore((s) => s.token);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ['cash-flow', periodId],
     queryFn:  () => getCashFlow(periodId),
   });
+
+  const handlePreview = async () => {
+    if (!token) return;
+    setPdfBusy(true);
+    try { await openPdfPreview(pdfReports.cashFlow(periodId) + '?preview=true', token); }
+    catch (e) { pushToast((e as Error).message, 'error'); }
+    finally { setPdfBusy(false); }
+  };
+  const handleDownload = async () => {
+    if (!token) return;
+    setPdfBusy(true);
+    try { await downloadPdf(pdfReports.cashFlow(periodId), `cash-flow-${periodId}.pdf`, token); }
+    catch (e) { pushToast((e as Error).message, 'error'); }
+    finally { setPdfBusy(false); }
+  };
 
   if (isLoading) return <div className="py-8 text-center text-gray-400 dark:text-gray-500 text-sm">Loading…</div>;
 
@@ -191,9 +209,13 @@ function StatementTab({ periodId }: { periodId: number }) {
   return (
     <div className="space-y-4">
       <div className="flex justify-end gap-2">
-        <button onClick={() => window.print()}
-          className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
-          Print / PDF
+        <button onClick={handlePreview} disabled={pdfBusy}
+          className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium disabled:opacity-50">
+          Preview PDF
+        </button>
+        <button onClick={handleDownload} disabled={pdfBusy}
+          className="px-3 py-1.5 text-xs bg-teal-600 text-white rounded hover:bg-teal-700 font-medium disabled:opacity-50">
+          Download PDF
         </button>
       </div>
 

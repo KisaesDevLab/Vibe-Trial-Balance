@@ -93,3 +93,26 @@ export async function authMiddleware(
       .json({ data: null, error: { code: 'SERVER_ERROR', message: 'Auth check failed.' } });
   }
 }
+
+/**
+ * Blocks mutating HTTP methods (POST/PUT/PATCH/DELETE) from reviewer accounts.
+ * GET/HEAD/OPTIONS pass through, so a single `router.use(blockReviewerWrites)`
+ * guards the whole router without splitting read vs write routes. Admin and
+ * staff always pass. Mount AFTER authMiddleware.
+ */
+export function blockReviewerWrites(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): void {
+  const method = req.method.toUpperCase();
+  const isMutation = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+  if (isMutation && req.user?.role === 'reviewer') {
+    res.status(403).json({
+      data: null,
+      error: { code: 'READ_ONLY', message: 'Reviewer accounts cannot modify data.' },
+    });
+    return;
+  }
+  next();
+}
