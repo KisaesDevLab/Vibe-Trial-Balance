@@ -8,7 +8,7 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { db } from '../db';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { authMiddleware, AuthRequest, invalidateAuthCache } from '../middleware/auth';
 import { JWT_SECRET, JWT_EXPIRY } from '../lib/jwtConfig';
 import { sendServerError } from '../lib/safeError';
 
@@ -138,6 +138,7 @@ router.post('/change-password', authMiddleware, async (req: AuthRequest, res: Re
       password_hash: hash,
       must_change_password: false,
     });
+    invalidateAuthCache(me.id);
     res.json({ data: { ok: true }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'auth');

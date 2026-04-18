@@ -58,4 +58,4 @@ Passwords must meet all of the following:
 - At least **one lowercase letter** (a–z)
 - At least **one number** (0–9)
 
-For security, use unique passwords per user — never share the admin password. The default `admin` password should be changed immediately after first login.
+For security, use unique passwords per user — never share the admin password. The bootstrap `admin` / `admin1234` credential is only valid until the forced-change screen on first login; after that the rotated password is the only one that works.

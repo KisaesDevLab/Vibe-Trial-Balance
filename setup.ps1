@@ -336,15 +336,8 @@ else {
         ([System.Security.Cryptography.RandomNumberGenerator]::Create()).GetBytes($buf)
         return -join ($buf | ForEach-Object { $_.ToString('x2') })
     }
-    function New-InitialAdminPassword {
-        $buf = New-Object byte[] 18
-        ([System.Security.Cryptography.RandomNumberGenerator]::Create()).GetBytes($buf)
-        # Base64 with url-safe chars, no padding — readable + transcribable
-        return [Convert]::ToBase64String($buf).TrimEnd('=').Replace('+','A').Replace('/','B')
-    }
     $jwtSecret = New-HexSecret 32
     $encKey    = New-HexSecret 32
-    $initialAdminPassword = New-InitialAdminPassword
     $envLines = @(
         "# Database (matches docker-compose.yml)",
         "DB_HOST=127.0.0.1",
@@ -358,10 +351,8 @@ else {
         "JWT_EXPIRY=8h",
         "ENCRYPTION_KEY=$encKey",
         "",
-        "# Bootstrap admin password — used once on first seed. You'll be forced to",
-        "# change it on first login. Safe to leave here; it's only used when the",
-        "# database is empty.",
-        "INITIAL_ADMIN_PASSWORD=$initialAdminPassword",
+        "# First-boot admin login is always 'admin' / 'admin1234'. The app forces",
+        "# a password change on first login before anything else is reachable.",
         "",
         "# Anthropic API (optional — can also configure in Admin > Settings)",
         "ANTHROPIC_API_KEY=",
@@ -372,7 +363,7 @@ else {
         "ALLOWED_ORIGIN=http://localhost:$PORT_CLIENT"
     )
     $envLines | Set-Content -Path "server\.env" -Encoding UTF8
-    Write-OK "Created server/.env with random JWT_SECRET, ENCRYPTION_KEY, and admin password"
+    Write-OK "Created server/.env with random JWT_SECRET and ENCRYPTION_KEY"
 }
 
 if (Test-Path "docker-compose.yml") {
@@ -548,41 +539,16 @@ Write-Host "  Frontend:  http://localhost:$PORT_CLIENT" -ForegroundColor White
 Write-Host "  Backend:   http://localhost:$PORT_SERVER" -ForegroundColor White
 Write-Host ""
 
-# Only write + open FIRST_LOGIN.txt when this run actually CREATED server/.env.
-# On a re-run, the password stored in .env is probably stale — the user already
-# rotated. Showing them the old password would just confuse them into trying
-# something that no longer works.
+# Surface the first-boot admin credentials only when we just created .env.
+# On a re-run the user has probably already rotated, and showing `admin1234`
+# would be misleading.
 if ($script:EnvJustCreated) {
-    $adminPw = $null
-    foreach ($line in Get-Content "server\.env") {
-        if ($line -match "^INITIAL_ADMIN_PASSWORD=(.+)$") { $adminPw = $Matches[1]; break }
-    }
-    if ($adminPw) {
-        $loginFile = Join-Path (Get-Location) "FIRST_LOGIN.txt"
-        @(
-            "Vibe Trial Balance - one-time login",
-            "-----------------------------------",
-            "",
-            "URL:       http://localhost:$PORT_CLIENT",
-            "Username:  admin",
-            "Password:  $adminPw",
-            "",
-            "You will be required to choose your own password on first sign-in.",
-            "This file can be safely deleted after you change the password.",
-            ""
-        ) | Set-Content -Path $loginFile -Encoding UTF8
-
-        Write-Host "  ----------------------------------------------------------" -ForegroundColor Yellow
-        Write-Host "    First-time login (change required on first sign-in):" -ForegroundColor Yellow
-        Write-Host "      Username:  admin" -ForegroundColor White
-        Write-Host "      Password:  $adminPw" -ForegroundColor White
-        Write-Host "  ----------------------------------------------------------" -ForegroundColor Yellow
-        Write-Host "    Saved to FIRST_LOGIN.txt in the project folder." -ForegroundColor Gray
-        Write-Host "    Opening that file now — keep it open while you sign in." -ForegroundColor Gray
-        Start-Process notepad.exe -ArgumentList $loginFile -ErrorAction SilentlyContinue
-    }
+    Write-Host "  ----------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "    First-time login (change required on first sign-in):" -ForegroundColor Yellow
+    Write-Host "      Username:  admin" -ForegroundColor White
+    Write-Host "      Password:  admin1234" -ForegroundColor White
+    Write-Host "  ----------------------------------------------------------" -ForegroundColor Yellow
 } else {
-    Write-Host "  Existing server\.env kept — use your existing admin password." -ForegroundColor Gray
-    Write-Host "  (If you never signed in, see FIRST_LOGIN.txt in this folder.)" -ForegroundColor Gray
+    Write-Host "  Existing server\.env kept — sign in with your rotated admin password." -ForegroundColor Gray
 }
 Write-Host ""

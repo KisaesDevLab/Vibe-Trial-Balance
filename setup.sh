@@ -152,16 +152,8 @@ if [ ! -f "server/.env" ]; then
       date +%s%N | sha256sum | head -c $(( $1 * 2 ))
     fi
   }
-  gen_admin_pw() {
-    if command -v openssl >/dev/null 2>&1; then
-      openssl rand -base64 18 | tr -d '=+/' | head -c 24
-    else
-      head -c 18 /dev/urandom | base64 | tr -d '=+/' | head -c 24
-    fi
-  }
   JWT_SECRET_VAL=$(gen_hex 32)
   ENC_KEY_VAL=$(gen_hex 32)
-  INITIAL_ADMIN_PW=$(gen_admin_pw)
   cat > server/.env <<ENVEOF
 # Database (matches docker-compose.yml)
 DB_HOST=127.0.0.1
@@ -175,9 +167,8 @@ JWT_SECRET=$JWT_SECRET_VAL
 JWT_EXPIRY=8h
 ENCRYPTION_KEY=$ENC_KEY_VAL
 
-# Bootstrap admin password — used once on first seed. You'll be forced to change
-# it on first login. Safe to leave here; only used when the DB is empty.
-INITIAL_ADMIN_PASSWORD=$INITIAL_ADMIN_PW
+# First-boot admin login is always 'admin' / 'admin1234'. The app forces a
+# password change on first login before anything else is reachable.
 
 # Anthropic API (optional — can also configure in Admin > Settings)
 ANTHROPIC_API_KEY=
@@ -187,7 +178,7 @@ PORT=$PORT_SERVER
 NODE_ENV=development
 ALLOWED_ORIGIN=http://localhost:$PORT_CLIENT
 ENVEOF
-  log "Created server/.env with random JWT_SECRET, ENCRYPTION_KEY, and admin password"
+  log "Created server/.env with random JWT_SECRET and ENCRYPTION_KEY"
 else
   info "server/.env already exists — updating ports if changed..."
   # Update PORT, DB_PORT, and ALLOWED_ORIGIN if ports differ from defaults
@@ -277,52 +268,16 @@ echo -e "  Server:  ${CYAN}http://localhost:${PORT_SERVER}${NC}"
 echo -e "  pgAdmin: ${CYAN}http://localhost:${PORT_PGADMIN}${NC}  (admin@local.dev / admin)"
 echo ""
 
-# Surface the first-boot admin password — but only if we JUST wrote server/.env
-# in this run. On a re-run, the stored password is probably stale (the user
-# already rotated through the app), and showing it would just confuse them.
-if [ "$ENV_JUST_CREATED" = "1" ] && [ -f "server/.env" ]; then
-  ADMIN_PW=$(grep -E '^INITIAL_ADMIN_PASSWORD=' server/.env | head -1 | cut -d= -f2-)
-else
-  ADMIN_PW=""
-fi
-if [ -n "$ADMIN_PW" ]; then
-  cat > FIRST_LOGIN.txt <<EOF
-Vibe Trial Balance - one-time login
------------------------------------
-
-URL:       http://localhost:${PORT_CLIENT}
-Username:  admin
-Password:  ${ADMIN_PW}
-
-You will be required to choose your own password on first sign-in.
-This file can be safely deleted after you change the password.
-EOF
-
+# Surface the first-boot admin credentials — but only when we JUST wrote
+# server/.env in this run. On a re-run the user has probably already rotated,
+# and showing `admin1234` again would be misleading.
+if [ "$ENV_JUST_CREATED" = "1" ]; then
   echo -e "  ${YELLOW}──────────────────────────────────────────────────────${NC}"
   echo -e "    ${YELLOW}First-time login (change required on first sign-in):${NC}"
   echo -e "      Username:  ${CYAN}admin${NC}"
-  echo -e "      Password:  ${CYAN}${ADMIN_PW}${NC}"
+  echo -e "      Password:  ${CYAN}admin1234${NC}"
   echo -e "  ${YELLOW}──────────────────────────────────────────────────────${NC}"
-  echo -e "    Saved to ${CYAN}FIRST_LOGIN.txt${NC} in the project folder."
-
-  # Try to open the file in whatever text viewer the OS has a default for.
-  # Order matters — some Linux distros ship an `open` command that is unrelated
-  # (e.g. ttv console tool) so we dispatch on platform first. Fails silently on
-  # headless servers / CI — the terminal banner above is still enough.
-  case "$(uname -s)" in
-    Darwin)
-      command -v open >/dev/null 2>&1 && open FIRST_LOGIN.txt 2>/dev/null || true
-      ;;
-    Linux*)
-      command -v xdg-open >/dev/null 2>&1 && xdg-open FIRST_LOGIN.txt >/dev/null 2>&1 || true
-      ;;
-    MINGW*|CYGWIN*|MSYS*)
-      # Git Bash on Windows — `start` invokes the default .txt handler (Notepad)
-      start "" FIRST_LOGIN.txt >/dev/null 2>&1 || true
-      ;;
-  esac
 else
-  echo -e "  ${CYAN}Existing server/.env kept — use your existing admin password.${NC}"
-  echo -e "  ${CYAN}(If you never signed in, see FIRST_LOGIN.txt in this folder.)${NC}"
+  echo -e "  ${CYAN}Existing server/.env kept — sign in with your rotated admin password.${NC}"
 fi
 echo ""

@@ -44,7 +44,6 @@ services:
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:?ALLOWED_ORIGIN must be set in .env (e.g. https://your-host)}
       APP_BASE_URL: ${APP_BASE_URL:-${ALLOWED_ORIGIN}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
       STRICT_AI_URL_SAFETY: ${STRICT_AI_URL_SAFETY:-}
       # Cap the Node heap on Pi-class hardware so OOMs take down the container
       # rather than thrashing the whole host.

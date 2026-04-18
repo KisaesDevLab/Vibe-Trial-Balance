@@ -15,13 +15,23 @@ export interface AuthRequest extends Request {
 // just to re-check is_active. Entries expire quickly, so deactivation takes
 // effect within CACHE_TTL_MS of the admin's action.
 const CACHE_TTL_MS = 30 * 1000;
-interface CachedUser { role: string; expiresAt: number }
+interface CachedUser { role: string; mustChangePassword: boolean; expiresAt: number }
 const activeUserCache = new Map<number, CachedUser>();
 
 /** Invalidate a cached auth lookup. Call after updating a user's role or is_active. */
 export function invalidateAuthCache(userId: number): void {
   activeUserCache.delete(userId);
 }
+
+// While `must_change_password` is true, the JWT is only good for these paths:
+// reading the current user profile and rotating the password. Every other
+// request is refused — this enforces the forced-rotation flow at the API layer
+// so the fixed `admin / admin1234` bootstrap credential can't be used to reach
+// any data by bypassing the login UI.
+const ROTATION_ALLOWLIST = new Set([
+  'GET /api/v1/auth/me',
+  'POST /api/v1/auth/change-password',
+]);
 
 export async function authMiddleware(
   req: AuthRequest,
@@ -61,13 +71,15 @@ export async function authMiddleware(
     const now = Date.now();
     const cached = activeUserCache.get(payload.userId);
     let currentRole: string;
+    let mustChangePassword: boolean;
 
     if (cached && cached.expiresAt > now) {
       currentRole = cached.role;
+      mustChangePassword = cached.mustChangePassword;
     } else {
       const row = await db('app_users')
         .where({ id: payload.userId, is_active: true })
-        .first('role');
+        .first('role', 'must_change_password');
       if (!row) {
         activeUserCache.delete(payload.userId);
         res
@@ -76,7 +88,26 @@ export async function authMiddleware(
         return;
       }
       currentRole = row.role as string;
-      activeUserCache.set(payload.userId, { role: currentRole, expiresAt: now + CACHE_TTL_MS });
+      mustChangePassword = !!row.must_change_password;
+      activeUserCache.set(payload.userId, {
+        role: currentRole,
+        mustChangePassword,
+        expiresAt: now + CACHE_TTL_MS,
+      });
+    }
+
+    if (mustChangePassword) {
+      const route = `${req.method.toUpperCase()} ${req.originalUrl.split('?')[0]}`;
+      if (!ROTATION_ALLOWLIST.has(route)) {
+        res.status(403).json({
+          data: null,
+          error: {
+            code: 'PASSWORD_CHANGE_REQUIRED',
+            message: 'You must change your password before using the app.',
+          },
+        });
+        return;
+      }
     }
 
     req.user = {

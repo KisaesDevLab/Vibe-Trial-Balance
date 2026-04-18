@@ -38,7 +38,7 @@ PrivilegesRequired=admin
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
-WelcomeLabel2=This will install {#MyAppName} on your computer.%n%nThe app runs in Docker containers. Docker Desktop is required and will be detected during installation.%n%nA one-time admin password will be generated during install and displayed on the final screen — write it down. You'll be asked to pick your own password on first login.
+WelcomeLabel2=This will install {#MyAppName} on your computer.%n%nThe app runs in Docker containers. Docker Desktop is required and will be detected during installation.%n%nFirst-time login is always username "admin" / password "admin1234". The app forces you to pick your own password on first sign-in.
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
@@ -133,22 +133,10 @@ begin
     Result := Result + HexChars[Random(16) + 1];
 end;
 
-// Pronounceable-ish admin password: 20 characters from an unambiguous alphabet
-// (no 0/O, 1/l/I) so the user can read it off the install screen without typos.
-function GenerateAdminPassword: String;
+// Track whether this install created a fresh .env, so the finish page can
+// decide whether to show the bootstrap credentials.
 var
-  I: Integer;
-  Alphabet: String;
-begin
-  Alphabet := 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-  Result := '';
-  for I := 1 to 20 do
-    Result := Result + Alphabet[Random(Length(Alphabet)) + 1];
-end;
-
-// Global so the post-install panel can display it to the user.
-var
-  GeneratedAdminPassword: String;
+  FreshInstall: Boolean;
 
 // ── Generate .env from template if it doesn't already exist ──
 
@@ -163,12 +151,10 @@ begin
   TemplatePath := ExpandConstant('{app}\.env.template');
 
   // Don't overwrite existing .env (preserves user's secrets on reinstall).
-  // Corollary: reinstalls won't get a new admin password — the existing one
-  // still works.
   if FileExists(EnvPath) then
   begin
     Log('.env already exists — skipping generation to preserve secrets');
-    GeneratedAdminPassword := '';
+    FreshInstall := False;
     Exit;
   end;
 
@@ -176,7 +162,7 @@ begin
   DbPass := GenerateRandomHex(32);
   JwtSecret := GenerateRandomHex(64);
   EncKey := GenerateRandomHex(64);
-  GeneratedAdminPassword := GenerateAdminPassword();
+  FreshInstall := True;
 
   // Read template and replace placeholders
   if LoadStringsFromFile(TemplatePath, Lines) then
@@ -187,11 +173,10 @@ begin
       StringChangeEx(Lines[I], '__DB_PASSWORD__', DbPass, True);
       StringChangeEx(Lines[I], '__JWT_SECRET__', JwtSecret, True);
       StringChangeEx(Lines[I], '__ENCRYPTION_KEY__', EncKey, True);
-      StringChangeEx(Lines[I], '__INITIAL_ADMIN_PASSWORD__', GeneratedAdminPassword, True);
       Content := Content + Lines[I] + #13#10;
     end;
     SaveStringToFile(EnvPath, Content, False);
-    Log('Generated .env with random secrets and bootstrap admin password');
+    Log('Generated .env with random secrets');
   end;
 end;
 
@@ -230,31 +215,11 @@ begin
   if CurStep = ssPostInstall then
   begin
     GenerateEnvFile;
-    // Persist the bootstrap admin password alongside the app so that a user who
-    // closed the installer before writing it down can still recover it. This
-    // file is inside {app} which on Windows defaults to C:\VibeTB (admin-only
-    // writable). Delete it yourself once you've rotated the password.
-    if GeneratedAdminPassword <> '' then
-    begin
-      SaveStringToFile(
-        ExpandConstant('{app}\FIRST_LOGIN.txt'),
-        'Vibe Trial Balance — one-time login' + #13#10 +
-        '------------------------------------' + #13#10 +
-        'URL:       http://localhost' + #13#10 +
-        'Username:  admin' + #13#10 +
-        'Password:  ' + GeneratedAdminPassword + #13#10 +
-        #13#10 +
-        'You will be required to choose your own password on first sign-in.' + #13#10 +
-        'Delete this file after you have changed the password.' + #13#10,
-        False);
-    end;
   end;
 end;
 
-// Show the bootstrap admin password on the installer's final screen so the user
-// can write it down before clicking Finish. This is the ONLY place it is
-// displayed in cleartext inside the UI; it's also written to FIRST_LOGIN.txt
-// as a safety net.
+// Show the bootstrap admin credentials on the installer's final screen so the
+// user knows how to sign in for the first time.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
@@ -277,19 +242,18 @@ begin
   Result := MemoDirInfo + NewLine + MemoTasksInfo;
 end;
 
-// The installer's final "Finished" page uses FinishedLabel — patch it to reveal
-// the generated password if we created a fresh .env.
+// The installer's final "Finished" page uses FinishedLabel — patch it to show
+// the bootstrap credentials on a fresh install.
 procedure CurPageChanged(CurPageID: Integer);
 begin
-  if (CurPageID = wpFinished) and (GeneratedAdminPassword <> '') then
+  if (CurPageID = wpFinished) and FreshInstall then
   begin
     WizardForm.FinishedLabel.Caption :=
       'Setup has finished installing ' + ExpandConstant('{#MyAppName}') + ' on your computer.' + #13#10 + #13#10 +
-      'Your one-time admin login:' + #13#10 +
+      'First-time admin login:' + #13#10 +
       '    Username:  admin' + #13#10 +
-      '    Password:  ' + GeneratedAdminPassword + #13#10 + #13#10 +
-      'Write this down now. You will be required to choose your own' + #13#10 +
-      'password on first sign-in.' + #13#10 + #13#10 +
-      'The password is also saved in FIRST_LOGIN.txt inside the install folder.';
+      '    Password:  admin1234' + #13#10 + #13#10 +
+      'The app will force you to choose your own password on first sign-in' + #13#10 +
+      'before anything else in the app is reachable.';
   end;
 end;

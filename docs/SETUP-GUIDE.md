@@ -939,7 +939,7 @@ docker compose -f docker-compose.prod.yml logs -f server
 Before exposing the app to any network beyond localhost:
 
 - [ ] **Set `NODE_ENV=production`** in your `server/.env` file — enables security enforcement
-- [ ] **Change the default admin password** — `admin` / `admin` must be changed on first login
+- [ ] **Change the default admin password** — `admin` / `admin1234` must be rotated on first login (the app enforces this)
 - [ ] **Set a strong `JWT_SECRET`** — at least 64 random characters (server refuses to start without it in production)
 - [ ] **Set a strong `ENCRYPTION_KEY`** — separate from JWT_SECRET, used to encrypt API keys stored in the database
 - [ ] **Set a strong `DB_PASSWORD`** — do not use the development default

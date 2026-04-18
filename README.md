@@ -71,7 +71,6 @@ Create a `.env` file in `server/` (or set these as system environment variables)
 | `JWT_EXPIRY` | `8h` | JWT token lifetime |
 | `ALLOWED_ORIGIN` | `http://localhost:5173` | **Required in production** — server refuses to start without it |
 | `ENCRYPTION_KEY` | *(falls back to JWT_SECRET in dev)* | **Required in production** — must be separate from JWT_SECRET. Generate with `openssl rand -hex 32` |
-| `INITIAL_ADMIN_PASSWORD` | *(random, printed once)* | Bootstrap admin password. If unset before first seed, a random one is generated and printed to stdout. User is forced to rotate on first login. |
 | `ANTHROPIC_API_KEY` | *(none)* | Optional — can also be set in Admin > Settings |
 | `APP_BASE_URL` | `http://localhost:3001` | Used in MCP integration for self-referencing URLs |
 | `STRICT_AI_URL_SAFETY` | `false` | Set to `true` to block outbound AI/OCR URLs that resolve to RFC1918 / loopback / link-local. Cloud-metadata IPs are always blocked regardless. |
@@ -108,7 +107,7 @@ npm run dev                                  # Start both servers
 
 **URLs:** Frontend http://localhost:5173 | API http://localhost:3001 | pgAdmin http://localhost:5050
 
-**First-time login:** the setup script generates a random admin password and writes it to `FIRST_LOGIN.txt` in the project folder (also opens it automatically in Notepad / TextEdit). It's also printed in the final banner of the setup output, and stored in `server/.env` as `INITIAL_ADMIN_PASSWORD`. You'll be forced to pick a new password on first sign-in; new passwords require 8+ characters with uppercase, lowercase, and a number. After you rotate, the next `start.ps1` / `launch.bat` run auto-deletes `FIRST_LOGIN.txt`.
+**First-time login:** username `admin`, password `admin1234`. The app forces you to pick a new password on first sign-in before you can reach anything else; new passwords require 8+ characters with uppercase, lowercase, and a number.
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed commands and troubleshooting.
 

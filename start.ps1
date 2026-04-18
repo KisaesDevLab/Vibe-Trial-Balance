@@ -187,18 +187,7 @@ Write-Host ""
 Write-Host "  Frontend : http://localhost:$PORT_CLIENT" -ForegroundColor White
 Write-Host "  Backend  : http://localhost:$PORT_SERVER" -ForegroundColor White
 
-# If FIRST_LOGIN.txt still exists from setup, open it so the user can copy the
-# password into the login page without hunting through terminal scrollback or
-# hidden files. start.ps1 can't easily probe the backend from here (the dev
-# server is about to start in the foreground) — we rely on the rotated-login
-# flow to clean the file up on next launch.
-if (Test-Path "FIRST_LOGIN.txt") {
-    Write-Host "  Login    : see FIRST_LOGIN.txt (opening it now)" -ForegroundColor Cyan
-    Write-Host "             delete the file once you've changed the password" -ForegroundColor Gray
-    Start-Process notepad.exe -ArgumentList (Join-Path (Get-Location) "FIRST_LOGIN.txt") -ErrorAction SilentlyContinue
-} else {
-    Write-Host "  Login    : use your existing admin password" -ForegroundColor Cyan
-}
+Write-Host "  Login    : admin / admin1234 on first run (you'll be forced to rotate)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Press Ctrl+C to stop." -ForegroundColor Yellow
 Write-Host ""

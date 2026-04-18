@@ -35,13 +35,6 @@ if [ -z "${ENCRYPTION_KEY:-}" ]; then
   echo "[setup] Generated random ENCRYPTION_KEY"
 fi
 
-if [ -z "${INITIAL_ADMIN_PASSWORD:-}" ]; then
-  require_openssl
-  # Readable chars, no ambiguous ones. User will be forced to rotate on first login.
-  INITIAL_ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -d '=+/' | head -c 20)"
-  echo "[setup] Generated random INITIAL_ADMIN_PASSWORD"
-fi
-
 if [ -z "${ALLOWED_ORIGIN:-}" ]; then
   # Reasonable Pi default — the operator can edit .env later if they put the Pi
   # behind a DNS name.
@@ -108,29 +101,11 @@ if [ "${GENERATED_PG_PASSWORD:-0}" = "1" ] || [ ! -f /opt/vibe-tb/.env ]; then
     echo "JWT_SECRET=$JWT_SECRET"
     echo "JWT_EXPIRY=8h"
     echo "ENCRYPTION_KEY=$ENCRYPTION_KEY"
-    echo "INITIAL_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD"
     echo "ALLOWED_ORIGIN=$ALLOWED_ORIGIN"
     echo "APP_BASE_URL=$ALLOWED_ORIGIN"
     echo "ANTHROPIC_API_KEY="
   } >> /opt/vibe-tb/.env
   echo "[setup] Credentials written to /opt/vibe-tb/.env (chmod 600)"
-
-  # Also drop a FIRST_LOGIN.txt alongside so whoever logs into the Pi over SSH
-  # (or browses the Samba share) can find the one-time password without reading
-  # a dotfile.
-  sudo install -m 644 -o "$USER" -g "$USER" /dev/null /opt/vibe-tb/FIRST_LOGIN.txt
-  cat > /opt/vibe-tb/FIRST_LOGIN.txt <<EOF
-Vibe Trial Balance - one-time login
------------------------------------
-
-URL:       $ALLOWED_ORIGIN
-Username:  admin
-Password:  $INITIAL_ADMIN_PASSWORD
-
-You will be required to choose your own password on first sign-in.
-This file can be safely deleted after you change the password.
-EOF
-  echo "[setup] One-time login saved to /opt/vibe-tb/FIRST_LOGIN.txt"
 fi
 
 # Copy nginx config
@@ -145,8 +120,7 @@ echo ""
 echo "  First-time login  (you'll be forced to change the password on first sign-in):"
 echo "    URL:       $ALLOWED_ORIGIN"
 echo "    Username:  admin"
-echo "    Password:  $INITIAL_ADMIN_PASSWORD"
+echo "    Password:  admin1234"
 echo ""
-echo "  Same info saved to /opt/vibe-tb/FIRST_LOGIN.txt"
 echo "  Next step:  run deploy.sh to build the app and start PM2."
 echo ""

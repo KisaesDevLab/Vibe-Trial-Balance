@@ -69,23 +69,15 @@ Opens backend on http://localhost:3001 and frontend on http://localhost:5173.
 
 ## App Login
 The first time you boot a fresh database, an `admin` account is created with a
-**random** password. You don't need to hunt for it:
+known fixed password:
 
-- **`FIRST_LOGIN.txt`** is saved in the project folder (dev setup) or the
-  install folder (Windows installer) and opens automatically in Notepad /
-  TextEdit when setup finishes. Copy the password from there.
-- The **setup script** also prints the same password in its final banner, so
-  you can see it in the terminal.
-- If you closed the file and the terminal, the password is still in
-  `server/.env` under `INITIAL_ADMIN_PASSWORD`, or (for Docker installs) visible
-  via `docker compose logs server | findstr FIRST-BOOT`.
+- **Username:** `admin`
+- **Password:** `admin1234`
 
-On first sign-in the app forces you to pick your own password (8+ chars, one
-uppercase, one lowercase, one number). After you rotate, `FIRST_LOGIN.txt` is
-auto-deleted by the next run of the start/launch script.
-
-Power users: set `INITIAL_ADMIN_PASSWORD=...` in `.env` before first boot to
-choose your own bootstrap password instead of a random one.
+On first sign-in the app immediately forces you to pick your own password
+(8+ chars, one uppercase, one lowercase, one number). Until you rotate, nothing
+else in the app is reachable — the forced-change screen is the only UI the
+bootstrap password can get you to.
 
 ---
 
@@ -100,7 +92,6 @@ The server reads `.env` from `server/.env`. Key variables:
 | `DB_PORT` | `5432` | PostgreSQL port |
 | `JWT_SECRET` | *(none)* | **Required everywhere** — ≥32 chars. `setup.sh` / `setup.ps1` generate one automatically |
 | `ENCRYPTION_KEY` | *(falls back to JWT_SECRET in dev)* | **Required in production** — set a unique value, separate from JWT_SECRET |
-| `INITIAL_ADMIN_PASSWORD` | *(random, printed once)* | Optional. If set before first seed, used as the bootstrap password. Otherwise random |
 | `ALLOWED_ORIGIN` | `http://localhost:5173` | **Required in production** — set to your domain |
 
 ---
@@ -129,7 +120,7 @@ The server reads `.env` from `server/.env`. Key variables:
 → Set `JWT_SECRET` to a random 64-hex string in `server/.env` (run `openssl rand -hex 32`). The server refuses to start without it in every environment, and rejects secrets shorter than 32 characters.
 
 **First-boot login page rejects my password**
-→ If you forgot the temporary password, check `server/.env` for `INITIAL_ADMIN_PASSWORD` (dev) or `FIRST_LOGIN.txt` in the install folder (Windows installer). If both are gone, run `docker compose logs server | grep "FIRST-BOOT"` or reset via `npm run db:reset`.
+→ On a fresh install the credentials are `admin` / `admin1234`. If someone already rotated and the new password is lost, reset with `npm run db:reset` (wipes the database) — the admin will be recreated with `admin1234` and force a rotation on first sign-in.
 
 **"FATAL: ENCRYPTION_KEY environment variable is required in production"**
 → Set `ENCRYPTION_KEY` to a separate random string in `server/.env`. Must be different from `JWT_SECRET`.

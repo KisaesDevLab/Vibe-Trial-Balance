@@ -1046,8 +1046,8 @@ ollama pull qwq:32b            # Reasoning model for support chat</code></pre>
     <p>Open the app in your browser and log in with the default credentials:</p>
     <div class="callout callout-danger">
       <strong>Default Credentials</strong>
-      Username: <code>admin</code> &nbsp;/&nbsp; Password: <code>admin</code><br>
-      Change this password immediately via the user menu in the top-right corner.
+      Username: <code>admin</code> &nbsp;/&nbsp; Password: <code>admin1234</code><br>
+      The app forces you to pick a new password on first sign-in before anything else is reachable.
     </div>
 
     <h4>Step 2: Create Additional Users (Optional)</h4>
@@ -1540,7 +1540,7 @@ docker compose -f docker-compose.prod.yml logs -f server</code></pre>
 
     <ul class="checklist">
       <li><strong>Set <code>NODE_ENV=production</code></strong> in your <code>server/.env</code> file &mdash; enables security enforcement</li>
-      <li><strong>Change the default admin password</strong> &mdash; <code>admin</code> / <code>admin</code> must be changed on first login</li>
+      <li><strong>Change the default admin password</strong> &mdash; <code>admin</code> / <code>admin1234</code> must be rotated on first login (the app enforces this)</li>
       <li><strong>Set a strong <code>JWT_SECRET</code></strong> &mdash; at least 64 random characters (server refuses to start without it in production)</li>
       <li><strong>Set a strong <code>ENCRYPTION_KEY</code></strong> &mdash; separate from JWT_SECRET, used to encrypt API keys stored in the database</li>
       <li><strong>Set a strong <code>DB_PASSWORD</code></strong> &mdash; do not use the development default</li>

@@ -89,25 +89,14 @@ powershell -Command "try { $r = Invoke-WebRequest -Uri 'http://localhost/api/v1/
 if errorlevel 1 goto wait
 
 :: ── Surface the first-boot admin password ──────────────────────────────────
-:: .env is the authoritative source — that's what the seed reads to set the
-:: bootstrap password. FIRST_LOGIN.txt is just a human-readable copy.
-:: (Earlier we tried parsing FIRST_LOGIN.txt with findstr /i "Password", but
-:: the file has 3 lines containing that substring and the FOR loop left
-:: ADMIN_PW set to garbage from the last descriptive line. .env has exactly
-:: one line matching INITIAL_ADMIN_PASSWORD= so the parse is unambiguous.)
-set ADMIN_PW=
-if exist .env (
-    for /f "tokens=1,* delims==" %%A in ('findstr /b /c:"INITIAL_ADMIN_PASSWORD=" .env') do set ADMIN_PW=%%B
-)
-:: Only show the banner if the DB still has a temp password. Query the server
-:: with the candidate password; if it returns mustChangePassword=true we know
-:: the user hasn't rotated yet.
+:: Default bootstrap password is the fixed string `admin1234`. We probe the
+:: auth endpoint to see whether the admin user has already rotated; if the
+:: login still succeeds AND mustChangePassword=true, show the banner. Anything
+:: else means the user has already set their own password.
 set FIRST_BOOT=
-if not "%ADMIN_PW%"=="" (
-    powershell -Command "try { $body = @{username='admin'; password=$env:ADMIN_PW} | ConvertTo-Json -Compress; $r = Invoke-RestMethod -Uri 'http://localhost/api/v1/auth/login' -Method POST -ContentType 'application/json' -Body $body -TimeoutSec 5; if ($r.data.user.mustChangePassword) { Write-Output 'first' } else { Write-Output 'rotated' } } catch { Write-Output 'unknown' }" > "%TEMP%\vibetb_auth.txt" 2>nul
-    set /p FIRST_BOOT=<"%TEMP%\vibetb_auth.txt"
-    del "%TEMP%\vibetb_auth.txt" 2>nul
-)
+powershell -Command "try { $body = @{username='admin'; password='admin1234'} | ConvertTo-Json -Compress; $r = Invoke-RestMethod -Uri 'http://localhost/api/v1/auth/login' -Method POST -ContentType 'application/json' -Body $body -TimeoutSec 5; if ($r.data.user.mustChangePassword) { Write-Output 'first' } else { Write-Output 'rotated' } } catch { Write-Output 'rotated' }" > "%TEMP%\vibetb_auth.txt" 2>nul
+set /p FIRST_BOOT=<"%TEMP%\vibetb_auth.txt"
+del "%TEMP%\vibetb_auth.txt" 2>nul
 
 echo.
 echo   ============================================
@@ -119,20 +108,9 @@ if "%FIRST_BOOT%"=="first" (
     echo.
     echo   First-time login ^(you'll be asked to pick a new password^):
     echo     Username:  admin
-    echo     Password:  %ADMIN_PW%
-    echo.
-    if exist FIRST_LOGIN.txt (
-        echo   Opening FIRST_LOGIN.txt so you can copy-paste the password.
-        echo   Keep that window open until you've signed in and changed the password.
-        start "" notepad.exe "%CD%\FIRST_LOGIN.txt"
-    )
+    echo     Password:  admin1234
 ) else (
     echo   Login:   use your admin account
-    :: The user has rotated the password, so FIRST_LOGIN.txt is stale noise.
-    :: Sweep it so the next launch doesn't show misleading credentials.
-    if exist FIRST_LOGIN.txt (
-        del /q FIRST_LOGIN.txt >nul 2>&1
-    )
 )
 echo.
 
