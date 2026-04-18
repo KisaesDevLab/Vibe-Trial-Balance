@@ -136,7 +136,9 @@ cd "$APP_DIR"
 
 # ── Create server/.env with resolved ports ──────────────────────────────────
 
+ENV_JUST_CREATED=0
 if [ ! -f "server/.env" ]; then
+  ENV_JUST_CREATED=1
   info "Creating server/.env with generated secrets..."
   # The server rejects JWT_SECRET shorter than 32 chars, so generate full 64-hex
   # secrets from a real CSPRNG. Fall back gracefully if openssl isn't available.
@@ -275,11 +277,10 @@ echo -e "  Server:  ${CYAN}http://localhost:${PORT_SERVER}${NC}"
 echo -e "  pgAdmin: ${CYAN}http://localhost:${PORT_PGADMIN}${NC}  (admin@local.dev / admin)"
 echo ""
 
-# Surface the first-boot admin password. The password also lives in server/.env
-# as INITIAL_ADMIN_PASSWORD, but asking a non-technical user to read a hidden
-# dotfile is unreasonable, so we also write a plain FIRST_LOGIN.txt at the
-# project root and try to open it in the default text editor.
-if [ -f "server/.env" ]; then
+# Surface the first-boot admin password — but only if we JUST wrote server/.env
+# in this run. On a re-run, the stored password is probably stale (the user
+# already rotated through the app), and showing it would just confuse them.
+if [ "$ENV_JUST_CREATED" = "1" ] && [ -f "server/.env" ]; then
   ADMIN_PW=$(grep -E '^INITIAL_ADMIN_PASSWORD=' server/.env | head -1 | cut -d= -f2-)
 else
   ADMIN_PW=""
@@ -305,15 +306,23 @@ EOF
   echo -e "    Saved to ${CYAN}FIRST_LOGIN.txt${NC} in the project folder."
 
   # Try to open the file in whatever text viewer the OS has a default for.
-  # Fails silently on headless servers / CI — the terminal banner above is
-  # still enough for technical users.
-  if command -v open >/dev/null 2>&1; then
-    open FIRST_LOGIN.txt 2>/dev/null || true
-  elif command -v xdg-open >/dev/null 2>&1; then
-    xdg-open FIRST_LOGIN.txt >/dev/null 2>&1 || true
-  fi
+  # Order matters — some Linux distros ship an `open` command that is unrelated
+  # (e.g. ttv console tool) so we dispatch on platform first. Fails silently on
+  # headless servers / CI — the terminal banner above is still enough.
+  case "$(uname -s)" in
+    Darwin)
+      command -v open >/dev/null 2>&1 && open FIRST_LOGIN.txt 2>/dev/null || true
+      ;;
+    Linux*)
+      command -v xdg-open >/dev/null 2>&1 && xdg-open FIRST_LOGIN.txt >/dev/null 2>&1 || true
+      ;;
+    MINGW*|CYGWIN*|MSYS*)
+      # Git Bash on Windows — `start` invokes the default .txt handler (Notepad)
+      start "" FIRST_LOGIN.txt >/dev/null 2>&1 || true
+      ;;
+  esac
 else
-  echo -e "  ${YELLOW}The app prints the admin password on its first run — watch${NC}"
-  echo -e "  ${YELLOW}the server console output when you run 'npm run dev'.${NC}"
+  echo -e "  ${CYAN}Existing server/.env kept — use your existing admin password.${NC}"
+  echo -e "  ${CYAN}(If you never signed in, see FIRST_LOGIN.txt in this folder.)${NC}"
 fi
 echo ""

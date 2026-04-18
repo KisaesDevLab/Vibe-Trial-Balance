@@ -84,21 +84,29 @@ async function syncTxJE(
   const tx = await trx('bank_transactions').where({ id: txId, client_id: clientId }).first();
   if (!tx) return;
 
-  // If there's an existing linked JE, check that JE's OWN period is unlocked before
-  // touching it. Otherwise a caller could detach a JE from a sealed period by moving
-  // the bank transaction to a different period.
+  // Figure out every period row this operation will touch and lock them in
+  // ASCENDING id order. Acquiring locks in a canonical order across all code
+  // paths eliminates the two-way deadlock where tx A holds period 5 and wants
+  // 7 while tx B holds 7 and wants 5.
   let existingJePeriodId: number | null = null;
   if (tx.journal_entry_id) {
     const existingJe = await trx('journal_entries')
       .where({ id: tx.journal_entry_id })
       .first('period_id');
     existingJePeriodId = (existingJe?.period_id as number | null) ?? null;
-    if (existingJePeriodId) {
-      await assertPeriodUnlocked(existingJePeriodId, trx);
-    }
+  }
+  const targetPeriodId: number | null = tx.period_id ?? null;
+  const periodsToLock = Array.from(
+    new Set(
+      [existingJePeriodId, targetPeriodId].filter((p): p is number => typeof p === 'number'),
+    ),
+  ).sort((a, b) => a - b);
+  for (const pid of periodsToLock) {
+    await assertPeriodUnlocked(pid, trx);
   }
 
-  // If there's no period to sync against, just clear any stale JE link.
+  // If there's no period to sync against, just clear any stale JE link. The
+  // existing JE's period (if any) is already locked above.
   if (!tx.period_id) {
     if (tx.journal_entry_id) {
       await trx('journal_entry_lines').where({ journal_entry_id: tx.journal_entry_id }).delete();
@@ -106,13 +114,6 @@ async function syncTxJE(
       await trx('bank_transactions').where({ id: txId }).update({ journal_entry_id: null });
     }
     return;
-  }
-
-  // Lock the target period row as serialization point (also prevents duplicate
-  // entry_numbers) AND fail-fast if the target period is locked. Skip if we
-  // already locked the same period above for the existing JE.
-  if (existingJePeriodId !== tx.period_id) {
-    await assertPeriodUnlocked(tx.period_id, trx);
   }
 
   // Delete any existing auto-generated JE (lock on its period already acquired above)
@@ -627,12 +628,17 @@ btCollectionRouter.post('/batch-delete', async (req: AuthRequest, res: Response)
       const jeIds = txs.map((t: { journal_entry_id: number | null }) => t.journal_entry_id).filter(Boolean) as number[];
       if (jeIds.length > 0) {
         // Any JE we are about to delete belongs to some period — every one of those
-        // periods must be unlocked before we can mutate them.
+        // periods must be unlocked before we can mutate them. Lock in ascending
+        // id order so this batch can't deadlock against another concurrent batch.
         const jePeriods = await trx('journal_entries')
           .whereIn('id', jeIds)
           .distinct('period_id');
-        for (const p of jePeriods) {
-          if (p.period_id) await assertPeriodUnlocked(p.period_id as number, trx);
+        const periodIds = jePeriods
+          .map((p: { period_id: number | null }) => p.period_id)
+          .filter((p: number | null): p is number => typeof p === 'number')
+          .sort((a: number, b: number) => a - b);
+        for (const pid of periodIds) {
+          await assertPeriodUnlocked(pid, trx);
         }
         await trx('journal_entry_lines').whereIn('journal_entry_id', jeIds).delete();
         await trx('journal_entries').whereIn('id', jeIds).delete();

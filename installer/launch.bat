@@ -89,22 +89,15 @@ powershell -Command "try { $r = Invoke-WebRequest -Uri 'http://localhost/api/v1/
 if errorlevel 1 goto wait
 
 :: ── Surface the first-boot admin password ──────────────────────────────────
-:: Source of truth, in priority order:
-::   1) FIRST_LOGIN.txt written by the installer
-::   2) INITIAL_ADMIN_PASSWORD line in .env
-::   3) The seed's "FIRST-BOOT ADMIN PASSWORD" line in docker server logs
-:: The user only needs it on their very first launch; on subsequent runs the
-:: DB already has a rotated password and we suppress the banner.
+:: .env is the authoritative source — that's what the seed reads to set the
+:: bootstrap password. FIRST_LOGIN.txt is just a human-readable copy.
+:: (Earlier we tried parsing FIRST_LOGIN.txt with findstr /i "Password", but
+:: the file has 3 lines containing that substring and the FOR loop left
+:: ADMIN_PW set to garbage from the last descriptive line. .env has exactly
+:: one line matching INITIAL_ADMIN_PASSWORD= so the parse is unambiguous.)
 set ADMIN_PW=
-if exist FIRST_LOGIN.txt (
-    for /f "tokens=2,* delims=: " %%A in ('findstr /i "Password" FIRST_LOGIN.txt') do (
-        if "%%A"=="" ( set ADMIN_PW=%%B ) else ( set ADMIN_PW=%%A )
-    )
-)
-if "%ADMIN_PW%"=="" (
-    if exist .env (
-        for /f "tokens=2 delims==" %%A in ('findstr /b "INITIAL_ADMIN_PASSWORD=" .env') do set ADMIN_PW=%%A
-    )
+if exist .env (
+    for /f "tokens=1,* delims==" %%A in ('findstr /b /c:"INITIAL_ADMIN_PASSWORD=" .env') do set ADMIN_PW=%%B
 )
 :: Only show the banner if the DB still has a temp password. Query the server
 :: with the candidate password; if it returns mustChangePassword=true we know
