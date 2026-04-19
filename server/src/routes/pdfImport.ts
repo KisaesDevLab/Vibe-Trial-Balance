@@ -266,6 +266,12 @@ Rules:
 
       const analysisResult = extractJsonObject<PdfAnalysisResult>(aiResult.text);
       if (!analysisResult) {
+        const hitCap = aiResult.outputTokens >= maxTokens - 10;
+        console.error(
+          `[pdf-import] AI_ERROR: could not parse JSON from ${aiModel}. ` +
+          `output=${aiResult.outputTokens}/${maxTokens}${hitCap ? ' (HIT CAP — likely truncated)' : ''}, ` +
+          `text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`,
+        );
         res.status(500).json({ data: null, error: { code: 'AI_ERROR', message: 'AI returned invalid format' } });
         return;
       }
