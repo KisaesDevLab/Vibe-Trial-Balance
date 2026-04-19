@@ -140,6 +140,7 @@ ${knowledge}`;
 
     // Stream the response
     let fullText = '';
+    const streamStarted = Date.now();
     const gen = provider.stream({
       model: primaryModel,
       maxTokens: 2048,
@@ -164,7 +165,12 @@ ${knowledge}`;
       // Don't try to write/flush — socket is gone. We don't have a final
       // usage count when aborted mid-stream, so log zeros so the ledger has a
       // row but the cost tracker doesn't over-attribute.
-      logAiUsage({ endpoint: 'support/chat', model: primaryModel, inputTokens: 0, outputTokens: 0, userId: req.user?.userId, clientId: null });
+      logAiUsage({
+        endpoint: 'support/chat', model: primaryModel, inputTokens: 0, outputTokens: 0,
+        userId: req.user?.userId, clientId: null,
+        status: 'error', errorMessage: 'Client disconnected mid-stream',
+        durationMs: Date.now() - streamStarted, maxTokens: 2048,
+      });
       return;
     }
 
@@ -177,7 +183,12 @@ ${knowledge}`;
       return;
     }
     const usage = chunk.value;
-    logAiUsage({ endpoint: 'support/chat', model: primaryModel, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, userId: req.user?.userId, clientId: null });
+    logAiUsage({
+      endpoint: 'support/chat', model: primaryModel,
+      inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+      userId: req.user?.userId, clientId: null,
+      status: 'success', durationMs: Date.now() - streamStarted, maxTokens: 2048,
+    });
 
     // Save messages to DB in a single transaction so a partial write can't
     // leave the user's message recorded without the assistant reply.
@@ -193,6 +204,15 @@ ${knowledge}`;
   } catch (err: unknown) {
     const internal = err instanceof Error ? err.message : String(err);
     console.error('[support]', internal);
+    // Record the failure so admins can see it in the AI Usage Log without
+    // needing to check server logs. We may not have a primaryModel yet if
+    // the failure happened before getLLMProvider returned.
+    logAiUsage({
+      endpoint: 'support/chat', model: 'unknown',
+      inputTokens: 0, outputTokens: 0,
+      userId: req.user?.userId, clientId: null,
+      status: 'error', errorMessage: internal, maxTokens: 2048,
+    });
     writeEvent({ type: 'error', message: 'An internal error occurred. Please try again.' });
     res.end();
   }

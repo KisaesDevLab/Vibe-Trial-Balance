@@ -9,6 +9,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { logAiUsage } from '../lib/aiUsage';
+import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
@@ -257,21 +258,18 @@ Rules:
       // from text length (~80 chars per TB line). Min 4096, max from settings.
       const estimatedAccounts = Math.ceil(extractedText.length / 80);
       const maxTokens = Math.max(tokenSettings.maxTokensDefault, Math.min(tokenSettings.maxTokensBankStatement, estimatedAccounts * 200));
-      const aiResult = await aiProvider.complete({
-        model: aiModel,
-        maxTokens,
-        messages: [{ role: 'user', content: messageContent }],
-      });
-      logAiUsage({ endpoint: 'pdf/analyze', model: aiModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
+      const { result: aiResult, logId } = await aiComplete(
+        aiProvider,
+        { model: aiModel, maxTokens, messages: [{ role: 'user', content: messageContent }] },
+        { endpoint: 'pdf/analyze', userId: req.user?.userId, clientId },
+      );
 
       const analysisResult = extractJsonObject<PdfAnalysisResult>(aiResult.text);
       if (!analysisResult) {
         const hitCap = aiResult.outputTokens >= maxTokens - 10;
-        console.error(
-          `[pdf-import] AI_ERROR: could not parse JSON from ${aiModel}. ` +
-          `output=${aiResult.outputTokens}/${maxTokens}${hitCap ? ' (HIT CAP — likely truncated)' : ''}, ` +
-          `text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`,
-        );
+        const detail = `output=${aiResult.outputTokens}/${maxTokens}${hitCap ? ' (HIT CAP — likely truncated)' : ''}, finish=${aiResult.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`;
+        console.error(`[pdf-import] AI_ERROR: could not parse JSON from ${aiModel}. ${detail}`);
+        markAiUsageParseError(logId, `Invalid JSON. ${detail}`);
         res.status(500).json({ data: null, error: { code: 'AI_ERROR', message: 'AI returned invalid format' } });
         return;
       }
@@ -544,17 +542,18 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Each object MUST 
 ]`;
 
     const { provider, fastModel } = await getLLMProvider();
-    const aiResult = await provider.complete({
-      model: fastModel,
-      maxTokens: Math.max(2048, needNumbers.length * 150),
-      messages: [{ role: 'user', content: prompt }],
-    });
-    logAiUsage({ endpoint: 'pdf/suggest-numbers', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
+    const { result: aiResult, logId } = await aiComplete(
+      provider,
+      { model: fastModel, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
+      { endpoint: 'pdf/suggest-numbers', userId: req.user?.userId, clientId },
+    );
 
     type SuggestionRaw = { entryIndex: number; accountName?: string; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
     const rawSuggestions = extractJsonArray<SuggestionRaw>(aiResult.text);
     if (!rawSuggestions) {
-      console.error('[pdf/suggest-numbers] Failed to parse AI response:', aiResult.text.slice(0, 500));
+      const detail = `finish=${aiResult.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`;
+      console.error('[pdf/suggest-numbers] Failed to parse AI response:', detail);
+      markAiUsageParseError(logId, `Invalid JSON. ${detail}`);
       res.status(500).json({ data: null, error: { code: 'PARSE_ERROR', message: 'AI returned unexpected format' } });
       return;
     }
@@ -645,16 +644,17 @@ If the user requests corrections to the account matching, categories, or actions
     ];
 
     const { provider: pdfProvider, fastModel: pdfFastModel } = await getLLMProvider();
-    const aiResult2 = await pdfProvider.complete({
-      model: pdfFastModel,
-      maxTokens: 2048,
-      system: systemPrompt,
-      messages: aiMessages,
-    });
-    logAiUsage({ endpoint: 'pdf/chat', model: pdfFastModel, inputTokens: aiResult2.inputTokens, outputTokens: aiResult2.outputTokens, userId: req.user?.userId, clientId });
+    const { result: aiResult2, logId: chatLogId } = await aiComplete(
+      pdfProvider,
+      { model: pdfFastModel, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
+      { endpoint: 'pdf/chat', userId: req.user?.userId, clientId },
+    );
 
     const parsed = extractJsonObject<{ reply: string; revisedAnalysis: PdfAnalysisResult | null }>(aiResult2.text);
     if (!parsed) {
+      // Fall back to treating the raw text as the reply; still worth flagging
+      // in the usage log so this pattern is visible.
+      markAiUsageParseError(chatLogId, `Chat reply not valid JSON; passed through raw text (finish=${aiResult2.stopReason ?? 'unknown'}).`);
       res.json({ data: { reply: aiResult2.text.trim(), revisedAnalysis: null }, error: null });
       return;
     }
@@ -791,12 +791,11 @@ Rules:
 - For missing_from_tb: pdfAmount = actual PDF amount, tbAmount = null`;
 
     const { provider: verifyProvider, fastModel: verifyModel } = await getLLMProvider();
-    const aiResult3 = await verifyProvider.complete({
-      model: verifyModel,
-      maxTokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    logAiUsage({ endpoint: 'pdf/verify', model: verifyModel, inputTokens: aiResult3.inputTokens, outputTokens: aiResult3.outputTokens, userId: req.user?.userId, clientId: period.client_id });
+    const { result: aiResult3, logId: verifyLogId } = await aiComplete(
+      verifyProvider,
+      { model: verifyModel, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
+      { endpoint: 'pdf/verify', userId: req.user?.userId, clientId: period.client_id },
+    );
 
     type VerificationResult = {
       overallStatus: 'verified' | 'discrepancies';
@@ -813,6 +812,9 @@ Rules:
     };
     const verificationResult = extractJsonObject<VerificationResult>(aiResult3.text);
     if (!verificationResult) {
+      const detail = `finish=${aiResult3.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult3.text.slice(0, 500))}`;
+      console.error(`[pdf/verify] Failed to parse AI response: ${detail}`);
+      markAiUsageParseError(verifyLogId, `Invalid JSON. ${detail}`);
       res.status(500).json({ data: null, error: { code: 'AI_ERROR', message: 'AI returned invalid format' } });
       return;
     }

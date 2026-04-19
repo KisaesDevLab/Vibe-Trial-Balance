@@ -5,7 +5,7 @@
 import { Router, Response } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { logAiUsage } from '../lib/aiUsage';
+import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
@@ -113,15 +113,15 @@ Focus on:
 Return 5-15 observations. Be specific and actionable.`;
 
     const { provider, fastModel } = await getLLMProvider();
-    const aiResult = await provider.complete({
-      model: fastModel,
-      maxTokens: 2048,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    logAiUsage({ endpoint: 'diagnostics', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId: null });
+    const { result: aiResult, logId } = await aiComplete(
+      provider,
+      { model: fastModel, maxTokens: 2048, messages: [{ role: 'user', content: prompt }] },
+      { endpoint: 'diagnostics', userId: req.user?.userId, clientId: null },
+    );
 
     const observations = extractJsonArray(aiResult.text);
     if (!observations) {
+      markAiUsageParseError(logId, `Invalid JSON array (finish=${aiResult.stopReason ?? 'unknown'}). text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`);
       res.status(502).json({ data: null, error: { code: 'AI_PARSE_ERROR', message: 'AI returned an unrecognized format. Please try again.' } });
       return;
     }

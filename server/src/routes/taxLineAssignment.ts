@@ -5,7 +5,7 @@
 import { Router, Response } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { logAiUsage } from '../lib/aiUsage';
+import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
@@ -220,7 +220,7 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
     // Step d: batch AI for remaining accounts
     if (needsAi.length > 0) {
       try {
-        const aiSuggestions = await getAiSuggestions(needsAi, taxCodes, entityType, activityType);
+        const aiSuggestions = await getAiSuggestions(needsAi, taxCodes, entityType, activityType, { userId: req.user?.userId ?? null, clientId });
 
         for (const account of needsAi) {
           const aiResult = aiSuggestions.find((r) => r.account_number === account.account_number);
@@ -312,6 +312,7 @@ async function getAiSuggestions(
   taxCodes: TaxCodeRow[],
   entityType: string,
   activityType: string,
+  logCtx: { userId: number | null; clientId: number },
 ): Promise<AiSuggestionOutput[]> {
   const { provider, fastModel } = await getLLMProvider();
   const tokenSettings = await getAiTokenSettings();
@@ -363,17 +364,17 @@ Return a JSON array where each element has:
 - confidence: number (0.0 to 1.0)
 - reasoning: string (1-2 sentences)`;
 
-    const aiResult = await provider.complete({
-      model: fastModel,
-      maxTokens,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
-    });
-    logAiUsage({ endpoint: 'tax/auto-assign', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: null, clientId: null });
+    const { result: aiResult, logId } = await aiComplete(
+      provider,
+      { model: fastModel, maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] },
+      { endpoint: 'tax/auto-assign', userId: logCtx.userId, clientId: logCtx.clientId },
+    );
 
     const parsed = extractJsonArray<AiSuggestionOutput>(aiResult.text);
     if (!parsed) {
-      console.error(`[taxLineAssignment] AI batch ${Math.floor(i / BATCH_SIZE) + 1} returned non-array:`, aiResult.text.slice(0, 500));
+      const detail = `finish=${aiResult.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`;
+      console.error(`[taxLineAssignment] AI batch ${Math.floor(i / BATCH_SIZE) + 1} returned non-array:`, detail);
+      markAiUsageParseError(logId, `Batch ${Math.floor(i / BATCH_SIZE) + 1} invalid JSON array. ${detail}`);
       // Don't fail the whole run — skip this batch, caller will mark them unmappable
       continue;
     }

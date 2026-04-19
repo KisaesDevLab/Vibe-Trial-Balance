@@ -3,7 +3,7 @@
 // You may not distribute this software. See LICENSE for terms.
 
 import { db } from '../../db';
-import { logAiUsage } from '../../lib/aiUsage';
+import { aiComplete, markAiUsageParseError } from '../../lib/aiComplete';
 import { getLLMProvider } from '../../lib/aiClient';
 import { extractJsonArray } from '../../lib/aiJsonExtract';
 
@@ -90,15 +90,17 @@ Return 5-15 observations.`;
 
   try {
     const { provider, fastModel } = await getLLMProvider();
-    const aiResult = await provider.complete({
-      model: fastModel,
-      maxTokens: 2048,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    logAiUsage({ endpoint: 'mcp/diagnostics', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: null, clientId: null });
+    const { result: aiResult, logId } = await aiComplete(
+      provider,
+      { model: fastModel, maxTokens: 2048, messages: [{ role: 'user', content: prompt }] },
+      { endpoint: 'mcp/diagnostics', userId: null, clientId: null },
+    );
 
     const observations = extractJsonArray<DiagnosticObservation>(aiResult.text);
-    if (!observations) throw new Error('AI returned invalid format');
+    if (!observations) {
+      markAiUsageParseError(logId, `Invalid JSON array (finish=${aiResult.stopReason ?? 'unknown'}). text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`);
+      throw new Error('AI returned invalid format');
+    }
     return { observations, periodId };
   } catch (err: unknown) {
     return { error: err instanceof Error ? err.message : 'Unknown error' };

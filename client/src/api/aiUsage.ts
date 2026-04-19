@@ -48,6 +48,8 @@ export async function getAiUsage(): Promise<AiUsageRow[]> {
   return res.data;
 }
 
+export type AiUsageStatus = 'success' | 'error' | 'parse_error' | 'truncated';
+
 export interface AiUsageDetailRow {
   id: number;
   created_at: string;
@@ -60,6 +62,12 @@ export interface AiUsageDetailRow {
   client_id: number | null;
   username: string | null;
   client_name: string | null;
+  status: AiUsageStatus;
+  finish_reason: string | null;
+  error_message: string | null;
+  duration_ms: number | null;
+  max_tokens: number | null;
+  http_status: number | null;
 }
 
 export interface AiUsageDetailParams {
@@ -70,6 +78,7 @@ export interface AiUsageDetailParams {
   userId?: number;
   from?: string;
   to?: string;
+  status?: AiUsageStatus | '';
 }
 
 export interface AiUsageDetailMeta {
@@ -87,6 +96,7 @@ export async function getAiUsageDetail(params: AiUsageDetailParams = {}): Promis
   if (params.userId)   qs.set('userId',   String(params.userId));
   if (params.from)     qs.set('from',     params.from);
   if (params.to)       qs.set('to',       params.to);
+  if (params.status)   qs.set('status',   params.status);
   const query = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiFetch<AiUsageDetailRow[]>(`/settings/ai-usage/detail${query}`);
   if (res.error) throw new Error(res.error.message);

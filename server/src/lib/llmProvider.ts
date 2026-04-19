@@ -39,6 +39,13 @@ export interface LLMResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  /**
+   * Why the model stopped generating. Standard values across providers:
+   *   - Claude:  'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | 'pause_turn' | 'refusal'
+   *   - OpenAI:  'stop' | 'length' | 'content_filter' | 'tool_calls'
+   * `'length'` / `'max_tokens'` both indicate the output was truncated at cap.
+   */
+  stopReason?: string | null;
 }
 
 export interface LLMUsage {
@@ -89,6 +96,7 @@ export class ClaudeProvider implements LLMProvider {
       text: textBlock && 'text' in textBlock ? textBlock.text : '',
       inputTokens: msg.usage.input_tokens,
       outputTokens: msg.usage.output_tokens,
+      stopReason: msg.stop_reason ?? null,
     };
   }
 
@@ -198,6 +206,7 @@ export class OpenAICompatProvider implements LLMProvider {
       text,
       inputTokens: res.usage?.prompt_tokens ?? 0,
       outputTokens: res.usage?.completion_tokens ?? 0,
+      stopReason: res.choices[0]?.finish_reason ?? null,
     };
   }
 

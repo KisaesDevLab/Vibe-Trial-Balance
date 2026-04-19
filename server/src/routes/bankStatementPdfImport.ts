@@ -10,6 +10,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { logAiUsage } from '../lib/aiUsage';
+import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
@@ -378,12 +379,11 @@ bankStatementPdfRouter.post(
             ? buildTextPrompt(chunks[i])
             : buildChunkPrompt(chunks[i], i, chunks.length);
 
-          const chunkResult = await provider.complete({
-            model: primaryModel,
-            maxTokens: tokenSettings.maxTokensBankStatement,
-            messages: [{ role: 'user', content: prompt }],
-          });
-          logAiUsage({ endpoint: 'bank-statement-pdf/analyze', model: primaryModel, inputTokens: chunkResult.inputTokens, outputTokens: chunkResult.outputTokens, userId: req.user?.userId, clientId });
+          const { result: chunkResult, logId: chunkLogId } = await aiComplete(
+            provider,
+            { model: primaryModel, maxTokens: tokenSettings.maxTokensBankStatement, messages: [{ role: 'user', content: prompt }] },
+            { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, clientId },
+          );
 
           const hitTokenLimit = chunkResult.outputTokens >= tokenSettings.maxTokensBankStatement - 10;
           console.log(`[bank-pdf] Chunk ${i + 1}/${chunks.length}: ${chunkResult.outputTokens} output tokens${hitTokenLimit ? ' (HIT LIMIT — output likely truncated!)' : ''}`);
@@ -397,16 +397,16 @@ bankStatementPdfRouter.post(
             console.log(`[bank-pdf] Re-splitting chunk ${i + 1} into ${subChunks.length} sub-chunks`);
             for (let j = 0; j < subChunks.length; j++) {
               const subPrompt = buildChunkPrompt(subChunks[j], j, subChunks.length);
-              const subResult = await provider.complete({
-                model: primaryModel,
-                maxTokens: tokenSettings.maxTokensBankStatement,
-                messages: [{ role: 'user', content: subPrompt }],
-              });
-              logAiUsage({ endpoint: 'bank-statement-pdf/analyze', model: primaryModel, inputTokens: subResult.inputTokens, outputTokens: subResult.outputTokens, userId: req.user?.userId, clientId });
+              const { result: subResult, logId: subLogId } = await aiComplete(
+                provider,
+                { model: primaryModel, maxTokens: tokenSettings.maxTokensBankStatement, messages: [{ role: 'user', content: subPrompt }] },
+                { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, clientId },
+              );
               console.log(`[bank-pdf] Sub-chunk ${j + 1}/${subChunks.length}: ${subResult.outputTokens} output tokens`);
               const subParsed = extractJsonObject<{ transactions?: BankStatementTransaction[]; warnings?: string[] }>(subResult.text);
               if (subParsed?.transactions) allTransactions.push(...subParsed.transactions);
               if (subParsed?.warnings) allWarnings.push(...subParsed.warnings);
+              if (!subParsed) markAiUsageParseError(subLogId, `Sub-chunk invalid JSON (finish=${subResult.stopReason ?? 'unknown'}).`);
             }
             continue;
           }
@@ -424,6 +424,7 @@ bankStatementPdfRouter.post(
           } else {
             allWarnings.push(`Chunk ${i + 1} failed to parse — some transactions may be missing.`);
             console.warn(`[bank-pdf] Chunk ${i + 1} failed to parse. Raw output (first 500 chars): ${chunkResult.text.slice(0, 500)}`);
+            markAiUsageParseError(chunkLogId, `Chunk ${i + 1} invalid JSON (finish=${chunkResult.stopReason ?? 'unknown'}).`);
           }
         }
 
@@ -453,14 +454,18 @@ bankStatementPdfRouter.post(
         const [aiProvider, aiModel] = useVision
           ? [vision.provider, vision.model]
           : [provider, primaryModel];
-        const aiResult = await aiProvider.complete({
-          model: aiModel,
-          maxTokens,
-          messages: [{ role: 'user', content: messageContent! }],
-        });
-        logAiUsage({ endpoint: 'bank-statement-pdf/analyze', model: aiModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
+        const { result: aiResult, logId: singleLogId } = await aiComplete(
+          aiProvider,
+          { model: aiModel, maxTokens, messages: [{ role: 'user', content: messageContent! }] },
+          { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, clientId },
+        );
 
         analysisResult = extractJsonObject<BankStatementAnalysisResult>(aiResult.text);
+        if (!analysisResult) {
+          const detail = `finish=${aiResult.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`;
+          console.error(`[bank-pdf] Failed to parse AI response: ${detail}`);
+          markAiUsageParseError(singleLogId, `Invalid JSON. ${detail}`);
+        }
       }
 
       if (!analysisResult) {

@@ -253,7 +253,7 @@ settingsRouter.get('/ai-usage/detail', async (req: AuthRequest, res: Response): 
   const limit  = Math.min(Math.max(1, Number(req.query.limit) || 50), 200);
   const offset = (page - 1) * limit;
 
-  const { endpoint, model, userId, from, to } = req.query as Record<string, string | undefined>;
+  const { endpoint, model, userId, from, to, status } = req.query as Record<string, string | undefined>;
 
   try {
     let query = db('ai_usage_log')
@@ -269,6 +269,12 @@ settingsRouter.get('/ai-usage/detail', async (req: AuthRequest, res: Response): 
         'ai_usage_log.estimated_cost_usd',
         'ai_usage_log.user_id',
         'ai_usage_log.client_id',
+        'ai_usage_log.status',
+        'ai_usage_log.finish_reason',
+        'ai_usage_log.error_message',
+        'ai_usage_log.duration_ms',
+        'ai_usage_log.max_tokens',
+        'ai_usage_log.http_status',
         'app_users.display_name as username',
         'clients.name as client_name',
       )
@@ -282,6 +288,7 @@ settingsRouter.get('/ai-usage/detail', async (req: AuthRequest, res: Response): 
     if (userId)   { const uid = Number(userId); if (!isNaN(uid)) { query = query.where('ai_usage_log.user_id', uid); countQuery = countQuery.where('user_id', uid); } }
     if (from)     { query = query.where('ai_usage_log.created_at', '>=', from);              countQuery = countQuery.where('created_at', '>=', from); }
     if (to)       { query = query.where('ai_usage_log.created_at', '<=', to);                countQuery = countQuery.where('created_at', '<=', to); }
+    if (status)   { query = query.where('ai_usage_log.status', status);                      countQuery = countQuery.where('status', status); }
 
     const [rows, [{ count }]] = await Promise.all([
       query.limit(limit).offset(offset),

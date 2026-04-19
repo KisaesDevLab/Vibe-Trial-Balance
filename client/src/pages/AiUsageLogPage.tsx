@@ -5,13 +5,24 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '../store/uiStore';
-import { getAiUsageDetail, type AiUsageDetailRow } from '../api/aiUsage';
+import { getAiUsageDetail, type AiUsageDetailRow, type AiUsageStatus } from '../api/aiUsage';
 import { DateInput } from '../components/DateInput';
 
 const LIMIT = 50;
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString();
+}
+
+function fmtDateTime(iso: string): string {
+  return new Date(iso).toLocaleString();
+}
+
+function fmtDuration(ms: number | null): string {
+  if (ms == null) return '—';
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
 function fmtCost(val: string | null): string {
@@ -31,6 +42,24 @@ function endpointBadgeClass(endpoint: string): string {
   return 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300';
 }
 
+function statusBadgeClass(status: AiUsageStatus): string {
+  switch (status) {
+    case 'success':     return 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400';
+    case 'truncated':   return 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400';
+    case 'parse_error': return 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-400';
+    case 'error':       return 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400';
+  }
+}
+
+function statusLabel(status: AiUsageStatus): string {
+  switch (status) {
+    case 'success':     return 'OK';
+    case 'truncated':   return 'Truncated';
+    case 'parse_error': return 'Parse error';
+    case 'error':       return 'Error';
+  }
+}
+
 export function AiUsageLogPage() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
@@ -40,8 +69,17 @@ export function AiUsageLogPage() {
   const [model, setModel]       = useState('');
   const [from, setFrom]         = useState('');
   const [to, setTo]             = useState('');
+  const [status, setStatus]     = useState<AiUsageStatus | ''>('');
+  const [detailRow, setDetailRow] = useState<AiUsageDetailRow | null>(null);
 
-  const params = { page, limit: LIMIT, endpoint: endpoint || undefined, model: model || undefined, from: from || undefined, to: to || undefined };
+  const params = {
+    page, limit: LIMIT,
+    endpoint: endpoint || undefined,
+    model:    model    || undefined,
+    from:     from     || undefined,
+    to:       to       || undefined,
+    status:   status   || undefined,
+  };
 
   const { data: result, isLoading, isError } = useQuery({
     queryKey: ['ai-usage-detail', params],
@@ -69,7 +107,7 @@ export function AiUsageLogPage() {
     <div className="p-6 max-w-7xl mx-auto space-y-4">
       <div>
         <h1 className="text-xl font-semibold text-gray-900 dark:text-white">AI Usage Log</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Per-call log of all AI API requests. Admin only.</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Per-call log of all AI API requests. Click a row for details. Admin only.</p>
       </div>
 
       {/* Filters */}
@@ -95,6 +133,20 @@ export function AiUsageLogPage() {
           />
         </div>
         <div>
+          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Status</label>
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value as AiUsageStatus | '')}
+            className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 w-36 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+          >
+            <option value="">All</option>
+            <option value="success">OK</option>
+            <option value="truncated">Truncated</option>
+            <option value="parse_error">Parse error</option>
+            <option value="error">Error</option>
+          </select>
+        </div>
+        <div>
           <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">From</label>
           <DateInput value={from} onChange={(e) => setFrom(e.target.value)} className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 w-36 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
         </div>
@@ -109,7 +161,7 @@ export function AiUsageLogPage() {
           Filter
         </button>
         <button
-          onClick={() => { setEndpoint(''); setModel(''); setFrom(''); setTo(''); setPage(1); }}
+          onClick={() => { setEndpoint(''); setModel(''); setFrom(''); setTo(''); setStatus(''); setPage(1); }}
           className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
         >
           Clear
@@ -135,10 +187,12 @@ export function AiUsageLogPage() {
               <thead className="bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
                 <tr>
                   <th className="px-3 py-2 text-left text-gray-500 dark:text-gray-400 font-medium">Timestamp</th>
+                  <th className="px-3 py-2 text-left text-gray-500 dark:text-gray-400 font-medium">Status</th>
                   <th className="px-3 py-2 text-left text-gray-500 dark:text-gray-400 font-medium">Endpoint</th>
                   <th className="px-3 py-2 text-left text-gray-500 dark:text-gray-400 font-medium">Model</th>
-                  <th className="px-3 py-2 text-right text-gray-500 dark:text-gray-400 font-medium">In Tokens</th>
-                  <th className="px-3 py-2 text-right text-gray-500 dark:text-gray-400 font-medium">Out Tokens</th>
+                  <th className="px-3 py-2 text-right text-gray-500 dark:text-gray-400 font-medium">In</th>
+                  <th className="px-3 py-2 text-right text-gray-500 dark:text-gray-400 font-medium">Out</th>
+                  <th className="px-3 py-2 text-right text-gray-500 dark:text-gray-400 font-medium">Duration</th>
                   <th className="px-3 py-2 text-right text-gray-500 dark:text-gray-400 font-medium">Est. Cost</th>
                   <th className="px-3 py-2 text-left text-gray-500 dark:text-gray-400 font-medium">User</th>
                   <th className="px-3 py-2 text-left text-gray-500 dark:text-gray-400 font-medium">Client</th>
@@ -146,9 +200,18 @@ export function AiUsageLogPage() {
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {rows.map((row) => (
-                  <tr key={row.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                  <tr
+                    key={row.id}
+                    onClick={() => setDetailRow(row)}
+                    className="hover:bg-gray-50 dark:hover:bg-gray-700/30 cursor-pointer"
+                  >
                     <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap font-mono">
                       {fmtDate(row.created_at)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-medium ${statusBadgeClass(row.status)}`}>
+                        {statusLabel(row.status)}
+                      </span>
                     </td>
                     <td className="px-3 py-2">
                       <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-medium ${endpointBadgeClass(row.endpoint)}`}>
@@ -163,6 +226,9 @@ export function AiUsageLogPage() {
                     </td>
                     <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-400 font-mono">
                       {Number(row.output_tokens).toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-400 font-mono">
+                      {fmtDuration(row.duration_ms)}
                     </td>
                     <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300 font-mono">
                       {fmtCost(row.estimated_cost_usd)}
@@ -205,6 +271,99 @@ export function AiUsageLogPage() {
           </div>
         </div>
       )}
+
+      {detailRow && (
+        <AiUsageDetailDrawer row={detailRow} onClose={() => setDetailRow(null)} />
+      )}
+    </div>
+  );
+}
+
+// ── Detail drawer ────────────────────────────────────────────────────────────
+
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[140px_1fr] gap-3 text-sm py-2 border-b border-gray-100 dark:border-gray-700 last:border-0">
+      <div className="text-gray-500 dark:text-gray-400">{label}</div>
+      <div className="text-gray-900 dark:text-gray-100 break-words">{children}</div>
+    </div>
+  );
+}
+
+function AiUsageDetailDrawer({ row, onClose }: { row: AiUsageDetailRow; onClose: () => void }) {
+  const tokensLine = row.max_tokens != null
+    ? `${row.output_tokens.toLocaleString()} / ${row.max_tokens.toLocaleString()}`
+    : row.output_tokens.toLocaleString();
+  const hitCap = row.max_tokens != null && row.output_tokens >= row.max_tokens - 10;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40" />
+      <div
+        className="relative w-full max-w-lg bg-white dark:bg-gray-800 h-full overflow-y-auto shadow-xl border-l border-gray-200 dark:border-gray-700"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-5 py-3 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Call details</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="px-5 py-3">
+          <DetailRow label="Timestamp">
+            <span className="font-mono">{fmtDateTime(row.created_at)}</span>
+          </DetailRow>
+          <DetailRow label="Status">
+            <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-medium ${statusBadgeClass(row.status)}`}>
+              {statusLabel(row.status)}
+            </span>
+            {hitCap && row.status === 'success' && (
+              <span className="ml-2 text-amber-600 dark:text-amber-400 text-xs">(hit max_tokens cap)</span>
+            )}
+          </DetailRow>
+          <DetailRow label="Endpoint">
+            <span className="font-mono">{row.endpoint}</span>
+          </DetailRow>
+          <DetailRow label="Model">
+            <span className="font-mono">{row.model}</span>
+          </DetailRow>
+          <DetailRow label="Input tokens">
+            <span className="font-mono">{row.input_tokens.toLocaleString()}</span>
+          </DetailRow>
+          <DetailRow label="Output / max">
+            <span className="font-mono">{tokensLine}</span>
+          </DetailRow>
+          <DetailRow label="Finish reason">
+            <span className="font-mono">{row.finish_reason ?? '—'}</span>
+          </DetailRow>
+          <DetailRow label="Duration">
+            <span className="font-mono">{fmtDuration(row.duration_ms)}</span>
+          </DetailRow>
+          <DetailRow label="HTTP status">
+            <span className="font-mono">{row.http_status ?? '—'}</span>
+          </DetailRow>
+          <DetailRow label="Est. cost">
+            <span className="font-mono">{fmtCost(row.estimated_cost_usd)}</span>
+          </DetailRow>
+          <DetailRow label="User">
+            {row.username ?? <span className="italic text-gray-400">system</span>}
+          </DetailRow>
+          <DetailRow label="Client">
+            {row.client_name ?? <span className="text-gray-400">—</span>}
+          </DetailRow>
+          {row.error_message && (
+            <DetailRow label="Error">
+              <pre className="font-mono text-xs whitespace-pre-wrap text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded px-2 py-1">
+                {row.error_message}
+              </pre>
+            </DetailRow>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

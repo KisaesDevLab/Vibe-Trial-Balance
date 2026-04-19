@@ -8,7 +8,7 @@ import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked } from '../lib/periodGuard';
-import { logAiUsage } from '../lib/aiUsage';
+import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
@@ -439,15 +439,17 @@ Rules:
 
       try {
         const { provider, fastModel } = await getLLMProvider();
-        const aiResult = await provider.complete({
-          model: fastModel,
-          maxTokens: 4096,
-          messages: [{ role: 'user', content: prompt }],
-        });
-        logAiUsage({ endpoint: 'csv/analyze', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
+        const { result: aiResult, logId } = await aiComplete(
+          provider,
+          { model: fastModel, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
+          { endpoint: 'csv/analyze', userId: req.user?.userId, clientId },
+        );
 
         const parsed = extractJsonObject<AiAnalysisResult>(aiResult.text);
-        if (!parsed) throw new Error('AI returned invalid format');
+        if (!parsed) {
+          markAiUsageParseError(logId, `Invalid JSON (finish=${aiResult.stopReason ?? 'unknown'}). text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`);
+          throw new Error('AI returned invalid format');
+        }
         // Extract column mapping only — discard AI's matches
         columnMapping = {
           delimiter: parsed.delimiter,
@@ -605,17 +607,18 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Use the EXACT csv
 ]`;
 
     const { provider, fastModel } = await getLLMProvider();
-    const aiResult2 = await provider.complete({
-      model: fastModel,
-      maxTokens: Math.max(2048, needNumbers.length * 150),
-      messages: [{ role: 'user', content: prompt }],
-    });
-    logAiUsage({ endpoint: 'csv/suggest-numbers', model: fastModel, inputTokens: aiResult2.inputTokens, outputTokens: aiResult2.outputTokens, userId: req.user?.userId, clientId });
+    const { result: aiResult2, logId: suggestLogId } = await aiComplete(
+      provider,
+      { model: fastModel, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
+      { endpoint: 'csv/suggest-numbers', userId: req.user?.userId, clientId },
+    );
 
     type SuggestionRaw = { csvRow: number; accountName?: string; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
     const rawSuggestions = extractJsonArray<SuggestionRaw>(aiResult2.text);
     if (!rawSuggestions) {
-      console.error('[csv/suggest-numbers] Failed to parse AI response:', aiResult2.text.slice(0, 500));
+      const detail = `finish=${aiResult2.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult2.text.slice(0, 500))}`;
+      console.error('[csv/suggest-numbers] Failed to parse AI response:', detail);
+      markAiUsageParseError(suggestLogId, `Invalid JSON. ${detail}`);
       res.status(500).json({ data: null, error: { code: 'PARSE_ERROR', message: 'AI returned unexpected format' } });
       return;
     }
@@ -715,16 +718,15 @@ If the user requests corrections to the column mapping, account matching, or row
     ];
 
     const { provider, fastModel } = await getLLMProvider();
-    const aiResult3 = await provider.complete({
-      model: fastModel,
-      maxTokens: 2048,
-      system: systemPrompt,
-      messages: aiMessages,
-    });
-    logAiUsage({ endpoint: 'csv/chat', model: fastModel, inputTokens: aiResult3.inputTokens, outputTokens: aiResult3.outputTokens, userId: req.user?.userId, clientId });
+    const { result: aiResult3, logId: chatLogId } = await aiComplete(
+      provider,
+      { model: fastModel, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
+      { endpoint: 'csv/chat', userId: req.user?.userId, clientId },
+    );
 
     const parsed = extractJsonObject<{ reply: string; revisedAnalysis: AiAnalysisResult | null }>(aiResult3.text);
     if (!parsed) {
+      markAiUsageParseError(chatLogId, `Chat reply not valid JSON; passed through raw text (finish=${aiResult3.stopReason ?? 'unknown'}).`);
       res.json({ data: { reply: aiResult3.text.trim(), revisedAnalysis: null }, error: null });
       return;
     }

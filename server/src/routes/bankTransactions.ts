@@ -12,7 +12,7 @@ import { createHash } from 'crypto';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
-import { logAiUsage } from '../lib/aiUsage';
+import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonArray } from '../lib/aiJsonExtract';
@@ -897,15 +897,15 @@ ${txList}
 Respond with a JSON array and nothing else. Each element: { "id": number, "accountId": number, "confidence": 0.0-1.0, "reasoning": string }`;
 
     const { provider, fastModel } = await getLLMProvider();
-    const aiResult = await provider.complete({
-      model: fastModel,
-      maxTokens: 8192,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    logAiUsage({ endpoint: 'bank/classify', model: fastModel, inputTokens: aiResult.inputTokens, outputTokens: aiResult.outputTokens, userId: req.user?.userId, clientId });
+    const { result: aiResult, logId } = await aiComplete(
+      provider,
+      { model: fastModel, maxTokens: 8192, messages: [{ role: 'user', content: prompt }] },
+      { endpoint: 'bank/classify', userId: req.user?.userId, clientId },
+    );
 
     const suggestions = extractJsonArray<{ id: number; accountId: number; confidence: number; reasoning: string }>(aiResult.text);
     if (!suggestions) {
+      markAiUsageParseError(logId, `Invalid JSON array (finish=${aiResult.stopReason ?? 'unknown'}). text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`);
       res.status(500).json({ data: null, error: { code: 'AI_PARSE_ERROR', message: 'AI response did not contain a JSON array' } });
       return;
     }
