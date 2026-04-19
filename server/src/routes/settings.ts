@@ -498,7 +498,7 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
         timeoutMs:                   Number(s['llm.timeout_ms'])              || 120000,
         ocrEnabled:                  s['llm.ocr_enabled'] === 'true',
         ocrProvider:                 (s['llm.ocr_provider'] === 'ollama-openai' ? 'ollama-openai' : 'llamacpp'),
-        ocrBaseUrl:                  s['llm.ocr_base_url']                   || '',
+        ocrBaseUrl:                  s['llm.ocr_base_url']                   || 'http://vibe-glm-ocr:8090',
         ocrModel:                    s['llm.ocr_model']                      || 'glm-ocr',
         ocrTimeoutMs:                Number(s['llm.ocr_timeout_ms'])         || 120000,
         maxTokensDefault:            Number(s['ai.max_tokens_default'])       || 4096,

@@ -7,7 +7,7 @@
 exports.up = async function (knex) {
   const defaults = [
     { key: 'llm.ocr_enabled',    value: 'false'   },
-    { key: 'llm.ocr_base_url',   value: ''         },
+    { key: 'llm.ocr_base_url',   value: 'http://vibe-glm-ocr:8090' },
     { key: 'llm.ocr_model',      value: 'glm-ocr'  },
     { key: 'llm.ocr_timeout_ms', value: '120000'   }, // 2 min per page
   ];

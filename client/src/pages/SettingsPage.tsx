@@ -223,7 +223,7 @@ export function SettingsPage() {
     timeoutMs: 120000,
     ocrEnabled: false,
     ocrProvider: 'llamacpp' as const,
-    ocrBaseUrl: '',
+    ocrBaseUrl: 'http://vibe-glm-ocr:8090',
     ocrModel: 'glm-ocr',
     ocrTimeoutMs: 120000,
     maxTokensDefault: 4096,
@@ -712,7 +712,7 @@ export function SettingsPage() {
                         const next: Partial<typeof effectiveLlm> = { ...prev, ocrProvider: value };
                         // Seed a sensible default URL when switching if the field is empty.
                         if (!effectiveLlm.ocrBaseUrl) {
-                          next.ocrBaseUrl = value === 'llamacpp' ? 'http://localhost:8080' : 'http://localhost:11434';
+                          next.ocrBaseUrl = value === 'llamacpp' ? 'http://vibe-glm-ocr:8090' : 'http://localhost:11434';
                         }
                         return next;
                       });
@@ -748,13 +748,13 @@ export function SettingsPage() {
                 <input
                   value={effectiveLlm.ocrBaseUrl}
                   onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), ocrBaseUrl: e.target.value }))}
-                  placeholder={effectiveLlm.ocrProvider === 'llamacpp' ? 'http://localhost:8080' : 'http://localhost:11434'}
+                  placeholder={effectiveLlm.ocrProvider === 'llamacpp' ? 'http://vibe-glm-ocr:8090' : 'http://localhost:11434'}
                   className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
                 />
                 <p className="text-[10px] text-gray-400 mt-0.5">
                   Requests are POSTed to <code className="px-1 rounded bg-purple-100 dark:bg-purple-900/40">{'{base}/v1/chat/completions'}</code>.
                 </p>
-                {effectiveLlm.ocrBaseUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(effectiveLlm.ocrBaseUrl) && (
+                {effectiveLlm.ocrBaseUrl && !/^https?:\/\/(localhost|127\.0\.0\.1|vibe-glm-ocr)(:|\/|$)/.test(effectiveLlm.ocrBaseUrl) && (
                   <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
                     Non-localhost URL: PDF page images will be sent over the network to this server. Ensure this is a trusted endpoint on a secure network.
                   </p>

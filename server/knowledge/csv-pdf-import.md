@@ -75,7 +75,7 @@ For scanned PDFs — especially dense bank and credit card statements — you ca
 3. Choose a backend:
    - **llama.cpp server** (recommended) — `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp), usually on port 8080
    - **Ollama (OpenAI-compatible)** — any Ollama instance with a vision model pulled, on port 11434
-4. Enter the **OCR Base URL** (e.g., `http://localhost:8080` or `http://localhost:11434`)
+4. Enter the **OCR Base URL** (e.g., `http://vibe-glm-ocr:8090` for the bundled Docker service, or `http://localhost:11434` for a local Ollama)
 5. Enter the **OCR Model** name (default: `glm-ocr`; other good choices: `minicpm-v`, `qwen3-vl`)
 6. Click **Test OCR Connection** to verify the server responds
 7. Click **Save**
