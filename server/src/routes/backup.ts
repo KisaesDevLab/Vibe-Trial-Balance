@@ -1300,6 +1300,47 @@ restoreRouter.get('/history', async (req: AuthRequest, res: Response): Promise<v
 // Scheduled backup
 // ─────────────────────────────────────────────────────────────────────────────
 
+// How many scheduled (`trigger_type = 'scheduled'`) backups to keep on disk.
+// Manual backups are NEVER pruned automatically — an admin made them, an admin
+// can delete them. Without this cap, a daily full backup of a 500-client firm
+// fills the Pi's SD card in a couple of months. 14 days is enough headroom to
+// notice a bad week of data and still recover.
+const SCHEDULED_BACKUP_RETENTION = 14;
+
+async function pruneOldScheduledBackups(): Promise<void> {
+  try {
+    const stale = await db('backup_history')
+      .where({ trigger_type: 'scheduled' })
+      .orderBy('created_at', 'desc')
+      .offset(SCHEDULED_BACKUP_RETENTION)
+      .select('id', 'storage_local', 'filename');
+
+    for (const row of stale) {
+      const filePath = row.storage_local as string | null;
+      if (filePath && fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (unlinkErr) {
+          // File-system failure shouldn't kill the prune — log and move on.
+          // Worst case the row stays, gets retried tomorrow.
+          console.warn(
+            `[backup] Could not unlink ${filePath}:`,
+            unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr),
+          );
+          continue;
+        }
+      }
+      await db('backup_history').where({ id: row.id }).delete();
+      console.log(`[backup] Pruned old scheduled backup: ${row.filename}`);
+    }
+  } catch (err: unknown) {
+    console.error(
+      '[backup] Prune failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
 export function startBackupScheduler(): void {
   // Run at 2:00 AM daily
   cron.schedule('0 2 * * *', async () => {
@@ -1307,10 +1348,15 @@ export function startBackupScheduler(): void {
     try {
       const record = await createBackup('full', { triggerType: 'scheduled' }, null);
       console.log(`[backup] Scheduled backup complete: ${record.filename}`);
+      // Prune AFTER the new backup lands so a transient prune failure can never
+      // leave the firm with zero scheduled backups on disk.
+      await pruneOldScheduledBackups();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       console.error(`[backup] Scheduled backup failed: ${message}`);
     }
   });
-  console.log('[backup] Scheduler registered (daily at 02:00)');
+  console.log(
+    `[backup] Scheduler registered (daily at 02:00, retention: ${SCHEDULED_BACKUP_RETENTION} days)`,
+  );
 }

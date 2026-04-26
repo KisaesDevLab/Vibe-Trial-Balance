@@ -10,6 +10,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import OpenAI from 'openai';
 import { getLLMProvider, DEFAULT_FAST_MODEL, DEFAULT_PRIMARY_MODEL, loadLLMSettings, buildProviderFromSettings } from '../lib/aiClient';
+import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { extractJsonObject } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 import { encrypt, decrypt, isEncrypted } from '../lib/encryption';
@@ -201,18 +202,25 @@ settingsRouter.post('/ai-pricing/fetch', async (req: AuthRequest, res: Response)
     const { provider, fastModel, primaryModel, vision } = await getLLMProvider();
     const modelList = [fastModel, primaryModel, vision.model].filter((v, i, a) => a.indexOf(v) === i); // dedupe
     const emptyStructure = modelList.map((m) => `"${m}":{"input":0.00,"output":0.00}`).join(',');
-    const aiResult = await provider.complete({
-      model: fastModel,
-      maxTokens: 512,
-      messages: [{
-        role: 'user',
-        content: `Return ONLY a valid JSON object (no prose, no markdown) with the current API pricing per million tokens for these models: ${modelList.join(' and ')}. Use this exact structure:
+    // aiComplete records the call in ai_usage_log so admins can debug a "fetch
+    // pricing" failure from the in-app AI Usage Log without SSH.
+    const { result: aiResult, logId } = await aiComplete(
+      provider,
+      {
+        model: fastModel,
+        maxTokens: 512,
+        messages: [{
+          role: 'user',
+          content: `Return ONLY a valid JSON object (no prose, no markdown) with the current API pricing per million tokens for these models: ${modelList.join(' and ')}. Use this exact structure:
 {${emptyStructure}}
 Fill in the actual USD prices per million tokens from your most current knowledge. If you don't know the pricing for a model, use 0.00.`,
-      }],
-    });
+        }],
+      },
+      { endpoint: 'settings/ai-pricing/fetch', userId: req.user?.userId },
+    );
     const pricing = extractJsonObject(aiResult.text);
     if (!pricing) {
+      markAiUsageParseError(logId, 'extractJsonObject returned null');
       res.status(500).json({ data: null, error: { code: 'AI_ERROR', message: 'AI returned unexpected format' } });
       return;
     }
