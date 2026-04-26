@@ -3,6 +3,7 @@
 // You may not distribute this software. See LICENSE for terms.
 
 import { apiFetch } from './client';
+import { API_BASE_URL } from '../lib/baseConfig';
 
 export interface SoftwareMap {
   id: number;
@@ -115,24 +116,18 @@ export const importTaxCodes = (csvText: string) =>
     body: JSON.stringify({ csv: csvText }),
   });
 
+// Returns the export URL. The endpoint requires Bearer auth, so callers must
+// pair this with `downloadExport()` (which fetches as a blob with the JWT
+// header) rather than dropping the URL into a bare <a href>.
 export const exportTaxCodesUrl = (params?: ListTaxCodesParams): string => {
-  const stored = localStorage.getItem('auth');
-  let token = '';
-  try {
-    const parsed = JSON.parse(stored ?? '{}') as { state?: { token?: string } };
-    token = parsed.state?.token ?? '';
-  } catch {
-    // ignore
-  }
   const query = buildQuery({
     returnForm: params?.returnForm,
     activityType: params?.activityType,
     taxSoftware: params?.taxSoftware,
     search: params?.search,
     includeInactive: params?.includeInactive,
-    token,
   });
-  return `/api/v1/tax-codes/export${query}`;
+  return `${API_BASE_URL}/tax-codes/export${query}`;
 };
 
 export const createSoftwareMap = (taxCodeId: number, data: SoftwareMapInput) =>

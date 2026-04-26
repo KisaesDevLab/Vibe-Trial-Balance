@@ -2,6 +2,8 @@
 // Licensed under the PolyForm Internal Use License 1.0.0.
 // You may not distribute this software. See LICENSE for terms.
 
+import { API_BASE_URL } from '../lib/baseConfig';
+
 // Helper to open/download a PDF from an authenticated endpoint
 // Since fetch with auth headers can't directly trigger download, use this approach:
 // 1. Fetch the PDF as a blob with the JWT Authorization header
@@ -48,19 +50,19 @@ export async function downloadPdf(url: string, filename: string, token: string):
 
 // Convenience wrappers for each report type
 export const pdfReports = {
-  trialBalance: (periodId: number) => `/api/v1/reports/periods/${periodId}/trial-balance`,
-  journalEntries: (periodId: number, type?: string) => `/api/v1/reports/periods/${periodId}/journal-entries${type ? `?type=${type}` : ''}`,
-  ajeListing: (periodId: number) => `/api/v1/reports/periods/${periodId}/aje-listing`,
-  generalLedger: (periodId: number, accountId?: number) => `/api/v1/reports/periods/${periodId}/general-ledger${accountId ? `?accountId=${accountId}` : ''}`,
-  incomeStatement: (periodId: number) => `/api/v1/reports/periods/${periodId}/income-statement`,
-  balanceSheet: (periodId: number) => `/api/v1/reports/periods/${periodId}/balance-sheet`,
-  taxCodeReport: (periodId: number) => `/api/v1/reports/periods/${periodId}/tax-code-report`,
-  workpaperIndex: (periodId: number) => `/api/v1/reports/periods/${periodId}/workpaper-index`,
-  taxBasisPl: (periodId: number) => `/api/v1/reports/periods/${periodId}/tax-basis-pl`,
-  taxReturnOrder: (periodId: number) => `/api/v1/reports/periods/${periodId}/tax-return-order`,
-  cashFlow: (periodId: number) => `/api/v1/reports/periods/${periodId}/cash-flow`,
-  m1: (periodId: number) => `/api/v1/reports/periods/${periodId}/m1`,
-  taxBasisSchedule: (periodId: number) => `/api/v1/reports/periods/${periodId}/tax-basis-schedule`,
+  trialBalance: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/trial-balance`,
+  journalEntries: (periodId: number, type?: string) => `${API_BASE_URL}/reports/periods/${periodId}/journal-entries${type ? `?type=${type}` : ''}`,
+  ajeListing: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/aje-listing`,
+  generalLedger: (periodId: number, accountId?: number) => `${API_BASE_URL}/reports/periods/${periodId}/general-ledger${accountId ? `?accountId=${accountId}` : ''}`,
+  incomeStatement: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/income-statement`,
+  balanceSheet: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/balance-sheet`,
+  taxCodeReport: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-code-report`,
+  workpaperIndex: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/workpaper-index`,
+  taxBasisPl: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-basis-pl`,
+  taxReturnOrder: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-return-order`,
+  cashFlow: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/cash-flow`,
+  m1: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/m1`,
+  taxBasisSchedule: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-basis-schedule`,
   workpaperMerged: (periodId: number, reportIds: string[]) =>
-    `/api/v1/reports/periods/${periodId}/workpaper-merged?reports=${reportIds.join(',')}`,
+    `${API_BASE_URL}/reports/periods/${periodId}/workpaper-merged?reports=${reportIds.join(',')}`,
 };

@@ -1,3 +1,19 @@
+# Production compose — pulls prebuilt images from GitHub Container Registry.
+#
+#   curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/docker-compose.prod.yml
+#   cp .env.example .env       # fill in required vars
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Pin the image tag with IMAGE_TAG in .env (defaults to `latest`).
+#
+# Multi-app mode (Vibe TB sharing a host with other Vibe products behind a
+# shared Caddy ingress) layers `docker-compose.grouped.yml` on top:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.grouped.yml up -d
+#
+# Local OCR (GLM-OCR) ships under the optional `ai` profile. Operators who run
+# OCR externally leave the profile off and point OCR_BASE_URL via the in-app
+# Settings page.
+
 services:
   db:
     image: postgres:16-alpine
@@ -8,7 +24,6 @@ services:
       POSTGRES_DB: vibe_tb_db
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # Memory cap sized for a Raspberry Pi 5 (8GB). Adjust upward on larger hosts.
     mem_limit: 1g
     mem_reservation: 256m
     healthcheck:
@@ -22,10 +37,9 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  server:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
+  api:
+    image: ghcr.io/kisaesdevlab/vibe-tb-api:${IMAGE_TAG:-latest}
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       db:
@@ -41,19 +55,20 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env (use `openssl rand -hex 32`)}
       JWT_EXPIRY: ${JWT_EXPIRY:-8h}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set in .env (use `openssl rand -hex 32`)}
-      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:?ALLOWED_ORIGIN must be set in .env (e.g. https://your-host)}
-      APP_BASE_URL: ${APP_BASE_URL:-${ALLOWED_ORIGIN}}
+      # Required in single-app mode (server exits at boot if missing in prod).
+      # In multi-app mode, docker-compose.grouped.yml overrides this from VIBE_HOST.
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-}
+      APP_BASE_URL: ${APP_BASE_URL:-${ALLOWED_ORIGIN:-}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       STRICT_AI_URL_SAFETY: ${STRICT_AI_URL_SAFETY:-}
-      # Cap the Node heap on Pi-class hardware so OOMs take down the container
-      # rather than thrashing the whole host.
       NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=1024}
     volumes:
       - uploads:/app/server/uploads
       - backups:/app/server/backups
-    # NOTE: the server does NOT publish a host port. Client (nginx) talks to it
-    # on the internal Docker network. Exposing 3001 to the host bypasses nginx
-    # rate limiting and the /api/v1/backup/ body-size cap.
+    # The api is NOT published to the host — web (nginx) reaches it on the
+    # internal compose network. Publishing 3001 would bypass nginx's rate
+    # limit and backup body-size cap. In multi-app mode, Caddy reaches it
+    # via the `vibe_ingress` network attached by docker-compose.grouped.yml.
     expose:
       - "3001"
     mem_limit: 1536m
@@ -70,18 +85,51 @@ services:
         max-size: "10m"
         max-file: "5"
 
-  client:
-    build:
-      context: .
-      dockerfile: Dockerfile.client
+  web:
+    image: ghcr.io/kisaesdevlab/vibe-tb-web:${IMAGE_TAG:-latest}
+    pull_policy: always
     restart: unless-stopped
     depends_on:
-      server:
+      api:
         condition: service_healthy
+    environment:
+      # Single-app default '/'. Override to '/tb/' (etc.) when behind a shared
+      # Caddy ingress — see docker-compose.grouped.yml.
+      VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
     ports:
-      - "80:80"
+      - "${WEB_PUBLISH_PORT:-80}:80"
     mem_limit: 128m
     mem_reservation: 32m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  glm-ocr:
+    # Optional local OCR appliance. The image is published from a separate
+    # KisaesDevLab repository; until then this profile is a placeholder and
+    # operators wanting local OCR should run vibe-glm-ocr externally and set
+    # OCR_BASE_URL via Admin → Settings.
+    #
+    # The default OCR URL baked into the SPA / server is `http://vibe-glm-ocr:8090`,
+    # so we expose this service under that alias on the default compose network.
+    # Without the alias, the api container would resolve `glm-ocr` (the service
+    # name) but not `vibe-glm-ocr`, and the default URL would 503.
+    image: ghcr.io/kisaesdevlab/vibe-glm-ocr:${OCR_IMAGE_TAG:-latest}
+    profiles: ["ai"]
+    pull_policy: always
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - vibe-glm-ocr
+    expose:
+      - "8090"
+    volumes:
+      - ocr-cache:/cache
+    mem_limit: 4g
+    mem_reservation: 1g
     logging:
       driver: json-file
       options:
@@ -92,3 +140,4 @@ volumes:
   pgdata:
   uploads:
   backups:
+  ocr-cache:

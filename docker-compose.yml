@@ -1,4 +1,17 @@
-﻿services:
+# Developer-only stack: PostgreSQL (+ optional pgAdmin under the `tools` profile).
+#
+# The full app runs via `npm run dev` against this DB. For a containerized
+# build of the SPA + API, see `docker-compose.prod.yml` (pulls images from
+# GHCR). Multi-app mode behind shared Caddy uses `docker-compose.grouped.yml`
+# as an overlay on top of the prod compose.
+#
+# POSTGRES_PUBLISH_PORT defaults to 5432 to keep `npm run dev` working
+# out of the box (knexfile defaults DB_PORT=5432). The Vibe distribution
+# plan assigns Vibe TB to 5436 in *production* multi-app deployments to
+# avoid collisions with other Vibe products; for dev, only one product
+# runs at a time so 5432 is fine.
+
+services:
   db:
     image: postgres:16-alpine
     container_name: vibe-tb-db
@@ -8,20 +21,21 @@
       POSTGRES_PASSWORD: localdev123
       POSTGRES_DB: vibe_tb_db
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PUBLISH_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: vibe-tb-pgadmin
+    profiles: ["tools"]
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@local.dev
       PGADMIN_DEFAULT_PASSWORD: admin
       PGADMIN_LISTEN_PORT: 5050
     ports:
-      - "5050:5050"
+      - "${PGADMIN_PUBLISH_PORT:-5051}:5050"
     depends_on:
       - db
 

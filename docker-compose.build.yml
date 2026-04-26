@@ -1,0 +1,20 @@
+# Build-from-source overlay — layer on top of docker-compose.prod.yml when you
+# want to bake in a local modification instead of pulling prebuilt GHCR images.
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.build.yml up -d --build
+#
+# `pull_policy: build` ensures Compose never tries to fetch the GHCR image when
+# both `image:` and `build:` are set on the same service.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    pull_policy: build
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    pull_policy: build

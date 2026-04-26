@@ -4,7 +4,7 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, pushToast } from '../store/uiStore';
 import { checkFileSize } from '../utils/fileLimits';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import {
@@ -15,6 +15,7 @@ import {
   downloadUrl,
   type ClientDocument,
 } from '../api/documents';
+import { downloadExport } from '../api/exports';
 import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -369,14 +370,21 @@ export function DocumentsPage() {
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1 justify-end">
-                      {/* Download */}
-                      <a
-                        href={downloadUrl(doc.id)}
-                        download={doc.filename}
+                      {/* Download — bare <a href> can't carry a Bearer token, so
+                          fetch as a blob and trigger the download manually. */}
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await downloadExport(downloadUrl(doc.id), doc.filename);
+                          } catch (err) {
+                            pushToast(err instanceof Error ? err.message : 'Download failed', 'error');
+                          }
+                        }}
                         className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
                       >
                         Download
-                      </a>
+                      </button>
                       {/* Link */}
                       <button
                         onClick={() => setLinkTarget(doc)}

@@ -4,9 +4,11 @@
 
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useUIStore } from '../store/uiStore';
+import { useAuthStore, useUIStore, pushToast } from '../store/uiStore';
 import { listPeriods, type Period } from '../api/periods';
 import { getComparison, upsertComparisonNote, type ComparisonRow } from '../api/comparison';
+import { downloadPdf, openPdfPreview } from '../api/pdfReports';
+import { API_BASE_URL } from '../lib/baseConfig';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -126,9 +128,33 @@ export function MultiPeriodPage() {
 
   const rows = useMemo(() => compData?.rows ?? [], [compData]);
 
-  // PDF download
-  const pdfUrl = (preview: boolean) =>
-    `/api/v1/reports/periods/${selectedPeriodId}/flux/${comparePeriodId}?preview=${preview ? 'true' : 'false'}`;
+  // The flux PDF endpoint requires Bearer auth, so a bare <a href> would 401.
+  // Fetch the PDF as a blob with the JWT header, then preview/download.
+  const token = useAuthStore((s) => s.token);
+  const buildPdfUrl = (preview: boolean) =>
+    `${API_BASE_URL}/reports/periods/${selectedPeriodId}/flux/${comparePeriodId}?preview=${preview ? 'true' : 'false'}`;
+
+  async function handlePreviewPdf(): Promise<void> {
+    if (!token) return;
+    try {
+      await openPdfPreview(buildPdfUrl(true), token);
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Failed to open PDF', 'error');
+    }
+  }
+
+  async function handleDownloadPdf(): Promise<void> {
+    if (!token) return;
+    try {
+      await downloadPdf(
+        buildPdfUrl(false),
+        `flux-analysis-${selectedPeriodId}-vs-${comparePeriodId}.pdf`,
+        token,
+      );
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Failed to download PDF', 'error');
+    }
+  }
 
   if (!selectedPeriodId) {
     return (
@@ -151,21 +177,20 @@ export function MultiPeriodPage() {
         </div>
         {compData && comparePeriodId !== '' && (
           <div className="flex items-center gap-2">
-            <a
-              href={pdfUrl(true)}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              onClick={handlePreviewPdf}
               className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300"
             >
               Preview PDF
-            </a>
-            <a
-              href={pdfUrl(false)}
-              download
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadPdf}
               className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
             >
               Download PDF
-            </a>
+            </button>
           </div>
         )}
       </div>

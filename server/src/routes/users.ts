@@ -9,6 +9,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest, invalidateAuthCache } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
+import { passwordSchema } from '../lib/passwordPolicy';
 
 export const usersRouter = Router();
 usersRouter.use(authMiddleware);
@@ -20,12 +21,6 @@ function adminOnly(req: AuthRequest, res: Response, next: NextFunction): void {
   }
   next();
 }
-
-const passwordSchema = z.string().min(8, 'Password must be at least 8 characters')
-  .max(128)
-  .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-  .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
-  .regex(/[0-9]/, 'Password must contain at least one number');
 
 const userSchema = z.object({
   username: z.string().min(2).max(100),

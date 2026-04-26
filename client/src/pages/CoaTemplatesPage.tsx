@@ -4,9 +4,11 @@
 
 import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAuthStore, useUIStore } from '../store/uiStore';
+import { useAuthStore, useUIStore, pushToast } from '../store/uiStore';
 import { checkFileSize } from '../utils/fileLimits';
 import { confirmAction } from '../components/ConfirmDialog';
+import { API_BASE_URL } from '../lib/baseConfig';
+import { downloadExport } from '../api/exports';
 import {
   listCoaTemplates,
   getCoaTemplate,
@@ -131,14 +133,20 @@ function ViewAccountsModal({
                 colorClass={businessTypeColor(template.business_type)}
               />
             </p>
-            <a
-              href={exportTemplateUrl(template.id)}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const filename = `coa-template-${template.id}-${(template.name || 'template').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.xlsx`;
+                  await downloadExport(exportTemplateUrl(template.id), filename);
+                } catch (err) {
+                  pushToast(err instanceof Error ? err.message : 'Export failed', 'error');
+                }
+              }}
+              className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline-offset-2 hover:underline"
             >
               Export Excel
-            </a>
+            </button>
           </div>
 
           {Object.entries(grouped).map(([cat, accounts]) => (
@@ -194,7 +202,7 @@ function ApplyModal({
   const { data: clientsData } = useQuery({
     queryKey: ['clients-list-for-apply'],
     queryFn: async () => {
-      const res = await fetch('/api/v1/clients', {
+      const res = await fetch(`${API_BASE_URL}/clients`, {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
       const json = await res.json() as { data: { id: number; name: string }[]; error: null };
@@ -412,7 +420,7 @@ function CreateFromClientModal({
   const { data: clientsData } = useQuery({
     queryKey: ['clients-list-for-create'],
     queryFn: async () => {
-      const res = await fetch('/api/v1/clients', {
+      const res = await fetch(`${API_BASE_URL}/clients`, {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
       const json = await res.json() as { data: { id: number; name: string }[]; error: null };

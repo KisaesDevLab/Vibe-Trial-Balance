@@ -3,6 +3,7 @@
 // You may not distribute this software. See LICENSE for terms.
 
 import { apiFetch } from './client';
+import { API_BASE_URL } from '../lib/baseConfig';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -91,18 +92,18 @@ export const getBackupHistory = (clientId?: number) =>
 export const deleteBackup = (backupId: number) =>
   apiFetch<{ deleted: boolean }>(`/backup/${backupId}`, { method: 'DELETE' });
 
+// Returns the download URL. The endpoint requires Bearer auth, so callers must
+// pair this with `downloadBackup()` (which fetches as a blob with the JWT
+// header) rather than dropping the URL into a bare <a href>.
 export function getBackupDownloadUrl(backupId: number): string {
-  const stored = localStorage.getItem('auth');
-  const token = stored ? (JSON.parse(stored) as { state?: { token?: string } }).state?.token ?? '' : '';
-  // Return a URL; the download is triggered via a link with the Authorization header workaround
-  return `/api/v1/backup/${backupId}/download?token=${encodeURIComponent(token)}`;
+  return `${API_BASE_URL}/backup/${backupId}/download`;
 }
 
 export async function downloadBackup(backupId: number, filename: string): Promise<void> {
   const stored = localStorage.getItem('auth');
   const token = stored ? (JSON.parse(stored) as { state?: { token?: string } }).state?.token ?? '' : '';
 
-  const response = await fetch(`/api/v1/backup/${backupId}/download`, {
+  const response = await fetch(`${API_BASE_URL}/backup/${backupId}/download`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 
@@ -134,7 +135,7 @@ export async function uploadBackupFile(file: File): Promise<{ data: UploadPrevie
 
   let response: Response;
   try {
-    response = await fetch('/api/v1/restore/upload', {
+    response = await fetch(`${API_BASE_URL}/restore/upload`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: formData,

@@ -3,6 +3,7 @@
 // You may not distribute this software. See LICENSE for terms.
 
 import { apiFetch } from './client';
+import { API_BASE_URL } from '../lib/baseConfig';
 
 export interface ClientDocument {
   id: number;
@@ -37,7 +38,7 @@ export const uploadDocument = (clientId: number, file: File): Promise<Response> 
   }
   const formData = new FormData();
   formData.append('file', file);
-  return fetch(`/api/v1/clients/${clientId}/documents`, {
+  return fetch(`${API_BASE_URL}/clients/${clientId}/documents`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
@@ -57,5 +58,5 @@ export const linkDocument = (
   });
 
 export function downloadUrl(id: number): string {
-  return `/api/v1/documents/${id}/download`;
+  return `${API_BASE_URL}/documents/${id}/download`;
 }

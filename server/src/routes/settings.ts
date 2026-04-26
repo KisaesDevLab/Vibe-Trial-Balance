@@ -15,6 +15,7 @@ import { sendServerError } from '../lib/safeError';
 import { encrypt, decrypt, isEncrypted } from '../lib/encryption';
 import { logAudit } from '../lib/periodGuard';
 import { loadOcrSettings, testOcrConnection } from '../lib/ocrProvider';
+import { assertSafeOutboundUrl } from '../lib/urlSafety';
 
 export const settingsRouter = Router();
 settingsRouter.use(authMiddleware);
@@ -629,6 +630,31 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     const effectiveOcrUrl = d.ocrBaseUrl ?? curOcr['llm.ocr_base_url'] ?? '';
     if (!effectiveOcrUrl) {
       res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'OCR Base URL is required when enabling OCR pre-processing.' } });
+      return;
+    }
+  }
+
+  // SSRF guard: every admin-supplied base URL must pass assertSafeOutboundUrl
+  // BEFORE we persist it. Without this, a malicious or compromised admin
+  // (or replayed PUT) could point the server at AWS/GCP/Azure IMDS — every
+  // outbound LLM/OCR fetch then leaks instance credentials. The guard always
+  // blocks IMDS endpoints; in cloud deployments it also blocks RFC1918 when
+  // STRICT_AI_URL_SAFETY=true. Self-hosted Pi setups are unaffected.
+  const urlsToCheck: Array<[string, string | undefined]> = [
+    ['Ollama Base URL',                d.ollamaBaseUrl],
+    ['OpenAI-compatible Base URL',     d.openaiCompatBaseUrl],
+    ['OCR Base URL',                   d.ocrBaseUrl],
+  ];
+  for (const [label, url] of urlsToCheck) {
+    if (!url) continue;
+    try {
+      await assertSafeOutboundUrl(url);
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : 'invalid URL';
+      res.status(400).json({
+        data: null,
+        error: { code: 'VALIDATION_ERROR', message: `${label} rejected: ${reason}` },
+      });
       return;
     }
   }

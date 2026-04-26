@@ -3,8 +3,9 @@
 // You may not distribute this software. See LICENSE for terms.
 
 import { apiFetch } from './client';
+import { API_BASE_URL } from '../lib/baseConfig';
 
-const BASE_URL = '/api/v1';
+const BASE_URL = API_BASE_URL;
 
 export type TaxSoftware = 'ultratax' | 'cch' | 'lacerte' | 'gosystem' | 'generic';
 

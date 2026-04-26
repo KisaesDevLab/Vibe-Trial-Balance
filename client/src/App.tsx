@@ -47,6 +47,7 @@ import { PyTieOutPage } from './pages/PyTieOutPage';
 import { TBPopoutPage } from './pages/TBPopoutPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { useAuthStore } from './store/uiStore';
+import { ROUTER_BASENAME } from './lib/baseConfig';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);
@@ -56,7 +57,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={ROUTER_BASENAME}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route

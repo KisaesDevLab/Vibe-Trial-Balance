@@ -119,8 +119,8 @@ The fastest path to a running installation. Multi-arch images (`linux/amd64` and
 
 | Image | Pull command |
 |-------|--------------|
-| Server | `docker pull ghcr.io/kisaesdevlab/vibe-tb-server:latest` |
-| Client | `docker pull ghcr.io/kisaesdevlab/vibe-tb-client:latest` |
+| API | `docker pull ghcr.io/kisaesdevlab/vibe-tb-api:latest` |
+| Web | `docker pull ghcr.io/kisaesdevlab/vibe-tb-web:latest` |
 
 Available tags:
 - `latest` — current main
@@ -133,7 +133,7 @@ Available tags:
 # Pick an install directory on the host
 mkdir -p /opt/vibe-tb && cd /opt/vibe-tb
 
-curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/docker-compose.prod.images.yml
+curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/docker-compose.prod.yml
 curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/.env.example
 cp .env.example .env
 ```
@@ -155,7 +155,7 @@ Compose will refuse to start if any required value is missing.
 ### 3. Start it
 
 ```bash
-docker compose -f docker-compose.prod.images.yml up -d
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 On first boot the server runs migrations and seeds the default `admin` / `admin` account. **Change the admin password immediately after first login.**
@@ -163,7 +163,7 @@ On first boot the server runs migrations and seeds the default `admin` / `admin`
 ### 4. Verify
 
 ```bash
-docker compose -f docker-compose.prod.images.yml ps      # db, server, client all "Up"
+docker compose -f docker-compose.prod.yml ps      # db, api, web all "Up"
 curl http://localhost:3001/api/v1/health                 # {"status":"ok","database":"connected",...}
 ```
 
@@ -173,8 +173,8 @@ Open the app at `http://YOUR_SERVER_IP` (port 80).
 
 ```bash
 cd /opt/vibe-tb
-docker compose -f docker-compose.prod.images.yml pull
-docker compose -f docker-compose.prod.images.yml up -d
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 With `IMAGE_TAG=latest`, `pull` fetches whatever `main` currently points to. For reproducible production, pin `IMAGE_TAG` to a specific `v*` tag or `sha-*` and bump it deliberately.
@@ -191,7 +191,40 @@ Back these up at the host level (e.g., `docker run --rm -v pgdata:/src alpine ta
 
 ### Raspberry Pi note
 
-The published images include `linux/arm64`, so the same `docker-compose.prod.images.yml` runs on a Pi 5 without any changes. Follow the steps above on the Pi — no compile step needed.
+The published images include `linux/arm64`, so the same `docker-compose.prod.yml` runs on a Pi 5 without any changes. Follow the steps above on the Pi — no compile step needed.
+
+### Single-app vs multi-app
+
+By default the compose above runs Vibe TB in **single-app mode** — the SPA is served at `/`, the web container publishes port 80 to the host, and `ALLOWED_ORIGIN` points at the host's bare URL.
+
+When Vibe TB shares a host with other Vibe products (MyBooks, Connect, Payroll Time) behind a shared Caddy ingress, layer `docker-compose.grouped.yml` over the prod compose and set `VIBE_HOST` and `VITE_BASE_PATH=/tb/` in `.env`:
+
+```bash
+docker network create vibe_ingress     # one-time per host
+docker compose -f docker-compose.prod.yml -f docker-compose.grouped.yml up -d
+```
+
+The same image runs in both modes — the web container substitutes `VITE_BASE_PATH` over the SPA assets at startup. The shared Caddy is provisioned by the [`vibe-installer`](https://github.com/KisaesDevLab/vibe-installer) repo; ad-hoc setups can stand up a Caddy attached to `vibe_ingress` with a single rule:
+
+```
+handle_path /tb/* {
+    reverse_proxy web:80
+}
+```
+
+That's enough — the web container's nginx already proxies `/api/*` to `api:3001` internally. `handle_path` strips the `/tb` prefix before forwarding, so the SPA's `/tb/api/v1/...` calls reach the backend as `/api/v1/...`.
+
+### Upgrading from `vibe-tb-server` / `vibe-tb-client` images
+
+The image names changed from `vibe-tb-server`/`vibe-tb-client` to `vibe-tb-api`/`vibe-tb-web` to align with the rest of the Vibe product family. The Compose service names changed correspondingly (`server` → `api`, `client` → `web`). To upgrade:
+
+```bash
+docker compose -f docker-compose.prod.yml down                                    # stop the old stack
+curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/docker-compose.prod.yml
+docker compose -f docker-compose.prod.yml up -d                                    # pulls vibe-tb-api / vibe-tb-web
+```
+
+Existing named volumes (`pgdata`, `uploads`, `backups`) are scoped by Compose project, not service, so the data carries across the rename. `docker-compose.prod.images.yml` no longer exists — `docker-compose.prod.yml` is now the canonical image-based compose.
 
 ---
 
@@ -298,23 +331,25 @@ cp .env.example .env
 
 ### 2. Build and run
 
+`docker-compose.prod.yml` itself only references prebuilt GHCR images. Layer `docker-compose.build.yml` on top to add `build:` directives that point at the in-repo `Dockerfile.server` / `Dockerfile.client`:
+
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml -f docker-compose.build.yml up -d --build
 ```
 
-The checked-in `docker-compose.prod.yml` references `Dockerfile.server` and `Dockerfile.client` from this repo — no inline edits needed. It enforces the same required-secret contract as the prebuilt path.
+The build overlay enforces `pull_policy: build` so Compose never tries to pull from GHCR when local sources are present. All required-secret env contracts from the prod compose still apply.
 
 ### 3. Verify
 
 ```bash
-docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml -f docker-compose.build.yml ps
 curl http://localhost:3001/api/v1/health
 ```
 
 ### 4. Updates
 
 ```bash
-git pull && docker compose -f docker-compose.prod.yml up -d --build
+git pull && docker compose -f docker-compose.prod.yml -f docker-compose.build.yml up -d --build
 ```
 
 ---
@@ -327,18 +362,18 @@ Same Docker setup as internal, with additional hardening for internet-facing dep
 
 #### 1. Add HTTPS with Let's Encrypt
 
-Replace the client Dockerfile's nginx with a Certbot-enabled config, or use a reverse proxy like Caddy or Traefik.
+Replace the web container's nginx with a Certbot-enabled config, or use a reverse proxy like Caddy or Traefik.
 
 **Option A — Caddy (simplest, auto-HTTPS):**
 
-Replace the `client` service in `docker-compose.prod.yml`:
+Replace the `web` service in `docker-compose.prod.yml`:
 
 ```yaml
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
-      - server
+      - api
     ports:
       - "80:80"
       - "443:443"
@@ -346,13 +381,13 @@ Replace the `client` service in `docker-compose.prod.yml`:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
-      - client_dist:/srv
+      - web_dist:/srv
 
 volumes:
   # ... existing volumes ...
   caddy_data:
   caddy_config:
-  client_dist:
+  web_dist:
 ```
 
 Create a `Caddyfile`:
@@ -363,11 +398,11 @@ yourdomain.com {
     file_server
 
     handle /api/* {
-        reverse_proxy server:3001
+        reverse_proxy api:3001
     }
 
     handle /mcp/* {
-        reverse_proxy server:3001 {
+        reverse_proxy api:3001 {
             flush_interval -1
             transport http {
                 read_timeout 3600s
@@ -377,10 +412,10 @@ yourdomain.com {
 }
 ```
 
-Build the client to a volume:
+Build the SPA into a volume (uses the prebuilt `web` image's static assets):
 ```bash
 docker compose -f docker-compose.prod.yml run --rm \
-  -v client_dist:/output client sh -c "cp -r /usr/share/nginx/html/* /output/"
+  -v web_dist:/output web sh -c "cp -r /usr/share/nginx/html/* /output/"
 ```
 
 **Option B — Nginx + Certbot:**

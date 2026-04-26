@@ -3,8 +3,10 @@
 // You may not distribute this software. See LICENSE for terms.
 
 import { useAuthStore } from '../store/uiStore';
+import { API_BASE_URL, withBase } from '../lib/baseConfig';
 
-const BASE = '/api/v1/support';
+const BASE = `${API_BASE_URL}/support`;
+const LOGIN_PATH = withBase('login');
 
 function getToken(): string {
   return useAuthStore.getState().token ?? '';
@@ -36,7 +38,7 @@ export function streamChat(
 
       if (response.status === 401) {
         useAuthStore.getState().clearAuth();
-        if (!window.location.pathname.startsWith('/login')) window.location.href = '/login';
+        if (!window.location.pathname.startsWith(LOGIN_PATH)) window.location.href = LOGIN_PATH;
         return;
       }
       if (!response.ok) {

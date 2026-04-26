@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
+import { withBase } from '../lib/baseConfig';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -356,8 +357,10 @@ export function openTBPopout(periodId: number, periodName?: string) {
   const left = window.screenX + window.outerWidth - width - 20;
   const top = window.screenY + 60;
   const nameParam = periodName ? `&name=${encodeURIComponent(periodName)}` : '';
+  // withBase() prefixes the SPA's base path so the popout works in both
+  // single-app ('/') and multi-app ('/tb/') modes.
   window.open(
-    `/tb-popout?periodId=${periodId}${nameParam}`,
+    `${withBase('tb-popout')}?periodId=${periodId}${nameParam}`,
     'tb-popout',
     `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`,
   );

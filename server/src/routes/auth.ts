@@ -11,6 +11,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest, invalidateAuthCache } from '../middleware/auth';
 import { JWT_SECRET, JWT_EXPIRY } from '../lib/jwtConfig';
 import { sendServerError } from '../lib/safeError';
+import { passwordSchema } from '../lib/passwordPolicy';
 
 const router = Router();
 
@@ -107,15 +108,18 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res: Response): Promi
 // password. Clears the must_change_password flag so the forced-rotation UI goes away.
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(8).max(200),
+  newPassword: passwordSchema,
 });
 
 router.post('/change-password', authMiddleware, async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = changePasswordSchema.safeParse(req.body);
   if (!parsed.success) {
+    // Surface the first complexity violation so the user knows which rule failed
+    // (uppercase / lowercase / digit / length). Zod returns these per-issue.
+    const firstIssue = parsed.error.issues[0]?.message ?? 'Password does not meet complexity requirements.';
     res.status(400).json({
       data: null,
-      error: { code: 'VALIDATION_ERROR', message: 'New password must be at least 8 characters.' },
+      error: { code: 'VALIDATION_ERROR', message: firstIssue },
     });
     return;
   }

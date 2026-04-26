@@ -4,9 +4,10 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAuthStore } from '../store/uiStore';
+import { useAuthStore, pushToast } from '../store/uiStore';
 import { checkFileSize } from '../utils/fileLimits';
 import { confirmAction } from '../components/ConfirmDialog';
+import { downloadExport } from '../api/exports';
 import {
   listTaxCodes,
   createTaxCode,
@@ -734,14 +735,19 @@ export function TaxCodesPage() {
           >
             Import CSV
           </button>
-          <a
-            href={exportTaxCodesUrl(activeFilters)}
-            target="_blank"
-            rel="noreferrer"
-            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 inline-block"
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await downloadExport(exportTaxCodesUrl(activeFilters), 'tax-codes.xlsx');
+              } catch (err) {
+                pushToast(err instanceof Error ? err.message : 'Export failed', 'error');
+              }
+            }}
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300"
           >
             Export Excel
-          </a>
+          </button>
           <button
             onClick={() => { setShowCreate(true); setEditId(null); setPanelError(null); }}
             className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"

@@ -3,6 +3,7 @@
 // You may not distribute this software. See LICENSE for terms.
 
 import { apiFetch } from './client';
+import { API_BASE_URL } from '../lib/baseConfig';
 
 export interface CоaTemplate {
   id: number;
@@ -142,18 +143,11 @@ export const applyTemplate = (
     body: JSON.stringify({ mode }),
   });
 
-// Export template as CSV — returns URL to open
-export const exportTemplateUrl = (templateId: number): string => {
-  const stored = localStorage.getItem('auth');
-  let token = '';
-  try {
-    const parsed = JSON.parse(stored ?? '{}') as { state?: { token?: string } };
-    token = parsed.state?.token ?? '';
-  } catch {
-    // ignore
-  }
-  return `/api/v1/coa-templates/${templateId}/export${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-};
+// Returns the export URL. The endpoint requires Bearer auth, so callers must
+// pair this with `downloadExport()` (which fetches as a blob with the JWT
+// header) rather than dropping the URL into a bare <a href>.
+export const exportTemplateUrl = (templateId: number): string =>
+  `${API_BASE_URL}/coa-templates/${templateId}/export`;
 
 // Import preview
 export const importTemplatePreview = (csv: string) =>

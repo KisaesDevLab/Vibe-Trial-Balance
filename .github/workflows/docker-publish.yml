@@ -38,23 +38,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: server
-            image: vibe-tb-server
+          - name: api
+            image: vibe-tb-api
             dockerfile: Dockerfile.server
             platform: linux/amd64
             runner: ubuntu-latest
-          - name: server
-            image: vibe-tb-server
+          - name: api
+            image: vibe-tb-api
             dockerfile: Dockerfile.server
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-          - name: client
-            image: vibe-tb-client
+          - name: web
+            image: vibe-tb-web
             dockerfile: Dockerfile.client
             platform: linux/amd64
             runner: ubuntu-latest
-          - name: client
-            image: vibe-tb-client
+          - name: web
+            image: vibe-tb-web
             dockerfile: Dockerfile.client
             platform: linux/arm64
             runner: ubuntu-24.04-arm
@@ -133,8 +133,8 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - { name: server, repo: vibe-tb-server }
-          - { name: client, repo: vibe-tb-client }
+          - { name: api, repo: vibe-tb-api }
+          - { name: web, repo: vibe-tb-web }
 
     steps:
       - name: Download per-arch digests

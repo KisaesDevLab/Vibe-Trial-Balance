@@ -9,6 +9,7 @@ import { getMcpTokenStatus, generateMcpToken, revokeMcpToken } from '../api/mcpS
 import { getAiPricing, saveAiPricing, fetchAiPricingFromClaude, getAiUsage, getAiModels, saveAiModels, getAvailableModels, type AiPricingMap } from '../api/aiUsage';
 import { useAuthStore } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
+import { ROUTER_BASENAME } from '../lib/baseConfig';
 
 function AdminBadge() {
   return (
@@ -315,8 +316,11 @@ export function SettingsPage() {
     setTimeout(() => setTokenCopied(false), 2000);
   };
 
-  const serverPort = '3001';
-  const mcpHttpUrl = `http://localhost:${serverPort}`;
+  // MCP clients (Claude Desktop, etc.) connect to this app over HTTP. The
+  // proxy chain is: client → web nginx → api:3001. So the public-facing URL is
+  // window.location.origin + the SPA's base path. In single-app mode that's
+  // https://host/mcp/sse; in multi-app it's https://host/tb/mcp/sse.
+  const mcpHttpUrl = `${window.location.origin}${ROUTER_BASENAME}`;
 
   const stdioSnippet = `{
   "mcpServers": {

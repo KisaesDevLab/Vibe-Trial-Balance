@@ -3,8 +3,10 @@
 // You may not distribute this software. See LICENSE for terms.
 
 import { useAuthStore } from '../store/uiStore';
+import { API_BASE_URL, withBase } from '../lib/baseConfig';
 
-const BASE_URL = '/api/v1';
+const BASE_URL = API_BASE_URL;
+const LOGIN_PATH = withBase('login');
 
 function getToken(): string | null {
   const stored = localStorage.getItem('auth');
@@ -19,8 +21,8 @@ function getToken(): string | null {
 
 function handleUnauthorized(): void {
   useAuthStore.getState().clearAuth();
-  if (!window.location.pathname.startsWith('/login')) {
-    window.location.href = '/login';
+  if (!window.location.pathname.startsWith(LOGIN_PATH)) {
+    window.location.href = LOGIN_PATH;
   }
 }
 
