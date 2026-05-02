@@ -48,6 +48,7 @@ import { pyComparisonRouter } from './routes/pyComparison';
 import { mcpRouter } from './routes/mcpHttp';
 import { db } from './db';
 import { sendServerError } from './lib/safeError';
+import { isAiConfigured } from './lib/aiClient';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -58,6 +59,31 @@ if (isProduction && !process.env.ALLOWED_ORIGIN) {
   process.exit(1);
 }
 
+// Parse a comma-separated ALLOWED_ORIGIN list. Entries wrapped in / / are
+// treated as regex (e.g. /^https:\/\/.*\.firm\.com$/). Empty or unset →
+// dev-friendly localhost defaults.
+function parseAllowedOrigins(raw: string | undefined): (string | RegExp)[] {
+  if (!raw || !raw.trim()) return ['http://localhost:5173', 'http://localhost:3000'];
+  return raw.split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(entry => {
+      // Treat as regex only when the body between the slashes is non-empty —
+      // `//` would compile to an empty regex that matches every origin.
+      if (entry.length > 2 && entry.startsWith('/') && entry.endsWith('/')) {
+        try {
+          return new RegExp(entry.slice(1, -1));
+        } catch (err) {
+          console.error(`[cors] invalid regex entry "${entry}":`, (err as Error).message);
+          return entry; // fall back to literal match — safer than throwing at startup
+        }
+      }
+      return entry;
+    });
+}
+
+const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGIN);
+
 // Respect X-Forwarded-For from a trusted reverse proxy (e.g. Nginx on the Pi).
 // This lets rate-limit fall back to real client IP for unauthenticated paths
 // instead of all requests sharing the proxy IP.
@@ -65,7 +91,14 @@ app.set('trust proxy', 1);
 
 app.use(helmet());
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',
+  origin: (origin, cb) => {
+    // No Origin header (server-to-server, curl) — allow.
+    if (!origin) return cb(null, true);
+    const ok = allowedOrigins.some(o => o instanceof RegExp ? o.test(origin) : o === origin);
+    if (ok) return cb(null, true);
+    console.info(`[cors] rejected origin: ${origin}`);
+    return cb(null, false);
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -138,15 +171,44 @@ app.use('/api/v1', (req, res, next) => {
   next();
 });
 
+// Readiness probe: returns 503 when any required dependency (currently the
+// database) is unhealthy. Used by Docker HEALTHCHECK and by the appliance's
+// HAProxy backend probes.
 app.get('/api/v1/health', async (_req, res) => {
+  const checks: Record<string, { ok: boolean; ms?: number; error?: string }> = {};
+  const start = Date.now();
   try {
-    const result = await db.raw('SELECT NOW() AS now');
-    res.json({
-      data: { status: 'ok', database: 'connected', timestamp: result.rows[0].now },
-      error: null,
-    });
-  } catch (err: unknown) {
-    sendServerError(res, err, 'health');
+    await db.raw('SELECT 1');
+    checks.db = { ok: true, ms: Date.now() - start };
+  } catch (err) {
+    checks.db = { ok: false, error: (err as Error).message };
+  }
+  const ok = Object.values(checks).every(c => c.ok);
+  res.status(ok ? 200 : 503).json({
+    data: { ok, version: process.env.npm_package_version, checks },
+    error: null,
+  });
+});
+
+// Liveness probe: cheap, no DB touch. Used to distinguish "process is up"
+// from "process is ready to serve traffic" — see /health for the latter.
+app.get('/api/v1/ping', (_req, res) => {
+  res.status(200).json({
+    data: { ok: true, version: process.env.npm_package_version },
+    error: null,
+  });
+});
+
+// Public feature flags: the SPA reads this on boot to decide whether to
+// render AI-dependent UI (chat bubble, support page link). Unauthenticated
+// — no sensitive data exposed.
+app.get('/api/v1/features', async (_req, res) => {
+  try {
+    const ai = await isAiConfigured();
+    res.json({ data: { ai }, error: null });
+  } catch {
+    // If the settings table query fails (e.g., DB down), fall back to env.
+    res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY }, error: null });
   }
 });
 
@@ -221,21 +283,50 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   sendServerError(res, err, 'global');
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/api/v1/health`);
-  startBackupScheduler();
-});
-
-server.on('error', (err: NodeJS.ErrnoException) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`\nError: Port ${PORT} is already in use.`);
-    console.error(`Another process is listening on this port. Either:`);
-    console.error(`  1. Stop the other process using port ${PORT}`);
-    console.error(`  2. Set a different port: PORT=3002 npm run dev\n`);
+// When MIGRATIONS_AUTO=false (appliance mode), refuse to start with pending
+// migrations — running with a partial schema causes hard-to-debug failures.
+// In default mode (true), the entrypoint or upstream `migrate.ts` already
+// applied them, so this check is a no-op.
+async function checkPendingMigrations(): Promise<void> {
+  if (process.env.MIGRATIONS_AUTO !== 'false') return;
+  try {
+    const [, pending] = (await db.migrate.list()) as [unknown, unknown[]];
+    if (pending.length > 0) {
+      console.error(
+        `\nFATAL: ${pending.length} pending migration(s) detected with MIGRATIONS_AUTO=false.\n` +
+        `Run \`node dist/migrate.js\` before starting the server, or set MIGRATIONS_AUTO=true.\n`
+      );
+      process.exit(1);
+    }
+  } catch (err) {
+    console.error('FATAL: failed to check migration status:', err);
     process.exit(1);
   }
-  throw err;
+}
+
+async function start(): Promise<void> {
+  await checkPendingMigrations();
+  const server = app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/api/v1/health`);
+    startBackupScheduler();
+  });
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\nError: Port ${PORT} is already in use.`);
+      console.error(`Another process is listening on this port. Either:`);
+      console.error(`  1. Stop the other process using port ${PORT}`);
+      console.error(`  2. Set a different port: PORT=3002 npm run dev\n`);
+      process.exit(1);
+    }
+    throw err;
+  });
+}
+
+start().catch((err) => {
+  console.error('FATAL: server failed to start:', err);
+  process.exit(1);
 });
 
 export { app, db };

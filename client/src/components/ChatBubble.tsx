@@ -5,6 +5,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { streamChat } from '../api/support';
+import { useFeatures } from '../hooks/useFeatures';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -13,6 +14,7 @@ interface Message {
 }
 
 export function ChatBubble() {
+  const features = useFeatures();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -100,6 +102,9 @@ export function ChatBubble() {
       handleSend();
     }
   }
+
+  // AI not configured (or check still pending) → render nothing.
+  if (!features?.ai) return null;
 
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end">

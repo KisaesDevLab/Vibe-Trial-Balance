@@ -38,7 +38,7 @@ services:
         max-file: "3"
 
   api:
-    image: ghcr.io/kisaesdevlab/vibe-tb-api:${IMAGE_TAG:-latest}
+    image: ghcr.io/kisaesdevlab/vibe-tb-server:${IMAGE_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
     depends_on:
@@ -86,7 +86,7 @@ services:
         max-file: "5"
 
   web:
-    image: ghcr.io/kisaesdevlab/vibe-tb-web:${IMAGE_TAG:-latest}
+    image: ghcr.io/kisaesdevlab/vibe-tb-client:${IMAGE_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
     depends_on:

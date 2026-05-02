@@ -37,8 +37,8 @@ ghcr.io/kisaesdevlab/vibe-mybooks-web:1.4.2
 ghcr.io/kisaesdevlab/vibe-mybooks-worker:1.4.2
 
 ghcr.io/kisaesdevlab/vibe-connect:1.2.0          # single-image; SPA + API combined
-ghcr.io/kisaesdevlab/vibe-tb-api:0.9.5
-ghcr.io/kisaesdevlab/vibe-tb-web:0.9.5
+ghcr.io/kisaesdevlab/vibe-tb-server:0.9.5
+ghcr.io/kisaesdevlab/vibe-tb-client:0.9.5
 ghcr.io/kisaesdevlab/vibe-payroll-api:0.3.0
 ghcr.io/kisaesdevlab/vibe-payroll-web:0.3.0
 ```
@@ -134,7 +134,7 @@ The installer repo references `docker-compose.prod.yml` from each app repo (or v
 
 ### Vibe TB
 
-**Images:** `vibe-tb-api`, `vibe-tb-web`.
+**Images:** `vibe-tb-server`, `vibe-tb-client` (renamed from `vibe-tb-api`/`vibe-tb-web` for appliance-manifest alignment; see `.appliance/manifest.json`).
 
 **Compose services:** `api`, `web`, `postgres`, `pgadmin` (optional, behind a `tools` profile).
 

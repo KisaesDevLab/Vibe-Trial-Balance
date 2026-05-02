@@ -62,14 +62,16 @@ Create a `.env` file in `server/` (or set these as system environment variables)
 |----------|---------|-------------|
 | `NODE_ENV` | *(none)* | Set to `production` for production deployments — enforces required env vars |
 | `PORT` | `3001` | Server listen port |
-| `DB_HOST` | `127.0.0.1` | PostgreSQL host |
-| `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_NAME` | `vibe_tb_db` | Database name |
-| `DB_USER` | `vibetb` | Database user |
-| `DB_PASSWORD` | `localdev123` | Database password |
+| `DATABASE_URL` | *(none)* | **Preferred** — full Postgres connection string (e.g. `postgres://user:pw@host:5432/db`). Takes precedence over `DB_*` vars when set. |
+| `DB_HOST` | `127.0.0.1` | PostgreSQL host (deprecated — prefer `DATABASE_URL`) |
+| `DB_PORT` | `5432` | PostgreSQL port (deprecated — prefer `DATABASE_URL`) |
+| `DB_NAME` | `vibe_tb_db` | Database name (deprecated — prefer `DATABASE_URL`) |
+| `DB_USER` | `vibetb` | Database user (deprecated — prefer `DATABASE_URL`) |
+| `DB_PASSWORD` | `localdev123` | Database password (deprecated — prefer `DATABASE_URL`) |
+| `MIGRATIONS_AUTO` | `true` | When `false`, the server refuses to start with pending migrations. Set this in appliance/orchestrated deploys that run migrations as a separate step (`node dist/migrate.js`). |
 | `JWT_SECRET` | *(none)* | **Required everywhere** — must be ≥32 chars. Server refuses to start without it. Generate with `openssl rand -hex 32` |
 | `JWT_EXPIRY` | `8h` | JWT token lifetime |
-| `ALLOWED_ORIGIN` | `http://localhost:5173` | **Required in production** — server refuses to start without it |
+| `ALLOWED_ORIGIN` | `http://localhost:5173,http://localhost:3000` | **Required in production**. Comma-separated list. Entries wrapped in `/.../` are treated as regex (e.g. `/^https:\/\/.*\.firm\.com$/`). |
 | `ENCRYPTION_KEY` | *(falls back to JWT_SECRET in dev)* | **Required in production** — must be separate from JWT_SECRET. Generate with `openssl rand -hex 32` |
 | `ANTHROPIC_API_KEY` | *(none)* | Optional — can also be set in Admin > Settings |
 | `APP_BASE_URL` | `http://localhost:3001` | Used in MCP integration for self-referencing URLs |
@@ -119,8 +121,8 @@ The fastest path to a running installation. Multi-arch images (`linux/amd64` and
 
 | Image | Pull command |
 |-------|--------------|
-| API | `docker pull ghcr.io/kisaesdevlab/vibe-tb-api:latest` |
-| Web | `docker pull ghcr.io/kisaesdevlab/vibe-tb-web:latest` |
+| Server | `docker pull ghcr.io/kisaesdevlab/vibe-tb-server:latest` |
+| Client | `docker pull ghcr.io/kisaesdevlab/vibe-tb-client:latest` |
 
 Available tags:
 - `latest` — current main
@@ -214,17 +216,41 @@ handle_path /tb/* {
 
 That's enough — the web container's nginx already proxies `/api/*` to `api:3001` internally. `handle_path` strips the `/tb` prefix before forwarding, so the SPA's `/tb/api/v1/...` calls reach the backend as `/api/v1/...`.
 
-### Upgrading from `vibe-tb-server` / `vibe-tb-client` images
+### Upgrading from `vibe-tb-api` / `vibe-tb-web` images
 
-The image names changed from `vibe-tb-server`/`vibe-tb-client` to `vibe-tb-api`/`vibe-tb-web` to align with the rest of the Vibe product family. The Compose service names changed correspondingly (`server` → `api`, `client` → `web`). To upgrade:
+The image names changed from `vibe-tb-api`/`vibe-tb-web` to `vibe-tb-server`/`vibe-tb-client` to align with the Vibe Appliance manifest convention (see `.appliance/manifest.json`). Compose service names (`api`, `web`) are unchanged in `docker-compose.prod.yml` — only the image references changed. To upgrade:
 
 ```bash
 docker compose -f docker-compose.prod.yml down                                    # stop the old stack
 curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/docker-compose.prod.yml
-docker compose -f docker-compose.prod.yml up -d                                    # pulls vibe-tb-api / vibe-tb-web
+docker compose -f docker-compose.prod.yml up -d                                    # pulls vibe-tb-server / vibe-tb-client
 ```
 
-Existing named volumes (`pgdata`, `uploads`, `backups`) are scoped by Compose project, not service, so the data carries across the rename. `docker-compose.prod.images.yml` no longer exists — `docker-compose.prod.yml` is now the canonical image-based compose.
+Existing named volumes (`pgdata`, `uploads`, `backups`) are scoped by Compose project, not service, so the data carries across the rename. The previous `vibe-tb-api`/`vibe-tb-web` GHCR packages will continue to receive `latest` for one release cycle before being deprecated.
+
+### Deploying as part of Vibe Appliance
+
+For multi-app deployments managed by the Vibe Appliance installer, this repo ships:
+
+- `docker-compose.appliance.yml` — appliance overlay (no bundled Postgres, no published ports, points at shared Postgres via `DATABASE_URL`).
+- `.appliance/manifest.json` — manifest the installer reads to wire up subdomains, env vars, migrations, and backup volumes.
+
+In this mode, migrations and (on first install) seeds run as explicit one-shots before the API service starts:
+
+```bash
+# Always: apply pending migrations
+docker compose run --rm vibe-tb-server node dist/migrate.js
+
+# First install only: load admin user, tax codes, COA templates
+docker compose run --rm vibe-tb-server node dist/seed.js
+
+# Then bring the service up
+docker compose -f docker-compose.appliance.yml up -d
+```
+
+`MIGRATIONS_AUTO=false` is set by the appliance overlay, which causes the entrypoint to skip both auto-migrate and auto-seed, AND the API refuses to start if a migration is still pending. The seed runner is idempotent (knex seed files use insert-ignore / on-conflict patterns) so it's safe to re-run if you're not sure whether the DB is fresh. The appliance's `enable-app.sh` handles this flow automatically; the manual commands above are for ad-hoc testing.
+
+Emergency-access mode (`http://<lan-ip>:5172`) requires `ALLOWED_ORIGIN` to include that origin in the comma-separated list — the appliance synthesizes this; verify it if running the appliance compose by hand.
 
 ---
 

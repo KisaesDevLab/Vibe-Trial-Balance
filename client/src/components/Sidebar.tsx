@@ -7,10 +7,14 @@ import { NavLink } from 'react-router-dom';
 import { ClientSelector } from './ClientSelector';
 import { PeriodSelector } from './PeriodSelector';
 import { useAuthStore, useUIStore } from '../store/uiStore';
+import { useFeatures } from '../hooks/useFeatures';
 
 interface NavItem {
   to: string;
   label: string;
+  // When true, the link is hidden if the server reports no AI provider is
+  // configured (GET /api/v1/features → ai: false).
+  requiresAi?: boolean;
 }
 
 interface NavGroup {
@@ -88,8 +92,8 @@ const NAV_GROUPS: NavGroup[] = [
     title: 'Tools',
     items: [
       { to: '/documents',   label: 'Documents' },
-      { to: '/diagnostics', label: 'AI Diagnostics' },
-      { to: '/support',     label: 'Support' },
+      { to: '/diagnostics', label: 'AI Diagnostics', requiresAi: true },
+      { to: '/support',     label: 'Support',        requiresAi: true },
       { to: '/settings',    label: 'Settings' },
     ],
     defaultOpen: false,
@@ -134,11 +138,14 @@ const navItemClass = (isActive: boolean) =>
       : 'text-gray-400 hover:bg-gray-800 hover:text-gray-100 border-l-2 border-transparent pl-[10px]'
   }`;
 
-function NavSection({ group, isAdmin }: { group: NavGroup; isAdmin?: boolean }) {
+function NavSection({ group, isAdmin, aiAvailable }: { group: NavGroup; isAdmin?: boolean; aiAvailable: boolean }) {
   const [open, setOpen] = useState(group.defaultOpen ?? true);
 
   // Admin group hidden for non-admins
   if (isAdmin === false) return null;
+
+  const visibleItems = group.items.filter((item) => !item.requiresAi || aiAvailable);
+  if (visibleItems.length === 0) return null;
 
   return (
     <div className="mb-1">
@@ -158,7 +165,7 @@ function NavSection({ group, isAdmin }: { group: NavGroup; isAdmin?: boolean }) 
 
       {open && (
         <div className="space-y-px">
-          {group.items.map((item) => (
+          {visibleItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -176,7 +183,9 @@ function NavSection({ group, isAdmin }: { group: NavGroup; isAdmin?: boolean }) 
 export function Sidebar() {
   const { user, clearAuth } = useAuthStore();
   const { selectedClientId, fontSize, increaseFontSize, decreaseFontSize, isDarkMode, toggleDarkMode } = useUIStore();
+  const features = useFeatures();
   const isAdmin = user?.role === 'admin';
+  const aiAvailable = features?.ai === true;
 
   return (
     <aside className="w-56 bg-gray-900 text-white flex flex-col shrink-0">
@@ -195,13 +204,13 @@ export function Sidebar() {
       {/* Nav groups */}
       <nav className="flex-1 px-2 py-2 overflow-y-auto">
         {NAV_GROUPS.map((group) => (
-          <NavSection key={group.title ?? '__top'} group={group} />
+          <NavSection key={group.title ?? '__top'} group={group} aiAvailable={aiAvailable} />
         ))}
 
         {isAdmin && (
           <>
             <div className="my-2 border-t border-gray-700/60" />
-            <NavSection group={ADMIN_GROUP} isAdmin={isAdmin} />
+            <NavSection group={ADMIN_GROUP} isAdmin={isAdmin} aiAvailable={aiAvailable} />
           </>
         )}
       </nav>

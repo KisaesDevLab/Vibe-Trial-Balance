@@ -374,16 +374,18 @@ All environment variables are set in `server/.env`. Here is the complete referen
 |----------|---------|-------------|
 | `NODE_ENV` | *(none)* | Set to `production` for production deployments — enforces `JWT_SECRET` requirement |
 | `PORT` | `3001` | Backend server listen port |
-| `DB_HOST` | `127.0.0.1` | PostgreSQL host (`db` in Docker) |
-| `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_NAME` | `vibe_tb_db` | Database name |
-| `DB_USER` | `vibetb` | Database user |
-| `DB_PASSWORD` | `localdev123` | Database password — **change in production** |
+| `DATABASE_URL` | *(none)* | **Preferred** Postgres connection string (e.g. `postgres://user:pw@host:5432/db`). Takes precedence over `DB_*` vars when set. |
+| `DB_HOST` | `127.0.0.1` | PostgreSQL host (`db` in Docker) — deprecated in favor of `DATABASE_URL` |
+| `DB_PORT` | `5432` | PostgreSQL port — deprecated in favor of `DATABASE_URL` |
+| `DB_NAME` | `vibe_tb_db` | Database name — deprecated in favor of `DATABASE_URL` |
+| `DB_USER` | `vibetb` | Database user — deprecated in favor of `DATABASE_URL` |
+| `DB_PASSWORD` | `localdev123` | Database password — **change in production**; deprecated in favor of `DATABASE_URL` |
+| `MIGRATIONS_AUTO` | `true` | When `false`, the entrypoint skips both migrations and seeds, and the server refuses to start with pending migrations. Used by appliance / orchestrated deploys that run `node dist/migrate.js` as a one-shot. |
 | `JWT_SECRET` | `local-dev-secret-12345` | JWT signing key — **required in production** (server refuses to start without it when `NODE_ENV=production`) |
 | `JWT_EXPIRY` | `8h` | JWT token lifetime (e.g., `8h`, `1d`) |
-| `ALLOWED_ORIGIN` | `http://localhost:5173` | CORS allowed origin — see [ALLOWED_ORIGIN details](#allowed_origin-details) below |
+| `ALLOWED_ORIGIN` | `http://localhost:5173,http://localhost:3000` | Comma-separated list of CORS allowed origins; entries wrapped in `/.../` are regex — see [ALLOWED_ORIGIN details](#allowed_origin-details) below |
 | `ENCRYPTION_KEY` | *(falls back to JWT_SECRET)* | Encryption key for API keys stored in the database — set a separate value for best security |
-| `ANTHROPIC_API_KEY` | *(none)* | Anthropic API key — can also set in Admin > Settings |
+| `ANTHROPIC_API_KEY` | *(none)* | Anthropic API key — can also set in Admin > Settings. Optional: when absent, AI features are hidden in the UI; the rest of the app works normally. |
 | `APP_BASE_URL` | `http://localhost:3001` | Used for MCP integration and self-referencing URLs |
 
 #### ALLOWED_ORIGIN Details
@@ -407,7 +409,7 @@ All environment variables are set in `server/.env`. Here is the complete referen
 - Must **not** include a path — `http://example.com` not `http://example.com/app`
 - Is **case-sensitive** — `http://Example.com` will not match `http://example.com`
 
-**Multiple origins are not supported** in the current configuration. The app accepts exactly one origin. If you need to allow access from multiple origins (e.g., both `http://` and `https://`, or both a domain and an IP), you would need to modify `server/src/app.ts` to pass an array or function to the `cors()` middleware.
+**Multiple origins are supported.** Pass a comma-separated list — for example `https://tb.firm.com,http://192.168.1.50:5172` to allow both the primary HTTPS subdomain and an emergency LAN-IP origin. Whitespace around commas is trimmed. Entries wrapped in `/.../` are treated as JavaScript regex (e.g., `/^https:\/\/.*\.firm\.com$/` to allow any subdomain).
 
 **Common mistakes:**
 
@@ -660,6 +662,17 @@ A full reconciliation workspace for matching bank transactions to book balances:
 - Uses a 5-step waterfall: existing mappings, prior period, cross-client patterns, AI suggestion, or unmappable
 - Preview modal shows confidence-coded suggestions with override dropdowns
 - Confirm to apply with dual-write (sets both `tax_code_id` and legacy `tax_line` field)
+
+**Tax-year crosswalk updates:**
+
+The pre-seeded tax codes and software-mapping crosswalks (UltraTax CS, Lacerte, GoSystem, CCH Axcess, Generic) live in database seeds under `server/seeds/004_tax_codes_1065.js`, `005_tax_codes_1120s_1040_common.js`, and `006_tax_codes_1120.js`. They are **form-based, not year-based** — codes are organized by entity type (1040, 1065, 1120, 1120S), not by tax year.
+
+When the IRS publishes tax-year-end changes (typically December–January each year):
+
+1. Maintainer updates the relevant seed file(s) for the new tax-year version of any code that changed.
+2. For existing databases, the change ships as a Knex migration under `server/migrations/` that upserts only the affected codes — preserving any customer overrides.
+3. Fresh installs run the updated seeds automatically on first boot.
+4. Customer-specific overrides take precedence: edits made in **Admin > Tax Codes** are persisted with `is_system: false` and are not overwritten by future migrations.
 
 ### 6.10 Financial Statements
 

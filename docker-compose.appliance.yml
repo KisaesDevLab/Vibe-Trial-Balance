@@ -1,0 +1,96 @@
+# Appliance overlay for Vibe-Trial-Balance — used by the Vibe-Appliance
+# composes that group Vibe-TB alongside other Vibe apps behind a shared
+# Caddy ingress and shared Postgres.
+#
+# This file is NOT for standalone deploys — for those, use docker-compose.prod.yml
+# (single-app) or `docker-compose.prod.yml + docker-compose.grouped.yml`
+# (multi-app with bundled Postgres).
+#
+# Differences from docker-compose.prod.yml:
+#   - No bundled Postgres — DATABASE_URL points at the appliance's shared instance.
+#   - No published host ports — Caddy fronts everything via vibe_ingress.
+#   - MIGRATIONS_AUTO=false — the appliance enable-app.sh runs migrations as
+#     a one-shot via `docker compose run --rm vibe-tb-server node dist/migrate.js`
+#     before bringing the service up.
+#   - Volume names prefixed `vibe-tb-` for the appliance's backup tooling.
+#
+# Service names match the manifest-canonical `vibe-tb-server` / `vibe-tb-client`.
+# Inside the project's `default` network, those services also expose legacy
+# aliases `api` / `web` so the client image's nginx config (which proxies to
+# `http://api:3001`) keeps working without forking. The aliases are scoped to
+# the project's default network so they cannot collide with other apps on the
+# shared `vibe_ingress` network.
+#
+# Required env vars (set by the appliance, not by Kurt):
+#   VIBE_TB_TAG               image tag to pin (default: latest)
+#   VIBE_TB_DATABASE_URL      e.g. postgres://vibetb:<pw>@vibe-postgres:5432/vibe_tb_db
+#   VIBE_TB_DB_PASSWORD       db password (also encoded in DATABASE_URL)
+#   VIBE_TB_ALLOWED_ORIGIN    comma-separated; must include both the primary
+#                             https://tb.<domain> and the emergency
+#                             http://<lan-ip>:5172 origins.
+#   VIBE_TB_JWT_SECRET        32-byte hex
+#   VIBE_TB_ENCRYPTION_KEY    32-byte hex
+#
+# Optional:
+#   VIBE_TB_ANTHROPIC_API_KEY  AI features disabled if absent
+#   VIBE_TB_LOG_LEVEL          default: info
+#   VIBE_TB_BASE_PATH          default: /tb/
+
+services:
+  vibe-tb-server:
+    image: ghcr.io/kisaesdevlab/vibe-tb-server:${VIBE_TB_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - api
+      vibe_ingress: {}
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      DATABASE_URL: ${VIBE_TB_DATABASE_URL:?VIBE_TB_DATABASE_URL must be set}
+      DB_PASSWORD: ${VIBE_TB_DB_PASSWORD:?VIBE_TB_DB_PASSWORD must be set}
+      ALLOWED_ORIGIN: ${VIBE_TB_ALLOWED_ORIGIN:?VIBE_TB_ALLOWED_ORIGIN must be set}
+      JWT_SECRET: ${VIBE_TB_JWT_SECRET:?VIBE_TB_JWT_SECRET must be set}
+      ENCRYPTION_KEY: ${VIBE_TB_ENCRYPTION_KEY:?VIBE_TB_ENCRYPTION_KEY must be set}
+      ANTHROPIC_API_KEY: ${VIBE_TB_ANTHROPIC_API_KEY:-}
+      MIGRATIONS_AUTO: "false"
+      LOG_LEVEL: ${VIBE_TB_LOG_LEVEL:-info}
+    volumes:
+      - vibe-tb-uploads:/app/server/uploads
+      - vibe-tb-backups:/app/server/backups
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3001/api/v1/ping', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  vibe-tb-client:
+    image: ghcr.io/kisaesdevlab/vibe-tb-client:${VIBE_TB_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - web
+      vibe_ingress: {}
+    environment:
+      VITE_BASE_PATH: ${VIBE_TB_BASE_PATH:-/tb/}
+    depends_on:
+      vibe-tb-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  vibe_ingress:
+    external: true
+
+volumes:
+  vibe-tb-uploads:
+  vibe-tb-backups:

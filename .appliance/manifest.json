@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "slug": "vibe-tb",
+  "displayName": "Vibe Trial Balance",
+  "description": "Tax preparation and trial balance workpaper application",
+  "logo": "tb.svg",
+  "userFacing": true,
+  "image": {
+    "server": "ghcr.io/kisaesdevlab/vibe-tb-server",
+    "client": "ghcr.io/kisaesdevlab/vibe-tb-client",
+    "defaultTag": "latest"
+  },
+  "ports": { "server": 3001, "client": 80 },
+  "subdomains": [
+    {
+      "name": "tb",
+      "target": "vibe-tb-client:80",
+      "audience": "default",
+      "emergencyPort": 5172
+    }
+  ],
+  "depends": ["postgres"],
+  "websocket": false,
+  "env": {
+    "required": [
+      { "name": "JWT_SECRET", "generate": "hex32" },
+      { "name": "ENCRYPTION_KEY", "generate": "hex32" },
+      { "name": "DATABASE_URL", "from": "shared-postgres-url", "database": "vibe_tb_db", "user": "vibetb" },
+      { "name": "DB_PASSWORD", "from": "shared-postgres-password" },
+      {
+        "name": "ALLOWED_ORIGIN",
+        "from": "subdomain-url",
+        "doc": "Must be a comma-separated list including BOTH the primary subdomain (https://tb.<domain>) and the emergency origin (http://<lan-ip>:5172). The appliance enable-app.sh synthesizes this list."
+      }
+    ],
+    "optional": [
+      { "name": "ANTHROPIC_API_KEY", "secret": true, "doc": "Claude API key for AI support chat. AI features hidden in UI when absent; rest of app fully functional." },
+      { "name": "LOG_LEVEL", "default": "info" }
+    ]
+  },
+  "database": { "name": "vibe_tb_db", "user": "vibetb" },
+  "firstLogin": {
+    "type": "default-credentials-forced-reset",
+    "username": "admin",
+    "password": "admin",
+    "url": "/login",
+    "note": "Default admin credentials are admin/admin. The app forces a password reset on first login."
+  },
+  "health": "/api/v1/health",
+  "ping": "/api/v1/ping",
+  "migrations": {
+    "command": ["node", "dist/migrate.js"],
+    "autoEnvVar": "MIGRATIONS_AUTO"
+  },
+  "seed": {
+    "command": ["node", "dist/seed.js"],
+    "runOnFreshInstall": true,
+    "idempotent": true
+  },
+  "backup": {
+    "volumes": ["vibe-tb-uploads", "vibe-tb-backups"],
+    "databases": ["vibe_tb_db"]
+  }
+}

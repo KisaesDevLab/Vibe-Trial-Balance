@@ -147,6 +147,20 @@ export async function getLLMProvider(): Promise<LLMConfig> {
 }
 
 /**
+ * Cheap check used by GET /api/v1/features so the SPA can hide AI-dependent
+ * UI when no provider is configured. Tries to build a provider; treats any
+ * throw (missing key, missing baseURL, etc.) as "AI unavailable".
+ */
+export async function isAiConfigured(): Promise<boolean> {
+  try {
+    await getLLMProvider();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Load all LLM-related settings from the database.
  * Exported so other modules (e.g. settings routes) can build ad-hoc providers.
  */
