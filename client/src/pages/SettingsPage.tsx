@@ -9,6 +9,7 @@ import { getMcpTokenStatus, generateMcpToken, revokeMcpToken } from '../api/mcpS
 import { getAiPricing, saveAiPricing, fetchAiPricingFromClaude, getAiUsage, getAiModels, saveAiModels, getAvailableModels, type AiPricingMap } from '../api/aiUsage';
 import { useAuthStore } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
+import { PasswordInput } from '../components/PasswordInput';
 import { ROUTER_BASENAME } from '../lib/baseConfig';
 
 function AdminBadge() {
@@ -443,12 +444,11 @@ export function SettingsPage() {
               <div className="space-y-3 mb-4 border border-green-200 dark:border-green-800 rounded p-3 bg-green-50/30 dark:bg-green-900/10">
                 <div>
                   <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">OpenAI API Key</label>
-                  <input
-                    type="password"
+                  <PasswordInput
                     value={effectiveLlm.openaiApiKey}
                     onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), openaiApiKey: e.target.value }))}
                     placeholder="sk-..."
-                    className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
+                    className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 pr-9 text-sm w-full focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
                   />
                   <p className="text-[10px] text-gray-400 mt-0.5">Get your key from platform.openai.com/api-keys</p>
                 </div>
@@ -548,12 +548,11 @@ export function SettingsPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">API Key <span className="text-gray-400">(optional)</span></label>
-                    <input
-                      type="password"
+                    <PasswordInput
                       value={effectiveLlm.openaiCompatApiKey}
                       onChange={(e) => setLlmEdits((p) => ({ ...(p ?? {}), openaiCompatApiKey: e.target.value }))}
                       placeholder="sk-..."
-                      className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
+                      className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 pr-9 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
                     />
                   </div>
                   <div>
@@ -927,13 +926,12 @@ export function SettingsPage() {
 
               {isAdmin && (!currentKey || showInput) && (
                 <div className="space-y-2">
-                  <input
-                    type="password"
+                  <PasswordInput
                     value={apiKeyInput}
                     onChange={(e) => setApiKeyInput(e.target.value)}
                     placeholder="sk-ant-…"
                     autoComplete="new-password"
-                    className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-1.5 pr-9 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
                   />
                   {saveError && (
                     <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm">{saveError}</div>

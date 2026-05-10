@@ -4,6 +4,8 @@
 
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
+import { PasswordResetRequestPage } from './pages/PasswordResetRequestPage';
+import { PasswordResetConfirmPage } from './pages/PasswordResetConfirmPage';
 import { AppShell } from './components/AppShell';
 import { DashboardPage } from './pages/DashboardPage';
 import { ClientsPage } from './pages/ClientsPage';
@@ -60,6 +62,8 @@ export default function App() {
     <BrowserRouter basename={ROUTER_BASENAME}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/password-reset/request" element={<PasswordResetRequestPage />} />
+        <Route path="/password-reset/confirm" element={<PasswordResetConfirmPage />} />
         <Route
           path="/"
           element={

@@ -22,9 +22,17 @@ function adminOnly(req: AuthRequest, res: Response, next: NextFunction): void {
   next();
 }
 
+// Treat empty string as "not set" so the form can submit a blank email field
+// without tripping the email-format validator.
+const optionalEmail = z
+  .union([z.literal(''), z.string().email().max(320)])
+  .optional()
+  .transform((v) => (v === '' || v === undefined ? null : v));
+
 const userSchema = z.object({
   username: z.string().min(2).max(100),
   displayName: z.string().min(1).max(255),
+  email: optionalEmail,
   password: passwordSchema,
   role: z.enum(['admin', 'reviewer', 'preparer']),
 });
@@ -33,7 +41,7 @@ const userSchema = z.object({
 usersRouter.get('/', adminOnly, async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
     const users = await db('app_users')
-      .select('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
+      .select('id', 'username', 'display_name', 'email', 'role', 'is_active', 'created_at', 'updated_at')
       .orderBy('display_name');
     res.json({ data: users, error: null, meta: { count: users.length } });
   } catch (err: unknown) {
@@ -48,20 +56,21 @@ usersRouter.post('/', adminOnly, async (req: AuthRequest, res: Response): Promis
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
     return;
   }
-  const { username, displayName, password, role } = parsed.data;
+  const { username, displayName, email, password, role } = parsed.data;
 
   try {
     const hash = await bcrypt.hash(password, 12);
     const [user] = await db('app_users').insert({
       username,
       display_name: displayName,
+      email: email ?? null,
       password_hash: hash,
       role,
       is_active: true,
       // Admin-provisioned accounts must rotate on first login — the creating admin
       // necessarily knows the initial password.
       must_change_password: true,
-    }).returning(['id', 'username', 'display_name', 'role', 'is_active', 'created_at']);
+    }).returning(['id', 'username', 'display_name', 'email', 'role', 'is_active', 'created_at']);
 
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: user.id, action: 'create', description: `Created user "${username}" (role: ${role})` });
     res.status(201).json({ data: user, error: null });
@@ -85,6 +94,7 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
 
   const patchSchema = z.object({
     displayName: z.string().min(1).max(255).optional(),
+    email: optionalEmail,
     password: passwordSchema.optional(),
     role: z.enum(['admin', 'reviewer', 'preparer']).optional(),
     isActive: z.boolean().optional(),
@@ -102,6 +112,7 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
 
   const updates: Record<string, unknown> = { updated_at: db.fn.now() };
   if (parsed.data.displayName !== undefined) updates.display_name = parsed.data.displayName;
+  if (parsed.data.email !== undefined) updates.email = parsed.data.email;
   if (parsed.data.role !== undefined) updates.role = parsed.data.role;
   if (parsed.data.isActive !== undefined) updates.is_active = parsed.data.isActive;
   if (parsed.data.password) {
@@ -114,7 +125,7 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
 
   try {
     const [updated] = await db('app_users').where({ id }).update(updates)
-      .returning(['id', 'username', 'display_name', 'role', 'is_active', 'updated_at']);
+      .returning(['id', 'username', 'display_name', 'email', 'role', 'is_active', 'updated_at']);
     if (!updated) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'User not found' } });
       return;

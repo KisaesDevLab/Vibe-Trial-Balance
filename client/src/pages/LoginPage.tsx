@@ -2,10 +2,11 @@
 // Licensed under the PolyForm Internal Use License 1.0.0.
 // You may not distribute this software. See LICENSE for terms.
 
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { login, changePassword } from '../api/auth';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { login, changePassword, getFeatures } from '../api/auth';
 import { useAuthStore } from '../store/uiStore';
+import { PasswordInput } from '../components/PasswordInput';
 
 export function LoginPage() {
   const [username, setUsername] = useState('');
@@ -17,8 +18,20 @@ export function LoginPage() {
   // When the server tells us the user must rotate, we switch this form into
   // a second-step password-change panel instead of sending them into the app.
   const [rotateRequired, setRotateRequired] = useState(false);
+  const [resetEnabled, setResetEnabled] = useState(false);
   const setAuth = useAuthStore((s) => s.setAuth);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    let cancelled = false;
+    void getFeatures().then((res) => {
+      if (cancelled) return;
+      if (res.data?.passwordResetEnabled) setResetEnabled(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,25 +96,21 @@ export function LoginPage() {
             )}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New password</label>
-              <input
-                type="password"
+              <PasswordInput
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 minLength={8}
                 autoFocus
-                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                 autoComplete="new-password"
                 required
               />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Confirm new password</label>
-              <input
-                type="password"
+              <PasswordInput
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 minLength={8}
-                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                 autoComplete="new-password"
                 required
               />
@@ -147,11 +156,9 @@ export function LoginPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
-            <input
-              type="password"
+            <PasswordInput
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
               required
               autoComplete="current-password"
             />
@@ -164,6 +171,17 @@ export function LoginPage() {
           >
             {loading ? 'Signing in...' : 'Sign in'}
           </button>
+
+          {resetEnabled && (
+            <div className="text-center pt-1">
+              <Link
+                to="/password-reset/request"
+                className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+              >
+                Forgot password?
+              </Link>
+            </div>
+          )}
         </form>
       </div>
     </div>

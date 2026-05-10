@@ -8,6 +8,7 @@ export interface AppUser {
   id: number;
   username: string;
   display_name: string;
+  email: string | null;
   role: 'admin' | 'reviewer' | 'preparer';
   is_active: boolean;
   created_at: string;
@@ -17,12 +18,14 @@ export interface AppUser {
 export interface UserInput {
   username: string;
   displayName: string;
+  email?: string | null;
   password: string;
   role: 'admin' | 'reviewer' | 'preparer';
 }
 
 export interface UserPatch {
   displayName?: string;
+  email?: string | null;
   password?: string;
   role?: 'admin' | 'reviewer' | 'preparer';
   isActive?: boolean;

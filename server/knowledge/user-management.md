@@ -23,14 +23,21 @@ The app has three roles:
 4. Save
 
 ## Editing a User
-Click the edit icon on any user row to update their display name, role, or password. You cannot change a user's username after creation.
+Click the edit icon on any user row to update their display name, email, role, or password. You cannot change a user's username after creation.
+
+The email field is optional but is required for self-service password reset — without an email on file, that user can only be reset via the admin flow below.
 
 ## Resetting a Password
+
+### Self-service (when SMTP/Postmark/Emailit is configured)
+A user who has an email on file can click **Forgot password?** on the login page, enter their username or email, and receive a one-time reset link valid for 30 minutes. Used or expired links cannot be reused. The "Forgot password?" link is hidden when the server has no `MAIL_TRANSPORT` configured.
+
+### Admin-initiated (always available)
 1. Open the edit dialog for the user
 2. Enter a new password in the Password field
 3. Save
 
-The user will need to be informed of their new password — there is no automated email reset.
+The user is forced to rotate this temporary password on their next login. Inform them of the new password through a secure channel.
 
 ## Deactivating a User
 To prevent a user from logging in without deleting their history:

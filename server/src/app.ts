@@ -10,6 +10,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import authRoutes from './routes/auth';
+import passwordResetRoutes from './routes/passwordReset';
 import clientRoutes from './routes/clients';
 import { coaCollectionRouter, coaItemRouter } from './routes/chartOfAccounts';
 import { periodCollectionRouter, periodItemRouter } from './routes/periods';
@@ -49,6 +50,7 @@ import { mcpRouter } from './routes/mcpHttp';
 import { db } from './db';
 import { sendServerError } from './lib/safeError';
 import { isAiConfigured } from './lib/aiClient';
+import { isMailerConfigured } from './lib/mailService';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -203,16 +205,18 @@ app.get('/api/v1/ping', (_req, res) => {
 // render AI-dependent UI (chat bubble, support page link). Unauthenticated
 // — no sensitive data exposed.
 app.get('/api/v1/features', async (_req, res) => {
+  const passwordResetEnabled = isMailerConfigured();
   try {
     const ai = await isAiConfigured();
-    res.json({ data: { ai }, error: null });
+    res.json({ data: { ai, passwordResetEnabled }, error: null });
   } catch {
     // If the settings table query fails (e.g., DB down), fall back to env.
-    res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY }, error: null });
+    res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY, passwordResetEnabled }, error: null });
   }
 });
 
 app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/auth', passwordResetRoutes);
 app.use('/api/v1/clients', clientRoutes);
 app.use('/api/v1/clients/:clientId/chart-of-accounts', coaCollectionRouter);
 app.use('/api/v1/chart-of-accounts', coaItemRouter);

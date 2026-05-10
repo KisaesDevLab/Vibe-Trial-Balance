@@ -64,6 +64,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
           id: user.id,
           username: user.username,
           displayName: user.display_name,
+          email: user.email ?? null,
           role: user.role,
           mustChangePassword: !!user.must_change_password,
         },
@@ -79,7 +80,7 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res: Response): Promi
   try {
     const user = await db('app_users')
       .where({ id: req.user!.userId, is_active: true })
-      .select('id', 'username', 'display_name', 'role', 'must_change_password')
+      .select('id', 'username', 'display_name', 'email', 'role', 'must_change_password')
       .first();
 
     if (!user) {
@@ -94,6 +95,7 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res: Response): Promi
         id: user.id,
         username: user.username,
         displayName: user.display_name,
+        email: user.email ?? null,
         role: user.role,
         mustChangePassword: !!user.must_change_password,
       },

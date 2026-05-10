@@ -27,3 +27,33 @@ export function changePassword(currentPassword: string, newPassword: string) {
     body: JSON.stringify({ currentPassword, newPassword }),
   });
 }
+
+export function requestPasswordReset(identifier: string) {
+  return apiFetch<{ ok: true; message: string }>('/auth/password-reset/request', {
+    method: 'POST',
+    body: JSON.stringify({ identifier }),
+  });
+}
+
+export function verifyPasswordResetToken(token: string) {
+  return apiFetch<{ valid: boolean; reason?: 'expired' | 'consumed' | 'unknown' }>(
+    '/auth/password-reset/verify',
+    { method: 'POST', body: JSON.stringify({ token }) },
+  );
+}
+
+export function confirmPasswordReset(token: string, newPassword: string) {
+  return apiFetch<{ ok: true }>('/auth/password-reset/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ token, newPassword }),
+  });
+}
+
+export interface PublicFeatures {
+  ai: boolean;
+  passwordResetEnabled: boolean;
+}
+
+export function getFeatures() {
+  return apiFetch<PublicFeatures>('/features');
+}

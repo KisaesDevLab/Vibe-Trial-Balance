@@ -13,6 +13,7 @@ export interface AuthUser {
   id: number;
   username: string;
   displayName: string;
+  email?: string | null;
   role: string;
   mustChangePassword?: boolean;
 }

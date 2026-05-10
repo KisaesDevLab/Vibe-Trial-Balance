@@ -5,7 +5,7 @@
 2. Enter your username and password
 3. Click **Login**
 
-If you see "Token expired", log out and log back in. Contact your admin if you need a password reset.
+If you see "Token expired", log out and log back in. If you've forgotten your password and your account has an email on file, click **Forgot password?** on the login screen to receive a reset link (valid 30 minutes). Otherwise contact your admin to reset it.
 
 First-time admin login uses a fixed, publicly-known bootstrap password: username `admin`, password `admin1234`. The app immediately forces you to pick your own password on first sign-in before anything else in the app is reachable. Passwords must be at least 8 characters and include an uppercase letter, a lowercase letter, and a number.
 

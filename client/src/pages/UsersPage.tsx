@@ -15,6 +15,7 @@ import {
 } from '../api/users';
 import { useAuthStore } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
+import { PasswordInput } from '../components/PasswordInput';
 
 const ROLE_BADGE: Record<string, { label: string; cls: string }> = {
   admin:    { label: 'Admin',    cls: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400' },
@@ -48,17 +49,19 @@ interface UserFormProps {
 function UserForm({ initial, isEdit, onSave, onCancel, saving, error }: UserFormProps) {
   const [username, setUsername] = useState(initial?.username ?? '');
   const [displayName, setDisplayName] = useState(initial?.displayName ?? '');
+  const [email, setEmail] = useState(initial?.email ?? '');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<UserInput['role']>(initial?.role ?? 'preparer');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const trimmedEmail = email.trim();
     if (isEdit) {
-      const patch: UserPatch = { displayName, role };
+      const patch: UserPatch = { displayName, email: trimmedEmail === '' ? null : trimmedEmail, role };
       if (password) patch.password = password;
       onSave(patch);
     } else {
-      onSave({ username, displayName, password, role });
+      onSave({ username, displayName, email: trimmedEmail === '' ? null : trimmedEmail, password, role });
     }
   };
 
@@ -79,11 +82,23 @@ function UserForm({ initial, isEdit, onSave, onCancel, saving, error }: UserForm
       </div>
       <div>
         <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Email <span className="text-gray-400 dark:text-gray-500">(needed for self-service password reset)</span>
+        </label>
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={320}
+          autoComplete="email"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white" />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
           {isEdit ? 'New Password (leave blank to keep current)' : 'Password'}
         </label>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-          required={!isEdit} minLength={6}
-          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white" />
+        <PasswordInput
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required={!isEdit}
+          minLength={6}
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+        />
       </div>
       <div>
         <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
@@ -258,7 +273,7 @@ export function UsersPage() {
         <Modal title={`Edit — ${editUser.display_name}`} onClose={() => setEditUser(null)}>
           <UserForm
             isEdit
-            initial={{ username: editUser.username, displayName: editUser.display_name, role: editUser.role }}
+            initial={{ username: editUser.username, displayName: editUser.display_name, email: editUser.email ?? '', role: editUser.role }}
             onSave={(data) => updateMutation.mutate({ id: editUser.id, patch: data as UserPatch })}
             onCancel={() => setEditUser(null)}
             saving={updateMutation.isPending}
