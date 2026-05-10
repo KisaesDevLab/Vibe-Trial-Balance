@@ -99,3 +99,58 @@ export const getOcrStatus = () =>
 
 export const testOcr = () =>
   apiFetch<{ valid: boolean; model?: string; message?: string }>('/settings/test-ocr', { method: 'POST' });
+
+// ── Mail (password-reset email transport) ───────────────────────────────────
+
+export type MailTransport = '' | 'smtp' | 'postmark' | 'emailit';
+
+export interface MailSettings {
+  transport: MailTransport;
+  from: string;
+  smtp: {
+    host: string;
+    port: string;
+    user: string;
+    secure: boolean;
+    hasPassword: boolean;
+  };
+  postmark: { hasToken: boolean };
+  emailit: { hasApiKey: boolean; apiUrl: string };
+  envOverride: boolean;
+}
+
+/** Sentinel sent from the form for secret fields the admin did not edit —
+ *  the server preserves the existing encrypted value. Sending '' clears the
+ *  secret. Sending a real value replaces it. */
+export const MAIL_SECRET_KEEP = '__keep__';
+
+export interface MailSettingsPatch {
+  transport?: MailTransport;
+  from?: string;
+  smtpHost?: string;
+  smtpPort?: string;
+  smtpUser?: string;
+  /** real value, '' to clear, or MAIL_SECRET_KEEP to leave existing secret untouched */
+  smtpPassword?: string;
+  smtpSecure?: boolean;
+  postmarkToken?: string;
+  emailitApiKey?: string;
+  emailitApiUrl?: string;
+}
+
+export const getMailSettings = () => apiFetch<MailSettings>('/settings/mail');
+
+export const saveMailSettings = (data: MailSettingsPatch) =>
+  apiFetch<{ saved: boolean }>('/settings/mail', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+
+/** Sends a test email to the requesting admin's own email. When `data` is
+ *  provided, the test uses those form values instead of the persisted ones —
+ *  letting the admin verify edits before saving. */
+export const testMail = (data?: MailSettingsPatch) =>
+  apiFetch<{ sent: boolean; to: string; transport: string }>('/settings/mail/test', {
+    method: 'POST',
+    body: JSON.stringify(data ?? {}),
+  });

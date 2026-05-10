@@ -126,7 +126,6 @@ router.post('/password-reset/request', requestLimiter, async (req: Request, res:
       .first('id', 'username', 'display_name', 'email');
 
     if (user && user.email) {
-      const mailer = getMailer();
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = hashToken(rawToken);
       const expiresAt = new Date(Date.now() + TOKEN_TTL_MS);
@@ -154,6 +153,7 @@ router.post('/password-reset/request', requestLimiter, async (req: Request, res:
         description: `Password reset requested for "${user.username}"`,
       });
 
+      const mailer = await getMailer();
       if (mailer) {
         const link = buildResetUrl(rawToken);
         const { subject, html, text } = buildResetEmail(user.display_name || user.username, link);
@@ -164,7 +164,7 @@ router.post('/password-reset/request', requestLimiter, async (req: Request, res:
           // Still return 200 — don't leak send-failure state.
         }
       } else {
-        console.warn('[password-reset] MAIL_TRANSPORT not configured — request silently no-op');
+        console.warn('[password-reset] mail transport not configured — request silently no-op');
       }
     }
   } catch (err: unknown) {

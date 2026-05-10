@@ -205,7 +205,12 @@ app.get('/api/v1/ping', (_req, res) => {
 // render AI-dependent UI (chat bubble, support page link). Unauthenticated
 // — no sensitive data exposed.
 app.get('/api/v1/features', async (_req, res) => {
-  const passwordResetEnabled = isMailerConfigured();
+  let passwordResetEnabled = false;
+  try {
+    passwordResetEnabled = await isMailerConfigured();
+  } catch {
+    passwordResetEnabled = !!process.env.MAIL_TRANSPORT;
+  }
   try {
     const ai = await isAiConfigured();
     res.json({ data: { ai, passwordResetEnabled }, error: null });

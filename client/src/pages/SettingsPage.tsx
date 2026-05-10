@@ -4,7 +4,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMProviderSettings, saveLLMProviderSettings, testLLM, testOcr, fetchOpenAIModels, fetchProviderModels, type LLMProvider, type LLMProviderSettings, type OpenAIModelInfo } from '../api/settings';
+import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMProviderSettings, saveLLMProviderSettings, testLLM, testOcr, fetchOpenAIModels, fetchProviderModels, getMailSettings, saveMailSettings, testMail, MAIL_SECRET_KEEP, type LLMProvider, type LLMProviderSettings, type OpenAIModelInfo, type MailSettingsPatch, type MailTransport } from '../api/settings';
 import { getMcpTokenStatus, generateMcpToken, revokeMcpToken } from '../api/mcpSettings';
 import { getAiPricing, saveAiPricing, fetchAiPricingFromClaude, getAiUsage, getAiModels, saveAiModels, getAvailableModels, type AiPricingMap } from '../api/aiUsage';
 import { useAuthStore } from '../store/uiStore';
@@ -70,6 +70,13 @@ export function SettingsPage() {
   const [mcpActiveTab, setMcpActiveTab] = useState<'stdio' | 'http'>('stdio');
   const [newMcpToken, setNewMcpToken] = useState<string | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
+
+  // Mail-provider state
+  const [mailEdits, setMailEdits] = useState<MailSettingsPatch | null>(null);
+  const [mailSaved, setMailSaved] = useState(false);
+  const [mailError, setMailError] = useState<string | null>(null);
+  const [mailTesting, setMailTesting] = useState(false);
+  const [mailTestResult, setMailTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['settings'],
@@ -282,6 +289,81 @@ export function SettingsPage() {
     } finally {
       setOcrTesting(false);
     }
+  };
+
+  // Mail provider settings query (admin only). The server masks secrets and
+  // exposes hasX flags so the UI can show "(stored)" indicators without ever
+  // round-tripping the actual credentials.
+  const { data: mailData, isLoading: mailLoading } = useQuery({
+    queryKey: ['mail-settings'],
+    queryFn: async () => {
+      if (!isAdmin) return null;
+      const res = await getMailSettings();
+      if (res.error) throw new Error(res.error.message);
+      return res.data;
+    },
+    enabled: isAdmin,
+  });
+
+  // Effective view = persisted DB values + admin's pending edits. Secret-field
+  // edits live separately (see buildMailPayload below) so the input can stay
+  // empty without nuking the stored secret.
+  const effectiveMail = {
+    transport: (mailEdits?.transport ?? mailData?.transport ?? '') as MailTransport,
+    from: mailEdits?.from ?? mailData?.from ?? '',
+    smtpHost: mailEdits?.smtpHost ?? mailData?.smtp.host ?? '',
+    smtpPort: String(mailEdits?.smtpPort ?? mailData?.smtp.port ?? '587'),
+    smtpUser: mailEdits?.smtpUser ?? mailData?.smtp.user ?? '',
+    smtpSecure: mailEdits?.smtpSecure ?? mailData?.smtp.secure ?? false,
+    emailitApiUrl: mailEdits?.emailitApiUrl ?? mailData?.emailit.apiUrl ?? '',
+    smtpPasswordInput: mailEdits?.smtpPassword === MAIL_SECRET_KEEP ? '' : (mailEdits?.smtpPassword ?? ''),
+    postmarkTokenInput: mailEdits?.postmarkToken === MAIL_SECRET_KEEP ? '' : (mailEdits?.postmarkToken ?? ''),
+    emailitApiKeyInput: mailEdits?.emailitApiKey === MAIL_SECRET_KEEP ? '' : (mailEdits?.emailitApiKey ?? ''),
+  };
+
+  // Build the request body. Untouched secrets get the KEEP sentinel so the
+  // server preserves them; an empty edit goes through as an explicit clear.
+  function buildMailPayload(): MailSettingsPatch {
+    const p: MailSettingsPatch = {};
+    if (mailEdits?.transport !== undefined) p.transport = mailEdits.transport;
+    if (mailEdits?.from !== undefined) p.from = mailEdits.from;
+    if (mailEdits?.smtpHost !== undefined) p.smtpHost = mailEdits.smtpHost;
+    if (mailEdits?.smtpPort !== undefined) p.smtpPort = String(mailEdits.smtpPort);
+    if (mailEdits?.smtpUser !== undefined) p.smtpUser = mailEdits.smtpUser;
+    if (mailEdits?.smtpSecure !== undefined) p.smtpSecure = mailEdits.smtpSecure;
+    if (mailEdits?.emailitApiUrl !== undefined) p.emailitApiUrl = mailEdits.emailitApiUrl;
+    p.smtpPassword = mailEdits?.smtpPassword !== undefined ? mailEdits.smtpPassword : MAIL_SECRET_KEEP;
+    p.postmarkToken = mailEdits?.postmarkToken !== undefined ? mailEdits.postmarkToken : MAIL_SECRET_KEEP;
+    p.emailitApiKey = mailEdits?.emailitApiKey !== undefined ? mailEdits.emailitApiKey : MAIL_SECRET_KEEP;
+    return p;
+  }
+
+  const handleSaveMail = async () => {
+    setMailError(null);
+    if (!mailEdits) return;
+    const res = await saveMailSettings(buildMailPayload());
+    if (res.error) {
+      setMailError(res.error.message);
+      return;
+    }
+    qc.invalidateQueries({ queryKey: ['mail-settings'] });
+    qc.invalidateQueries({ queryKey: ['features'] });
+    setMailEdits(null);
+    setMailSaved(true);
+    setTimeout(() => setMailSaved(false), 3000);
+  };
+
+  const handleTestMail = async () => {
+    setMailTesting(true);
+    setMailTestResult(null);
+    // Test uses the form values when present, otherwise the persisted config.
+    const res = await testMail(mailEdits ? buildMailPayload() : undefined);
+    setMailTesting(false);
+    if (res.error) {
+      setMailTestResult({ ok: false, message: res.error.message });
+      return;
+    }
+    setMailTestResult({ ok: true, message: `Sent to ${res.data.to} via ${res.data.transport}.` });
   };
 
   // MCP token queries — all users can view status; mutations are admin only
@@ -1231,6 +1313,190 @@ export function SettingsPage() {
           )}
         </div>
       </div>
+
+      {/* Email / Password Reset Provider */}
+      {isAdmin && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+          <div className="px-5 py-4">
+            <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-1">
+              Email Provider
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+              Send password-reset emails. When configured, the &quot;Forgot password?&quot; link appears on the
+              login page. Users without an email on file can still be reset by an admin under{' '}
+              <strong>Admin &gt; Users</strong>. Secrets are encrypted at rest using your{' '}
+              <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">ENCRYPTION_KEY</code>.
+            </p>
+
+            {mailLoading ? (
+              <div className="text-sm text-gray-400 dark:text-gray-500">Loading…</div>
+            ) : (
+              <div className="space-y-4">
+                {mailData?.envOverride && effectiveMail.transport === '' && (
+                  <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 text-blue-700 dark:text-blue-400 px-3 py-2 rounded text-xs">
+                    Mail-related environment variables are set on the server. They&apos;ll be used until you save
+                    a transport here.
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Transport</label>
+                  <select
+                    value={effectiveMail.transport}
+                    onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), transport: e.target.value as MailTransport }))}
+                    className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full max-w-xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                  >
+                    <option value="">Disabled (no self-service reset)</option>
+                    <option value="smtp">SMTP</option>
+                    <option value="postmark">Postmark</option>
+                    <option value="emailit">Emailit v2</option>
+                  </select>
+                </div>
+
+                {effectiveMail.transport && (
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">From address</label>
+                    <input
+                      value={effectiveMail.from}
+                      onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), from: e.target.value }))}
+                      placeholder="Vibe TB <noreply@yourfirm.com>"
+                      className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                    />
+                  </div>
+                )}
+
+                {effectiveMail.transport === 'smtp' && (
+                  <div className="space-y-3 border border-blue-200 dark:border-blue-800 rounded p-3 bg-blue-50/30 dark:bg-blue-900/10">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Host</label>
+                        <input
+                          value={effectiveMail.smtpHost}
+                          onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), smtpHost: e.target.value }))}
+                          placeholder="smtp.example.com"
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Port</label>
+                        <input
+                          value={effectiveMail.smtpPort}
+                          onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), smtpPort: e.target.value }))}
+                          placeholder="587"
+                          inputMode="numeric"
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Username</label>
+                        <input
+                          value={effectiveMail.smtpUser}
+                          onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), smtpUser: e.target.value }))}
+                          autoComplete="off"
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                          Password {mailData?.smtp.hasPassword && <span className="text-gray-400">(stored — leave blank to keep)</span>}
+                        </label>
+                        <PasswordInput
+                          value={effectiveMail.smtpPasswordInput}
+                          onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), smtpPassword: e.target.value }))}
+                          placeholder={mailData?.smtp.hasPassword ? '••••••••' : ''}
+                          autoComplete="new-password"
+                          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 pr-9 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="inline-flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={effectiveMail.smtpSecure}
+                          onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), smtpSecure: e.target.checked }))}
+                        />
+                        Use TLS-on-connect (port 465). Leave off for STARTTLS on 587.
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {effectiveMail.transport === 'postmark' && (
+                  <div className="space-y-3 border border-amber-200 dark:border-amber-800 rounded p-3 bg-amber-50/30 dark:bg-amber-900/10">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        Server token {mailData?.postmark.hasToken && <span className="text-gray-400">(stored — leave blank to keep)</span>}
+                      </label>
+                      <PasswordInput
+                        value={effectiveMail.postmarkTokenInput}
+                        onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), postmarkToken: e.target.value }))}
+                        placeholder={mailData?.postmark.hasToken ? '••••••••' : ''}
+                        autoComplete="new-password"
+                        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 pr-9 text-sm w-full focus:outline-none focus:ring-2 focus:ring-amber-500 dark:bg-gray-700 dark:text-white"
+                      />
+                      <p className="text-[11px] text-gray-400 mt-0.5">From your Postmark server settings (Server API tokens).</p>
+                    </div>
+                  </div>
+                )}
+
+                {effectiveMail.transport === 'emailit' && (
+                  <div className="space-y-3 border border-purple-200 dark:border-purple-800 rounded p-3 bg-purple-50/30 dark:bg-purple-900/10">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        API key {mailData?.emailit.hasApiKey && <span className="text-gray-400">(stored — leave blank to keep)</span>}
+                      </label>
+                      <PasswordInput
+                        value={effectiveMail.emailitApiKeyInput}
+                        onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), emailitApiKey: e.target.value }))}
+                        placeholder={mailData?.emailit.hasApiKey ? '••••••••' : ''}
+                        autoComplete="new-password"
+                        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 pr-9 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">API URL <span className="text-gray-400">(optional)</span></label>
+                      <input
+                        value={effectiveMail.emailitApiUrl}
+                        onChange={(e) => setMailEdits((p) => ({ ...(p ?? {}), emailitApiUrl: e.target.value }))}
+                        placeholder="https://api.emailit.com/v1"
+                        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={handleSaveMail}
+                    disabled={!mailEdits}
+                    className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
+                  >
+                    Save Email Settings
+                  </button>
+                  <button
+                    onClick={handleTestMail}
+                    disabled={mailTesting || (effectiveMail.transport === '' && !mailData?.transport)}
+                    title={!user?.email ? 'Add an email to your own user account first' : 'Send a test email to your account'}
+                    className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
+                  >
+                    {mailTesting ? 'Sending…' : 'Send Test Email'}
+                  </button>
+                  {mailSaved && <span className="text-xs text-green-600 dark:text-green-400">Saved</span>}
+                  {mailError && <span className="text-xs text-red-600 dark:text-red-400">{mailError}</span>}
+                </div>
+                {mailTestResult && (
+                  <div className={`text-xs px-3 py-2 rounded ${mailTestResult.ok ? 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400'}`}>
+                    {mailTestResult.ok ? `Test sent — ${mailTestResult.message}` : `Test failed: ${mailTestResult.message}`}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* MCP / Claude Desktop Integration */}
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">

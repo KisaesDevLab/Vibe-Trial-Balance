@@ -17,6 +17,13 @@ import { encrypt, decrypt, isEncrypted } from '../lib/encryption';
 import { logAudit } from '../lib/periodGuard';
 import { loadOcrSettings, testOcrConnection } from '../lib/ocrProvider';
 import { assertSafeOutboundUrl } from '../lib/urlSafety';
+import {
+  buildMailerFor,
+  invalidateMailerCache,
+  loadMailConfig,
+  type MailConfig,
+  type MailTransport,
+} from '../lib/mailService';
 
 export const settingsRouter = Router();
 settingsRouter.use(authMiddleware);
@@ -746,5 +753,263 @@ settingsRouter.post('/test-ocr', async (req: AuthRequest, res: Response): Promis
     // Keep useful info (status codes, "model not found") but strip raw response bodies
     const message = raw.length > 120 ? raw.slice(0, 120) + '…' : raw;
     res.status(500).json({ data: null, error: { code: 'OCR_TEST_FAILED', message } });
+  }
+});
+
+// ── Mail (password-reset email transport) ───────────────────────────────────
+
+const SENTINEL_KEEP = '__keep__';
+const MAIL_TRANSPORTS = ['', 'smtp', 'postmark', 'emailit'] as const;
+
+interface MailSettingsResponse {
+  transport: '' | MailTransport;
+  from: string;
+  smtp: {
+    host: string;
+    port: string;
+    user: string;
+    secure: boolean;
+    hasPassword: boolean;
+  };
+  postmark: { hasToken: boolean };
+  emailit: { hasApiKey: boolean; apiUrl: string };
+  envOverride: boolean; // true if env vars are filling any gap
+}
+
+async function readMailRow(key: string): Promise<string> {
+  const row = await db('settings').where({ key }).first('value');
+  return (row?.value as string | undefined) ?? '';
+}
+
+// GET /api/v1/settings/mail (admin only)
+settingsRouter.get('/mail', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  try {
+    const [transport, from, smtpHost, smtpPort, smtpUser, smtpPass, smtpSecure, postmarkToken, emailitKey, emailitUrl] =
+      await Promise.all([
+        readMailRow('mail.transport'),
+        readMailRow('mail.from'),
+        readMailRow('mail.smtp_host'),
+        readMailRow('mail.smtp_port'),
+        readMailRow('mail.smtp_user'),
+        readMailRow('mail.smtp_password'),
+        readMailRow('mail.smtp_secure'),
+        readMailRow('mail.postmark_token'),
+        readMailRow('mail.emailit_api_key'),
+        readMailRow('mail.emailit_api_url'),
+      ]);
+
+    const envOverride =
+      !transport &&
+      !!(process.env.MAIL_TRANSPORT || process.env.SMTP_HOST || process.env.POSTMARK_TOKEN || process.env.EMAILIT_API_KEY);
+
+    const data: MailSettingsResponse = {
+      transport: (transport as MailSettingsResponse['transport']) || '',
+      from,
+      smtp: {
+        host: smtpHost,
+        port: smtpPort,
+        user: smtpUser,
+        secure: smtpSecure === 'true',
+        hasPassword: !!smtpPass,
+      },
+      postmark: { hasToken: !!postmarkToken },
+      emailit: { hasApiKey: !!emailitKey, apiUrl: emailitUrl },
+      envOverride,
+    };
+    res.json({ data, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'mail-settings');
+  }
+});
+
+const mailPutSchema = z.object({
+  // '' is allowed and clears the transport setting (disables self-service reset).
+  transport: z.enum(['', 'smtp', 'postmark', 'emailit']).optional(),
+  from: z.string().max(320).optional(),
+  smtpHost: z.string().max(255).optional(),
+  smtpPort: z.union([z.string().max(6), z.number().int()]).optional(),
+  smtpUser: z.string().max(255).optional(),
+  smtpPassword: z.string().max(500).optional(),
+  smtpSecure: z.boolean().optional(),
+  postmarkToken: z.string().max(500).optional(),
+  emailitApiKey: z.string().max(500).optional(),
+  emailitApiUrl: z.string().max(500).optional(),
+});
+
+async function upsertSetting(key: string, value: string): Promise<void> {
+  await db('settings')
+    .insert({ key, value, updated_at: db.fn.now() })
+    .onConflict('key')
+    .merge({ value, updated_at: db.fn.now() });
+}
+
+// PUT /api/v1/settings/mail (admin only)
+settingsRouter.put('/mail', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  const parsed = mailPutSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    return;
+  }
+  const d = parsed.data;
+  try {
+    const ops: Promise<void>[] = [];
+
+    if (d.transport !== undefined) ops.push(upsertSetting('mail.transport', d.transport));
+    if (d.from !== undefined) ops.push(upsertSetting('mail.from', d.from));
+    if (d.smtpHost !== undefined) ops.push(upsertSetting('mail.smtp_host', d.smtpHost));
+    if (d.smtpPort !== undefined) ops.push(upsertSetting('mail.smtp_port', String(d.smtpPort)));
+    if (d.smtpUser !== undefined) ops.push(upsertSetting('mail.smtp_user', d.smtpUser));
+    if (d.smtpSecure !== undefined) ops.push(upsertSetting('mail.smtp_secure', String(d.smtpSecure)));
+    if (d.emailitApiUrl !== undefined) ops.push(upsertSetting('mail.emailit_api_url', d.emailitApiUrl));
+
+    // Secrets — empty string means "clear", SENTINEL_KEEP means "leave as-is",
+    // everything else gets encrypted before storage.
+    const writeSecret = (key: string, value: string | undefined): void => {
+      if (value === undefined || value === SENTINEL_KEEP) return;
+      ops.push(upsertSetting(key, value === '' ? '' : encrypt(value)));
+    };
+    writeSecret('mail.smtp_password', d.smtpPassword);
+    writeSecret('mail.postmark_token', d.postmarkToken);
+    writeSecret('mail.emailit_api_key', d.emailitApiKey);
+
+    await Promise.all(ops);
+    invalidateMailerCache();
+    await logAudit({
+      userId: req.user!.userId,
+      periodId: null,
+      entityType: 'setting',
+      entityId: null,
+      action: 'update',
+      description: 'Updated mail provider settings',
+    });
+    res.json({ data: { saved: true }, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'mail-settings');
+  }
+});
+
+// POST /api/v1/settings/mail/test (admin only)
+//
+// Sends a test email using either the persisted config or — if the admin has
+// edits in the form they haven't saved yet — a one-off config built from the
+// request body. The recipient is always the requesting admin's own email so
+// no test email can be triggered toward an arbitrary address.
+const mailTestSchema = mailPutSchema.extend({
+  to: z.string().email().optional(),
+});
+settingsRouter.post('/mail/test', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  const parsed = mailTestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    return;
+  }
+  const requester = await db('app_users').where({ id: req.user!.userId }).first('email');
+  const to = parsed.data.to || (requester?.email as string | null) || '';
+  if (!to) {
+    res.status(400).json({
+      data: null,
+      error: {
+        code: 'NO_RECIPIENT',
+        message: 'Add an email to your own user account first, or pass `to` explicitly.',
+      },
+    });
+    return;
+  }
+
+  try {
+    // Build the config to test. If the request includes form values, prefer
+    // them (so the admin can verify edits before saving). Otherwise read the
+    // persisted config the same way the runtime does.
+    const useForm = MAIL_TRANSPORTS.includes((parsed.data.transport ?? '') as (typeof MAIL_TRANSPORTS)[number])
+      && parsed.data.transport;
+    let cfg: MailConfig | null;
+    if (useForm) {
+      const t = parsed.data.transport as MailTransport;
+      const from = (parsed.data.from || '').trim() || process.env.MAIL_FROM || '';
+      if (!from) {
+        res.status(400).json({ data: null, error: { code: 'MISSING_FROM', message: 'From address is required.' } });
+        return;
+      }
+      // For "keep existing" sentinels in secrets, fall through to the persisted
+      // value via loadMailConfig so the admin can test without re-entering the
+      // password every time.
+      const persisted = await loadMailConfig();
+      cfg = { transport: t, from };
+      if (t === 'smtp') {
+        const host = (parsed.data.smtpHost ?? persisted?.smtp?.host ?? '').trim();
+        if (!host) {
+          res.status(400).json({ data: null, error: { code: 'MISSING_HOST', message: 'SMTP host is required.' } });
+          return;
+        }
+        const portRaw = String(parsed.data.smtpPort ?? persisted?.smtp?.port ?? 587).trim();
+        const port = Number(portRaw);
+        if (!Number.isFinite(port) || port <= 0) {
+          res.status(400).json({ data: null, error: { code: 'BAD_PORT', message: `Invalid port "${portRaw}"` } });
+          return;
+        }
+        const user = (parsed.data.smtpUser ?? persisted?.smtp?.user ?? '').trim() || undefined;
+        const pass =
+          parsed.data.smtpPassword === SENTINEL_KEEP || parsed.data.smtpPassword === undefined
+            ? persisted?.smtp?.pass
+            : parsed.data.smtpPassword;
+        const secure = parsed.data.smtpSecure ?? persisted?.smtp?.secure ?? false;
+        cfg.smtp = { host, port, user, pass, secure };
+      } else if (t === 'postmark') {
+        const token =
+          parsed.data.postmarkToken === SENTINEL_KEEP || parsed.data.postmarkToken === undefined
+            ? persisted?.postmark?.token
+            : parsed.data.postmarkToken;
+        if (!token) {
+          res.status(400).json({ data: null, error: { code: 'MISSING_TOKEN', message: 'Postmark token is required.' } });
+          return;
+        }
+        cfg.postmark = { token };
+      } else {
+        const apiKey =
+          parsed.data.emailitApiKey === SENTINEL_KEEP || parsed.data.emailitApiKey === undefined
+            ? persisted?.emailit?.apiKey
+            : parsed.data.emailitApiKey;
+        if (!apiKey) {
+          res.status(400).json({ data: null, error: { code: 'MISSING_API_KEY', message: 'Emailit API key is required.' } });
+          return;
+        }
+        cfg.emailit = { apiKey, apiUrl: parsed.data.emailitApiUrl ?? persisted?.emailit?.apiUrl };
+      }
+    } else {
+      cfg = await loadMailConfig();
+      if (!cfg) {
+        res.status(400).json({
+          data: null,
+          error: { code: 'NOT_CONFIGURED', message: 'No mail transport is configured.' },
+        });
+        return;
+      }
+    }
+
+    const mailer = buildMailerFor(cfg);
+    await mailer.send({
+      to,
+      subject: 'Vibe TB — test email',
+      text: 'This is a test email from Vibe TB confirming your mail provider is configured correctly.',
+      html: '<p>This is a test email from <strong>Vibe TB</strong> confirming your mail provider is configured correctly.</p>',
+    });
+    res.json({ data: { sent: true, to, transport: cfg.transport }, error: null });
+  } catch (err: unknown) {
+    const raw = err instanceof Error ? err.message : 'Mail test failed';
+    console.error('[mail-test]', raw);
+    const message = raw.length > 200 ? raw.slice(0, 200) + '…' : raw;
+    res.status(500).json({ data: null, error: { code: 'MAIL_TEST_FAILED', message } });
   }
 });
