@@ -16,12 +16,6 @@
 set -e
 cd /app/server
 
-# TypeScript layout note: tsconfig.json includes both `src/**/*` and
-# `../shared/**/*`. With no explicit `rootDir`, tsc computes it as the
-# common ancestor of those inputs — `/app` — and emits to
-# `dist/server/src/*.js` (preserving the layout below rootDir), NOT
-# `dist/*.js`. Keep the dist paths below in sync with that reality.
-
 if [ "${MIGRATIONS_AUTO:-true}" = "true" ]; then
   echo "[entrypoint] Running database migrations (MIGRATIONS_AUTO=true)..."
   npx knex migrate:latest --knexfile knexfile.js
@@ -44,9 +38,9 @@ if [ "${MIGRATIONS_AUTO:-true}" = "true" ]; then
   fi
 else
   echo "[entrypoint] MIGRATIONS_AUTO=false — skipping auto-migration and auto-seed"
-  echo "[entrypoint]   Run \`node dist/server/src/migrate.js\` and \`npx knex seed:run --knexfile knexfile.js\`"
+  echo "[entrypoint]   Run \`node dist/migrate.js\` and \`npx knex seed:run --knexfile knexfile.js\`"
   echo "[entrypoint]   as one-shot containers before starting this service."
 fi
 
 echo "[entrypoint] Starting server..."
-exec node dist/server/src/app.js
+exec node dist/app.js
