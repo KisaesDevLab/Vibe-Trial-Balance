@@ -1,3 +1,5 @@
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/I3D3227TTP)
+
 # Vibe Trial Balance
 
 A self-hosted tax preparation and accounting workpaper application for small CPA firms. Manage trial balances, journal entries, bank transactions, tax code assignments, financial statements, and client engagements — with AI-powered diagnostics, classification, and PDF import.
