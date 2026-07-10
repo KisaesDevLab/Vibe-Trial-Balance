@@ -9,6 +9,7 @@
 import { Knex } from 'knex';
 import type { Content, TableCell } from 'pdfmake/interfaces';
 import { PdfTemplateService, DocOptions } from './PdfTemplateService';
+import { categoryNet, netIncomeContribution } from '../lib/accounting';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared DB helpers
@@ -121,12 +122,17 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
       const uCr = Number(r.unadjusted_credit ?? 0);
       const baDr = Number(r.book_adj_debit ?? 0);
       const baCr = Number(r.book_adj_credit ?? 0);
-      const bDr = Number(r.book_adjusted_debit ?? 0);
-      const bCr = Number(r.book_adjusted_credit ?? 0);
       const taDr = Number(r.tax_adj_debit ?? 0);
       const taCr = Number(r.tax_adj_credit ?? 0);
-      const tDr = Number(r.tax_adjusted_debit ?? 0);
-      const tCr = Number(r.tax_adjusted_credit ?? 0);
+      // Adjusted balances are presented NETTED per account (only the winning
+      // side shows), matching the TB grid, popout, and Excel export — so the
+      // report ties to the working grid line-for-line.
+      const bNet = Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0);
+      const bDr = bNet > 0 ? bNet : 0;
+      const bCr = bNet < 0 ? -bNet : 0;
+      const tNet = Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0);
+      const tDr = tNet > 0 ? tNet : 0;
+      const tCr = tNet < 0 ? -tNet : 0;
 
       if (showGroup('priorYear'))    { cells.push(pyDr, pyCr); }
       if (showGroup('unadjusted'))   { cells.push(uDr, uCr); }
@@ -157,7 +163,18 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
   if (showGroup('taxAdjusted'))  { grandCells.push(totals.tax_dr, totals.tax_cr); }
   tableBody.push(svc.dataRow(grandCells, { bold: true, shade: true }));
 
-  const balanced = Math.abs(totals.unadj_dr - totals.unadj_cr) < 1;
+  // Verify every displayed layer foots DR = CR (integer cents — exact), not
+  // just the unadjusted columns; report the first layer that fails.
+  const layerChecks: Array<{ label: string; dr: number; cr: number }> = [
+    { label: 'Prior Year',    dr: totals.py_dr,       cr: totals.py_cr },
+    { label: 'Unadjusted',    dr: totals.unadj_dr,    cr: totals.unadj_cr },
+    { label: 'Book AJEs',     dr: totals.book_adj_dr, cr: totals.book_adj_cr },
+    { label: 'Book Adjusted', dr: totals.book_dr,     cr: totals.book_cr },
+    { label: 'Tax AJEs',      dr: totals.tax_adj_dr,  cr: totals.tax_adj_cr },
+    { label: 'Tax Adjusted',  dr: totals.tax_dr,      cr: totals.tax_cr },
+  ];
+  const outOfBalance = layerChecks.filter((l) => l.dr !== l.cr);
+  const balanced = outOfBalance.length === 0;
 
   const content: Content[] = [
     {
@@ -172,8 +189,8 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
     },
     {
       text: balanced
-        ? 'Trial balance is in balance.'
-        : `WARNING: Trial balance is out of balance. DR total: ${svc.formatCents(totals.unadj_dr)}  CR total: ${svc.formatCents(totals.unadj_cr)}`,
+        ? 'Trial balance is in balance (all layers foot DR = CR).'
+        : `WARNING: Out of balance — ${outOfBalance.map((l) => `${l.label}: DR ${svc.formatCents(l.dr)} vs CR ${svc.formatCents(l.cr)}`).join('; ')}`,
       fontSize: 7,
       color: balanced ? '#27ae60' : '#c0392b',
       margin: [0, 4, 0, 0] as [number, number, number, number],
@@ -339,7 +356,10 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
       (e) => e.entry_type === type,
     );
     const tableBody: TableCell[][] = [svc.headerRow(cols)];
-    let total = 0;
+    // Debits and credits are footed independently — printing the debit total
+    // in both columns would mask an out-of-balance entry.
+    let totalDr = 0;
+    let totalCr = 0;
     let rowIdx = 0;
 
     for (const entry of sectionEntries) {
@@ -349,7 +369,8 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
       for (const line of entryLines as Record<string, unknown>[]) {
         const dr = Number(line.debit  ?? 0);
         const cr = Number(line.credit ?? 0);
-        total += dr;
+        totalDr += dr;
+        totalCr += cr;
 
         tableBody.push(svc.dataRow([
           firstLine ? String(entry.entry_number ?? '') : '',
@@ -367,7 +388,7 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
     }
 
     tableBody.push(svc.dataRow(
-      ['', '', '', '', 'SECTION TOTAL', total, total],
+      ['', '', '', '', totalDr === totalCr ? 'SECTION TOTAL' : 'SECTION TOTAL — OUT OF BALANCE', totalDr, totalCr],
       { bold: true, shade: true },
     ));
 
@@ -444,6 +465,22 @@ export async function generateGeneralLedgerPdf(
     linesByAccount.get(aid)!.push(l);
   }
 
+  // Union with accounts that have JE activity but no trial_balance row (the
+  // web GL route does the same) — otherwise their activity vanishes from the
+  // PDF and the ledger no longer foots to the journals.
+  const tbAccountIds = new Set((tbRows as Record<string, unknown>[]).map((r) => Number(r.account_id)));
+  const missingIds = [...linesByAccount.keys()].filter((aid) => !tbAccountIds.has(aid));
+  if (missingIds.length > 0) {
+    const missingAccts = await db('chart_of_accounts')
+      .whereIn('id', missingIds)
+      .select('id as account_id', 'account_number', 'account_name', 'normal_balance');
+    for (const a of missingAccts as Record<string, unknown>[]) {
+      (tbRows as Record<string, unknown>[]).push({ ...a, unadjusted_debit: 0, unadjusted_credit: 0 });
+    }
+    (tbRows as Record<string, unknown>[]).sort((a, b) =>
+      String(a.account_number).localeCompare(String(b.account_number), undefined, { numeric: true }));
+  }
+
   const cols = ['Date', 'Entry #', 'Type', 'Description', 'Debit', 'Credit', 'Balance'];
   const widths = [55, 40, 35, '*', 65, 65, 65];
 
@@ -483,9 +520,10 @@ export async function generateGeneralLedgerPdf(
       rowIdx++;
     }
 
-    // Ending balance
+    // Ending balance — includes trans + book + tax entries, i.e. the
+    // tax-adjusted figure; label it so users don't tie it to book balances.
     tableBody.push(svc.dataRow(
-      ['', '', '', 'Ending Balance', null, null, balance],
+      ['', '', '', 'Ending Balance (all entries — tax adjusted)', null, null, balance],
       { bold: true, shade: true },
     ));
 
@@ -744,26 +782,36 @@ export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promi
 // (g) Tax Code Report PDF
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Promise<Buffer> {
+export async function generateTaxCodeReportPdf(
+  db: Knex,
+  periodId: number,
+  columns: 'book' | 'tax' = 'tax',
+): Promise<Buffer> {
   const svc  = await PdfTemplateService.fromDb(db);
   const info = await getPeriodInfo(db, periodId);
 
+  const drCol = columns === 'book' ? 'vtb.book_adjusted_debit as dr' : 'vtb.tax_adjusted_debit as dr';
+  const crCol = columns === 'book' ? 'vtb.book_adjusted_credit as cr' : 'vtb.tax_adjusted_credit as cr';
+
+  // No tax_line filter: unmapped accounts must appear (grouped under
+  // "Unassigned") so the PDF's population and totals match the on-screen
+  // report instead of silently hiding unfinished mapping work.
   const rows = await db('v_adjusted_trial_balance as vtb')
     .join('chart_of_accounts as coa', 'coa.id', 'vtb.account_id')
     .leftJoin('tax_codes as tc', 'tc.id', 'coa.tax_code_id')
     .where('vtb.period_id', periodId)
     .where('vtb.is_active', true)
-    .whereNotNull('vtb.tax_line')
     .select(
       'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
-      'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
+      drCol, crCol,
       'vtb.normal_balance',
       'vtb.tax_line',
       'tc.description as tc_description',
     )
-    .orderBy(['vtb.tax_line', 'vtb.account_number']);
+    .orderByRaw('vtb.tax_line ASC NULLS LAST, vtb.account_number ASC');
 
-  const cols   = ['Tax Code', 'Acct #', 'Account Name', 'Net Amount'];
+  const layerLabel = columns === 'book' ? 'Book-Adj Net' : 'Tax-Adj Net';
+  const cols   = ['Tax Code', 'Acct #', 'Account Name', layerLabel];
   const widths = [70, 55, '*', 80];
 
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
@@ -786,13 +834,13 @@ export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Prom
     let codeTotal = 0;
 
     for (const r of codeRows as Record<string, unknown>[]) {
-      const dr  = Number(r.tax_adjusted_debit  ?? 0);
-      const cr  = Number(r.tax_adjusted_credit ?? 0);
-      // Sign-aware net: debit-normal accounts (assets/expenses) show DR−CR as
-      // positive; credit-normal accounts (liab/equity/revenue) show CR−DR.
-      // Without this, revenue appears negative and the grand total is
-      // meaningless (it just mirrors TB's DR−CR, which sums to zero).
-      const net = r.normal_balance === 'credit' ? cr - dr : dr - cr;
+      const dr  = Number(r.dr ?? 0);
+      const cr  = Number(r.cr ?? 0);
+      // Raw DR−CR, matching the on-screen Tax Code Report and its Excel
+      // export: credit balances show as negatives, and the grand total is a
+      // zero control on a balanced TB. The two renderings of this report must
+      // state identical amounts.
+      const net = dr - cr;
       codeTotal += net;
 
       tableBody.push(svc.dataRow([
@@ -809,7 +857,7 @@ export async function generateTaxCodeReportPdf(db: Knex, periodId: number): Prom
     rowIdx++;
   }
 
-  tableBody.push(svc.dataRow(['', '', 'GRAND TOTAL', grandTotal], { bold: true, shade: true }));
+  tableBody.push(svc.dataRow(['', '', 'GRAND TOTAL (balance check — should be 0.00)', grandTotal], { bold: true, shade: true }));
 
   const content: Content[] = [{
     table: { headerRows: 1, widths, body: tableBody },
@@ -1002,11 +1050,20 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
   const widths = [55, '*', 45, '*', 80];
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
 
-  const groups = new Map<string, { label: string; desc: string; rows: TbRow[] }>();
+  // Unassigned accounts are split by category so a mixed revenue/expense
+  // "Unassigned" group's subtotal stays meaningful and group subtotals sum
+  // to net income (mirrors TaxBasisPlPage).
+  const groups = new Map<string, { label: string; desc: string; unassigned: boolean; rows: TbRow[] }>();
   for (const r of rows) {
-    const key = r.tax_code ?? '__UNASSIGNED__';
+    const key = r.tax_code ?? `__UNASSIGNED__${r.category}`;
     if (!groups.has(key)) {
-      groups.set(key, { label: r.tax_code ?? 'Unassigned', desc: r.tc_description ?? '(no tax code assigned)', rows: [] });
+      const unassignedLabel = r.category === 'revenue' ? 'Unassigned — Revenue' : 'Unassigned — Expenses';
+      groups.set(key, {
+        label: r.tax_code ?? unassignedLabel,
+        desc: r.tc_description ?? '(no tax code assigned)',
+        unassigned: r.tax_code === null,
+        rows: [],
+      });
     }
     groups.get(key)!.rows.push(r);
   }
@@ -1020,12 +1077,13 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
     for (const r of grp.rows) {
       const dr  = Number(r.tax_adjusted_debit  ?? 0);
       const cr  = Number(r.tax_adjusted_credit ?? 0);
-      const net = r.normal_balance === 'debit' ? dr - cr : cr - dr;
+      // Category-based signing: revenue = cr − dr, expenses = dr − cr, so
+      // contra accounts net against their category (matches TaxBasisPlPage).
+      const net = categoryNet(r.category, dr, cr);
       grpNet += net;
-      // Accumulate revenue and expenses separately for net income
       if (r.category === 'revenue') grandRevenue += net;
       else grandExpenses += net;
-      tableBody.push(svc.dataRow([grp.label === 'Unassigned' ? '—' : grp.label, '', r.account_number, r.account_name, net], { isAlt: rowIdx % 2 === 1 }));
+      tableBody.push(svc.dataRow([grp.unassigned ? '—' : grp.label, '', r.account_number, r.account_name, net], { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
     }
     tableBody.push(svc.dataRow(['', '', '', `Total ${grp.label}`, grpNet], { bold: true, shade: true }));
@@ -1077,7 +1135,11 @@ export async function generateTaxReturnOrderPdf(db: Knex, periodId: number): Pro
   const widths = [30, 55, 45, '*', 55, 75];
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
 
-  let grandNet = 0;
+  // Balance check: raw Σ(debit − credit) over every account. A summed
+  // "grand total" of normal-signed balances across all five categories is
+  // not a recognized accounting figure; the raw sum is a control total that
+  // must be zero on a balanced trial balance.
+  let balanceCheck = 0;
   let rowIdx = 0;
   let lastCode: string | null | undefined = undefined;
 
@@ -1093,7 +1155,7 @@ export async function generateTaxReturnOrderPdf(db: Knex, periodId: number): Pro
     const dr  = Number(r.tax_adjusted_debit  ?? 0);
     const cr  = Number(r.tax_adjusted_credit ?? 0);
     const net = r.normal_balance === 'debit' ? dr - cr : cr - dr;
-    grandNet += net;
+    balanceCheck += dr - cr;
     tableBody.push(svc.dataRow([
       r.sort_order !== null ? String(r.sort_order) : '—',
       r.tax_code ?? '—',
@@ -1104,7 +1166,7 @@ export async function generateTaxReturnOrderPdf(db: Knex, periodId: number): Pro
     ], { isAlt: rowIdx % 2 === 1 }));
     rowIdx++;
   }
-  tableBody.push(svc.dataRow(['', '', '', '', 'Grand Total (Net)', grandNet], { bold: true, shade: true }));
+  tableBody.push(svc.dataRow(['', '', '', '', 'Balance Check (should be 0.00)', balanceCheck], { bold: true, shade: true }));
 
   const content: Content[] = [{
     table: { headerRows: 1, widths, body: tableBody },
@@ -1133,28 +1195,34 @@ export async function generateFluxAnalysisPdf(
     .first('period_name', 'start_date', 'end_date');
   if (!comparePeriod) throw Object.assign(new Error('Compare period not found'), { status: 404 });
 
-  function netBal(dr: number, cr: number, nb: string): number {
-    return nb === 'debit' ? dr - cr : cr - dr;
-  }
-
+  // Mirrors comparison.ts: fetch FULL rows for both periods (no is_active
+  // filter) and walk the UNION of account ids, so accounts with a balance in
+  // only one period — including deactivated/closed-out accounts — still
+  // appear instead of silently vanishing from the category totals.
+  const cmpSelect = [
+    'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
+    'vtb.category', 'vtb.normal_balance',
+    'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
+  ];
   const [currentRows, compareRows] = await Promise.all([
     db('v_adjusted_trial_balance as vtb')
-      .where('vtb.period_id', periodId).where('vtb.is_active', true)
-      .select(
-        'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
-        'vtb.category', 'vtb.normal_balance',
-        'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
-      )
+      .where('vtb.period_id', periodId)
+      .select(cmpSelect)
       .orderBy('vtb.account_number', 'asc'),
     db('v_adjusted_trial_balance as vtb')
-      .where('vtb.period_id', comparePeriodId).where('vtb.is_active', true)
-      .select('vtb.account_id', 'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit'),
+      .where('vtb.period_id', comparePeriodId)
+      .select(cmpSelect),
   ]);
 
-  const cmpMap = new Map<number, { dr: number; cr: number }>();
-  for (const r of compareRows as Record<string, unknown>[]) {
-    cmpMap.set(Number(r.account_id), { dr: Number(r.book_adjusted_debit), cr: Number(r.book_adjusted_credit) });
-  }
+  const curMap = new Map<number, Record<string, unknown>>();
+  for (const r of currentRows as Record<string, unknown>[]) curMap.set(Number(r.account_id), r);
+  const cmpMap = new Map<number, Record<string, unknown>>();
+  for (const r of compareRows as Record<string, unknown>[]) cmpMap.set(Number(r.account_id), r);
+
+  const unionRows = [
+    ...(currentRows as Record<string, unknown>[]),
+    ...(compareRows as Record<string, unknown>[]).filter((r) => !curMap.has(Number(r.account_id))),
+  ].sort((a, b) => String(a.account_number).localeCompare(String(b.account_number), undefined, { numeric: true }));
 
   const notes = await db('variance_notes')
     .where({ period_id: periodId, compare_period_id: comparePeriodId })
@@ -1171,7 +1239,7 @@ export async function generateFluxAnalysisPdf(
   const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'];
 
   for (const cat of CATEGORIES) {
-    const catRows = (currentRows as Record<string, unknown>[]).filter((r) => r.category === cat);
+    const catRows = unionRows.filter((r) => r.category === cat);
     if (catRows.length === 0) continue;
 
     tableBody.push(svc.sectionHeaderRow(cat.charAt(0).toUpperCase() + cat.slice(1), cols.length));
@@ -1180,10 +1248,13 @@ export async function generateFluxAnalysisPdf(
     let catCompare = 0;
 
     for (const r of catRows) {
-      const nb   = r.normal_balance as string;
-      const curr = netBal(Number(r.book_adjusted_debit), Number(r.book_adjusted_credit), nb);
-      const cmp  = cmpMap.get(Number(r.account_id));
-      const prev = cmp ? netBal(cmp.dr, cmp.cr, nb) : 0;
+      const accountId = Number(r.account_id);
+      const cur = curMap.get(accountId);
+      const cmp = cmpMap.get(accountId);
+      // Category-based signing (matches comparison.ts): contra accounts show
+      // negative within their category so the subtotals net correctly.
+      const curr = cur ? categoryNet(cat, Number(cur.book_adjusted_debit), Number(cur.book_adjusted_credit)) : 0;
+      const prev = cmp ? categoryNet(cat, Number(cmp.book_adjusted_debit), Number(cmp.book_adjusted_credit)) : 0;
       const chg  = curr - prev;
       const pct  = prev !== 0 ? (chg / Math.abs(prev)) * 100 : null;
 
@@ -1194,8 +1265,10 @@ export async function generateFluxAnalysisPdf(
         r.account_number as string,
         r.account_name   as string,
         curr, prev, chg,
-        pct !== null ? `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%` : (curr !== 0 ? 'New' : '—'),
-        notesMap.get(Number(r.account_id)) ?? '',
+        // 'New' only when the account had no compare-period presence at all;
+        // a zero prior balance on an existing account is '—' (rate undefined).
+        pct !== null ? `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%` : (curr !== 0 && !cmp ? 'New' : '—'),
+        notesMap.get(accountId) ?? '',
       ], { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
     }
@@ -1259,23 +1332,26 @@ export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<B
   const bookNet = (r: Record<string, unknown>): number => {
     const dr = Number(r.book_adjusted_debit  ?? 0);
     const cr = Number(r.book_adjusted_credit ?? 0);
-    return (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+    return categoryNet(r.category as string, dr, cr);
   };
   const priorNet = (r: Record<string, unknown>): number => {
     const dr = Number(r.prior_year_debit  ?? 0);
     const cr = Number(r.prior_year_credit ?? 0);
-    return (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+    return categoryNet(r.category as string, dr, cr);
   };
   const cashImpact = (r: Record<string, unknown>): number => {
     const change = bookNet(r) - priorNet(r);
-    return (r.normal_balance as string) === 'debit' ? -change : change;
+    return (r.category as string) === 'assets' ? -change : change;
   };
+  const isBalanceSheet = (r: Record<string, unknown>): boolean =>
+    r.category === 'assets' || r.category === 'liabilities' || r.category === 'equity';
 
-  const netIncome = rows.reduce((sum, r) => {
-    if (r.category === 'revenue')  return sum + bookNet(r);
-    if (r.category === 'expenses') return sum - bookNet(r);
-    return sum;
-  }, 0);
+  const netIncome = rows.reduce((sum, r) =>
+    sum + netIncomeContribution(
+      r.category as string,
+      Number(r.book_adjusted_debit ?? 0),
+      Number(r.book_adjusted_credit ?? 0),
+    ), 0);
 
   const nonCashItems = rows
     .filter(r => r.cash_flow_category === 'non_cash' &&
@@ -1283,11 +1359,15 @@ export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<B
     .map(r => ({
       account_number: String(r.account_number),
       account_name:   String(r.account_name),
-      amount: r.category === 'expenses' ? bookNet(r) : -bookNet(r),
+      amount: -netIncomeContribution(
+        r.category as string,
+        Number(r.book_adjusted_debit ?? 0),
+        Number(r.book_adjusted_credit ?? 0),
+      ),
     }));
 
   const workingCapital = rows
-    .filter(r => r.cash_flow_category === 'operating')
+    .filter(r => r.cash_flow_category === 'operating' && isBalanceSheet(r))
     .map(r => ({
       account_number: String(r.account_number),
       account_name:   String(r.account_name),
@@ -1295,7 +1375,7 @@ export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<B
     }));
 
   const investingItems = rows
-    .filter(r => r.cash_flow_category === 'investing')
+    .filter(r => r.cash_flow_category === 'investing' && isBalanceSheet(r))
     .map(r => ({
       account_number: String(r.account_number),
       account_name:   String(r.account_name),
@@ -1303,7 +1383,7 @@ export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<B
     }));
 
   const financingItems = rows
-    .filter(r => r.cash_flow_category === 'financing')
+    .filter(r => r.cash_flow_category === 'financing' && isBalanceSheet(r))
     .map(r => ({
       account_number: String(r.account_number),
       account_name:   String(r.account_name),
@@ -1318,7 +1398,7 @@ export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<B
   const totalFinancing = financingItems.reduce((s, i) => s + i.amount, 0);
   const netChange = totalOperating + totalInvesting + totalFinancing;
 
-  const cashRows = rows.filter(r => r.cash_flow_category === 'cash');
+  const cashRows = rows.filter(r => r.cash_flow_category === 'cash' && isBalanceSheet(r));
   const beginningCash = cashRows.reduce((s, r) => s + priorNet(r), 0);
   const endingCash    = cashRows.reduce((s, r) => s + bookNet(r),  0);
 
@@ -1383,7 +1463,7 @@ export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<B
 
   const expectedEnding = beginningCash + netChange;
   const reconciliationDiff = endingCash - expectedEnding;
-  const reconciled = Math.abs(reconciliationDiff) <= 100;
+  const reconciled = reconciliationDiff === 0;
 
   const content: Content[] = [
     ...(reconciled ? [] : [{
@@ -1426,7 +1506,8 @@ export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<B
 // with TaxWorksheetsPage.tsx.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const M1_INCOME_CATEGORIES = new Set<string>(['Tax-Exempt Income', 'Deferred Revenue']);
+// Must stay in sync with M1_INCOME_CATEGORIES in client/src/api/taxWorkpapers.ts.
+const M1_INCOME_CATEGORIES = new Set<string>(['Tax-Exempt Income', 'Deferred Revenue', 'Other Income Difference']);
 const m1Sign = (c: string | null | undefined): 1 | -1 =>
   c && M1_INCOME_CATEGORIES.has(c) ? -1 : 1;
 
@@ -1448,14 +1529,16 @@ export async function generateM1Pdf(db: Knex, periodId: number): Promise<Buffer>
   const rows = await db('v_adjusted_trial_balance')
     .where({ period_id: periodId, is_active: true })
     .whereIn('category', ['revenue', 'expenses'])
-    .select('category', 'book_adjusted_debit', 'book_adjusted_credit');
+    .select('category', 'book_adjusted_debit', 'book_adjusted_credit',
+      'tax_adjusted_debit', 'tax_adjusted_credit');
 
   let bookNetIncome = 0;
+  let taxNetIncome  = 0;
   for (const r of rows as Array<Record<string, unknown>>) {
-    const dr = Number(r.book_adjusted_debit  ?? 0);
-    const cr = Number(r.book_adjusted_credit ?? 0);
-    if ((r.category as string) === 'revenue') bookNetIncome += cr - dr;
-    else bookNetIncome -= (dr - cr);
+    bookNetIncome += netIncomeContribution(
+      r.category as string, Number(r.book_adjusted_debit ?? 0), Number(r.book_adjusted_credit ?? 0));
+    taxNetIncome += netIncomeContribution(
+      r.category as string, Number(r.tax_adjusted_debit ?? 0), Number(r.tax_adjusted_credit ?? 0));
   }
 
   const totalBookAdj = adjs.reduce((s, a) => s + Number(a.book_amount), 0);
@@ -1486,14 +1569,27 @@ export async function generateM1Pdf(db: Knex, periodId: number): Promise<Buffer>
     ));
   }
 
-  // Summary section
+  // Summary section — the M-1 must tie: book NI + adjustments must equal the
+  // tax-adjusted TB net income. Surface the tie-out on the deliverable, not
+  // just on the screen.
+  const m1TieDiff = taxableIncome - taxNetIncome;
   const summaryBody: TableCell[][] = [
     svc.dataRow(['', 'Book Net Income', bookNetIncome], { bold: true }),
     svc.dataRow(['', 'Total M-1 Adjustments', totalDiff]),
     svc.dataRow(['', 'Taxable Income (per M-1)', taxableIncome], { bold: true, shade: true }),
+    svc.dataRow(['', 'Tax-Adjusted TB Net Income', taxNetIncome]),
   ];
 
   const content: Content[] = [
+    ...(m1TieDiff === 0 ? [] : [{
+      text: `WARNING — M-1 taxable income does not tie to the tax-adjusted trial balance. Off by ${svc.formatCents(Math.abs(m1TieDiff))}. Review M-1 adjustments against posted tax AJEs.`,
+      bold: true,
+      fontSize: 9,
+      color: '#ffffff',
+      fillColor: '#c0392b',
+      margin: [0, 0, 0, 6] as [number, number, number, number],
+      alignment: 'center' as const,
+    }]),
     {
       table: { headerRows: 1, widths, body: tableBody },
       layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
@@ -1504,7 +1600,7 @@ export async function generateM1Pdf(db: Knex, periodId: number): Promise<Buffer>
       layout: { hLineWidth: (i: number) => i === 0 ? 0 : 1, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
     },
     {
-      text: 'Sign convention: expense-like categories add (book − tax); income-like categories (Tax-Exempt Income, Deferred Revenue) add (tax − book).',
+      text: 'Sign convention: expense-like categories add (book − tax); income-like categories (Tax-Exempt Income, Deferred Revenue, Other Income Difference) add (tax − book).',
       fontSize: 7,
       color: '#999999',
       italics: true,

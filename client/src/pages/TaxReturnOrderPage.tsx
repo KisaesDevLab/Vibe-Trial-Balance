@@ -20,7 +20,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 const fmt = (cents: number) => {
   if (cents === 0) return '—';
   const abs = Math.abs(cents) / 100;
-  const s = abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  // Show cents so rows foot exactly and match the PDF rendering.
+  const s = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return cents < 0 ? `(${s})` : s;
 };
 
@@ -70,9 +71,11 @@ export function TaxReturnOrderPage() {
     },
     enabled: !!selectedClientId,
   });
+  // includeInactive: accounts may reference a deactivated code; still resolve
+  // it for grouping/labels instead of showing a mapped account as Unassigned.
   const { data: tcData } = useQuery({
-    queryKey: ['tax-codes'],
-    queryFn: () => listTaxCodes(),
+    queryKey: ['tax-codes', { includeInactive: true }],
+    queryFn: () => listTaxCodes({ includeInactive: true }),
   });
 
   const client = useMemo(
@@ -153,7 +156,13 @@ export function TaxReturnOrderPage() {
     return Array.from(groupMap.values()).sort((a, b) => a.sortOrder - b.sortOrder || a.taxCode.localeCompare(b.taxCode));
   }, [tbRows, coaAccounts, tcData, filterCategory, selectedPeriodId]);
 
-  const grandNet = groups.reduce((s, g) => s + g.net, 0);
+  // Raw Σ(debit − credit) control total — must be zero on a balanced TB. A
+  // grand total of normal-signed balances across all categories is not a
+  // recognized accounting figure.
+  const balanceCheck = groups.reduce(
+    (s, g) => s + g.rows.reduce((a, r) => a + (r.tax_adjusted_debit - r.tax_adjusted_credit), 0),
+    0,
+  );
   const mappedCount = groups.filter((g) => g.taxCodeId !== null).reduce((s, g) => s + g.rows.length, 0);
   const totalCount = groups.reduce((s, g) => s + g.rows.length, 0);
 
@@ -290,14 +299,18 @@ export function TaxReturnOrderPage() {
                   </tr>
                 </>
               ))}
-              <tr className="border-t-2 border-gray-400 dark:border-gray-500 bg-blue-50 dark:bg-blue-900/20">
-                <td colSpan={5} className="px-3 py-2 text-sm font-bold text-gray-800 dark:text-gray-200 text-right pr-4">
-                  Grand Total (Net)
-                </td>
-                <td className={`px-3 py-2 text-right font-mono font-bold tabular-nums ${grandNet < 0 ? 'text-red-700 dark:text-red-400' : grandNet > 0 ? 'text-green-700 dark:text-green-400' : 'text-gray-700 dark:text-gray-300'}`}>
-                  {fmt(grandNet)}
-                </td>
-              </tr>
+              {/* Only meaningful over the full account population — a single
+                  category filtered in isolation never nets to zero. */}
+              {!filterCategory && (
+                <tr className="border-t-2 border-gray-400 dark:border-gray-500 bg-blue-50 dark:bg-blue-900/20">
+                  <td colSpan={5} className="px-3 py-2 text-sm font-bold text-gray-800 dark:text-gray-200 text-right pr-4">
+                    Balance Check (should be 0.00)
+                  </td>
+                  <td className={`px-3 py-2 text-right font-mono font-bold tabular-nums ${balanceCheck !== 0 ? 'text-red-700 dark:text-red-400' : 'text-green-700 dark:text-green-400'}`}>
+                    {balanceCheck === 0 ? '✓ 0.00' : fmt(balanceCheck)}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
           </div>

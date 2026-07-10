@@ -47,6 +47,13 @@ function netRow(r: TBRow, dk: keyof TBRow, ck: keyof TBRow): number {
   return r.normal_balance === 'debit' ? dr - cr : cr - dr;
 }
 
+// Adjusted balances present NETTED per account (only the winning side shows),
+// matching the TB grid, popout, and Excel export so all surfaces tie.
+function netSides(r: TBRow, dk: keyof TBRow, ck: keyof TBRow): { dr: number; cr: number } {
+  const net = (r[dk] as number) - (r[ck] as number);
+  return { dr: net > 0 ? net : 0, cr: net < 0 ? -net : 0 };
+}
+
 function fmtPct(pct: number | null): React.ReactNode {
   if (pct === null) return <span className="text-gray-400 dark:text-gray-500">—</span>;
   const cls = pct > 0 ? 'text-green-700 dark:text-green-400' : pct < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400 dark:text-gray-500';
@@ -56,14 +63,18 @@ function fmtPct(pct: number | null): React.ReactNode {
 interface Totals { pyd: number; pyc: number; ud: number; uc: number; bad: number; bac: number; bd: number; bc: number; tad: number; tac: number; td: number; tc: number; }
 
 function sumRows(rows: TBRow[]): Totals {
-  return rows.reduce((s, r) => ({
-    pyd: s.pyd + r.prior_year_debit, pyc: s.pyc + r.prior_year_credit,
-    ud: s.ud + r.unadjusted_debit, uc: s.uc + r.unadjusted_credit,
-    bad: s.bad + r.book_adj_debit, bac: s.bac + r.book_adj_credit,
-    bd: s.bd + r.book_adjusted_debit, bc: s.bc + r.book_adjusted_credit,
-    tad: s.tad + r.tax_adj_debit, tac: s.tac + r.tax_adj_credit,
-    td: s.td + r.tax_adjusted_debit, tc: s.tc + r.tax_adjusted_credit,
-  }), { pyd:0,pyc:0,ud:0,uc:0,bad:0,bac:0,bd:0,bc:0,tad:0,tac:0,td:0,tc:0 });
+  return rows.reduce((s, r) => {
+    const b = netSides(r, 'book_adjusted_debit', 'book_adjusted_credit');
+    const t = netSides(r, 'tax_adjusted_debit', 'tax_adjusted_credit');
+    return {
+      pyd: s.pyd + r.prior_year_debit, pyc: s.pyc + r.prior_year_credit,
+      ud: s.ud + r.unadjusted_debit, uc: s.uc + r.unadjusted_credit,
+      bad: s.bad + r.book_adj_debit, bac: s.bac + r.book_adj_credit,
+      bd: s.bd + b.dr, bc: s.bc + b.cr,
+      tad: s.tad + r.tax_adj_debit, tac: s.tac + r.tax_adj_credit,
+      td: s.td + t.dr, tc: s.tc + t.cr,
+    };
+  }, { pyd:0,pyc:0,ud:0,uc:0,bad:0,bac:0,bd:0,bc:0,tad:0,tac:0,td:0,tc:0 });
 }
 
 const thCls = 'px-2 py-1.5 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700 last:border-r-0 whitespace-nowrap';
@@ -164,9 +175,9 @@ export function TrialBalanceReportPage() {
       if (show('priorYear'))    { row.push(String(r.prior_year_debit / 100), String(r.prior_year_credit / 100)); }
       if (show('unadjusted'))   { row.push(String(r.unadjusted_debit / 100), String(r.unadjusted_credit / 100)); }
       if (show('bookAje'))      { row.push(String(r.book_adj_debit / 100), String(r.book_adj_credit / 100)); }
-      if (show('bookAdjusted')) { row.push(String(r.book_adjusted_debit / 100), String(r.book_adjusted_credit / 100)); }
+      if (show('bookAdjusted')) { const b = netSides(r, 'book_adjusted_debit', 'book_adjusted_credit'); row.push(String(b.dr / 100), String(b.cr / 100)); }
       if (show('taxAje'))       { row.push(String(r.tax_adj_debit / 100), String(r.tax_adj_credit / 100)); }
-      if (show('taxAdjusted'))  { row.push(String(r.tax_adjusted_debit / 100), String(r.tax_adjusted_credit / 100)); }
+      if (show('taxAdjusted'))  { const t = netSides(r, 'tax_adjusted_debit', 'tax_adjusted_credit'); row.push(String(t.dr / 100), String(t.cr / 100)); }
       return row;
     });
     downloadXlsx(`trial-balance-report-${selectedPeriodId}.xlsx`, [header, ...dataRows]);
@@ -316,9 +327,9 @@ export function TrialBalanceReportPage() {
                           {show('priorYear') && <><td className={`${tdCls} bg-gray-50/50 dark:bg-gray-800/30 text-gray-500 dark:text-gray-400`}>{fmt(r.prior_year_debit)}</td><td className={`${tdCls} bg-gray-50/50 dark:bg-gray-800/30 text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.prior_year_credit)}</td></>}
                           {show('unadjusted') && <><td className={tdCls}>{fmt(r.unadjusted_debit)}</td><td className={`${tdCls} border-r border-gray-300 dark:border-gray-600`}>{fmt(r.unadjusted_credit)}</td></>}
                           {show('bookAje') && <><td className={`${tdCls} bg-blue-50/50 dark:bg-blue-900/10`}>{fmt(r.book_adj_debit)}</td><td className={`${tdCls} bg-blue-50/50 dark:bg-blue-900/10 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.book_adj_credit)}</td></>}
-                          {show('bookAdjusted') && <><td className={`${tdCls} bg-blue-100/50 dark:bg-blue-900/20`}>{fmt(r.book_adjusted_debit)}</td><td className={`${tdCls} bg-blue-100/50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.book_adjusted_credit)}</td></>}
+                          {show('bookAdjusted') && (() => { const b = netSides(r, 'book_adjusted_debit', 'book_adjusted_credit'); return <><td className={`${tdCls} bg-blue-100/50 dark:bg-blue-900/20`}>{fmt(b.dr)}</td><td className={`${tdCls} bg-blue-100/50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmt(b.cr)}</td></>; })()}
                           {show('taxAje') && <><td className={`${tdCls} bg-purple-50/50 dark:bg-purple-900/10`}>{fmt(r.tax_adj_debit)}</td><td className={`${tdCls} bg-purple-50/50 dark:bg-purple-900/10 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.tax_adj_credit)}</td></>}
-                          {show('taxAdjusted') && <><td className={`${tdCls} bg-purple-100/50 dark:bg-purple-900/20`}>{fmt(r.tax_adjusted_debit)}</td><td className={`${tdCls} bg-purple-100/50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.tax_adjusted_credit)}</td></>}
+                          {show('taxAdjusted') && (() => { const t = netSides(r, 'tax_adjusted_debit', 'tax_adjusted_credit'); return <><td className={`${tdCls} bg-purple-100/50 dark:bg-purple-900/20`}>{fmt(t.dr)}</td><td className={`${tdCls} bg-purple-100/50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmt(t.cr)}</td></>; })()}
                           {show('variance') && <><td className={`${tdCls} bg-teal-50/50 dark:bg-teal-900/10 text-gray-600 dark:text-gray-400`}>{fmtTotal(pyNet)}</td><td className={`${tdCls} bg-teal-50/50 dark:bg-teal-900/10 text-gray-700 dark:text-gray-300`}>{fmtTotal(cyNet)}</td><td className={`${tdCls} bg-teal-50/50 dark:bg-teal-900/10`}>{fmtPct(varPct)}</td></>}
                         </tr>
                       );

@@ -8,13 +8,10 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
+import { categoryNet } from '../lib/accounting';
 
 export const comparisonRouter = Router({ mergeParams: true });
 comparisonRouter.use(authMiddleware);
-
-function netBal(dr: number, cr: number, normalBalance: string): number {
-  return normalBalance === 'debit' ? dr - cr : cr - dr;
-}
 
 // GET /api/v1/periods/:periodId/compare/:comparePeriodId
 comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -91,12 +88,16 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
       const cmp = compareMap.get(accountId);
       const meta = cur ?? cmp!;
       const nb = String(meta.normal_balance);
+      // Balances are signed by CATEGORY (not per-account normal_balance) so
+      // contra accounts come out negative and category subtotals downstream
+      // net correctly (e.g. Accumulated Depreciation reduces Total Assets).
+      const cat = String(meta.category);
 
       const currentBalance = cur
-        ? netBal(Number(cur.book_adjusted_debit), Number(cur.book_adjusted_credit), nb)
+        ? categoryNet(cat, Number(cur.book_adjusted_debit), Number(cur.book_adjusted_credit))
         : 0;
       const compareBalance = cmp
-        ? netBal(Number(cmp.book_adjusted_debit), Number(cmp.book_adjusted_credit), nb)
+        ? categoryNet(cat, Number(cmp.book_adjusted_debit), Number(cmp.book_adjusted_credit))
         : 0;
 
       const varianceAmount = currentBalance - compareBalance;

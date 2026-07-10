@@ -6,6 +6,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
 
 export const m1CollectionRouter = Router({ mergeParams: true });
@@ -14,14 +15,41 @@ m1CollectionRouter.use(authMiddleware);
 export const m1ItemRouter = Router({ mergeParams: true });
 m1ItemRouter.use(authMiddleware);
 
+// Category names drive the M-1 sign convention (income-like vs expense-like),
+// so free-form strings are rejected — an unknown category would silently get
+// the expense-like sign. Must stay in sync with M1_CATEGORIES in
+// client/src/api/taxWorkpapers.ts.
+const M1_CATEGORIES = [
+  'Meals & Entertainment',
+  'Depreciation Difference',
+  'Officer Life Insurance',
+  'Political Contributions',
+  'Penalties & Fines',
+  'Tax-Exempt Income',
+  'Deferred Revenue',
+  'Accrued Expenses',
+  'Other Permanent Difference',
+  'Other Temporary Difference',
+  'Other Income Difference',
+] as const;
+
 const m1Schema = z.object({
   description: z.string().min(1).max(500),
-  category:    z.string().max(100).optional().nullable(),
+  category:    z.enum(M1_CATEGORIES).optional().nullable(),
   bookAmount:  z.number().int(),
   taxAmount:   z.number().int(),
   sortOrder:   z.number().int().optional(),
   notes:       z.string().optional().nullable(),
 });
+
+function sendPeriodLocked(res: Response, err: unknown): boolean {
+  const e = err as { code?: string; message?: string };
+  if (e?.code === 'PERIOD_LOCKED') {
+    res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
+    return true;
+  }
+  return false;
+}
 
 function parseRow(r: Record<string, unknown>) {
   return {
@@ -53,6 +81,8 @@ m1CollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<vo
   if (!result.success) { res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } }); return; }
   const d = result.data;
   try {
+    // M-1 amounts feed the period's taxable income — locked periods are immutable.
+    await assertPeriodUnlocked(periodId);
     const [row] = await db('m1_adjustments').insert({
       period_id:   periodId,
       description: d.description,
@@ -63,8 +93,10 @@ m1CollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<vo
       notes:       d.notes ?? null,
       created_by:  req.user!.userId,
     }).returning('*');
+    await logAudit({ userId: req.user!.userId, periodId, entityType: 'm1_adjustment', entityId: (row as { id: number }).id, action: 'create', description: `Added M-1 adjustment: ${d.description}` });
     res.status(201).json({ data: parseRow(row as Record<string, unknown>), error: null });
   } catch (err: unknown) {
+    if (sendPeriodLocked(res, err)) return;
     sendServerError(res, err, 'taxWorkpapers');
   }
 });
@@ -84,10 +116,15 @@ m1ItemRouter.patch('/', async (req: AuthRequest, res: Response): Promise<void> =
   if (d.sortOrder   !== undefined) updates.sort_order  = d.sortOrder;
   if (d.notes       !== undefined) updates.notes       = d.notes;
   try {
+    const existing = await db('m1_adjustments').where({ id }).first('period_id');
+    if (!existing) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Adjustment not found' } }); return; }
+    await assertPeriodUnlocked(Number(existing.period_id));
     const [updated] = await db('m1_adjustments').where({ id }).update(updates).returning('*');
     if (!updated) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Adjustment not found' } }); return; }
+    await logAudit({ userId: req.user!.userId, periodId: Number(existing.period_id), entityType: 'm1_adjustment', entityId: id, action: 'update', description: 'Updated M-1 adjustment' });
     res.json({ data: parseRow(updated as Record<string, unknown>), error: null });
   } catch (err: unknown) {
+    if (sendPeriodLocked(res, err)) return;
     sendServerError(res, err, 'taxWorkpapers');
   }
 });
@@ -97,10 +134,15 @@ m1ItemRouter.delete('/', async (req: AuthRequest, res: Response): Promise<void> 
   const id = Number(req.params.id);
   if (isNaN(id)) { res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid ID' } }); return; }
   try {
+    const existing = await db('m1_adjustments').where({ id }).first('period_id', 'description');
+    if (!existing) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Adjustment not found' } }); return; }
+    await assertPeriodUnlocked(Number(existing.period_id));
     const deleted = await db('m1_adjustments').where({ id }).delete();
     if (!deleted) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Adjustment not found' } }); return; }
+    await logAudit({ userId: req.user!.userId, periodId: Number(existing.period_id), entityType: 'm1_adjustment', entityId: id, action: 'delete', description: `Deleted M-1 adjustment: ${existing.description}` });
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
+    if (sendPeriodLocked(res, err)) return;
     sendServerError(res, err, 'taxWorkpapers');
   }
 });

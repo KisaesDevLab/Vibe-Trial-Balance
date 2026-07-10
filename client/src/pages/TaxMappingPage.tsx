@@ -17,6 +17,7 @@ import {
   type AssignmentSuggestion,
 } from '../api/taxLineAssignment';
 import { AssignmentPreviewModal } from '../components/AssignmentPreviewModal';
+import { categoryNet } from '../lib/accounting';
 
 // ---- Types ----
 
@@ -76,12 +77,10 @@ function fmtCents(cents: number): string {
 }
 
 function netBalance(row: TBRow): number {
-  // tax-adjusted net, respecting normal_balance direction so that
-  // revenue (credit-normal) and expenses (debit-normal) both return positive
-  // when they carry their expected balance.
-  const debit = row.tax_adjusted_debit;
-  const credit = row.tax_adjusted_credit;
-  return row.normal_balance === 'debit' ? debit - credit : credit - debit;
+  // Tax-adjusted net, signed by CATEGORY so contra accounts (accumulated
+  // depreciation, sales returns) come out negative and category subtotals,
+  // net income, and the balance check all net correctly.
+  return categoryNet(row.category, row.tax_adjusted_debit, row.tax_adjusted_credit);
 }
 
 function accountNetBalance(account: Account, tbMap: Map<number, TBRow>): number {
@@ -95,12 +94,14 @@ function accountNetBalance(account: Account, tbMap: Map<number, TBRow>): number 
 interface TaxCodeDropdownProps {
   accountId: number;
   currentCodeId: number | null;
+  /** tax_line string on the account, shown when the assigned code is not in the available list */
+  currentTaxLine?: string | null;
   taxCodes: TaxCode[];
   onSelect: (codeId: number | null, taxLine: string | null) => void;
   disabled?: boolean;
 }
 
-function TaxCodeDropdown({ accountId: _accountId, currentCodeId, taxCodes, onSelect, disabled }: TaxCodeDropdownProps) {
+function TaxCodeDropdown({ accountId: _accountId, currentCodeId, currentTaxLine, taxCodes, onSelect, disabled }: TaxCodeDropdownProps) {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
@@ -152,7 +153,12 @@ function TaxCodeDropdown({ accountId: _accountId, currentCodeId, taxCodes, onSel
       >
         {current
           ? <span><span className="font-mono font-medium text-gray-900 dark:text-white">{current.sort_order}: {current.tax_code}</span> — {current.description}</span>
-          : <span>— unassigned —</span>}
+          : currentCodeId !== null
+            // Assigned to a code outside the available list (entity/activity
+            // type changed, cross-client assign, inactive code). The account
+            // IS mapped — never present it as unassigned.
+            ? <span className="not-italic text-amber-700 dark:text-amber-400">{currentTaxLine ?? `code #${currentCodeId}`} <span className="text-[10px]">(not valid for this entity type)</span></span>
+            : <span>— unassigned —</span>}
       </button>
 
       {open && (
@@ -355,8 +361,11 @@ export function TaxMappingPage() {
   const assetsTotal = totalsByCategory.get('assets') ?? 0;
   const liabTotal = totalsByCategory.get('liabilities') ?? 0;
   const equityTotal = totalsByCategory.get('equity') ?? 0;
-  const bsBalance = assetsTotal - (liabTotal + equityTotal);
-  const bsBalanced = Math.abs(bsBalance) < 1; // within 1 cent
+  // Pre-closing trial balance: current-year earnings still live in the income
+  // statement accounts, so the accounting equation is
+  //   Assets = Liabilities + Equity + Net Income.
+  const bsBalance = assetsTotal - (liabTotal + equityTotal + netIncome);
+  const bsBalanced = bsBalance === 0; // integer cents — must tie exactly
 
   const isLoading = accountsLoading || tbLoading;
 
@@ -605,6 +614,7 @@ export function TaxMappingPage() {
                             <TaxCodeDropdown
                               accountId={row.account.id}
                               currentCodeId={row.taxCodeId}
+                              currentTaxLine={row.taxLine}
                               taxCodes={taxCodes}
                               onSelect={(codeId, taxLine) => handleCodeSelect(row.account, codeId, taxLine)}
                             />
@@ -663,7 +673,7 @@ export function TaxMappingPage() {
                 <tr className={`border-t border-gray-200 dark:border-gray-700 ${bsBalanced ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'}`}>
                   <td colSpan={2} className="px-3 py-2 text-sm font-bold text-right pr-6">
                     <span className={bsBalanced ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
-                      Assets = Liabilities + Equity
+                      Assets = Liabilities + Equity + Net Income
                     </span>
                   </td>
                   <td className={`px-3 py-2 text-right text-sm font-mono font-bold tabular-nums ${bsBalanced ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>

@@ -40,6 +40,16 @@ function runningBalance(normalBalance: string, tbDr: number, tbCr: number, lines
   return tbNet + adj;
 }
 
+// The closing row equals unadjusted + only the FILTERED entry types, so its
+// label must say which layer it represents: with all types it is the
+// tax-adjusted balance; a single-type filter matches no canonical TB column.
+const CLOSING_LABEL: Record<string, string> = {
+  all: 'Tax-Adjusted Balance (all entry types)',
+  trans: 'Balance (unadjusted + transaction entries only)',
+  book: 'Balance (unadjusted + book AJEs only)',
+  tax: 'Balance (unadjusted + tax AJEs only)',
+};
+
 function AccountSection({ acct, typeFilter, onClickLine }: { acct: GLAccount; typeFilter: string; onClickLine: (jeId: number) => void }) {
   const lines = typeFilter === 'all' ? acct.lines : acct.lines.filter((l) => l.entry_type === typeFilter);
 
@@ -107,7 +117,7 @@ function AccountSection({ acct, typeFilter, onClickLine }: { acct: GLAccount; ty
 
             {/* Closing / adjusted balance */}
             <tr className="border-t-2 border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/60">
-              <td colSpan={4} className="px-3 py-1.5 text-sm font-semibold text-gray-700 dark:text-gray-300">Adjusted Balance</td>
+              <td colSpan={4} className="px-3 py-1.5 text-sm font-semibold text-gray-700 dark:text-gray-300">{CLOSING_LABEL[typeFilter] ?? 'Adjusted Balance'}</td>
               <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">{fmt(closingDr)}</td>
               <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">{fmt(closingCr)}</td>
               <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold text-gray-800 dark:text-gray-200">

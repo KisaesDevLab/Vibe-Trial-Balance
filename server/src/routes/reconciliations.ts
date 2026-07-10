@@ -141,11 +141,26 @@ reconciliationItemRouter.get('/', async (req: AuthRequest, res: Response): Promi
       .pluck('transaction_id');
     const clearedSet = new Set(clearedIds.map(Number));
 
-    const transactions = txns.map((t: Record<string, unknown>) => ({
-      ...t,
-      amount: Number(t.amount),
-      is_cleared: clearedSet.has(Number(t.id)),
-    }));
+    // Transactions already cleared in an earlier COMPLETED reconciliation of
+    // the same account are not outstanding — re-presenting them every month
+    // overstates the outstanding-items schedule and invites double-clearing
+    // against the beginning balance.
+    const previouslyClearedIds = await db('reconciliation_items as ri')
+      .join('bank_reconciliations as br', 'br.id', 'ri.reconciliation_id')
+      .where('br.source_account_id', rec.source_account_id)
+      .where('br.status', 'completed')
+      .whereNot('br.id', id)
+      .where('br.statement_date', '<=', rec.statement_date)
+      .pluck('ri.transaction_id');
+    const previouslyClearedSet = new Set(previouslyClearedIds.map(Number));
+
+    const transactions = txns
+      .filter((t: Record<string, unknown>) => !previouslyClearedSet.has(Number(t.id)))
+      .map((t: Record<string, unknown>) => ({
+        ...t,
+        amount: Number(t.amount),
+        is_cleared: clearedSet.has(Number(t.id)),
+      }));
 
     res.json({
       data: {
@@ -274,7 +289,9 @@ reconciliationItemRouter.post('/complete', async (req: AuthRequest, res: Respons
       const expected = Number(rec.statement_ending_balance);
       const actual = Number(rec.beginning_book_balance) + clearedTotal;
       const diff = actual - expected;
-      if (Math.abs(diff) > 1) {
+      // Amounts are integer cents — a reconciliation must tie exactly;
+      // force=true is the only sanctioned override.
+      if (diff !== 0) {
         res.status(409).json({
           data: null,
           error: {

@@ -10,6 +10,7 @@ import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { QuickAddAccountModal } from './QuickAddAccountModal';
 import { DateInput } from './DateInput';
 import { evalAndFormatAmount } from '../utils/evalAmountExpr';
+import { validateJeLines } from '../utils/jeLines';
 import { useUnsavedGuard, confirmDiscard } from '../utils/useUnsavedGuard';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -17,11 +18,6 @@ import { useUnsavedGuard, confirmDiscard } from '../utils/useUnsavedGuard';
 function fmt(cents: number): string {
   if (cents === 0) return '—';
   return (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function parseCents(val: string): number {
-  const n = parseFloat(val.replace(/[^0-9.-]/g, ''));
-  return isNaN(n) ? 0 : Math.round(n * 100);
 }
 
 interface FormLine {
@@ -77,9 +73,10 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
   });
   const accounts: Account[] = accountsData ?? [];
 
-  const totalDebit = lines.reduce((s, l) => s + parseCents(l.debit), 0);
-  const totalCredit = lines.reduce((s, l) => s + parseCents(l.credit), 0);
-  const balanced = totalDebit === totalCredit && totalDebit > 0;
+  // Totals/validation run on exactly the lines that will post; rows with an
+  // amount but no account block submit instead of being silently dropped.
+  const lineStatus = validateJeLines(lines);
+  const { totalDebit, totalCredit, balanced } = lineStatus;
 
   // Treat the form as dirty once any field deviates from the initial state.
   const dirty =
@@ -107,19 +104,14 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!balanced) return;
+    if (!lineStatus.canSubmit) return;
     setError(null);
-    const validLines = lines.filter((l) => l.accountId !== '');
     mutation.mutate({
       periodId,
       entryType,
       entryDate,
       description: description || undefined,
-      lines: validLines.map((l) => ({
-        accountId: l.accountId as number,
-        debit: parseCents(l.debit),
-        credit: parseCents(l.credit),
-      })),
+      lines: lineStatus.lines,
     });
   };
 
@@ -236,13 +228,16 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
                   Entry is out of balance by {fmt(Math.abs(totalDebit - totalCredit))}.
                 </p>
               )}
+              {lineStatus.blockers.map((b) => (
+                <p key={b} className="text-xs text-red-600 dark:text-red-400 mt-1">{b}</p>
+              ))}
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={handleClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
               <button
                 type="submit"
-                disabled={mutation.isPending || !balanced}
+                disabled={mutation.isPending || !lineStatus.canSubmit}
                 className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
               >
                 {mutation.isPending ? 'Saving...' : 'Save Entry'}

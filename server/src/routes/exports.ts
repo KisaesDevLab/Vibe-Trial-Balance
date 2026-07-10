@@ -294,18 +294,36 @@ exportsRouter.get('/validate', async (req: AuthRequest, res: Response): Promise<
 
     const rows = await getTbRows(periodId, software);
 
-    // Balance check (unadjusted)
-    let totalDr = 0;
-    let totalCr = 0;
+    // Balance check on every layer — the export ships book- and tax-adjusted
+    // amounts, so an imbalance introduced by adjustments must fail validation
+    // even when the unadjusted columns foot.
+    const layerTotals = { unadj_dr: 0, unadj_cr: 0, book_dr: 0, book_cr: 0, tax_dr: 0, tax_cr: 0 };
     for (const r of rows as Record<string, unknown>[]) {
-      totalDr += Number(r.unadjusted_debit ?? 0);
-      totalCr += Number(r.unadjusted_credit ?? 0);
+      layerTotals.unadj_dr += Number(r.unadjusted_debit ?? 0);
+      layerTotals.unadj_cr += Number(r.unadjusted_credit ?? 0);
+      layerTotals.book_dr  += Number(r.book_adjusted_debit ?? 0);
+      layerTotals.book_cr  += Number(r.book_adjusted_credit ?? 0);
+      layerTotals.tax_dr   += Number(r.tax_adjusted_debit ?? 0);
+      layerTotals.tax_cr   += Number(r.tax_adjusted_credit ?? 0);
     }
-    const isBalanced = totalDr === totalCr;
+    const totalDr = layerTotals.unadj_dr;
+    const totalCr = layerTotals.unadj_cr;
+    const unbalancedLayers = [
+      { label: 'unadjusted',    dr: layerTotals.unadj_dr, cr: layerTotals.unadj_cr },
+      { label: 'book-adjusted', dr: layerTotals.book_dr,  cr: layerTotals.book_cr },
+      { label: 'tax-adjusted',  dr: layerTotals.tax_dr,   cr: layerTotals.tax_cr },
+    ].filter((l) => l.dr !== l.cr);
+    const isBalanced = unbalancedLayers.length === 0;
 
-    // Unmapped accounts (no tax_code_id)
+    // Unmapped accounts: only those that actually carry a balance on any
+    // exported layer — a zero-balance account never affects the export and
+    // flagging it trains users to ignore the warning.
+    const hasAnyBalance = (r: Record<string, unknown>): boolean =>
+      Number(r.unadjusted_debit ?? 0) !== 0 || Number(r.unadjusted_credit ?? 0) !== 0 ||
+      Number(r.book_adjusted_debit ?? 0) !== 0 || Number(r.book_adjusted_credit ?? 0) !== 0 ||
+      Number(r.tax_adjusted_debit ?? 0) !== 0 || Number(r.tax_adjusted_credit ?? 0) !== 0;
     const unmappedAccounts = (rows as Record<string, unknown>[])
-      .filter((r) => !r.tax_code_id)
+      .filter((r) => !r.tax_code_id && hasAnyBalance(r))
       .map((r) => ({ account_id: r.account_id, account_number: r.account_number, account_name: r.account_name }));
 
     // Missing software mappings (has tax_code_id but no software_code for selected software)
@@ -320,7 +338,9 @@ exportsRouter.get('/validate', async (req: AuthRequest, res: Response): Promise<
 
     const warnings: string[] = [];
     if (!isBalanced) {
-      warnings.push(`Trial balance is out of balance (DR: ${(totalDr / 100).toFixed(2)} vs CR: ${(totalCr / 100).toFixed(2)})`);
+      warnings.push(`Trial balance is out of balance — ${unbalancedLayers
+        .map((l) => `${l.label} (DR: ${(l.dr / 100).toFixed(2)} vs CR: ${(l.cr / 100).toFixed(2)})`)
+        .join('; ')}`);
     }
     if (unmappedAccounts.length > 0) {
       warnings.push(`${unmappedAccounts.length} account(s) have no tax code assigned`);

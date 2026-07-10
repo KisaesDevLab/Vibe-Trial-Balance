@@ -17,6 +17,9 @@ export interface ComparisonRow {
   account_name: string;
   category: string;
   normal_balance: string;
+  is_active: boolean;
+  in_current: boolean;
+  in_compare: boolean;
   current_balance: number;
   compare_balance: number;
   variance_amount: number;

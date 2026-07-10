@@ -11,18 +11,21 @@ import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { listTaxCodes, type TaxCode } from '../api/taxCodes';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
+import { categoryNet } from '../lib/accounting';
 
 const fmt = (cents: number) => {
   if (cents === 0) return '—';
   const abs = Math.abs(cents) / 100;
-  const s = abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  // Show cents so detail rows foot exactly to subtotals and match the PDF.
+  const s = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return cents < 0 ? `(${s})` : s;
 };
 
+// Category-based signing: revenue = credit − debit, expenses = debit − credit,
+// so contra accounts (sales returns, purchase discounts) net against their
+// category instead of inflating it.
 function taxNet(r: TBRow) {
-  return r.normal_balance === 'debit'
-    ? r.tax_adjusted_debit - r.tax_adjusted_credit
-    : r.tax_adjusted_credit - r.tax_adjusted_debit;
+  return categoryNet(r.category, r.tax_adjusted_debit, r.tax_adjusted_credit);
 }
 
 interface TaxGroup {
@@ -64,9 +67,12 @@ export function TaxBasisPlPage() {
     },
     enabled: !!selectedClientId,
   });
+  // includeInactive: accounts may legitimately reference a deactivated tax
+  // code; for grouping/labels we must still resolve it rather than render a
+  // mapped account as "Unassigned" (the PDF resolves codes the same way).
   const { data: tcData } = useQuery({
-    queryKey: ['tax-codes', { clientId: selectedClientId }],
-    queryFn: () => listTaxCodes(),
+    queryKey: ['tax-codes', { clientId: selectedClientId, includeInactive: true }],
+    queryFn: () => listTaxCodes({ includeInactive: true }),
     enabled: !!selectedClientId,
   });
 
@@ -93,13 +99,16 @@ export function TaxBasisPlPage() {
       (a) => a.is_active && (a.category === 'revenue' || a.category === 'expenses'),
     );
 
-    // Group by tax_code_id
-    const groupMap = new Map<number | null, TaxGroup>();
+    // Group by tax_code_id. Unassigned accounts are split by category —
+    // otherwise a mixed revenue/expense "Unassigned" group's subtotal adds
+    // both as positive and the group subtotals no longer sum to net income.
+    const groupMap = new Map<string, TaxGroup>();
 
     for (const account of plAccounts) {
       const tbRow = tbMap.get(account.id);
       const tcId = account.tax_code_id;
       const tc = tcId !== null ? taxCodeMap.get(tcId) : undefined;
+      const groupKey = tcId !== null ? `tc-${tcId}` : `unassigned-${account.category}`;
 
       // Build a full TBRow — use real data if available, otherwise zero balances
       const r: TBRow = tbRow ?? {
@@ -133,17 +142,17 @@ export function TaxBasisPlPage() {
         tax_adjusted_credit: 0,
       };
 
-      if (!groupMap.has(tcId)) {
-        groupMap.set(tcId, {
+      if (!groupMap.has(groupKey)) {
+        groupMap.set(groupKey, {
           taxCodeId: tcId,
-          taxCode: tc?.tax_code ?? 'Unassigned',
+          taxCode: tc?.tax_code ?? (account.category === 'revenue' ? 'Unassigned — Revenue' : 'Unassigned — Expenses'),
           description: tc?.description ?? '(no tax code assigned)',
-          sortOrder: tc?.sort_order ?? 99999,
+          sortOrder: tc?.sort_order ?? (account.category === 'revenue' ? 99998 : 99999),
           rows: [],
           net: 0,
         });
       }
-      const grp = groupMap.get(tcId)!;
+      const grp = groupMap.get(groupKey)!;
       grp.rows.push({ ...r, account });
       grp.net += taxNet(r);
     }
@@ -246,7 +255,7 @@ export function TaxBasisPlPage() {
                   {/* Account rows */}
                   {grp.rows.map((r, i) => (
                     <tr key={r.account_id} className={`border-t border-gray-100 dark:border-gray-700 ${i % 2 === 1 ? 'bg-gray-50/50 dark:bg-gray-800/30' : ''}`}>
-                      <td className="px-3 py-1.5 text-sm font-mono text-gray-400 dark:text-gray-500">{grp.taxCode === 'Unassigned' ? '—' : grp.taxCode}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-gray-400 dark:text-gray-500">{grp.taxCodeId === null ? '—' : grp.taxCode}</td>
                       <td className="px-3 py-1.5 text-sm font-mono text-gray-600 dark:text-gray-400">{r.account_number}</td>
                       <td className="px-3 py-1.5 text-sm text-gray-900 dark:text-gray-200">{r.account_name}</td>
                       <td className={`px-3 py-1.5 text-right font-mono tabular-nums text-sm ${taxNet(r) < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-200'}`}>

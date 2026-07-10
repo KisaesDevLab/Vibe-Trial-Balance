@@ -274,9 +274,17 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
   const pyNetIncome = revenue.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0)
                     - expenses.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
 
-  const openingEquity = equity.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
-  const closingEquity = equity.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0) + netIncome;
-  const pyClosing = openingEquity + pyNetIncome;
+  // prior_year_* columns hold PRE-closing balances, so prior-year ending
+  // equity = PY equity account balances + PY net income (this must equal the
+  // balance sheet's PY Total Equity).
+  const pyEquityAccounts = equity.reduce((s, r) => s + fsDisplayBalance(r, 'prior-year'), 0);
+  const openingEquity = pyEquityAccounts + pyNetIncome;
+  const cyEquityAccounts = equity.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
+  const closingEquity = cyEquityAccounts + netIncome;
+  // Rollforward identity: opening + net income + other changes = ending.
+  // Other changes = contributions, distributions, and any equity postings
+  // beyond the PY-net-income closing entry.
+  const otherChanges = closingEquity - openingEquity - netIncome;
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -291,16 +299,18 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           </tr>
         </thead>
         <tbody>
-          <SectionHeader title="Opening Equity Balance (Prior Year)" />
+          <SectionHeader title="Opening Equity Balance (Prior Year Ending)" />
           {equity.map((r) => (
             <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, 'prior-year')} priorCents={undefined} />
           ))}
+          <AccountRow label="Prior-Year Net Income (closed to equity)" cents={pyNetIncome} />
           <SubtotalRow label="Total Opening Equity" cents={openingEquity} />
 
           <tr><td colSpan={5} className="py-1" /></tr>
 
           <SectionHeader title="Current Period Activity" />
           <AccountRow label="Net Income / (Loss)" cents={netIncome} priorCents={pyNetIncome} />
+          <AccountRow label="Contributions / Distributions & Other Changes" cents={otherChanges} />
 
           <tr><td colSpan={5} className="py-1" /></tr>
 
@@ -309,7 +319,7 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
             <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
           ))}
           <AccountRow label="Net Income (current period)" cents={netIncome} priorCents={pyNetIncome} />
-          <TotalRow label="Total Equity" cents={closingEquity} priorCents={pyClosing} double />
+          <TotalRow label="Total Equity" cents={closingEquity} priorCents={openingEquity} double />
         </tbody>
       </table>
     </div>

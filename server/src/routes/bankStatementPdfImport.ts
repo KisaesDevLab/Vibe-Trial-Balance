@@ -46,7 +46,22 @@ interface BankStatementAnalysisResult {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function txHash(date: string, description: string, amount: number): string {
+// v2 dedup key — must stay in sync with txHash in bankTransactions.ts.
+function txHash(
+  date: string,
+  description: string,
+  amount: number,
+  checkNumber: string | null,
+  sourceAccountId: number | null,
+  ordinal: number,
+): string {
+  const key = `${date}|${description}|${amount}|${checkNumber ?? ''}|${sourceAccountId ?? ''}|${ordinal}`;
+  return createHash('sha256').update(key).digest('hex').slice(0, 64);
+}
+
+// Pre-v2 hash format; consulted for first occurrences so upgrading does not
+// duplicate previously imported statements.
+function legacyTxHash(date: string, description: string, amount: number): string {
   return createHash('sha256').update(`${date}|${description}|${amount}`).digest('hex').slice(0, 64);
 }
 
@@ -473,11 +488,14 @@ bankStatementPdfRouter.post(
         return;
       }
 
-      // Validate/sanitize transactions
+      // Validate/sanitize transactions. Amounts must be integer cents — the AI
+      // is instructed to multiply dollars by 100, but a fractional value here
+      // would abort the confirm insert against the BIGINT column, so round
+      // defensively at this trust boundary.
       const txns = (analysisResult.transactions ?? []).map((t) => ({
         date: t.date ?? '',
         description: t.description ?? '',
-        amount: typeof t.amount === 'number' ? t.amount : 0,
+        amount: typeof t.amount === 'number' && Number.isFinite(t.amount) ? Math.round(t.amount) : 0,
         checkNumber: t.checkNumber ?? null,
         payeeName: t.payeeName ?? null,
         category: t.category ?? null,
@@ -537,10 +555,35 @@ bankStatementPdfRouter.post('/confirm', async (req: AuthRequest, res: Response):
         await assertPeriodUnlocked(periodId, trx);
       }
 
-      for (const tx of transactions) {
-        if (!tx.date || !tx.description || tx.amount === 0) continue;
+      // Occurrence ordinals let legitimate within-statement duplicates coexist.
+      const occurrenceCounts = new Map<string, number>();
+      const legacyCandidates = [...new Set(
+        transactions
+          .filter((t) => t.date && t.description && Number.isInteger(t.amount) && t.amount !== 0)
+          .map((t) => legacyTxHash(t.date, t.description, t.amount)),
+      )];
+      const existingLegacy = new Set<string>(
+        legacyCandidates.length > 0
+          ? await trx('bank_transactions')
+              .where({ client_id: clientId })
+              .whereIn('import_hash', legacyCandidates)
+              .pluck('import_hash')
+          : [],
+      );
 
-        const hash = txHash(tx.date, tx.description, tx.amount);
+      for (const tx of transactions) {
+        // Reject non-integer amounts outright: the analyze endpoint rounds, but
+        // /confirm accepts a raw client payload and writes to a BIGINT column.
+        if (!tx.date || !tx.description || !Number.isInteger(tx.amount) || tx.amount === 0) continue;
+
+        const key = `${tx.date}|${tx.description}|${tx.amount}|${tx.checkNumber ?? ''}|${sourceAccountId ?? ''}`;
+        const ordinal = occurrenceCounts.get(key) ?? 0;
+        occurrenceCounts.set(key, ordinal + 1);
+        if (ordinal === 0 && existingLegacy.has(legacyTxHash(tx.date, tx.description, tx.amount))) {
+          duplicates++;
+          continue;
+        }
+        const hash = txHash(tx.date, tx.description, tx.amount, tx.checkNumber ?? null, sourceAccountId, ordinal);
 
         // Build the description — prepend payee name if available and different from description
         let finalDesc = tx.description;

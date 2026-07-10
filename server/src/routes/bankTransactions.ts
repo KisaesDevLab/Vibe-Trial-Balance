@@ -18,7 +18,27 @@ import { getLLMProvider } from '../lib/aiClient';
 import { extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 
-function txHash(date: string, description: string, amount: number): string {
+// v2 dedup key. check_number and source_account_id distinguish identical
+// activity across accounts (e.g. the same service fee hitting two accounts on
+// the same day); ordinal is the occurrence index of an identical row WITHIN
+// one import file, so two legitimate same-day/same-amount transactions both
+// survive while a re-import of the same file still dedups.
+function txHash(
+  date: string,
+  description: string,
+  amount: number,
+  checkNumber: string | null,
+  sourceAccountId: number | null,
+  ordinal: number,
+): string {
+  const key = `${date}|${description}|${amount}|${checkNumber ?? ''}|${sourceAccountId ?? ''}|${ordinal}`;
+  return createHash('sha256').update(key).digest('hex').slice(0, 64);
+}
+
+// Hash format used before the v2 key. Rows imported by older versions carry
+// this hash; consulted (for the first occurrence only) so upgrading does not
+// duplicate previously imported statements on re-import.
+export function legacyTxHash(date: string, description: string, amount: number): string {
   return createHash('sha256').update(`${date}|${description}|${amount}`).digest('hex').slice(0, 64);
 }
 
@@ -123,10 +143,13 @@ async function syncTxJE(
     await trx('bank_transactions').where({ id: txId }).update({ journal_entry_id: null });
   }
 
-  // Need all three fields to create a JE
-  if (!tx.account_id || !tx.source_account_id || tx.amount === 0) return;
+  // Need all three fields to create a JE. Note: pg returns BIGINT columns as
+  // strings, so the zero check must happen after conversion — `'0' === 0` is
+  // never true and would let zero-amount JEs through.
+  if (!tx.account_id || !tx.source_account_id) return;
 
   const txAmount = BigInt(tx.amount);
+  if (txAmount === 0n) return;
   const absAmountBig = txAmount < 0n ? -txAmount : txAmount;
   const absAmount = Number(absAmountBig);
   const debitAccountId  = txAmount > 0n ? tx.source_account_id : tx.account_id;
@@ -228,8 +251,25 @@ btCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
       query = query.whereNot('bt.entry_source', String(req.query.excludeEntrySource));
     }
 
+    // Status tallies across the WHOLE filtered dataset (ignoring the status
+    // filter and pagination) so the UI can show dataset-wide counts instead of
+    // presenting per-page tallies as totals.
+    let statusQuery = db('bank_transactions').where({ client_id: clientId });
+    if (req.query.sourceAccountId) statusQuery = statusQuery.where('source_account_id', Number(req.query.sourceAccountId));
+    if (req.query.periodId) statusQuery = statusQuery.where('period_id', Number(req.query.periodId));
+    if (req.query.entrySource) statusQuery = statusQuery.where('entry_source', String(req.query.entrySource));
+    else if (req.query.excludeEntrySource) statusQuery = statusQuery.whereNot('entry_source', String(req.query.excludeEntrySource));
+    const statusRows = await statusQuery.groupBy('classification_status').select('classification_status').count('id as cnt');
+    const statusCounts: Record<string, number> = {};
+    for (const r of statusRows as Array<{ classification_status: string; cnt: string | number }>) {
+      statusCounts[r.classification_status] = Number(r.cnt);
+    }
+
     const rows = await query.limit(pageSize).offset(offset);
-    res.json({ data: rows, error: null, meta: { total, page, pageSize, pages: Math.ceil(total / pageSize) } });
+    // BIGINT comes back as a string from pg; hand the client a real number so
+    // arithmetic and sorting behave.
+    const data = (rows as Record<string, unknown>[]).map((r) => ({ ...r, amount: Number(r.amount) }));
+    res.json({ data, error: null, meta: { total, page, pageSize, pages: Math.ceil(total / pageSize), statusCounts } });
   } catch (err: unknown) {
     sendServerError(res, err, 'bank-tx');
   }
@@ -474,12 +514,23 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
             if (amountCol && row[amountCol] !== undefined) {
               amtCents = parseDollarsToCents(row[amountCol]);
             } else if (debitCol || creditCol) {
+              // Bank-statement convention: the Debit/Withdrawal column is money
+              // OUT of the account, the Credit/Deposit column is money IN. The
+              // app-wide sign convention (OFX path, JE sync) is positive =
+              // deposit, so amount = credit − debit.
               const drC = debitCol ? (parseDollarsToCents(row[debitCol]) ?? 0) : 0;
               const crC = creditCol ? (parseDollarsToCents(row[creditCol]) ?? 0) : 0;
-              amtCents = drC - crC;
+              amtCents = crC - drC;
             } else {
-              const raw = pick(row, '', ['Amount', 'amount', 'Debit', 'debit']);
-              amtCents = parseDollarsToCents(raw);
+              const amtRaw = pick(row, '', ['Amount', 'amount']);
+              if (amtRaw !== '') {
+                amtCents = parseDollarsToCents(amtRaw);
+              } else {
+                // A bare Debit column with no Amount column is money out → negative
+                const drRaw = pick(row, '', ['Debit', 'debit']);
+                const drC = parseDollarsToCents(drRaw);
+                amtCents = drC === null ? null : -drC;
+              }
             }
 
             if (amtCents === null) return;
@@ -508,11 +559,40 @@ btCollectionRouter.post('/import', upload.single('file'), async (req: AuthReques
       return;
     }
 
+    // Assign each row its occurrence index among identical rows in this file,
+    // so legitimate within-file duplicates get distinct dedup hashes.
+    const occurrenceCounts = new Map<string, number>();
+    const hashedRows = rows.map((row) => {
+      const key = `${row.transaction_date}|${row.description ?? ''}|${row.amount}|${row.check_number ?? ''}|${row.source_account_id ?? ''}`;
+      const ordinal = occurrenceCounts.get(key) ?? 0;
+      occurrenceCounts.set(key, ordinal + 1);
+      return {
+        row,
+        ordinal,
+        hash: txHash(row.transaction_date, row.description ?? '', row.amount,
+          row.check_number, row.source_account_id, ordinal),
+        legacyHash: legacyTxHash(row.transaction_date, row.description ?? '', row.amount),
+      };
+    });
+
     let importedCount = 0;
     let duplicateCount = 0;
     await db.transaction(async (trx) => {
-      for (const row of rows) {
-        const hash = txHash(row.transaction_date, row.description ?? '', row.amount);
+      // Rows imported before the v2 hash carry the legacy format; match first
+      // occurrences against it so re-importing an overlapping statement after
+      // the upgrade does not duplicate existing data.
+      const legacyCandidates = [...new Set(hashedRows.filter(h => h.ordinal === 0).map(h => h.legacyHash))];
+      const existingLegacy = new Set<string>(
+        legacyCandidates.length > 0
+          ? await trx('bank_transactions')
+              .where({ client_id: clientId })
+              .whereIn('import_hash', legacyCandidates)
+              .pluck('import_hash')
+          : [],
+      );
+
+      for (const { row, ordinal, hash, legacyHash } of hashedRows) {
+        if (ordinal === 0 && existingLegacy.has(legacyHash)) { duplicateCount++; continue; }
         const [inserted] = await trx('bank_transactions')
           .insert({ ...row, import_hash: hash })
           .onConflict(['client_id', 'import_hash'])

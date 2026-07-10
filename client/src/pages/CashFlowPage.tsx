@@ -40,6 +40,16 @@ const CF_OPTIONS: { value: CfCategory; label: string }[] = [
   { value: 'financing', label: 'Financing' },
 ];
 
+// Income-statement activity enters the statement once, through net income:
+// revenue/expense accounts may only be tagged as non-cash add-backs, while
+// balance-sheet accounts take the section mappings.
+function optionsForCategory(category: string): { value: CfCategory; label: string }[] {
+  if (category === 'revenue' || category === 'expenses') {
+    return CF_OPTIONS.filter(o => o.value === null || o.value === 'non_cash');
+  }
+  return CF_OPTIONS.filter(o => o.value !== 'non_cash');
+}
+
 // ── Configure Tab ─────────────────────────────────────────────────────────────
 
 function ConfigureTab({ clientId }: { clientId: number }) {
@@ -108,7 +118,7 @@ function ConfigureTab({ clientId }: { clientId: number }) {
                     onChange={e => updateMut.mutate({ id: a.id, cat: (e.target.value || null) as CfCategory })}
                     className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-teal-500 dark:bg-gray-700 dark:text-white"
                   >
-                    {CF_OPTIONS.map(o => (
+                    {optionsForCategory(a.category).map(o => (
                       <option key={String(o.value)} value={o.value ?? ''}>{o.label}</option>
                     ))}
                   </select>
@@ -306,7 +316,7 @@ function StatementTab({ periodId }: { periodId: number }) {
               <td className="px-3 py-1.5 text-sm pl-8 dark:text-white">Ending Cash</td>
               <td className="px-3 py-1.5 text-sm font-mono text-right tabular-nums dark:text-white">{fmtSigned(cf.endingCash)}</td>
             </tr>
-            {Math.abs(cf.beginningCash + cf.netChange - cf.endingCash) > 1 && (
+            {cf.beginningCash + cf.netChange !== cf.endingCash && (
               <tr>
                 <td colSpan={2} className="px-3 py-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20">
                   Note: Beginning cash + net change ({fmtSigned(cf.beginningCash + cf.netChange)}) differs

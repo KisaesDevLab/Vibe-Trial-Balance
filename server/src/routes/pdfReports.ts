@@ -212,7 +212,9 @@ pdfReportsRouter.get('/periods/:periodId/tax-code-report', async (req: AuthReque
     return;
   }
   try {
-    const buffer = await generateTaxCodeReportPdf(db, periodId);
+    // Adjustment layer must follow the user's on-screen selection (book vs tax).
+    const columns = req.query.columns === 'book' ? 'book' : 'tax';
+    const buffer = await generateTaxCodeReportPdf(db, periodId, columns);
     sendPdf(res, buffer, `tax-code-report-${periodId}.pdf`, isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };

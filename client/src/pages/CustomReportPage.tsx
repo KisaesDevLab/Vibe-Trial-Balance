@@ -158,11 +158,13 @@ function ReportViewer({ config, periodId }: { config: ReportConfig; periodId: nu
 function Builder({
   clientId,
   initialConfig,
+  initialName = '',
   onSave,
   isSaving,
 }: {
   clientId: number;
   initialConfig: ReportConfig;
+  initialName?: string;
   onSave: (config: ReportConfig, name: string) => void;
   isSaving: boolean;
 }) {
@@ -171,7 +173,7 @@ function Builder({
   const [activeSection, setActiveSection] = useState<string | null>(sections[0]?.id ?? null);
   const [accountFilter, setAccountFilter] = useState('');
   const [catFilter, setCatFilter]         = useState<Account['category'] | 'all'>('all');
-  const [reportName, setReportName]       = useState('');
+  const [reportName, setReportName]       = useState(initialName);
 
   const { data: coaData } = useQuery({
     queryKey: ['accounts', clientId],
@@ -367,7 +369,9 @@ type Tab = 'build' | 'saved';
 export function CustomReportPage() {
   const [tab, setTab] = useState<Tab>('saved');
   const [previewReport, setPreviewReport] = useState<SavedReport | null>(null);
-  const [editConfig, setEditConfig] = useState<ReportConfig | null>(null);
+  // Full report (not just config) so Save can UPDATE the original row instead
+  // of always inserting a duplicate.
+  const [editReport, setEditReport] = useState<SavedReport | null>(null);
 
   const { selectedClientId, selectedPeriodId } = useUIStore();
   const qc = useQueryClient();
@@ -389,7 +393,7 @@ export function CustomReportPage() {
   const updateMut = useMutation({
     mutationFn: ({ id, name, config }: { id: number; name: string; config: ReportConfig }) =>
       updateSavedReport(id, { name, config }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['saved-reports', selectedClientId] }); setEditConfig(null); setPreviewReport(null); setTab('saved'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['saved-reports', selectedClientId] }); setEditReport(null); setPreviewReport(null); setTab('saved'); },
   });
 
   const deleteMut = useMutation({
@@ -414,7 +418,7 @@ export function CustomReportPage() {
 
       <div className="border-b border-gray-200 dark:border-gray-700 flex gap-1">
         <button className={tabBtn('saved')} onClick={() => setTab('saved')}>Saved Reports</button>
-        <button className={tabBtn('build')} onClick={() => { setEditConfig(null); setTab('build'); }}>
+        <button className={tabBtn('build')} onClick={() => { setEditReport(null); setTab('build'); }}>
           + New Report
         </button>
       </div>
@@ -444,7 +448,7 @@ export function CustomReportPage() {
                     {previewReport?.id === report.id ? 'Hide' : 'Preview'}
                   </button>
                 )}
-                <button onClick={() => { setEditConfig(report.config); setTab('build'); }}
+                <button onClick={() => { setEditReport(report); setTab('build'); }}
                   className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
                   Edit
                 </button>
@@ -469,10 +473,15 @@ export function CustomReportPage() {
       {/* Builder */}
       {tab === 'build' && (
         <Builder
+          key={editReport?.id ?? 'new'}
           clientId={selectedClientId}
-          initialConfig={editConfig ?? { sections: [], columns: ['book'] }}
+          initialConfig={editReport?.config ?? { sections: [], columns: ['book'] }}
+          initialName={editReport?.name ?? ''}
           isSaving={createMut.isPending || updateMut.isPending}
-          onSave={(config, name) => createMut.mutate({ name, config })}
+          onSave={(config, name) =>
+            editReport
+              ? updateMut.mutate({ id: editReport.id, name, config })
+              : createMut.mutate({ name, config })}
         />
       )}
     </div>

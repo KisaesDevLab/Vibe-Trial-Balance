@@ -20,6 +20,10 @@ const lineSchema = z.object({
   accountId: z.number().int().positive(),
   debit: z.number().int().min(0),
   credit: z.number().int().min(0),
+}).refine((l) => !(l.debit > 0 && l.credit > 0), {
+  message: 'A journal entry line cannot carry both a debit and a credit',
+}).refine((l) => l.debit > 0 || l.credit > 0, {
+  message: 'A journal entry line must have a debit or credit amount',
 });
 
 const jeSchema = z.object({
@@ -330,16 +334,15 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
           // after a direction flip.
           const bt = await trx('bank_transactions').where({ journal_entry_id: id }).first('source_account_id');
           if (bt?.source_account_id) {
-            const srcLine = lines.find((l) => l.accountId === bt.source_account_id);
-            if (srcLine) {
-              const magnitude = srcLine.debit + srcLine.credit;
-              btUpdates.amount = srcLine.debit > 0 ? magnitude : -magnitude;
-            } else {
-              // Source account no longer referenced by this JE — fall back to magnitude only
-              btUpdates.amount = lines.reduce((s, l) => s + l.debit, 0);
+            // Sum across all lines hitting the source account (splits can touch
+            // it more than once); net > 0 means the bank account was debited.
+            const srcLines = lines.filter((l) => l.accountId === bt.source_account_id);
+            if (srcLines.length > 0) {
+              btUpdates.amount = srcLines.reduce((s, l) => s + l.debit - l.credit, 0);
             }
-          } else {
-            btUpdates.amount = lines.reduce((s, l) => s + l.debit, 0);
+            // Source account no longer referenced: the edit no longer describes
+            // bank-account movement, so leave the stored amount untouched rather
+            // than overwrite it with an unsigned debit total.
           }
         }
         if (Object.keys(btUpdates).length > 0) {

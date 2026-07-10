@@ -37,7 +37,7 @@ export function TaxCodeReportPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await openPdfPreview(pdfReports.taxCodeReport(selectedPeriodId) + '?preview=true', token);
+      await openPdfPreview(pdfReports.taxCodeReport(selectedPeriodId) + `?columns=${colSet}&preview=true`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {
@@ -50,7 +50,7 @@ export function TaxCodeReportPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await downloadPdf(pdfReports.taxCodeReport(selectedPeriodId), `tax-code-report-${selectedPeriodId}.pdf`, token);
+      await downloadPdf(pdfReports.taxCodeReport(selectedPeriodId) + `?columns=${colSet}`, `tax-code-report-${selectedPeriodId}.pdf`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {

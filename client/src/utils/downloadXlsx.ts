@@ -28,6 +28,17 @@ const BORDER_CLR = 'D1D5DB';   // gray-300
 
 const thin = (color = BORDER_CLR) => ({ style: 'thin', color: { rgb: color } });
 
+// A cell is converted to a number only when it is a canonical decimal. This
+// deliberately rejects: leading-zero identifiers ("0010" — account numbers
+// must keep their zeros), scientific notation ("1e3"), and whitespace-only
+// strings (Number(' ') === 0 would fabricate a zero value).
+function coercibleNumber(cell: string): boolean {
+  if (cell !== cell.trim()) return false;
+  if (!/^-?\d+(\.\d+)?$/.test(cell)) return false;
+  if (/^-?0\d/.test(cell)) return false;
+  return true;
+}
+
 const border = {
   top:    thin(),
   bottom: thin(),
@@ -78,8 +89,9 @@ export function downloadXlsx(
     row.map((cell, colIdx) => {
       const isHeader = rowIdx === 0;
       const isNumeric = colMeta?.[colIdx]?.numeric ?? false;
-      const n = Number(cell);
-      const value = !isHeader && cell !== '' && !isNaN(n) ? n : cell;
+      // Explicit colMeta.numeric === false pins the column to text.
+      const allowNumber = colMeta?.[colIdx]?.numeric !== false && coercibleNumber(cell);
+      const value = !isHeader && cell !== '' && allowNumber ? Number(cell) : cell;
 
       return {
         v: value,
@@ -134,8 +146,7 @@ export function downloadXlsxMultiSheet(
     const styledData = sheet.rows.map((row, rowIdx) =>
       row.map((cell) => {
         const isHeader = rowIdx === 0;
-        const n = Number(cell);
-        const value = !isHeader && cell !== '' && !isNaN(n) ? n : cell;
+        const value = !isHeader && cell !== '' && coercibleNumber(cell) ? Number(cell) : cell;
         return {
           v: value,
           t: typeof value === 'number' ? 'n' as const : 's' as const,

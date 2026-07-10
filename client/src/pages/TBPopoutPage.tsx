@@ -223,9 +223,16 @@ export function TBPopoutPage() {
   if (error) return <div className="p-4 text-red-600">Error: {error}</div>;
   if (!data) return <div className="p-4 text-gray-500">Loading...</div>;
 
-  const totalDr = sorted.reduce((s, r) => s + r.unadjusted_debit, 0);
-  const totalCr = sorted.reduce((s, r) => s + r.unadjusted_credit, 0);
-  const balanced = totalDr === totalCr;
+  // Check every displayed column set, not just unadjusted — a PY or adjusted
+  // layer can be out of balance while the unadjusted columns foot.
+  const layerChecks: Array<{ label: string; dr: number; cr: number }> = [
+    { label: 'PY', dr: sorted.reduce((s, r) => s + r.prior_year_debit, 0), cr: sorted.reduce((s, r) => s + r.prior_year_credit, 0) },
+    { label: 'Unadj', dr: sorted.reduce((s, r) => s + r.unadjusted_debit, 0), cr: sorted.reduce((s, r) => s + r.unadjusted_credit, 0) },
+    { label: 'Book Adj', dr: sorted.reduce((s, r) => s + r.book_adjusted_debit, 0), cr: sorted.reduce((s, r) => s + r.book_adjusted_credit, 0) },
+    { label: 'Tax Adj', dr: sorted.reduce((s, r) => s + r.tax_adjusted_debit, 0), cr: sorted.reduce((s, r) => s + r.tax_adjusted_credit, 0) },
+  ];
+  const firstOob = layerChecks.find((l) => l.dr !== l.cr);
+  const balanced = !firstOob;
 
   return (
     <div className="h-screen flex flex-col bg-white text-gray-900 select-none" style={{ fontSize: '0.75rem' }}>
@@ -271,7 +278,7 @@ export function TBPopoutPage() {
           </label>
           <span className="text-gray-300">|</span>
           <span className={`font-medium px-1.5 py-0.5 rounded ${balanced ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
-            {balanced ? 'Balanced' : `OOB $${fmtTotal(Math.abs(totalDr - totalCr))}`}
+            {balanced ? 'Balanced' : `OOB ${firstOob!.label} $${fmtTotal(Math.abs(firstOob!.dr - firstOob!.cr))}`}
           </span>
           <button onClick={fetchData} title="Refresh" className="text-gray-400 hover:text-gray-700">&#x21bb;</button>
         </div>

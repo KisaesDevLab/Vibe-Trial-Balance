@@ -18,9 +18,11 @@ import {
   M1Adjustment,
   M1Input,
   M1_CATEGORIES,
+  M1_INCOME_CATEGORIES,
 } from '../api/taxWorkpapers';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
+import { categoryNet, netIncomeContribution } from '../lib/accounting';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,7 +44,9 @@ function parseCents(v: string): number {
 function netBalance(row: TBRow, kind: 'book' | 'tax'): number {
   const dr = kind === 'book' ? row.book_adjusted_debit : row.tax_adjusted_debit;
   const cr = kind === 'book' ? row.book_adjusted_credit : row.tax_adjusted_credit;
-  return row.normal_balance === 'debit' ? dr - cr : cr - dr;
+  // Category-based signing (matches the server PDF generators): contra
+  // accounts come out negative so category subtotals and net income are exact.
+  return categoryNet(row.category, dr, cr);
 }
 
 // ── M-1 Modal ─────────────────────────────────────────────────────────────────
@@ -192,18 +196,14 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
   const adjs = adjData?.data ?? [];
   const tbRows = tbData?.data ?? [];
 
-  // Book net income from TB
-  const bookNetIncome = tbRows.reduce((sum, r) => {
-    if (r.category === 'revenue')  return sum + netBalance(r, 'book');
-    if (r.category === 'expenses') return sum - netBalance(r, 'book');
-    return sum;
-  }, 0);
+  // Net income by category convention — revenue (cr − dr) minus expenses
+  // (dr − cr) — independent of any account's normal_balance designation, so
+  // contra IS accounts can never flip a contribution. Matches generateM1Pdf.
+  const bookNetIncome = tbRows.reduce(
+    (sum, r) => sum + netIncomeContribution(r.category, r.book_adjusted_debit, r.book_adjusted_credit), 0);
 
-  const taxNetIncome = tbRows.reduce((sum, r) => {
-    if (r.category === 'revenue')  return sum + netBalance(r, 'tax');
-    if (r.category === 'expenses') return sum - netBalance(r, 'tax');
-    return sum;
-  }, 0);
+  const taxNetIncome = tbRows.reduce(
+    (sum, r) => sum + netIncomeContribution(r.category, r.tax_adjusted_debit, r.tax_adjusted_credit), 0);
 
   // M-1 convention: columns represent the magnitude on the books vs the
   // magnitude allowed/recognized on the return. The sign of the adjustment
@@ -215,12 +215,8 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
   //     means book recognized income that tax does not, so tax NI is LOWER.
   //     Adjustment = −(book − tax), i.e. (tax − book), added to book NI.
   // To keep one row per adjustment, we key off category.
-  const INCOME_CATEGORIES = new Set<string>([
-    'Tax-Exempt Income',
-    'Deferred Revenue',
-  ]);
   const adjSign = (c: string | null | undefined): 1 | -1 =>
-    c && INCOME_CATEGORIES.has(c) ? -1 : 1;
+    c && M1_INCOME_CATEGORIES.has(c) ? -1 : 1;
 
   const totalBookAdj = adjs.reduce((s, a) => s + a.book_amount, 0);
   const totalTaxAdj  = adjs.reduce((s, a) => s + a.tax_amount, 0);

@@ -7,9 +7,21 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { listAccounts, type Account } from '../../api/chartOfAccounts';
 import { savePyManual, getComparison } from '../../api/pyComparison';
 
+// Accounting-aware: "(500.00)" (Excel's accounting format) and "500.00-" are
+// NEGATIVE. Stripping the parens (the old behavior) silently saved pasted
+// credit balances as debits. Returns NaN for unparseable input.
 function parseCents(val: string): number {
-  const n = parseFloat(val.replace(/[^0-9.-]/g, ''));
-  return isNaN(n) ? 0 : Math.round(n * 100);
+  let s = val.trim().replace(/[$\s]/g, '');
+  if (!s) return 0;
+  let sign = 1;
+  const paren = /^\((.*)\)$/.exec(s);
+  if (paren) { sign = -1; s = paren[1]; }
+  if (s.endsWith('-')) { sign = -sign; s = s.slice(0, -1); }
+  if (s.startsWith('-')) { sign = -sign; s = s.slice(1); }
+  if (s.startsWith('+')) s = s.slice(1);
+  s = s.replace(/,/g, '');
+  if (!/^\d+(\.\d+)?$/.test(s)) return NaN;
+  return sign * Math.round(parseFloat(s) * 100);
 }
 
 
@@ -120,6 +132,10 @@ export function ManualEntryGrid({ periodId, clientId, onClose, onSuccess }: Prop
 
   const mutation = useMutation({
     mutationFn: async () => {
+      const invalid = rows.filter((r) => r.balance.trim() && Number.isNaN(parseCents(r.balance)));
+      if (invalid.length > 0) {
+        throw new Error(`Unparseable amount(s) on account(s): ${invalid.slice(0, 5).map((r) => r.accountNumber).join(', ')}${invalid.length > 5 ? '…' : ''}.`);
+      }
       const accounts = rows
         .filter((r) => r.balance.trim())
         .map((r) => {

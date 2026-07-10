@@ -275,7 +275,9 @@ export function BankTransactionsPage() {
     onMutate: () => setAiStatus('Running AI classification…'),
     onSuccess: (res, ids) => {
       if (res.error) { setAiStatus(`Error: ${res.error.message}`); return; }
-      const unclassifiedBefore = rawTransactions.filter((t) => t.classification_status === 'unclassified').length;
+      // Dataset-wide count (pagination-safe); page rows only as fallback.
+      const unclassifiedBefore = paginationMeta?.statusCounts?.['unclassified']
+        ?? rawTransactions.filter((t) => t.classification_status === 'unclassified').length;
       invalidate();
       const n = res.data?.classified ?? 0;
       const attempted = res.data?.results?.length ?? n;
@@ -326,7 +328,7 @@ export function BankTransactionsPage() {
     switch (sortCol) {
       case 'transaction_date': av = a.transaction_date; bv = b.transaction_date; break;
       case 'description': av = (a.description ?? '').toLowerCase(); bv = (b.description ?? '').toLowerCase(); break;
-      case 'amount': av = a.amount; bv = b.amount; break;
+      case 'amount': av = Number(a.amount); bv = Number(b.amount); break;
       case 'check_number': av = (a.check_number ?? '').toLowerCase(); bv = (b.check_number ?? '').toLowerCase(); break;
       case 'source_account': av = (a.source_account_name ?? '').toLowerCase(); bv = (b.source_account_name ?? '').toLowerCase(); break;
       case 'category': av = (a.account_name ?? '').toLowerCase(); bv = (b.account_name ?? '').toLowerCase(); break;
@@ -345,8 +347,12 @@ export function BankTransactionsPage() {
   const toggleOne = (id: number) =>
     setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
 
-  const unclassifiedCount = transactions.filter((t) => t.classification_status === 'unclassified').length;
-  const aiSuggestedCount = transactions.filter((t) => t.classification_status === 'ai_suggested').length;
+  // Dataset-wide tallies from the server (pagination-safe); fall back to the
+  // current page's rows only when meta is unavailable.
+  const unclassifiedCount = paginationMeta?.statusCounts?.['unclassified']
+    ?? transactions.filter((t) => t.classification_status === 'unclassified').length;
+  const aiSuggestedCount = paginationMeta?.statusCounts?.['ai_suggested']
+    ?? transactions.filter((t) => t.classification_status === 'ai_suggested').length;
 
   if (!clientId) {
     return (

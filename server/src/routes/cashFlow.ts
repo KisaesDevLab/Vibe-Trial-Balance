@@ -6,6 +6,7 @@ import { Router, Response } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
+import { categoryNet, netIncomeContribution } from '../lib/accounting';
 
 export const cashFlowRouter = Router({ mergeParams: true });
 cashFlowRouter.use(authMiddleware);
@@ -13,20 +14,27 @@ cashFlowRouter.use(authMiddleware);
 function bookNet(r: Record<string, unknown>): number {
   const dr = Number(r.book_adjusted_debit  ?? 0);
   const cr = Number(r.book_adjusted_credit ?? 0);
-  return (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+  return categoryNet(r.category as string, dr, cr);
 }
 
 function priorNet(r: Record<string, unknown>): number {
   const dr = Number(r.prior_year_debit  ?? 0);
   const cr = Number(r.prior_year_credit ?? 0);
-  return (r.normal_balance as string) === 'debit' ? dr - cr : cr - dr;
+  return categoryNet(r.category as string, dr, cr);
 }
 
 function cashImpact(r: Record<string, unknown>): number {
   const change = bookNet(r) - priorNet(r);
   // Assets (debit normal): increase = use of cash (negative), decrease = source (positive)
   // Liabilities/Equity (credit normal): increase = source (positive), decrease = use (negative)
-  return (r.normal_balance as string) === 'debit' ? -change : change;
+  // Contra accounts carry a negative categoryNet, so the same rule nets them correctly.
+  return (r.category as string) === 'assets' ? -change : change;
+}
+
+// Only balance-sheet accounts may appear as cash-flow section line items;
+// income-statement activity enters the statement once, via net income.
+function isBalanceSheet(r: Record<string, unknown>): boolean {
+  return r.category === 'assets' || r.category === 'liabilities' || r.category === 'equity';
 }
 
 // GET /api/v1/periods/:periodId/cash-flow
@@ -58,12 +66,15 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
       prior_year_credit:    Number(r.prior_year_credit    ?? 0),
     })) as Record<string, unknown>[];
 
-    // Net income
-    const netIncome = parsed.reduce((sum, r) => {
-      if (r.category === 'revenue')  return sum + bookNet(r);
-      if (r.category === 'expenses') return sum - bookNet(r);
-      return sum;
-    }, 0);
+    // Net income: revenue (cr - dr) minus expenses (dr - cr), signed by
+    // CATEGORY so contra accounts (sales returns, purchase discounts) net
+    // against their category instead of inflating it.
+    const netIncome = parsed.reduce((sum, r) =>
+      sum + netIncomeContribution(
+        r.category as string,
+        Number(r.book_adjusted_debit),
+        Number(r.book_adjusted_credit),
+      ), 0);
 
     // Non-cash add-backs: ONLY revenue/expense accounts tagged non_cash
     // (e.g. Depreciation Expense). Contra-asset accounts like Accumulated
@@ -78,13 +89,14 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
         account_id:     r.account_id,
         account_number: r.account_number,
         account_name:   r.account_name,
-        // For expense non-cash items (depreciation), bookNet is positive and
-        // gets added back (cash wasn't used). For revenue non-cash items
-        // (accrued revenue booked but not collected), bookNet is positive
-        // and must be subtracted. Sign: expenses add, revenue subtracts.
-        amount: r.category === 'expenses'
-          ? bookNet(r as Record<string, unknown>)
-          : -bookNet(r as Record<string, unknown>),
+        // The add-back must reverse exactly what the item contributed to net
+        // income: expenses (dr - cr) come back positive, non-cash revenue
+        // (cr - dr) comes back negative.
+        amount: -netIncomeContribution(
+          r.category as string,
+          Number(r.book_adjusted_debit),
+          Number(r.book_adjusted_credit),
+        ),
       }));
 
     // Surface accounts we couldn't classify so the preparer can fix mappings.
@@ -93,11 +105,16 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
     // rejected above because their category didn't match.
     const unmappedAccounts = parsed
       .filter(r => {
-        const isBsAccount = r.category === 'assets' || r.category === 'liabilities' || r.category === 'equity';
+        const isBsAccount = isBalanceSheet(r);
         const noCategory = !r.cash_flow_category || r.cash_flow_category === '';
         const badNonCash = r.cash_flow_category === 'non_cash' &&
           r.category !== 'revenue' && r.category !== 'expenses';
-        return (isBsAccount && noCategory) || badNonCash;
+        // IS accounts mis-mapped to a balance-change section would be
+        // double-counted (already inside net income), so they are excluded
+        // from the sections below and flagged here instead.
+        const badSection = !isBsAccount &&
+          ['operating', 'investing', 'financing', 'cash'].includes(r.cash_flow_category as string);
+        return (isBsAccount && noCategory) || badNonCash || badSection;
       })
       .map(r => ({
         account_id:     r.account_id,
@@ -111,7 +128,7 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
 
     // Working capital changes
     const workingCapital = parsed
-      .filter(r => r.cash_flow_category === 'operating')
+      .filter(r => r.cash_flow_category === 'operating' && isBalanceSheet(r))
       .map(r => ({
         account_id:     r.account_id,
         account_number: r.account_number,
@@ -126,7 +143,7 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
 
     // Investing
     const investingItems = parsed
-      .filter(r => r.cash_flow_category === 'investing')
+      .filter(r => r.cash_flow_category === 'investing' && isBalanceSheet(r))
       .map(r => ({
         account_id:     r.account_id,
         account_number: r.account_number,
@@ -138,7 +155,7 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
 
     // Financing
     const financingItems = parsed
-      .filter(r => r.cash_flow_category === 'financing')
+      .filter(r => r.cash_flow_category === 'financing' && isBalanceSheet(r))
       .map(r => ({
         account_id:     r.account_id,
         account_number: r.account_number,
@@ -151,15 +168,16 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
     const netChange = totalOperating + totalInvesting + totalFinancing;
 
     // Cash accounts
-    const cashRows = parsed.filter(r => r.cash_flow_category === 'cash');
+    const cashRows = parsed.filter(r => r.cash_flow_category === 'cash' && isBalanceSheet(r));
     const beginningCash = cashRows.reduce((s, r) => s + priorNet(r), 0);
     const endingCash    = cashRows.reduce((s, r) => s + bookNet(r),  0);
 
-    // Reconciliation check: ending cash should equal beginning cash + net change.
-    // Drift > $1 (100 cents) indicates a real cash-flow mapping error, not float noise.
+    // Reconciliation check: ending cash must equal beginning cash + net change
+    // exactly — all amounts are integer cents, so any nonzero difference is a
+    // real mapping error, never float noise.
     const expectedEnding = beginningCash + netChange;
     const reconciliationDiff = endingCash - expectedEnding;
-    const reconciled = Math.abs(reconciliationDiff) <= 100;
+    const reconciled = reconciliationDiff === 0;
 
     res.json({
       data: {

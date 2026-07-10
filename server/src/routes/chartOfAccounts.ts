@@ -401,18 +401,38 @@ coaItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<vo
   }
 
   try {
-    // Block delete if any period has a non-zero balance for this account
+    // Block deactivation if the account carries ANY activity: non-zero
+    // unadjusted or prior-year balances, or journal-entry lines. The TB query
+    // filters on is_active, so deactivating an account with AJE activity
+    // would hide one side of a balanced entry from every column total.
     const balanceRows = await db('trial_balance')
       .where({ account_id: id })
       .where(function () {
-        this.whereNot({ unadjusted_debit: 0 }).orWhereNot({ unadjusted_credit: 0 });
+        this.whereNot({ unadjusted_debit: 0 })
+          .orWhereNot({ unadjusted_credit: 0 })
+          .orWhereNot({ prior_year_debit: 0 })
+          .orWhereNot({ prior_year_credit: 0 });
       })
       .count('id as cnt')
       .first();
     if (Number(balanceRows?.cnt ?? 0) > 0) {
       res.status(409).json({
         data: null,
-        error: { code: 'HAS_BALANCE', message: 'Cannot delete an account that has trial balance entries. Zero out the balance first.' },
+        error: { code: 'HAS_BALANCE', message: 'Cannot delete an account that has trial balance or prior-year entries. Zero out the balance first.' },
+      });
+      return;
+    }
+    const jeLines = await db('journal_entry_lines')
+      .where({ account_id: id })
+      .where(function () {
+        this.whereNot({ debit: 0 }).orWhereNot({ credit: 0 });
+      })
+      .count('id as cnt')
+      .first();
+    if (Number(jeLines?.cnt ?? 0) > 0) {
+      res.status(409).json({
+        data: null,
+        error: { code: 'HAS_JE_ACTIVITY', message: 'Cannot delete an account referenced by journal entries. Remove or repost those entries first.' },
       });
       return;
     }

@@ -33,7 +33,7 @@ import {
 import { updateAccount, type AccountInput } from '../api/chartOfAccounts';
 import { listClients } from '../api/clients';
 import { listPeriods, type Period } from '../api/periods';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, pushToast } from '../store/uiStore';
 import {
   listTickmarks,
   getTBTickmarks,
@@ -91,10 +91,15 @@ function fmtTotal(cents: number): string {
   return (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Returns integer cents, or NaN when the input is not a valid amount or
+// expression. NaN must be rejected by the caller — silently stripping the
+// invalid characters would synthesize a different number ("100/0" → "1000").
 function parseCents(val: string): number {
   const evaled = evalAmountExpr(val);
-  const n = parseFloat(evaled.replace(/[^0-9.-]/g, ''));
-  return isNaN(n) ? 0 : Math.round(n * 100);
+  const cleaned = evaled.replace(/[$,\s]/g, '');
+  if (cleaned === '') return 0;
+  if (!/^[+-]?\d+(\.\d+)?$/.test(cleaned)) return NaN;
+  return Math.round(parseFloat(cleaned) * 100);
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -532,13 +537,32 @@ export function TrialBalancePage() {
     const trimmed = text.trim();
     switch (col) {
       case 'unadjusted_debit':
-        handleBalanceEdit(rowData, 'unadjusted_debit', parseCents(text));
+      case 'unadjusted_credit': {
+        const cents = parseCents(text);
+        if (Number.isNaN(cents)) {
+          pushToast(`"${text.trim()}" is not a valid amount — balance unchanged.`, 'error');
+          break;
+        }
+        // Accounting-negative in one column posts to the opposite column —
+        // the server (correctly) rejects negative debit/credit values.
+        if (cents < 0) {
+          balanceMutation.mutate({
+            accountId: rowData.account_id,
+            debit:  col === 'unadjusted_debit' ? 0 : -cents,
+            credit: col === 'unadjusted_debit' ? -cents : 0,
+            expectedUpdatedAt: rowData.row_updated_at ?? null,
+          });
+        } else {
+          handleBalanceEdit(rowData, col, cents);
+        }
         break;
-      case 'unadjusted_credit':
-        handleBalanceEdit(rowData, 'unadjusted_credit', parseCents(text));
-        break;
+      }
       case 'unaj_net': {
         const net = parseCents(text);
+        if (Number.isNaN(net)) {
+          pushToast(`"${text.trim()}" is not a valid amount — balance unchanged.`, 'error');
+          break;
+        }
         balanceMutation.mutate({
           accountId: rowData.account_id,
           debit: net > 0 ? net : 0,
@@ -1114,9 +1138,11 @@ export function TrialBalancePage() {
     getGroupedRowModel: getGroupedRowModel(),
   });
 
-  // ── Footer calculations (uses unfiltered data for totals) ─────────────────
+  // ── Footer calculations ────────────────────────────────────────────────────
+  // Totals sum the VISIBLE rows so the columns always foot to the detail shown
+  // (and to the Excel export, which exports the filtered rows).
 
-  const rows = data ?? [];
+  const rows = filteredDataForNav;
   const colSum = (key: keyof TBRow) => rows.reduce((s, r) => s + (r[key] as number), 0);
   // Net-side totals for adjusted columns: sum only the side that wins per row
   const netDrSum = (dk: keyof TBRow, ck: keyof TBRow) =>
@@ -1750,15 +1776,48 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
     const drIdx = headers.indexOf(mapping.debitCol);
     const crIdx = headers.indexOf(mapping.creditCol);
 
+    // Accounting-aware amount parsing: "(1,234.56)" and "1234.56-" are
+    // NEGATIVE. Stripping the parens (the old behavior) silently flipped
+    // imported credits into debits.
+    const parseImportAmount = (raw: string | undefined): number => {
+      let s = (raw ?? '').trim().replace(/[$\s]/g, '');
+      if (!s) return 0;
+      let sign = 1;
+      const paren = /^\((.*)\)$/.exec(s);
+      if (paren) { sign = -1; s = paren[1]; }
+      if (s.endsWith('-')) { sign = -sign; s = s.slice(0, -1); }
+      if (s.startsWith('-')) { sign = -sign; s = s.slice(1); }
+      if (s.startsWith('+')) s = s.slice(1);
+      s = s.replace(/,/g, '');
+      if (!/^\d+(\.\d+)?$/.test(s)) return NaN;
+      return sign * Math.round(parseFloat(s) * 100);
+    };
+
+    const invalidRows: string[] = [];
     const rows: TBImportRow[] = rawRows
       .filter((r) => r[acctIdx]?.trim())
-      .map((r) => ({
-        accountNumber: r[acctIdx]?.trim() ?? '',
-        ...(nameIdx >= 0 && r[nameIdx]?.trim() ? { accountName: r[nameIdx].trim() } : {}),
-        debit: Math.round((parseFloat(r[drIdx]?.replace(/[^0-9.-]/g, '') || '0') || 0) * 100),
-        credit: Math.round((parseFloat(r[crIdx]?.replace(/[^0-9.-]/g, '') || '0') || 0) * 100),
-      }));
+      .map((r) => {
+        const acct = r[acctIdx]?.trim() ?? '';
+        const dr = parseImportAmount(r[drIdx]);
+        const cr = parseImportAmount(r[crIdx]);
+        if (Number.isNaN(dr) || Number.isNaN(cr)) {
+          invalidRows.push(acct);
+          return { accountNumber: acct, debit: 0, credit: 0 };
+        }
+        // A negative in one column is a balance on the opposite side — the
+        // API schema requires non-negative debit/credit columns.
+        return {
+          accountNumber: acct,
+          ...(nameIdx >= 0 && r[nameIdx]?.trim() ? { accountName: r[nameIdx].trim() } : {}),
+          debit: Math.max(0, dr) + Math.max(0, -cr),
+          credit: Math.max(0, cr) + Math.max(0, -dr),
+        };
+      });
 
+    if (invalidRows.length > 0) {
+      setError(`Unparseable amount(s) on account(s): ${invalidRows.slice(0, 5).join(', ')}${invalidRows.length > 5 ? '…' : ''}. Fix the file and retry — no rows were imported.`);
+      return;
+    }
     if (!rows.length) { setError('No valid rows to import.'); return; }
     setImporting(true);
     setError('');

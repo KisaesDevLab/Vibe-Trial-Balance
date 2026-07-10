@@ -19,10 +19,22 @@ function fmtCents(v: number): string {
   return v < 0 ? `(${s})` : s;
 }
 
-function fmtPct(v: number | null): string {
-  if (v === null) return 'New';
+// 'New' only when the account had no presence in the compare period at all;
+// an existing account with a zero prior balance has an undefined rate ('—').
+function fmtPct(v: number | null, inCompare: boolean): string {
+  if (v === null) return inCompare ? '—' : 'New';
   if (v === 0)    return '—';
   return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+}
+
+// Variance color: green = favorable, red = unfavorable. Balances are signed
+// per category, so an increase is favorable for assets/revenue/equity but
+// unfavorable for expenses and liabilities.
+function varianceColor(cat: string, variance: number): string {
+  if (variance === 0) return 'text-gray-400 dark:text-gray-500';
+  const increaseIsFavorable = cat === 'assets' || cat === 'revenue' || cat === 'equity';
+  const favorable = increaseIsFavorable ? variance > 0 : variance < 0;
+  return favorable ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400';
 }
 
 const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'] as const;
@@ -299,15 +311,13 @@ export function MultiPeriodPage() {
                           <td className="px-3 py-1.5 text-gray-800 dark:text-gray-200">{r.account_name}</td>
                           <td className="px-3 py-1.5 text-right text-sm font-mono tabular-nums dark:text-gray-200">{fmtCents(r.current_balance)}</td>
                           <td className="px-3 py-1.5 text-right text-sm font-mono tabular-nums text-gray-500 dark:text-gray-400">{fmtCents(r.compare_balance)}</td>
-                          <td className={`px-3 py-1.5 text-right text-sm font-mono tabular-nums ${
-                            r.variance_amount > 0 ? 'text-green-700 dark:text-green-400' : r.variance_amount < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400 dark:text-gray-500'
-                          }`}>
+                          <td className={`px-3 py-1.5 text-right text-sm font-mono tabular-nums ${varianceColor(cat, r.variance_amount)}`}>
                             {fmtCents(r.variance_amount)}
                           </td>
                           <td className={`px-3 py-1.5 text-right text-xs ${
                             isSignificant ? 'font-semibold text-amber-700 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'
                           }`}>
-                            {fmtPct(r.variance_pct)}
+                            {fmtPct(r.variance_pct, r.in_compare)}
                           </td>
                           <td className="px-3 py-1.5 min-w-[120px]">
                             <NoteCell
@@ -326,9 +336,7 @@ export function MultiPeriodPage() {
                       <td className="px-3 py-1.5 text-xs font-semibold text-gray-600 dark:text-gray-400 italic">Total {CAT_LABEL[cat]}</td>
                       <td className="px-3 py-1.5 text-right text-sm font-mono tabular-nums font-semibold dark:text-gray-200">{fmtCents(sub.current)}</td>
                       <td className="px-3 py-1.5 text-right text-sm font-mono tabular-nums font-semibold text-gray-500 dark:text-gray-400">{fmtCents(sub.compare)}</td>
-                      <td className={`px-3 py-1.5 text-right text-sm font-mono tabular-nums font-semibold ${
-                        sub.variance > 0 ? 'text-green-700 dark:text-green-400' : sub.variance < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400 dark:text-gray-500'
-                      }`}>
+                      <td className={`px-3 py-1.5 text-right text-sm font-mono tabular-nums font-semibold ${varianceColor(cat, sub.variance)}`}>
                         {fmtCents(sub.variance)}
                       </td>
                       <td className="px-3 py-1.5 text-right text-xs text-gray-500 dark:text-gray-400">

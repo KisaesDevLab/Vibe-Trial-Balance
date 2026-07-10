@@ -39,7 +39,14 @@ export interface ClassificationRule {
   account_number: string;
 }
 
-export interface PaginationMeta { total: number; page: number; pageSize: number; pages: number }
+export interface PaginationMeta {
+  total: number;
+  page: number;
+  pageSize: number;
+  pages: number;
+  /** dataset-wide tallies by classification_status (unaffected by pagination) */
+  statusCounts?: Record<string, number>;
+}
 
 export const listBankTransactions = (clientId: number, params?: { periodId?: number; status?: string; sourceAccountId?: number; excludeEntrySource?: string; page?: number; pageSize?: number }) => {
   const qs = new URLSearchParams();

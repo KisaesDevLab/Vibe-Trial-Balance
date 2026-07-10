@@ -36,9 +36,12 @@ exports.seed = async function (knex) {
     { account_number: '1500', account_name: 'Furniture & Equipment',      category: 'assets',      subcategory: 'fixed',             normal_balance: 'debit',  cash_flow_category: 'investing' },
     { account_number: '1510', account_name: 'Computer Equipment',         category: 'assets',      subcategory: 'fixed',             normal_balance: 'debit',  cash_flow_category: 'investing' },
     { account_number: '1520', account_name: 'Vehicles',                   category: 'assets',      subcategory: 'fixed',             normal_balance: 'debit',  cash_flow_category: 'investing' },
-    { account_number: '1550', account_name: 'Accum Depr - Furniture & Equip', category: 'assets',  subcategory: 'fixed',             normal_balance: 'credit', cash_flow_category: 'investing' },
-    { account_number: '1560', account_name: 'Accum Depr - Computers',     category: 'assets',      subcategory: 'fixed',             normal_balance: 'credit', cash_flow_category: 'investing' },
-    { account_number: '1570', account_name: 'Accum Depr - Vehicles',      category: 'assets',      subcategory: 'fixed',             normal_balance: 'credit', cash_flow_category: 'investing' },
+    // Accumulated depreciation is intentionally unmapped: its movement is fully
+    // explained by the Depreciation Expense non-cash add-back (ASC 230 indirect
+    // method); mapping it to investing would present depreciation as a cash inflow.
+    { account_number: '1550', account_name: 'Accum Depr - Furniture & Equip', category: 'assets',  subcategory: 'fixed',             normal_balance: 'credit', cash_flow_category: null },
+    { account_number: '1560', account_name: 'Accum Depr - Computers',     category: 'assets',      subcategory: 'fixed',             normal_balance: 'credit', cash_flow_category: null },
+    { account_number: '1570', account_name: 'Accum Depr - Vehicles',      category: 'assets',      subcategory: 'fixed',             normal_balance: 'credit', cash_flow_category: null },
     { account_number: '1600', account_name: 'Security Deposits',          category: 'assets',      subcategory: 'other',             normal_balance: 'debit',  cash_flow_category: 'investing' },
     // Liabilities
     { account_number: '2000', account_name: 'Accounts Payable',           category: 'liabilities', subcategory: 'current',           normal_balance: 'credit', cash_flow_category: 'operating' },
@@ -85,7 +88,7 @@ exports.seed = async function (knex) {
     { account_number: '6610', account_name: 'Professional Fees - Legal',  category: 'expenses',    subcategory: 'professional',      normal_balance: 'debit',  cash_flow_category: null },
     { account_number: '6700', account_name: 'Bank Service Charges',       category: 'expenses',    subcategory: 'financial',         normal_balance: 'debit',  cash_flow_category: null },
     { account_number: '6710', account_name: 'Interest Expense',           category: 'expenses',    subcategory: 'financial',         normal_balance: 'debit',  cash_flow_category: null },
-    { account_number: '6800', account_name: 'Depreciation Expense',       category: 'expenses',    subcategory: 'non-cash',          normal_balance: 'debit',  cash_flow_category: null },
+    { account_number: '6800', account_name: 'Depreciation Expense',       category: 'expenses',    subcategory: 'non-cash',          normal_balance: 'debit',  cash_flow_category: 'non_cash' },
     { account_number: '6900', account_name: 'Licenses & Permits',         category: 'expenses',    subcategory: 'general',           normal_balance: 'debit',  cash_flow_category: null },
     { account_number: '6910', account_name: 'Continuing Education',       category: 'expenses',    subcategory: 'general',           normal_balance: 'debit',  cash_flow_category: null },
     { account_number: '7000', account_name: 'Miscellaneous Expense',      category: 'expenses',    subcategory: 'general',           normal_balance: 'debit',  cash_flow_category: null },

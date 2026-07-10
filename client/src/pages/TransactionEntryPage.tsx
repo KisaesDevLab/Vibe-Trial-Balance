@@ -542,21 +542,24 @@ export function TransactionEntryPage() {
   const payees: Payee[] = payeesData ?? [];
   const accounts: Account[] = accountsData ?? [];
 
-  // Stat cards
+  // Stat cards. Sign convention: positive amount = money INTO the bank
+  // account = a DEBIT to cash (the JE sync debits the source account), so
+  // deposits are the debit total and withdrawals the credit total — both
+  // shown as unsigned magnitudes.
   const unsavedRows = rows.filter((r) => !r.saved);
   const statDebits = useMemo(() => {
-    return unsavedRows.reduce((sum, r) => {
-      const cents = parseDollarInput(r.amountStr);
-      return cents !== null && cents < 0 ? sum + cents : sum;
-    }, 0);
-  }, [unsavedRows]);
-  const statCredits = useMemo(() => {
     return unsavedRows.reduce((sum, r) => {
       const cents = parseDollarInput(r.amountStr);
       return cents !== null && cents > 0 ? sum + cents : sum;
     }, 0);
   }, [unsavedRows]);
-  const statNet = statCredits + statDebits;
+  const statCredits = useMemo(() => {
+    return unsavedRows.reduce((sum, r) => {
+      const cents = parseDollarInput(r.amountStr);
+      return cents !== null && cents < 0 ? sum + -cents : sum;
+    }, 0);
+  }, [unsavedRows]);
+  const statNet = statDebits - statCredits;
 
   // Auto-add row when last row has payee, carrying the source account forward
   useEffect(() => {
@@ -781,9 +784,9 @@ export function TransactionEntryPage() {
       <div className="px-6 py-3 grid grid-cols-4 gap-3 shrink-0">
         {[
           { label: 'Entries this session', value: unsavedRows.length.toString(), color: 'text-gray-800' },
-          { label: 'Total debits', value: fmt(statDebits), color: fmtColor(statDebits) },
-          { label: 'Total credits', value: fmt(statCredits), color: fmtColor(statCredits) },
-          { label: 'Net', value: fmt(statNet), color: fmtColor(statNet) },
+          { label: 'Debits — money in', value: fmt(statDebits), color: fmtColor(statDebits) },
+          { label: 'Credits — money out', value: fmt(statCredits), color: fmtColor(-statCredits) },
+          { label: 'Net (in − out)', value: fmt(statNet), color: fmtColor(statNet) },
         ].map(({ label, value, color }) => (
           <div key={label} className="bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded p-3">
             <div className="text-[11px] text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">{label}</div>
