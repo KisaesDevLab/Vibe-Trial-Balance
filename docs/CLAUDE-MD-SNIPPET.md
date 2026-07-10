@@ -5,9 +5,9 @@ before the Workflow Rules section).
 
 ---
 
-## License Compliance (PolyForm Internal Use 1.0.0)
+## License Compliance (PolyForm Small Business 1.0.0)
 
-This project is licensed under the **PolyForm Internal Use License 1.0.0**.
+This project is licensed under the **PolyForm Small Business License 1.0.0**.
 Enforce these rules in every coding session:
 
 ### When adding dependencies
@@ -25,16 +25,19 @@ Enforce these rules in every coding session:
   must begin with:
   ```
   // Copyright 2025-2026 Kisaes LLC
-  // Licensed under the PolyForm Internal Use License 1.0.0.
-  // You may not distribute this software. See LICENSE for terms.
+  // Licensed under the PolyForm Small Business License 1.0.0.
+  // Use is limited to qualifying small businesses. See LICENSE for terms.
   ```
 - Do not add headers to generated files, migration files, or config files.
 
-### Distribution restriction
-- The PolyForm Internal Use License does not permit distributing the software
-  to any third party in any form. Do not add features, build artifacts, or
-  workflows that would publish, redistribute, or hand off the codebase or
-  binaries to outside parties.
+### Use limitation and notices
+- The PolyForm Small Business License permits use only by companies with fewer
+  than 100 total individuals (employees + contractors) and under $1,000,000 USD
+  (2019, inflation-adjusted) prior-year revenue. Larger organizations need a
+  Commercial License from Kisaes LLC — see `COMMERCIAL_LICENSE.md`.
+- Distribution IS permitted, but distributed copies must carry the license
+  terms (or their URL) and the `Required Notice: Copyright 2025-2026 Kisaes LLC`
+  line from LICENSE. Never remove or alter that Required Notice line.
 - Client-facing access (clients getting their own login to a hosted instance)
   requires a Commercial License from Kisaes LLC — see `COMMERCIAL_LICENSE.md`.
 

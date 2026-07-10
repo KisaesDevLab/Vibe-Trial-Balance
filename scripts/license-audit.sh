@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # license-audit.sh — Automated license compliance audit for vibe-tb
-# License: PolyForm Internal Use 1.0.0
+# License: PolyForm Small Business 1.0.0
 #
 # Usage:  ./scripts/license-audit.sh [--quiet] [--json]
 #   --quiet   Suppress passing checks; show only warnings and failures
@@ -48,7 +48,7 @@ header "1. Required project files"
 if [[ -f "$ROOT/LICENSE" ]]; then
   pass "LICENSE file present"
 else
-  fail "LICENSE file MISSING — required for PolyForm Internal Use license"
+  fail "LICENSE file MISSING — required for PolyForm Small Business license"
   bump_fail
 fi
 
@@ -62,7 +62,7 @@ fi
 # ── 2. PolyForm source file headers ─────────────────────────────────────────
 header "2. Source file headers"
 
-HEADER_PATTERN="Licensed under the PolyForm Internal Use License|Copyright.*Kisaes"
+HEADER_PATTERN="Licensed under the PolyForm Small Business License|Copyright.*Kisaes"
 TS_FILES=$(find "$ROOT/client/src" "$ROOT/server/src" -name "*.ts" -o -name "*.tsx" 2>/dev/null | wc -l | tr -d ' ')
 HEADERS_FOUND=$(find "$ROOT/client/src" "$ROOT/server/src" -name "*.ts" -o -name "*.tsx" 2>/dev/null \
   | xargs grep -l -E "$HEADER_PATTERN" 2>/dev/null | wc -l | tr -d ' ')
@@ -71,7 +71,7 @@ info "$HEADERS_FOUND / $TS_FILES source files have license headers"
 
 if [[ "$HEADERS_FOUND" -eq 0 ]]; then
   warn "No source files contain license headers"
-  warn "Minimum header:  // Licensed under the PolyForm Internal Use License 1.0.0"
+  warn "Minimum header:  // Licensed under the PolyForm Small Business License 1.0.0"
   bump_warn
 elif [[ "$HEADERS_FOUND" -lt "$TS_FILES" ]]; then
   warn "$(( TS_FILES - HEADERS_FOUND )) source files missing license headers"
@@ -140,7 +140,7 @@ else
     echo "  $line"
   done
 
-  # Check for denied licenses (AGPL/SSPL/etc. incompatible with PolyForm Internal Use)
+  # Check for denied licenses (AGPL/SSPL/etc. incompatible with PolyForm Small Business)
   DENIED_PATTERN="GPL-2.0-only|SSPL|AGPL|Commons Clause|Proprietary|Commercial|UNLICENSED"
   CLIENT_DENIED=$(cd "$CLIENT_DIR" && npx license-checker \
     --excludePrivatePackages --csv 2>/dev/null \

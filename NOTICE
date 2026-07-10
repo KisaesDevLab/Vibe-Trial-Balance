@@ -1,15 +1,21 @@
 Vibe Trial Balance
 Copyright 2025-2026 Kisaes LLC
 
-This product is licensed under the PolyForm Internal Use License 1.0.0.
+This product is licensed under the PolyForm Small Business License 1.0.0.
 See the LICENSE file for the full license text.
-https://polyformproject.org/licenses/internal-use/1.0.0
+https://polyformproject.org/licenses/small-business/1.0.0
 
-The software may be used for the internal business operations of you
-and your company. You may not distribute the software.
+Required Notice: Copyright 2025-2026 Kisaes LLC
 
-For commercial licensing inquiries (e.g., providing client-facing access
-to a hosted instance), contact: licensing@kisaes.com
+The software may be used for the benefit of your company if it qualifies
+as a small business under the license (fewer than 100 total individuals
+and under 1,000,000 USD (2019, inflation-adjusted) prior-year revenue).
+If you distribute copies, you must pass along the license terms (or their
+URL) and the Required Notice line above.
+
+For commercial licensing inquiries (e.g., larger organizations, or
+providing client-facing access to a hosted instance), contact:
+licensing@kisaes.com
 
 Source code: https://github.com/KisaesDevLab/Vibe-Trial-Balance
 

@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Kisaes LLC
-// Licensed under the PolyForm Internal Use License 1.0.0.
-// You may not distribute this software. See LICENSE for terms.
+// Licensed under the PolyForm Small Business License 1.0.0.
+// Use is limited to qualifying small businesses. See LICENSE for terms.
 
 /**
  * Add a `must_change_password` flag to app_users so the bootstrap admin

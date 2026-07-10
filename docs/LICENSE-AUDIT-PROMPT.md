@@ -11,7 +11,7 @@ accepting external contributions, or after adding multiple dependencies.
 You are performing a comprehensive license compliance audit of
 **vibe-tb** — a self-hosted accounting/tax-workpaper application
 served over a network (Raspberry Pi 5, Nginx). The project license is
-**PolyForm Internal Use License 1.0.0**. Work through all 10 sections below.
+**PolyForm Small Business License 1.0.0**. Work through all 10 sections below.
 For each section, report findings with severity (CRITICAL / HIGH / MEDIUM /
 LOW / PASS).
 
@@ -22,11 +22,11 @@ Reference file: `scripts/license-policy.json` — the authoritative policy.
 ### Section 1 — LICENSE File
 
 1. Check whether `LICENSE` exists in the project root.
-2. Confirm it contains the full PolyForm Internal Use License 1.0.0 text with
+2. Confirm it contains the full PolyForm Small Business License 1.0.0 text with
    the licensor preamble (Licensor: Kisaes LLC, Software: Vibe Trial Balance).
 3. Confirm the `NOTICE` file exists with correct copyright and attribution.
 
-**Expected result:** `LICENSE` exists, contains full PolyForm Internal Use
+**Expected result:** `LICENSE` exists, contains full PolyForm Small Business
 1.0.0 text with the Kisaes LLC licensor preamble.
 
 ---
@@ -38,33 +38,40 @@ Reference file: `scripts/license-policy.json` — the authoritative policy.
    Minimum acceptable header:
    ```
    // Copyright 2025-2026 Kisaes LLC
-   // Licensed under the PolyForm Internal Use License 1.0.0.
-   // You may not distribute this software. See LICENSE for terms.
+   // Licensed under the PolyForm Small Business License 1.0.0.
+   // Use is limited to qualifying small businesses. See LICENSE for terms.
    ```
 3. List any files missing headers.
 4. Note: generated files (e.g. Vite build output, migration auto-generators)
    are exempt.
 
-**Expected result:** All hand-written source files have PolyForm Internal Use
+**Expected result:** All hand-written source files have PolyForm Small Business
 headers.
 
 ---
 
-### Section 3 — License Notices and No-Distribution
+### Section 3 — License Notices and Use Limitation
 
-The PolyForm Internal Use License does not permit distributing the software in
-any form. Verify that licensing notices are present and that the project does
-not advertise or facilitate distribution to third parties.
+The PolyForm Small Business License permits distribution, but requires that
+anyone who distributes copies passes along the license terms (or their URL)
+and any `Required Notice:` lines. Use is limited to qualifying small
+businesses (fewer than 100 total individuals; under $1,000,000 USD (2019,
+inflation-adjusted) prior-year revenue).
 
-1. Search `client/src/` for any UI component, page, or footer that references
+1. Confirm the LICENSE preamble contains the line
+   `Required Notice: Copyright 2025-2026 Kisaes LLC` and that no build or
+   packaging step strips it.
+2. Search `client/src/` for any UI component, page, or footer that references
    the license or links to the canonical source code repository.
-2. Check whether the LICENSE text is accessible to users of the application.
-3. Check `CLAUDE.md` and `README.md` for documented compliance and the absence
-   of any "redistribute" / "open source" language.
+3. Check whether the LICENSE text is accessible to users of the application.
+4. Check `CLAUDE.md` and `README.md` for documented compliance: the
+   small-business use limitation, the notice-preservation duty for
+   distributors, and the absence of any "open source" claims.
 
-**Expected result:** A visible license/source link exists in the application
-UI footer (or About page). README and CLAUDE.md describe the no-distribution
-clause and the supplemental Commercial License for client-facing access.
+**Expected result:** The Required Notice line is present and preserved. A
+visible license/source link exists in the application UI footer (or About
+page). README and CLAUDE.md describe the small-business use limitation and the
+supplemental Commercial License for larger firms and client-facing access.
 
 ---
 
@@ -101,7 +108,7 @@ clause and the supplemental Commercial License for client-facing access.
 
    **BlueOak-1.0.0** (jackspeak, minipass, sax, path-scurry, package-json-from-dist):
    - BlueOak-1.0.0 is a permissive license compatible with the PolyForm
-     Internal Use License. Classify as PASS after confirming the text matches
+     Small Business License. Classify as PASS after confirming the text matches
      the BlueOak 1.0.0 standard.
 
    **MIT\*** (chainsaw, traverse, png-js):
@@ -140,13 +147,13 @@ carry significantly lower compliance risk.
 
 ### Section 8 — Copyleft Dependency Check
 
-PolyForm Internal Use is a source-available license, not copyleft. Verify that
+PolyForm Small Business is a source-available license, not copyleft. Verify that
 no dependency carries copyleft obligations that would conflict with our
-no-distribution model:
+restricted-use, source-available model:
 
 - AGPL-3.0 dependencies are NOT compatible (the network-use clause would
   effectively force AGPL terms on the whole product, conflicting with the
-  PolyForm Internal Use license).
+  PolyForm Small Business license).
 - GPL-2.0-only is NOT compatible.
 - GPL-3.0-or-later requires review — acceptable if elected as a runtime
   dependency only and not statically linked.
@@ -167,7 +174,7 @@ This application integrates three AI providers. Verify:
 3. `@modelcontextprotocol/sdk` — confirm MIT or Apache-2.0
 
 These packages process sensitive financial data. Confirm their licenses permit
-use in a PolyForm Internal Use licensed application without additional terms.
+use in a PolyForm Small Business licensed application without additional terms.
 
 ---
 
@@ -179,7 +186,7 @@ Produce a structured compliance report with the following format:
 ## License Audit Report — vibe-tb
 Date: <today>
 Auditor: Claude Code
-Project License: PolyForm Internal Use License 1.0.0
+Project License: PolyForm Small Business License 1.0.0
 
 ### CRITICAL Issues (must fix before any distribution)
 [list]

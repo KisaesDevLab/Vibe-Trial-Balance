@@ -1,8 +1,8 @@
 # Vibe Trial Balance - Claude Code Project Memory
 
-## License Compliance (PolyForm Internal Use 1.0.0)
+## License Compliance (PolyForm Small Business 1.0.0)
 
-This project is licensed under the **PolyForm Internal Use License 1.0.0**. Enforce these rules in every coding session:
+This project is licensed under the **PolyForm Small Business License 1.0.0**. Enforce these rules in every coding session:
 
 ### When adding dependencies
 - Check the license before running `npm install`. Allowed: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, BlueOak-1.0.0, Unlicense.
@@ -15,14 +15,15 @@ This project is licensed under the **PolyForm Internal Use License 1.0.0**. Enfo
 - Every new `.ts` or `.tsx` file created under `client/src/` or `server/src/` must begin with:
   ```
   // Copyright 2025-2026 Kisaes LLC
-  // Licensed under the PolyForm Internal Use License 1.0.0.
-  // You may not distribute this software. See LICENSE for terms.
+  // Licensed under the PolyForm Small Business License 1.0.0.
+  // Use is limited to qualifying small businesses. See LICENSE for terms.
   ```
 - Do not add headers to generated files, migration files, or config files.
 
-### Distribution restriction
-- The PolyForm Internal Use License does not permit distributing the software to any third party in any form. Do not add features, build artifacts, or workflows that would publish, redistribute, or hand off the codebase or binaries to outside parties.
-- **Authorized exception — public Docker images.** The copyright holder (Kisaes LLC) has expressly permitted publishing Docker images to `ghcr.io/kisaesdevlab/vibe-tb-*` via the `.github/workflows/docker-publish.yml` workflow. Maintaining or extending that workflow, the image-based compose file, or README references to the registry is allowed. Any *other* redistribution channel (npm publish, release binaries, source mirrors, etc.) still requires the owner's explicit authorization.
+### Use limitation and notices
+- The PolyForm Small Business License permits use only by companies with **fewer than 100 total individuals** (employees + contractors) and **under $1,000,000 USD (2019, inflation-adjusted) total revenue** in the prior tax year. Larger organizations need a Commercial License from Kisaes LLC — see `COMMERCIAL_LICENSE.md`.
+- Distribution IS permitted under this license, but anyone who distributes copies must pass along the license terms (or their URL) and the `Required Notice: Copyright 2025-2026 Kisaes LLC` line from the LICENSE file. Do not remove or alter that Required Notice line, and preserve it in any packaging/build artifacts that ship license metadata.
+- Official Docker images publish to `ghcr.io/kisaesdevlab/vibe-tb-*` via `.github/workflows/docker-publish.yml`; keep the image license label in that workflow in sync with LICENSE.
 - Client-facing access (clients getting their own login to a hosted instance) requires a Commercial License from Kisaes LLC — see `COMMERCIAL_LICENSE.md`.
 
 ### Known open issues (see scripts/license-policy.json for detail)

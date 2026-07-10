@@ -14,7 +14,7 @@
 
 ## What the Installer Does
 
-1. Shows a welcome screen and the PolyForm Internal Use 1.0.0 license agreement
+1. Shows a welcome screen and the PolyForm Small Business 1.0.0 license agreement
 2. Checks for Docker Desktop — if not installed, opens the download page
 3. Lets the user choose an install directory (default: `C:\VibeTB`)
 4. Copies all app source files, Docker configs, and batch scripts

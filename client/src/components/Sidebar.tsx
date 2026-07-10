@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Kisaes LLC
-// Licensed under the PolyForm Internal Use License 1.0.0.
-// You may not distribute this software. See LICENSE for terms.
+// Licensed under the PolyForm Small Business License 1.0.0.
+// Use is limited to qualifying small businesses. See LICENSE for terms.
 
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
@@ -264,7 +264,7 @@ export function Sidebar() {
         {/* License footer */}
         <div className="pt-1.5 border-t border-gray-700/40">
           <p className="text-[9px] text-gray-600 leading-tight">
-            PolyForm Internal Use 1.0.0 &middot;{' '}
+            PolyForm Small Business 1.0.0 &middot;{' '}
             <a
               href="https://github.com/KisaesDevLab/Vibe-Trial-Balance"
               target="_blank"

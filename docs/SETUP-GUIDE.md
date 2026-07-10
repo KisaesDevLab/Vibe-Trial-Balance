@@ -64,7 +64,7 @@ Vibe Trial Balance is a self-hosted tax preparation and accounting workpaper app
 | PDF Generation | pdfmake (server-side) |
 | Hosting | Raspberry Pi 5, Docker, or any Linux/Windows server |
 
-**License:** PolyForm Internal Use 1.0.0 — free for personal and internal firm use; distribution is not permitted. See [LICENSE](../LICENSE) for full text.
+**License:** PolyForm Small Business 1.0.0 — free for companies with fewer than 100 people and under $1M (2019, inflation-adjusted) prior-year revenue; larger firms need a commercial license. See [LICENSE](../LICENSE) for full text.
 
 ---
 

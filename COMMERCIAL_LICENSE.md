@@ -8,11 +8,13 @@
 
 ## 1. Purpose
 
-This Commercial License Agreement ("Agreement") supplements the PolyForm Internal
-Use License 1.0.0 under which Vibe Trial Balance is made available. It grants
-additional rights not covered by that license, specifically the right to provide
-third-party end users (clients) with direct access to an instance of the software,
-and it sets out protections around license-key functionality in the software.
+This Commercial License Agreement ("Agreement") supplements the PolyForm Small
+Business License 1.0.0 under which Vibe Trial Balance is made available. It grants
+additional rights not covered by that license — specifically (a) use by companies
+that do not qualify as small businesses under that license, and (b) the right to
+provide third-party end users (clients) with direct access to an instance of the
+software — and it sets out protections around license-key functionality in the
+software.
 
 ---
 
@@ -30,30 +32,35 @@ and it sets out protections around license-key functionality in the software.
 
 ## 3. Uses That Do NOT Require a Commercial License
 
-The following uses are permitted under the standard PolyForm Internal Use License
-1.0.0 at no additional cost:
+The following uses are permitted under the standard PolyForm Small Business License
+1.0.0 at no additional cost, **provided the company qualifies as a small business
+under that license** (fewer than 100 total individuals working as employees and
+independent contractors, and less than 1,000,000 USD (2019, inflation-adjusted)
+total revenue in the prior tax year):
 
 - **Individual use** for personal or business bookkeeping
 - **Accounting firm internal use** — trial balance work, crosswalk management, report
   generation, tax mapping, journal entries, and all other features used by firm staff
 - **Firm staff performing services on behalf of clients** — the firm controls the
   instance; clients do not have direct login access
-- **Modifying the software** for internal use, including custom integrations,
-  templates, and workflows
+- **Modifying the software**, including custom integrations, templates, and workflows
 - **Self-hosting** on any infrastructure (Raspberry Pi, cloud VPS, office server, etc.)
-
-The PolyForm Internal Use License 1.0.0 does **not** permit distribution of the
-software to any third party in any form. Distribution of the source code, binaries,
-or modified copies is not permitted under any circumstances and is outside the scope
-of this Commercial License.
+- **Distributing copies** (original or modified), provided recipients receive the
+  license terms or their URL and the `Required Notice: Copyright 2025-2026 Kisaes LLC`
+  line, per the license's Notices section
 
 ---
 
 ## 4. Uses That Require a Commercial License
 
-A Commercial License is required when the Licensee provides **Client Access** — i.e.,
-when third-party end users (clients of the firm) are given their own login credentials
-or direct access to the Licensed Software.
+A Commercial License is required when:
+
+- The Licensee's company does **not** qualify as a small business under the PolyForm
+  Small Business License 1.0.0 (100 or more total individuals, or at/above the
+  inflation-adjusted $1,000,000 USD prior-year revenue threshold); or
+- The Licensee provides **Client Access** — i.e., third-party end users (clients of
+  the firm) are given their own login credentials or direct access to the Licensed
+  Software.
 
 Examples:
 - A CPA firm hosts VibeTB and gives each client a login to view their trial balance
@@ -113,9 +120,10 @@ Licensee's rights under this Commercial License immediately.
 - The Agreement renews automatically unless either party provides 30 days' written notice.
 - Kisaes LLC may terminate this Agreement if the Licensee breaches any term and fails
   to cure within 30 days of written notice.
-- Upon termination, the Licensee must cease providing Client Access but may continue
-  using the Licensed Software under the standard PolyForm Internal Use License 1.0.0
-  terms for internal business operations.
+- Upon termination, the Licensee must cease providing Client Access (and, if the
+  Licensee does not qualify as a small business, cease use entirely) but may otherwise
+  continue using the Licensed Software under the standard PolyForm Small Business
+  License 1.0.0 terms.
 
 ---
 

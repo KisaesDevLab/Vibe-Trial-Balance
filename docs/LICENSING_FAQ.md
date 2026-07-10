@@ -2,15 +2,23 @@
 
 ## Can I use this for free?
 
-**Yes.** Vibe Trial Balance is free for personal use and internal firm use under the
-PolyForm Internal Use License 1.0.0. You can download, install, modify, and self-host
-it at no cost.
+**Yes, if your company qualifies as a small business.** Vibe Trial Balance is free
+under the PolyForm Small Business License 1.0.0 for companies with **fewer than 100
+total individuals** (employees and independent contractors combined) and **less than
+$1,000,000 USD total revenue** in the prior tax year (2019 dollars, adjusted for
+inflation per the license). You can download, install, modify, and self-host it at
+no cost.
+
+## What if my firm is larger than that?
+
+**You need a Commercial License.** If your company has 100 or more people or meets or
+exceeds the revenue threshold, use is not covered by the small-business grant.
+Contact licensing@kisaes.com for details.
 
 ## Can my staff use it to prepare trial balances for clients?
 
-**Yes.** As long as your firm controls the instance and your staff are the ones
-logging in, this is standard internal business use and is fully covered by the
-PolyForm Internal Use License.
+**Yes.** As long as your qualifying firm controls the instance and your staff are the
+ones logging in, this is use for the benefit of your company and is fully covered.
 
 ## Can I give my clients their own login?
 
@@ -20,20 +28,24 @@ License from Kisaes LLC. Contact licensing@kisaes.com for details.
 
 ## Can I modify the code for my firm's needs?
 
-**Yes.** You are free to modify the software and create derivative works for your own
-internal business use under the PolyForm Internal Use License.
+**Yes.** The license expressly permits making changes and new works based on the
+software for any permitted purpose.
 
-## Can I share my modified version with another firm?
+## Can I share the software (or my modified version) with another firm?
 
-**No.** The PolyForm Internal Use License does not permit distribution of the software
-in any form — original or modified — to any third party. Each firm that wants to use
-Vibe Trial Balance must obtain its own copy directly from Kisaes LLC.
+**Yes — with notices.** Unlike our previous license, PolyForm Small Business grants a
+distribution license. If you pass along copies (original or modified), you must give
+recipients the license terms or the URL
+<https://polyformproject.org/licenses/small-business/1.0.0>, plus the line
+`Required Notice: Copyright 2025-2026 Kisaes LLC`. The receiving firm must itself
+qualify as a small business (or obtain a commercial license) to use it.
 
 ## Can I fork and host it as a SaaS?
 
-**No.** The PolyForm Internal Use License limits use to the internal business
-operations of you and your company. Offering the software as a hosted service to the
-general public is outside the scope of the license.
+Distribution and modification are permitted, but **use is still limited to the
+benefit of your own qualifying small company**. Offering the software as a hosted
+service to the general public is use beyond that grant and requires a Commercial
+License.
 
 ## Can I add my own crosswalk mappings and keep them private?
 
@@ -42,36 +54,37 @@ license covers the software itself, not the data you create with it.
 
 ## Is this open source?
 
-**No.** The source code is publicly viewable, but the PolyForm Internal Use License
+**No.** The source code is publicly viewable, but the PolyForm Small Business License
 1.0.0 is not an OSI-approved open source license — it is a source-available license
-that permits internal business use only and does not permit distribution.
+that limits use to qualifying small businesses.
 
 ## What changed from the previous license?
 
-Vibe Trial Balance has migrated to the PolyForm Internal Use License 1.0.0. Compared
-to previous source-available licenses we have used:
+Vibe Trial Balance has migrated from the PolyForm Internal Use License 1.0.0 to the
+PolyForm Small Business License 1.0.0:
 
-- **No distribution** — the new license does not permit redistributing the software
-  to third parties in any form
-- **Permanent terms** — no conversion timer; the restrictions stay in place
-  indefinitely
-- **Plain-English, lawyer-drafted** — PolyForm is a recognized standard license
+- **Distribution is now permitted** — you may share copies (with the required
+  notices), which the Internal Use license prohibited entirely
+- **Company-size limit added** — free use is limited to companies under 100 people
+  and under $1M (2019, inflation-adjusted) prior-year revenue; the Internal Use
+  license had no size cap
+- **Plain-English, lawyer-drafted** — PolyForm remains a recognized standard license
   maintained by licensing lawyers at the PolyForm Project
-- **Same freedoms for end users** — free for personal and internal firm use,
-  self-hosting, and modification for your own use
+- **Same freedoms for qualifying users** — free self-hosting and modification for
+  your own company's benefit
 
 ## What happens if I violate the license?
 
 If you are notified in writing that you have violated the license, you have 32 days
 from receiving notice to come into full compliance and take practical steps to
 correct past violations. If you do, your license continues. Otherwise, all your
-licenses under the PolyForm Internal Use License end immediately.
+licenses under the PolyForm Small Business License end immediately.
 
 ## Where can I read the full license?
 
-The complete PolyForm Internal Use License 1.0.0 text is in the [LICENSE](../LICENSE)
-file in the project root, and at
-<https://polyformproject.org/licenses/internal-use/1.0.0>. The commercial license
+The complete PolyForm Small Business License 1.0.0 text is in the
+[LICENSE](../LICENSE) file in the project root, and at
+<https://polyformproject.org/licenses/small-business/1.0.0>. The commercial license
 template is in [COMMERCIAL_LICENSE.md](../COMMERCIAL_LICENSE.md).
 
 ## Who do I contact for commercial licensing?

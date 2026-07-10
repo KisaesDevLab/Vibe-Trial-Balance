@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Kisaes LLC
-// Licensed under the PolyForm Internal Use License 1.0.0.
-// You may not distribute this software. See LICENSE for terms.
+// Licensed under the PolyForm Small Business License 1.0.0.
+// Use is limited to qualifying small businesses. See LICENSE for terms.
 
 export function Spinner({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
   const classes = { sm: 'w-4 h-4', md: 'w-6 h-6', lg: 'w-8 h-8' };

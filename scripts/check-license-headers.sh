@@ -1,8 +1,8 @@
 #!/bin/bash
 # scripts/check-license-headers.sh
-# Fails if any source file is missing the PolyForm Internal Use license header.
+# Fails if any source file is missing the PolyForm Small Business license header.
 
-HEADER_PATTERN="Licensed under the PolyForm Internal Use License"
+HEADER_PATTERN="Licensed under the PolyForm Small Business License"
 EXTENSIONS=("ts" "tsx")
 EXCLUDE_DIRS=("node_modules" ".git" "dist" "build" ".next" "coverage" ".vite")
 MISSING=0

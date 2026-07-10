@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Kisaes LLC
-// Licensed under the PolyForm Internal Use License 1.0.0.
-// You may not distribute this software. See LICENSE for terms.
+// Licensed under the PolyForm Small Business License 1.0.0.
+// Use is limited to qualifying small businesses. See LICENSE for terms.
 
 // Standalone seed runner. Companion to migrate.ts — used by the appliance
 // enable-app.sh on a fresh install when MIGRATIONS_AUTO=false (which causes

@@ -1,11 +1,11 @@
 #!/bin/bash
 # scripts/add-license-header.sh
-# Adds the PolyForm Internal Use license header to source files that are missing it.
+# Adds the PolyForm Small Business license header to source files that are missing it.
 
-HEADER_PATTERN="Licensed under the PolyForm Internal Use License"
+HEADER_PATTERN="Licensed under the PolyForm Small Business License"
 HEADER='// Copyright 2025-2026 Kisaes LLC
-// Licensed under the PolyForm Internal Use License 1.0.0.
-// You may not distribute this software. See LICENSE for terms.
+// Licensed under the PolyForm Small Business License 1.0.0.
+// Use is limited to qualifying small businesses. See LICENSE for terms.
 '
 EXTENSIONS=("ts" "tsx")
 EXCLUDE_DIRS=("node_modules" ".git" "dist" "build" ".next" "coverage" ".vite")

@@ -1,9 +1,9 @@
 {
-  "_comment": "Machine-readable license policy for vibe-tb (PolyForm Internal Use License 1.0.0).",
-  "_updated": "2026-04-06",
+  "_comment": "Machine-readable license policy for vibe-tb (PolyForm Small Business License 1.0.0).",
+  "_updated": "2026-07-10",
 
-  "projectLicense": "PolyForm-Internal-Use-1.0.0",
-  "projectLicenseUrl": "https://polyformproject.org/licenses/internal-use/1.0.0",
+  "projectLicense": "PolyForm-Small-Business-1.0.0",
+  "projectLicenseUrl": "https://polyformproject.org/licenses/small-business/1.0.0",
 
   "allowed": [
     "MIT",
@@ -77,7 +77,7 @@
     "licenseFile": {
       "required": true,
       "path": "LICENSE",
-      "status": "PRESENT — full PolyForm Internal Use 1.0.0 text with Kisaes LLC licensor preamble"
+      "status": "PRESENT — full PolyForm Small Business 1.0.0 text with Kisaes LLC licensor preamble and Required Notice line"
     },
     "noticeFile": {
       "required": true,
@@ -86,17 +86,17 @@
     },
     "sourceHeaders": {
       "required": true,
-      "status": "COMPLETE — all source files have PolyForm Internal Use headers",
-      "note": "Header references LICENSE and the no-distribution clause."
+      "status": "COMPLETE — all source files have PolyForm Small Business headers",
+      "note": "Header references LICENSE and the small-business use limitation."
     },
-    "noDistribution": {
+    "useLimitation": {
       "required": true,
-      "status": "ENFORCED — PolyForm Internal Use does not permit distributing the software in any form",
-      "note": "Client-facing access requires the supplemental Commercial License (see COMMERCIAL_LICENSE.md)."
+      "status": "PolyForm Small Business permits use only by companies with fewer than 100 total individuals and under 1,000,000 USD (2019, inflation-adjusted) prior-year revenue; distribution is permitted with notice preservation.",
+      "note": "Larger firms and client-facing access require the supplemental Commercial License (see COMMERCIAL_LICENSE.md). Distributors must preserve the Required Notice line and license terms/URL."
     },
     "sourceCodeLink": {
       "required": false,
-      "description": "Not legally required by PolyForm Internal Use, but kept for transparency.",
+      "description": "Not legally required by PolyForm Small Business, but kept for transparency.",
       "status": "IMPLEMENTED — Source Code link in Sidebar footer (Sidebar.tsx)",
       "note": "Link points to GitHub repo."
     }

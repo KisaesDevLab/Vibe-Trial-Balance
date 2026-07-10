@@ -4,7 +4,7 @@
 
 A self-hosted tax preparation and accounting workpaper application for small CPA firms. Manage trial balances, journal entries, bank transactions, tax code assignments, financial statements, and client engagements — with AI-powered diagnostics, classification, and PDF import.
 
-**License:** PolyForm Internal Use 1.0.0 ([full text](LICENSE)) — free for personal and internal firm use; distribution is not permitted. [Commercial license](COMMERCIAL_LICENSE.md) required for client-facing access. [FAQ](docs/LICENSING_FAQ.md)
+**License:** PolyForm Small Business 1.0.0 ([full text](LICENSE)) — free for companies with fewer than 100 people and under $1M (2019, inflation-adjusted) annual revenue. [Commercial license](COMMERCIAL_LICENSE.md) required for larger firms or client-facing access. [FAQ](docs/LICENSING_FAQ.md)
 
 ---
 
@@ -491,7 +491,7 @@ The app has built-in backup (Admin > Backup & Restore), but also set up external
 - [ ] Enable firewall (UFW, cloud security groups)
 - [ ] Set up external database backups
 - [ ] Regenerate your MCP token after upgrading (Admin > Settings > MCP Integration)
-- [ ] Review PolyForm Internal Use compliance: LICENSE file included, no third-party distribution of the software
+- [ ] Review PolyForm Small Business compliance: LICENSE file (with Required Notice line) included; confirm your firm qualifies as a small business under the license
 
 ---
 
@@ -533,12 +533,12 @@ See `server/knowledge/mcp-integration.md` for the full tool/resource/prompt refe
 
 ## License
 
-This project is licensed under the **PolyForm Internal Use License 1.0.0**.
+This project is licensed under the **PolyForm Small Business License 1.0.0**.
 
-- **Free for:** Personal use, internal firm use, self-hosting, and modification for your own internal business operations
-- **Not permitted:** Distributing the software (original or modified) to any third party in any form
-- **Requires commercial license:** Providing client-facing access (clients get their own login) or any other use beyond internal business operations
-- The [LICENSE](LICENSE) file contains the full PolyForm Internal Use 1.0.0 text. The canonical text is also at <https://polyformproject.org/licenses/internal-use/1.0.0>.
+- **Free for:** Companies with fewer than 100 total individuals (employees + contractors) and under $1,000,000 USD (2019, inflation-adjusted) total revenue in the prior tax year — including use, self-hosting, modification, and distribution (with the license notices preserved)
+- **Requires commercial license:** Use by companies at or above those thresholds, or providing client-facing access (clients get their own login)
+- **Notices:** If you distribute copies, you must include the license terms (or their URL) and the `Required Notice: Copyright 2025-2026 Kisaes LLC` line
+- The [LICENSE](LICENSE) file contains the full PolyForm Small Business 1.0.0 text. The canonical text is also at <https://polyformproject.org/licenses/small-business/1.0.0>.
 - See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for commercial licensing terms.
 - See [docs/LICENSING_FAQ.md](docs/LICENSING_FAQ.md) for common questions.
 - All dependencies are MIT/Apache-2.0/BSD/ISC compatible (verified via `./scripts/license-audit.sh`).

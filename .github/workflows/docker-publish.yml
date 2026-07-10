@@ -88,7 +88,7 @@ jobs:
             org.opencontainers.image.title=Vibe Trial Balance — ${{ matrix.name }}
             org.opencontainers.image.description=Self-hosted tax preparation and accounting workpaper application (${{ matrix.name }} tier)
             org.opencontainers.image.vendor=Kisaes LLC
-            org.opencontainers.image.licenses=LicenseRef-PolyForm-Internal-Use-1.0.0
+            org.opencontainers.image.licenses=LicenseRef-PolyForm-Small-Business-1.0.0
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}#deployment-docker--prebuilt-images
 
