@@ -9,6 +9,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAiUsage } from '../lib/aiUsage';
 import { getLLMProvider } from '../lib/aiClient';
+import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { sendServerError } from '../lib/safeError';
 
 export const supportRouter = Router();
@@ -143,6 +144,8 @@ ${knowledge}`;
     const streamStarted = Date.now();
     const gen = provider.stream({
       model: primaryModel,
+      taskClass: TB_TASK_CLASSES.SUPPORT_CHAT,
+      userId: req.user?.userId ?? null,
       maxTokens: 2048,
       system: systemPrompt,
       messages,

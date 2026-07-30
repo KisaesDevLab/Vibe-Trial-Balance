@@ -28,6 +28,12 @@ export const testLLM = () =>
 export type LLMProvider = 'claude' | 'ollama' | 'openai' | 'openai-compat';
 
 export interface LLMProviderSettings {
+  /**
+   * Deployment-level AI mode (read-only, set by the operator via VIBE_AI_MODE).
+   * 'router' → all AI traffic goes through the Vibe AI Router; every provider
+   * setting below is inert and the UI shows a managed-by-router banner.
+   */
+  aiMode?: 'direct' | 'router';
   provider: LLMProvider;
   ollamaBaseUrl: string;
   ollamaVisionModel: string;

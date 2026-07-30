@@ -5,6 +5,7 @@
 import { db } from '../../db';
 import { aiComplete, markAiUsageParseError } from '../../lib/aiComplete';
 import { getLLMProvider } from '../../lib/aiClient';
+import { TB_TASK_CLASSES } from '../../lib/routerProvider';
 import { extractJsonArray } from '../../lib/aiJsonExtract';
 
 function parseBigInt(v: unknown): number {
@@ -92,7 +93,7 @@ Return 5-15 observations.`;
     const { provider, fastModel } = await getLLMProvider();
     const { result: aiResult, logId } = await aiComplete(
       provider,
-      { model: fastModel, maxTokens: 2048, messages: [{ role: 'user', content: prompt }] },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.DIAGNOSTICS, maxTokens: 2048, messages: [{ role: 'user', content: prompt }] },
       { endpoint: 'mcp/diagnostics', userId: null, clientId: null },
     );
 

@@ -242,6 +242,10 @@ export function SettingsPage() {
     ...(llmEdits ?? {}),
   };
 
+  // Router mode (MIG-1): provider/model settings are managed in the router
+  // console; the sections below render inert with an explanatory banner.
+  const routerManaged = llmData?.aiMode === 'router';
+
   const handleSaveLLM = async () => {
     if (!llmEdits) return;
     setLlmError(null);
@@ -435,9 +439,22 @@ export function SettingsPage() {
     <div className="p-6 max-w-2xl space-y-6">
       <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Settings</h2>
 
+      {/* Managed by Vibe AI Router (MIG-1): provider settings are inert in router mode */}
+      {isAdmin && routerManaged && (
+        <div className="rounded-lg border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-900/20 px-5 py-4">
+          <h3 className="text-sm font-semibold text-sky-800 dark:text-sky-300 mb-1">Managed by Vibe AI Router</h3>
+          <p className="text-xs text-sky-700 dark:text-sky-400">
+            This installation sends all AI requests through the appliance&apos;s Vibe AI Router
+            (VIBE_AI_MODE=router). Model choice, data-boundary policy, scrubbing, budgets, and
+            cost tracking are configured per task class in the router console — the provider
+            settings below are inactive and kept only for standalone (direct) deployments.
+          </p>
+        </div>
+      )}
+
       {/* LLM Provider */}
       {isAdmin && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
+        <div className={`bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700${routerManaged ? ' pointer-events-none opacity-50' : ''}`}>
           <div className="px-5 py-4">
             <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-1">AI Provider</h3>
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
@@ -957,7 +974,7 @@ export function SettingsPage() {
       )}
 
       {/* Claude API Key — only shown when Claude is the active provider */}
-      {effectiveLlm.provider === 'claude' && <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
+      {effectiveLlm.provider === 'claude' && <div className={`bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700${routerManaged ? ' pointer-events-none opacity-50' : ''}`}>
         <div className="px-5 py-4">
           <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-1">
             Claude API Key

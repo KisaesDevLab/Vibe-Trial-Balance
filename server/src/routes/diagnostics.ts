@@ -7,6 +7,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider } from '../lib/aiClient';
+import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 
@@ -115,7 +116,7 @@ Return 5-15 observations. Be specific and actionable.`;
     const { provider, fastModel } = await getLLMProvider();
     const { result: aiResult, logId } = await aiComplete(
       provider,
-      { model: fastModel, maxTokens: 2048, messages: [{ role: 'user', content: prompt }] },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.DIAGNOSTICS, maxTokens: 2048, messages: [{ role: 'user', content: prompt }] },
       { endpoint: 'diagnostics', userId: req.user?.userId, clientId: null },
     );
 

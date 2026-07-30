@@ -12,6 +12,7 @@ import {
   type VisionConfig,
 } from './llmProvider';
 import { decrypt, isEncrypted } from './encryption';
+import { aiMode, routerProvider } from './routerProvider';
 
 export const DEFAULT_FAST_MODEL    = 'claude-haiku-4-5-20251001';
 export const DEFAULT_PRIMARY_MODEL = 'claude-sonnet-4-6';
@@ -53,6 +54,25 @@ export async function getAiTokenSettings(): Promise<AiTokenSettings> {
  *   2. Defaults to 'claude' if key is missing or blank.
  */
 export async function getLLMProvider(): Promise<LLMConfig> {
+  // Router mode (MIG-1): every provider/model setting below is inert — task
+  // classes + router policy pick the model; scrubbing, budgets, and cost live in
+  // the router console. This never falls through to a direct provider: a router
+  // outage must surface as an error, not silently ship prompts around the
+  // scrubber and ledger.
+  if (aiMode() === 'router') {
+    const provider = routerProvider();
+    // Model names here are labels only — call sites pass them back as
+    // params.model, the driver ignores them, and ai_usage_log records the
+    // model that actually served via result.servedModel.
+    return {
+      provider,
+      fastModel: 'vibe-router',
+      primaryModel: 'vibe-router',
+      providerName: 'vibe_router',
+      vision: { provider, model: 'vibe-router', providerName: 'vibe_router' },
+    };
+  }
+
   const s = await loadLLMSettings();
 
   const providerName = (s['llm.provider'] || 'claude') as 'claude' | 'ollama' | 'openai' | 'openai-compat';
@@ -152,6 +172,9 @@ export async function getLLMProvider(): Promise<LLMConfig> {
  * throw (missing key, missing baseURL, etc.) as "AI unavailable".
  */
 export async function isAiConfigured(): Promise<boolean> {
+  // Router mode: URL + token presence is boot-validated; the SPA should show AI
+  // features and let a router outage surface per-request rather than hiding UI.
+  if (aiMode() === 'router') return true;
   try {
     await getLLMProvider();
     return true;

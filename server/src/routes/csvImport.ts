@@ -10,6 +10,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider } from '../lib/aiClient';
+import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 
@@ -441,7 +442,7 @@ Rules:
         const { provider, fastModel } = await getLLMProvider();
         const { result: aiResult, logId } = await aiComplete(
           provider,
-          { model: fastModel, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
+          { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
           { endpoint: 'csv/analyze', userId: req.user?.userId, clientId },
         );
 
@@ -609,7 +610,7 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Use the EXACT csv
     const { provider, fastModel } = await getLLMProvider();
     const { result: aiResult2, logId: suggestLogId } = await aiComplete(
       provider,
-      { model: fastModel, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
       { endpoint: 'csv/suggest-numbers', userId: req.user?.userId, clientId },
     );
 
@@ -720,7 +721,7 @@ If the user requests corrections to the column mapping, account matching, or row
     const { provider, fastModel } = await getLLMProvider();
     const { result: aiResult3, logId: chatLogId } = await aiComplete(
       provider,
-      { model: fastModel, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
       { endpoint: 'csv/chat', userId: req.user?.userId, clientId },
     );
 

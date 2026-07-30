@@ -53,6 +53,15 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
 - Named exports, PascalCase components, camelCase utilities, snake_case DB columns
 
 ## Key Architecture Decisions
+- **AI dual-mode (MIG-1, permanent posture):** `VIBE_AI_MODE=direct|router`. `router` sends ALL
+  AI traffic through the appliance's Vibe AI Router via `server/src/lib/routerProvider.ts`
+  (`RouterLLMProvider` behind `getLLMProvider()`); every provider/model setting in the DB is
+  then inert and the Settings UI shows a managed-by-router banner. Boot refuses `router`
+  without `VIBE_AI_ROUTER_URL` + `VIBE_AI_TOKEN`. NEVER add a silent fallback from router to
+  direct — it would ship prompts around the router's scrubber and ledger. Every AI call site
+  must pass `taskClass` (see `TB_TASK_CLASSES`); the router driver fails closed without it.
+  `server/src/lib/vibeAiClient.ts` is VENDORED from the router repo — don't edit in place.
+  Tests: `npm run test:router` (server/).
 - Trial Balance Grid = editing balances ONLY, no category subtotals
 - Tax Mapping View (Plan Phase 5) = SEPARATE page: assign tax codes, read-only balances, category subtotals, net income, balance check
 - tax_line VARCHAR on chart_of_accounts: legacy field kept for compat. New system uses tax_code_id FK → tax_codes table. Dual-write: when tax_code_id assigned, also write tax_code string to tax_line.

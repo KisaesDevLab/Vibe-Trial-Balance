@@ -50,6 +50,7 @@ import { mcpRouter } from './routes/mcpHttp';
 import { db } from './db';
 import { sendServerError } from './lib/safeError';
 import { isAiConfigured } from './lib/aiClient';
+import { registerTbTaskClasses, validateAiModeEnv } from './lib/routerProvider';
 import { isMailerConfigured } from './lib/mailService';
 
 const app = express();
@@ -59,6 +60,16 @@ const isProduction = process.env.NODE_ENV === 'production';
 if (isProduction && !process.env.ALLOWED_ORIGIN) {
   console.error('\nFATAL: ALLOWED_ORIGIN environment variable is required in production.\n');
   process.exit(1);
+}
+
+// Refuse to boot on invalid AI-mode config (MIG-1): router mode without a router
+// URL + app token would fail every AI request with a worse message later.
+{
+  const aiModeError = validateAiModeEnv();
+  if (aiModeError) {
+    console.error(`\nFATAL: ${aiModeError}\n`);
+    process.exit(1);
+  }
 }
 
 // Parse a comma-separated ALLOWED_ORIGIN list. Entries wrapped in / / are
@@ -319,6 +330,9 @@ async function start(): Promise<void> {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/api/v1/health`);
     startBackupScheduler();
+    // Router mode only; non-blocking with retry — requests made before
+    // registration completes fail closed at the router, which is correct.
+    registerTbTaskClasses();
   });
 
   server.on('error', (err: NodeJS.ErrnoException) => {

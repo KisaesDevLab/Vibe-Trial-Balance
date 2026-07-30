@@ -11,6 +11,7 @@ import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { logAiUsage } from '../lib/aiUsage';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
+import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
@@ -260,7 +261,7 @@ Rules:
       const maxTokens = Math.max(tokenSettings.maxTokensDefault, Math.min(tokenSettings.maxTokensBankStatement, estimatedAccounts * 200));
       const { result: aiResult, logId } = await aiComplete(
         aiProvider,
-        { model: aiModel, maxTokens, messages: [{ role: 'user', content: messageContent }] },
+        { model: aiModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens, messages: [{ role: 'user', content: messageContent }] },
         { endpoint: 'pdf/analyze', userId: req.user?.userId, clientId },
       );
 
@@ -544,7 +545,7 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Each object MUST 
     const { provider, fastModel } = await getLLMProvider();
     const { result: aiResult, logId } = await aiComplete(
       provider,
-      { model: fastModel, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
       { endpoint: 'pdf/suggest-numbers', userId: req.user?.userId, clientId },
     );
 
@@ -646,7 +647,7 @@ If the user requests corrections to the account matching, categories, or actions
     const { provider: pdfProvider, fastModel: pdfFastModel } = await getLLMProvider();
     const { result: aiResult2, logId: chatLogId } = await aiComplete(
       pdfProvider,
-      { model: pdfFastModel, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
+      { model: pdfFastModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
       { endpoint: 'pdf/chat', userId: req.user?.userId, clientId },
     );
 
@@ -793,7 +794,7 @@ Rules:
     const { provider: verifyProvider, fastModel: verifyModel } = await getLLMProvider();
     const { result: aiResult3, logId: verifyLogId } = await aiComplete(
       verifyProvider,
-      { model: verifyModel, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
+      { model: verifyModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
       { endpoint: 'pdf/verify', userId: req.user?.userId, clientId: period.client_id },
     );
 

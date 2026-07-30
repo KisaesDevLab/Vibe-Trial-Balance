@@ -11,6 +11,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import OpenAI from 'openai';
 import { getLLMProvider, DEFAULT_FAST_MODEL, DEFAULT_PRIMARY_MODEL, loadLLMSettings, buildProviderFromSettings } from '../lib/aiClient';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
+import { aiMode, TB_TASK_CLASSES } from '../lib/routerProvider';
 import { extractJsonObject } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 import { encrypt, decrypt, isEncrypted } from '../lib/encryption';
@@ -215,6 +216,8 @@ settingsRouter.post('/ai-pricing/fetch', async (req: AuthRequest, res: Response)
       provider,
       {
         model: fastModel,
+        // Public-knowledge question, zero client data — the cloud_allowed class.
+        taskClass: TB_TASK_CLASSES.RESEARCH_SUMMARY,
         maxTokens: 512,
         messages: [{
           role: 'user',
@@ -503,6 +506,9 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
     }
     res.json({
       data: {
+        // Deployment-level AI mode (MIG-1). 'router' → every provider setting
+        // below is inert; the SPA renders a managed-by-router banner instead.
+        aiMode:                      aiMode(),
         provider:                    s['llm.provider']                        || 'claude',
         ollamaBaseUrl:               s['llm.ollama_base_url']                 || '',
         ollamaVisionModel:           s['llm.ollama_vision_model']             || 'qwen3-vl:8b',

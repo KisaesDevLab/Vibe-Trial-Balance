@@ -15,6 +15,7 @@ import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { getLLMProvider } from '../lib/aiClient';
+import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 
@@ -979,7 +980,7 @@ Respond with a JSON array and nothing else. Each element: { "id": number, "accou
     const { provider, fastModel } = await getLLMProvider();
     const { result: aiResult, logId } = await aiComplete(
       provider,
-      { model: fastModel, maxTokens: 8192, messages: [{ role: 'user', content: prompt }] },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: 8192, messages: [{ role: 'user', content: prompt }] },
       { endpoint: 'bank/classify', userId: req.user?.userId, clientId },
     );
 

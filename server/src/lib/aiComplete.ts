@@ -35,6 +35,13 @@ export async function aiComplete(
   ctx: AiCompleteContext,
 ): Promise<AiCompleteResult> {
   const started = Date.now();
+  // Thread attribution into the provider call: the router driver forwards
+  // userId/clientId as ledger dimensions; direct providers ignore them.
+  params = {
+    ...params,
+    userId: params.userId ?? ctx.userId ?? null,
+    clientId: params.clientId ?? ctx.clientId ?? null,
+  };
   try {
     const result = await provider.complete(params);
     const durationMs = Date.now() - started;
@@ -44,7 +51,9 @@ export async function aiComplete(
 
     const logId = await logAiUsageAsync({
       endpoint:     ctx.endpoint,
-      model:        params.model,
+      // In router mode the model that actually served comes back on the result;
+      // params.model is only the app-side label then.
+      model:        result.servedModel ?? params.model,
       inputTokens:  result.inputTokens,
       outputTokens: result.outputTokens,
       userId:       ctx.userId    ?? null,

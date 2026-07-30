@@ -7,6 +7,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
+import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 
@@ -366,7 +367,7 @@ Return a JSON array where each element has:
 
     const { result: aiResult, logId } = await aiComplete(
       provider,
-      { model: fastModel, maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] },
       { endpoint: 'tax/auto-assign', userId: logCtx.userId, clientId: logCtx.clientId },
     );
 

@@ -12,6 +12,7 @@ import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { logAiUsage } from '../lib/aiUsage';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
+import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
 import { extractJsonObject } from '../lib/aiJsonExtract';
@@ -396,7 +397,7 @@ bankStatementPdfRouter.post(
 
           const { result: chunkResult, logId: chunkLogId } = await aiComplete(
             provider,
-            { model: primaryModel, maxTokens: tokenSettings.maxTokensBankStatement, messages: [{ role: 'user', content: prompt }] },
+            { model: primaryModel, taskClass: TB_TASK_CLASSES.BANK_STATEMENT_EXTRACT, maxTokens: tokenSettings.maxTokensBankStatement, messages: [{ role: 'user', content: prompt }] },
             { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, clientId },
           );
 
@@ -414,7 +415,7 @@ bankStatementPdfRouter.post(
               const subPrompt = buildChunkPrompt(subChunks[j], j, subChunks.length);
               const { result: subResult, logId: subLogId } = await aiComplete(
                 provider,
-                { model: primaryModel, maxTokens: tokenSettings.maxTokensBankStatement, messages: [{ role: 'user', content: subPrompt }] },
+                { model: primaryModel, taskClass: TB_TASK_CLASSES.BANK_STATEMENT_EXTRACT, maxTokens: tokenSettings.maxTokensBankStatement, messages: [{ role: 'user', content: subPrompt }] },
                 { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, clientId },
               );
               console.log(`[bank-pdf] Sub-chunk ${j + 1}/${subChunks.length}: ${subResult.outputTokens} output tokens`);
@@ -471,7 +472,7 @@ bankStatementPdfRouter.post(
           : [provider, primaryModel];
         const { result: aiResult, logId: singleLogId } = await aiComplete(
           aiProvider,
-          { model: aiModel, maxTokens, messages: [{ role: 'user', content: messageContent! }] },
+          { model: aiModel, taskClass: TB_TASK_CLASSES.BANK_STATEMENT_EXTRACT, maxTokens, messages: [{ role: 'user', content: messageContent! }] },
           { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, clientId },
         );
 

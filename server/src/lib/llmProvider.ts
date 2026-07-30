@@ -33,6 +33,16 @@ export interface LLMParams {
   system?: string;
   maxTokens?: number;
   stopSequences?: string[];
+  /**
+   * Router-mode fields (MIG-1). Direct providers ignore all three. In router mode
+   * the task class is the only knob — model choice, scrubbing, budgets, and audit
+   * attribution derive from it — and the router driver fails closed if a call site
+   * does not declare one. userId/clientId thread attribution into the router ledger;
+   * aiComplete() injects them from its context automatically.
+   */
+  taskClass?: string;
+  userId?: number | null;
+  clientId?: number | null;
 }
 
 export interface LLMResult {
@@ -46,6 +56,12 @@ export interface LLMResult {
    * `'length'` / `'max_tokens'` both indicate the output was truncated at cap.
    */
   stopReason?: string | null;
+  /**
+   * The model that actually served the request, when it may differ from
+   * params.model — router mode, where policy (not the app) picks the model.
+   * Used for ai_usage_log attribution; absent in direct mode.
+   */
+  servedModel?: string;
 }
 
 export interface LLMUsage {
