@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
-import { useState, useCallback } from 'react';
+import { Fragment, useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/uiStore';
 import { checkFileSize } from '../utils/fileLimits';
@@ -567,17 +567,26 @@ function RestoreHistorySection({ records }: { records: RestoreRecord[] }) {
           </thead>
           <tbody>
             {records.map((r) => (
-              <tr key={r.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                <td className="py-2 px-2 text-gray-700 dark:text-gray-300 whitespace-nowrap">{fmtDate(r.restored_at)}</td>
-                <td className="py-2 px-2 capitalize text-gray-700 dark:text-gray-300">{r.restore_mode.replace('_', ' ')}</td>
-                <td className="py-2 px-2 text-gray-600 dark:text-gray-400">{r.target_client_name ?? (r.target_client_id ? `#${r.target_client_id}` : '—')}</td>
-                <td className="py-2 px-2 text-gray-600 dark:text-gray-400">{r.new_client_id ?? '—'}</td>
-                <td className="py-2 px-2">
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${badgeClass(r.status)}`}>
-                    {r.status}
-                  </span>
-                </td>
-              </tr>
+              <Fragment key={r.id}>
+                <tr className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 ${r.error_message ? '' : 'border-b border-gray-100 dark:border-gray-700'}`}>
+                  <td className="py-2 px-2 text-gray-700 dark:text-gray-300 whitespace-nowrap">{fmtDate(r.restored_at)}</td>
+                  <td className="py-2 px-2 capitalize text-gray-700 dark:text-gray-300">{r.restore_mode.replace('_', ' ')}</td>
+                  <td className="py-2 px-2 text-gray-600 dark:text-gray-400">{r.target_client_name ?? (r.target_client_id ? `#${r.target_client_id}` : '—')}</td>
+                  <td className="py-2 px-2 text-gray-600 dark:text-gray-400">{r.new_client_id ?? '—'}</td>
+                  <td className="py-2 px-2">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${badgeClass(r.status)}`}>
+                      {r.status}
+                    </span>
+                  </td>
+                </tr>
+                {r.error_message && (
+                  <tr className="border-b border-gray-100 dark:border-gray-700">
+                    <td colSpan={5} className="pb-2 px-2 text-[11px] font-mono break-all text-red-600 dark:text-red-400">
+                      {r.error_message}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>

@@ -428,7 +428,12 @@ const BATCH_SIZE = 500;
 async function restoreAsNew(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
-): Promise<{ newClientId: number; idMappings: Record<string, Record<number, number>> }> {
+): Promise<{
+  newClientId: number;
+  idMappings: Record<string, Record<number, number>>;
+  /** Nullable FK links nulled because the archive didn't carry the parent row. */
+  droppedLinks: number;
+}> {
   const idMap: IdMap = new Map();
 
   function getNewId(table: string, oldId: number): number {
@@ -441,6 +446,22 @@ async function restoreAsNew(
         new Error(`Restore consistency error: ${table} id ${oldId} referenced but not remapped. The backup is missing a parent row.`),
         { code: 'RESTORE_BROKEN_REF', status: 400 },
       );
+    }
+    return mapped;
+  }
+
+  // Nullable FK columns get the soft treatment: if the archive references a
+  // parent we never restored (common for period-level backups, which carry only
+  // one period's slice), we null the link instead of failing the whole restore.
+  // Leaving the raw old id in place — the previous behaviour — silently pointed
+  // the restored rows at ANOTHER client's records.
+  let droppedLinks = 0;
+  function mapOptional(table: string, oldId: unknown): number | null {
+    if (oldId === null || oldId === undefined) return null;
+    const mapped = idMap.get(table)?.get(oldId as number);
+    if (mapped === undefined) {
+      droppedLinks++;
+      return null;
     }
     return mapped;
   }
@@ -478,7 +499,10 @@ async function restoreAsNew(
     await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, newClientId]);
   }
 
-  // 2. periods — bulk insert, preserving old->new id order
+  // 2. periods — bulk insert, preserving old->new id order.
+  // rolled_forward_from is a self-reference, so it can't be resolved during the
+  // insert (the target period may not exist yet). Insert null, then patch in a
+  // second pass once every period is mapped.
   const periodsData = tables['periods'] as Array<Record<string, unknown>> | undefined;
   if (periodsData && periodsData.length > 0) {
     const periodMap = registerMap('periods');
@@ -486,6 +510,7 @@ async function restoreAsNew(
       ...row,
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
+      rolled_forward_from: null,
     }));
     for (const batch of chunk(prepared, BATCH_SIZE)) {
       const indexInWhole = prepared.indexOf(batch[0]);
@@ -494,6 +519,14 @@ async function restoreAsNew(
         const oldId = periodsData[indexInWhole + i].id as number;
         periodMap.set(oldId, (r as { id: number }).id);
       });
+    }
+    for (const row of periodsData) {
+      if (row.rolled_forward_from == null) continue;
+      const newSelfId = periodMap.get(row.id as number);
+      const newParentId = mapOptional('periods', row.rolled_forward_from);
+      if (newSelfId !== undefined && newParentId !== null) {
+        await trx('periods').where('id', newSelfId).update({ rolled_forward_from: newParentId });
+      }
     }
   }
 
@@ -563,7 +596,12 @@ async function restoreAsNew(
     }
   }
 
-  // 7. bank_transactions — bulk insert
+  // 7. bank_transactions — bulk insert.
+  // Every FK on this table has to be rewritten, not just client_id/account_id:
+  // period_id, source_account_id, ai_suggested_account_id and journal_entry_id
+  // are all nullable FKs that previously carried the SOURCE instance's ids
+  // straight through, silently attaching the restored client's transactions to
+  // the original client's period and accounts.
   const btData = tables['bank_transactions'] as Array<Record<string, unknown>> | undefined;
   if (btData && btData.length > 0) {
     const rows = btData.map((row) => ({
@@ -571,6 +609,10 @@ async function restoreAsNew(
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
       account_id: row.account_id ? getNewId('chart_of_accounts', row.account_id as number) : null,
+      period_id: mapOptional('periods', row.period_id),
+      source_account_id: mapOptional('chart_of_accounts', row.source_account_id),
+      ai_suggested_account_id: mapOptional('chart_of_accounts', row.ai_suggested_account_id),
+      journal_entry_id: mapOptional('journal_entries', row.journal_entry_id),
     }));
     for (const batch of chunk(rows, BATCH_SIZE)) {
       await trx('bank_transactions').insert(batch);
@@ -591,26 +633,34 @@ async function restoreAsNew(
     }
   }
 
-  // 9. variance_notes — bulk insert
+  // 9. variance_notes — bulk insert.
+  // compare_period_id is NOT NULL and FKs into periods, so a note whose compare
+  // period didn't ride along in the archive can't be restored at all — skip it
+  // rather than fail the restore or point it at a stranger's period.
   const vnData = tables['variance_notes'] as Array<Record<string, unknown>> | undefined;
   if (vnData && vnData.length > 0) {
-    const rows = vnData.map((row) => ({
-      ...row,
-      id: undefined,
-      account_id: getNewId('chart_of_accounts', row.account_id as number),
-      period_id: getNewId('periods', row.period_id as number),
-    }));
+    const rows = vnData
+      .map((row) => ({
+        ...row,
+        id: undefined,
+        account_id: getNewId('chart_of_accounts', row.account_id as number),
+        period_id: getNewId('periods', row.period_id as number),
+        compare_period_id: mapOptional('periods', row.compare_period_id),
+      }))
+      .filter((row) => row.compare_period_id !== null);
     for (const batch of chunk(rows, BATCH_SIZE)) {
       await trx('variance_notes').insert(batch);
     }
   }
 
-  // 10. document_imports — bulk insert
+  // 10. document_imports — bulk insert. client_id is NOT NULL and was previously
+  // left pointing at the source client.
   const diData = tables['document_imports'] as Array<Record<string, unknown>> | undefined;
   if (diData && diData.length > 0) {
     const rows = diData.map((row) => ({
       ...row,
       id: undefined,
+      client_id: getNewId('clients', row.client_id as number),
       period_id: getNewId('periods', row.period_id as number),
     }));
     for (const batch of chunk(rows, BATCH_SIZE)) {
@@ -624,7 +674,82 @@ async function restoreAsNew(
     idMappings[table] = Object.fromEntries(map.entries());
   }
 
-  return { newClientId, idMappings };
+  return { newClientId, idMappings, droppedLinks };
+}
+
+/**
+ * Tear down every row belonging to a client, children first.
+ *
+ * `DELETE FROM clients` alone is not enough. The cascade graph reaches
+ * chart_of_accounts and periods, but several FKs pointing at those two tables
+ * are NO ACTION (journal_entry_lines.account_id, bank_transactions.account_id,
+ * variance_notes.account_id, …). Postgres does not guarantee it will cascade the
+ * grandchildren before it checks those constraints, so the delete raised a
+ * foreign-key violation and rolled the whole restore back.
+ *
+ * Deleting explicitly in dependency order is deterministic and keeps the FK
+ * semantics the rest of the app relies on when a user removes a single account.
+ * Optional tables are hasTable-guarded so a restore onto an older schema works.
+ */
+async function deleteClientData(trx: Knex.Transaction, clientId: number): Promise<void> {
+  const periodIds = (await trx('periods').where('client_id', clientId).pluck('id')) as number[];
+  const coaIds = (await trx('chart_of_accounts').where('client_id', clientId).pluck('id')) as number[];
+  const jeIds = periodIds.length
+    ? ((await trx('journal_entries').whereIn('period_id', periodIds).pluck('id')) as number[])
+    : [];
+
+  const has = async (t: string) => trx.schema.hasTable(t);
+
+  if (jeIds.length) {
+    await trx('journal_entry_lines').whereIn('journal_entry_id', jeIds).delete();
+  }
+
+  if (await has('bank_reconciliations')) {
+    const reconIds = (await trx('bank_reconciliations').where('client_id', clientId).pluck('id')) as number[];
+    if (reconIds.length && (await has('reconciliation_items'))) {
+      await trx('reconciliation_items').whereIn('reconciliation_id', reconIds).delete();
+    }
+    await trx('bank_reconciliations').where('client_id', clientId).delete();
+  }
+
+  // Rows keyed by period.
+  if (periodIds.length) {
+    for (const table of ['tb_tickmarks', 'engagement_tasks', 'm1_adjustments', 'py_comparison_data']) {
+      if (await has(table)) await trx(table).whereIn('period_id', periodIds).delete();
+    }
+    await trx('variance_notes').whereIn('period_id', periodIds).orWhereIn('compare_period_id', periodIds).delete();
+    await trx('document_imports').whereIn('period_id', periodIds).delete();
+    await trx('trial_balance').whereIn('period_id', periodIds).delete();
+  }
+
+  // Rows keyed by account (may exist even with no periods).
+  if (coaIds.length) {
+    await trx('variance_notes').whereIn('account_id', coaIds).delete();
+    if (await has('tb_tickmarks')) await trx('tb_tickmarks').whereIn('account_id', coaIds).delete();
+    if (await has('py_comparison_data')) await trx('py_comparison_data').whereIn('account_id', coaIds).delete();
+  }
+
+  // bank_transactions references journal_entries, chart_of_accounts AND periods,
+  // so it must go before all three.
+  await trx('bank_transactions').where('client_id', clientId).delete();
+  if (jeIds.length) await trx('journal_entries').whereIn('id', jeIds).delete();
+
+  // Direct children of clients that also point into chart_of_accounts.
+  await trx('classification_rules').where('client_id', clientId).delete();
+  for (const table of ['client_documents', 'tickmark_library', 'saved_reports', 'export_consolidation_settings']) {
+    if (await has(table)) await trx(table).where('client_id', clientId).delete();
+  }
+
+  await trx('chart_of_accounts').where('client_id', clientId).delete();
+
+  // periods.rolled_forward_from is a self-reference — break the links first so
+  // the row order within this delete can't matter.
+  if (periodIds.length) {
+    await trx('periods').whereIn('id', periodIds).update({ rolled_forward_from: null });
+    await trx('periods').whereIn('id', periodIds).delete();
+  }
+
+  await trx('clients').where('id', clientId).delete();
 }
 
 async function restoreReplace(
@@ -637,8 +762,7 @@ async function restoreReplace(
   // restore) blocks here until the current txn ends.
   await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, targetClientId]);
 
-  // Delete existing client (cascade handles related tables)
-  await trx('clients').where('id', targetClientId).delete();
+  await deleteClientData(trx, targetClientId);
 
   const clientsData = tables['clients'] as Array<Record<string, unknown>> | undefined;
   if (!clientsData || clientsData.length === 0) return;
@@ -657,16 +781,35 @@ async function restoreReplace(
   const coaIdMap = new Map<number, number>();
   const jeIdMap = new Map<number, number>();
 
-  // periods — bulk
+  // Nullable FKs resolve to null when the archive doesn't carry the parent.
+  // The old `?? row.<col>` fallbacks left the SOURCE instance's id in place,
+  // which on this DB resolves to some unrelated row.
+  function mapOptional(map: Map<number, number>, oldId: unknown): number | null {
+    if (oldId === null || oldId === undefined) return null;
+    return map.get(oldId as number) ?? null;
+  }
+
+  // periods — bulk. rolled_forward_from is a self-reference; null it on insert
+  // and patch once every period has an id.
   const periodsData = tables['periods'] as Array<Record<string, unknown>> | undefined;
   if (periodsData && periodsData.length > 0) {
-    const prepared = periodsData.map((row) => remapClientId({ ...row, id: undefined }));
+    const prepared = periodsData.map((row) =>
+      remapClientId({ ...row, id: undefined, rolled_forward_from: null }),
+    );
     for (const batch of chunk(prepared, BATCH_SIZE)) {
       const indexInWhole = prepared.indexOf(batch[0]);
       const ins = await trx('periods').insert(batch).returning('id');
       ins.forEach((r, i) => {
         periodIdMap.set(periodsData[indexInWhole + i].id as number, (r as { id: number }).id);
       });
+    }
+    for (const row of periodsData) {
+      if (row.rolled_forward_from == null) continue;
+      const newSelfId = periodIdMap.get(row.id as number);
+      const newParentId = mapOptional(periodIdMap, row.rolled_forward_from);
+      if (newSelfId !== undefined && newParentId !== null) {
+        await trx('periods').where('id', newSelfId).update({ rolled_forward_from: newParentId });
+      }
     }
   }
 
@@ -736,6 +879,10 @@ async function restoreReplace(
       id: undefined,
       client_id: targetClientId,
       account_id: row.account_id ? (coaIdMap.get(row.account_id as number) ?? row.account_id) : null,
+      period_id: mapOptional(periodIdMap, row.period_id),
+      source_account_id: mapOptional(coaIdMap, row.source_account_id),
+      ai_suggested_account_id: mapOptional(coaIdMap, row.ai_suggested_account_id),
+      journal_entry_id: mapOptional(jeIdMap, row.journal_entry_id),
     }));
     for (const batch of chunk(rows, BATCH_SIZE)) {
       await trx('bank_transactions').insert(batch);
@@ -756,14 +903,19 @@ async function restoreReplace(
   }
 
   // variance_notes — bulk
+  // compare_period_id is NOT NULL — drop notes whose compare period isn't in
+  // the archive instead of pointing them at an unrelated period.
   const vnData = tables['variance_notes'] as Array<Record<string, unknown>> | undefined;
   if (vnData && vnData.length > 0) {
-    const rows = vnData.map((row) => ({
-      ...row,
-      id: undefined,
-      account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
-      period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
-    }));
+    const rows = vnData
+      .map((row) => ({
+        ...row,
+        id: undefined,
+        account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
+        period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
+        compare_period_id: mapOptional(periodIdMap, row.compare_period_id),
+      }))
+      .filter((row) => row.compare_period_id !== null);
     for (const batch of chunk(rows, BATCH_SIZE)) {
       await trx('variance_notes').insert(batch);
     }
@@ -772,7 +924,7 @@ async function restoreReplace(
   // document_imports — bulk
   const diData = tables['document_imports'] as Array<Record<string, unknown>> | undefined;
   if (diData && diData.length > 0) {
-    const rows = diData.map((row) => ({
+    const rows = diData.map((row) => remapClientId({
       ...row,
       id: undefined,
       period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
@@ -786,6 +938,8 @@ async function restoreReplace(
 interface RestoreSettingsReport {
   taxCodesUpserted: number;
   taxCodeMapsUpserted: number;
+  /** Software maps whose parent tax code was absent from the archive. */
+  taxCodeMapsSkipped: number;
   appSettingsReplaced: boolean;
   usersCreated: string[];
   usersSkipped: string[];
@@ -809,6 +963,7 @@ async function restoreSettings(
   const report: RestoreSettingsReport = {
     taxCodesUpserted: 0,
     taxCodeMapsUpserted: 0,
+    taxCodeMapsSkipped: 0,
     appSettingsReplaced: false,
     usersCreated: [],
     usersSkipped: [],
@@ -817,23 +972,47 @@ async function restoreSettings(
   // Serialize settings restores so two admins can't race each other.
   await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, 0]);
 
-  // Tax codes: upsert by (return_form, activity_type, tax_code)
+  // Tax codes: upsert by (return_form, activity_type, tax_code).
+  //
+  // The archive's own `id` values are deliberately dropped. An existing code
+  // keeps the id it already has — so live chart_of_accounts.tax_code_id links
+  // survive the restore — and a genuinely new code gets a fresh one. Forcing the
+  // backup's ids would rewrite primary keys out from under those FK references,
+  // and collides outright whenever the source instance numbered its tax_codes
+  // differently from the target (i.e. every cross-instance restore).
+  const taxCodeIdMap = new Map<number, number>();
   const taxCodesData = tables['tax_codes'] as Array<Record<string, unknown>> | undefined;
   if (taxCodesData && taxCodesData.length > 0) {
     for (const row of taxCodesData) {
-      await trx('tax_codes')
-        .insert({ ...row })
+      const { id: oldId, ...values } = row as { id?: number } & Record<string, unknown>;
+      const [upserted] = await trx('tax_codes')
+        .insert(values)
         .onConflict(['return_form', 'activity_type', 'tax_code'])
-        .merge();
+        .merge()
+        .returning('id');
+      const newId = (upserted as { id: number }).id;
+      if (typeof oldId === 'number') taxCodeIdMap.set(oldId, newId);
       report.taxCodesUpserted++;
     }
   }
 
-  // Tax code software maps: upsert
+  // Tax code software maps: upsert on the real unique key,
+  // (tax_code_id, tax_software) — the column is `tax_software`, not `software`.
+  // tax_code_id is rewritten through the map built above; a map whose parent
+  // code isn't in the archive is skipped rather than allowed to violate the FK.
   const mapsData = tables['tax_code_software_maps'] as Array<Record<string, unknown>> | undefined;
   if (mapsData && mapsData.length > 0) {
     for (const row of mapsData) {
-      await trx('tax_code_software_maps').insert({ ...row }).onConflict(['tax_code_id', 'software']).merge();
+      const { id: _oldId, ...values } = row as { id?: number } & Record<string, unknown>;
+      const newTaxCodeId = taxCodeIdMap.get(values.tax_code_id as number);
+      if (newTaxCodeId === undefined) {
+        report.taxCodeMapsSkipped++;
+        continue;
+      }
+      await trx('tax_code_software_maps')
+        .insert({ ...values, tax_code_id: newTaxCodeId })
+        .onConflict(['tax_code_id', 'tax_software'])
+        .merge();
       report.taxCodeMapsUpserted++;
     }
   }
@@ -1180,6 +1359,7 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
     let newClientId: number | null = null;
     let idMappings: Record<string, Record<number, number>> = {};
     let settingsReport: RestoreSettingsReport | null = null;
+    let droppedLinks = 0;
 
     // Pre-restore backup for replace mode
     if (mode === 'replace' && targetClientId) {
@@ -1212,6 +1392,7 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         const result = await restoreAsNew(tables, trx);
         newClientId = result.newClientId;
         idMappings = result.idMappings;
+        droppedLinks = result.droppedLinks;
       } else if (mode === 'replace') {
         if (!targetClientId) throw new Error('targetClientId required for replace mode');
         await restoreReplace(tables, targetClientId, trx);
@@ -1251,6 +1432,7 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         newClientId,
         idMappings,
         settingsReport,
+        droppedLinks,
       },
       error: null,
     });
@@ -1277,11 +1459,31 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         });
       }
     } catch (_e) { /* ignore */ }
-    if (code === 'INVALID_BACKUP') {
-      res.status(400).json({ data: null, error: { code: 'INVALID_BACKUP', message: internal } });
+    if (code === 'INVALID_BACKUP' || code === 'RESTORE_BROKEN_REF') {
+      // These carry an operator-actionable message that we author ourselves —
+      // safe to return verbatim. RESTORE_BROKEN_REF used to fall through to the
+      // generic 500 below, hiding the one message that explains the failure.
+      res.status((err as { status?: number }).status ?? 400).json({
+        data: null,
+        error: { code, message: internal, restoreHistoryId: historyId },
+      });
       return;
     }
-    sendServerError(res, err, 'backup');
+    // Anything else is an unexpected/driver-level error. Keep the generic
+    // message (it can carry schema detail), but hand back the restore_history
+    // id so the admin can read the real reason off the Restore History table
+    // instead of being told only "try again".
+    console.error('[restore] failed:', internal);
+    res.status(500).json({
+      data: null,
+      error: {
+        code: 'SERVER_ERROR',
+        message: historyId !== null
+          ? 'Restore failed. See the reason on this attempt in the Restore History table below.'
+          : 'An internal error occurred. Please try again.',
+        restoreHistoryId: historyId,
+      },
+    });
   }
 });
 
