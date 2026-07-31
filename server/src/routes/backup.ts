@@ -425,6 +425,76 @@ function chunk<T>(arr: T[], size: number): T[][] {
 }
 const BATCH_SIZE = 500;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// json/jsonb round-tripping
+//
+// node-pg serializes a JS array as a Postgres ARRAY literal — ["a","b"] becomes
+// {"a","b"} — which a json/jsonb column rejects with `invalid input syntax for
+// type json`. Reading a jsonb column back gives us a parsed JS value, so any
+// jsonb array in a backup (chart_of_accounts.import_aliases, app_settings.value,
+// document_imports.ai_extraction, …) fails on re-insert.
+//
+// The empty array is a nasty special case: it renders as `{}`, which IS valid
+// JSON, so a restore looks perfectly healthy right up until someone actually has
+// data in one of those columns.
+//
+// Fix: pre-encode every value bound for a json/jsonb column to a string, which
+// the driver then passes through verbatim. Column lists come from
+// information_schema and are cached per table for the life of the process.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const jsonColumnCache = new Map<string, Set<string>>();
+
+async function jsonColumnsFor(trx: Knex.Transaction, table: string): Promise<Set<string>> {
+  const cached = jsonColumnCache.get(table);
+  if (cached) return cached;
+  const names = (await trx('information_schema.columns')
+    .where({ table_schema: 'public', table_name: table })
+    .whereIn('data_type', ['json', 'jsonb'])
+    .pluck('column_name')) as string[];
+  const set = new Set(names);
+  jsonColumnCache.set(table, set);
+  return set;
+}
+
+/** JSON-encode any json/jsonb values in `rows` so Postgres accepts them. */
+async function encodeJsonColumns<T extends Record<string, unknown>>(
+  trx: Knex.Transaction,
+  table: string,
+  rows: T[],
+): Promise<T[]> {
+  const cols = await jsonColumnsFor(trx, table);
+  if (cols.size === 0 || rows.length === 0) return rows;
+  return rows.map((row) => {
+    let out: T = row;
+    for (const col of cols) {
+      const value = row[col];
+      // null/undefined pass through so nullable columns and NOT NULL defaults
+      // behave normally. EVERY other shape gets encoded, strings included: a
+      // jsonb string column reads back as a bare JS string ("hello", not
+      // "\"hello\""), which Postgres rejects unless we re-quote it. Values here
+      // always come from a `SELECT *` on a json/jsonb column, so they are parsed
+      // JS values — never already-encoded text — and double-encoding can't occur.
+      if (value === undefined || value === null) continue;
+      if (out === row) out = { ...row };
+      (out as Record<string, unknown>)[col] = JSON.stringify(value);
+    }
+    return out;
+  });
+}
+
+/** Encode json columns, then bulk-insert in parameter-limit-safe batches. */
+async function insertBatched(
+  trx: Knex.Transaction,
+  table: string,
+  rows: Array<Record<string, unknown>>,
+): Promise<void> {
+  const encoded = await encodeJsonColumns(trx, table, rows);
+  for (const batch of chunk(encoded, BATCH_SIZE)) {
+    await trx(table).insert(batch);
+  }
+}
+
 async function restoreAsNew(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
@@ -512,8 +582,9 @@ async function restoreAsNew(
       client_id: getNewId('clients', row.client_id as number),
       rolled_forward_from: null,
     }));
-    for (const batch of chunk(prepared, BATCH_SIZE)) {
-      const indexInWhole = prepared.indexOf(batch[0]);
+    const encoded = await encodeJsonColumns(trx, 'periods', prepared);
+    for (const batch of chunk(encoded, BATCH_SIZE)) {
+      const indexInWhole = encoded.indexOf(batch[0]);
       const inserted = await trx('periods').insert(batch).returning('id');
       inserted.forEach((r, i) => {
         const oldId = periodsData[indexInWhole + i].id as number;
@@ -539,8 +610,9 @@ async function restoreAsNew(
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
     }));
-    for (const batch of chunk(prepared, BATCH_SIZE)) {
-      const indexInWhole = prepared.indexOf(batch[0]);
+    const encoded = await encodeJsonColumns(trx, 'chart_of_accounts', prepared);
+    for (const batch of chunk(encoded, BATCH_SIZE)) {
+      const indexInWhole = encoded.indexOf(batch[0]);
       const inserted = await trx('chart_of_accounts').insert(batch).returning('id');
       inserted.forEach((r, i) => {
         const oldId = coaData[indexInWhole + i].id as number;
@@ -558,9 +630,7 @@ async function restoreAsNew(
       period_id: getNewId('periods', row.period_id as number),
       account_id: getNewId('chart_of_accounts', row.account_id as number),
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('trial_balance').insert(batch);
-    }
+    await insertBatched(trx, 'trial_balance', rows);
   }
 
   // 5. journal_entries — bulk insert, tracking old->new id
@@ -572,8 +642,9 @@ async function restoreAsNew(
       id: undefined,
       period_id: getNewId('periods', row.period_id as number),
     }));
-    for (const batch of chunk(prepared, BATCH_SIZE)) {
-      const indexInWhole = prepared.indexOf(batch[0]);
+    const encoded = await encodeJsonColumns(trx, 'journal_entries', prepared);
+    for (const batch of chunk(encoded, BATCH_SIZE)) {
+      const indexInWhole = encoded.indexOf(batch[0]);
       const inserted = await trx('journal_entries').insert(batch).returning('id');
       inserted.forEach((r, i) => {
         const oldId = jeData[indexInWhole + i].id as number;
@@ -591,9 +662,7 @@ async function restoreAsNew(
       journal_entry_id: getNewId('journal_entries', row.journal_entry_id as number),
       account_id: getNewId('chart_of_accounts', row.account_id as number),
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('journal_entry_lines').insert(batch);
-    }
+    await insertBatched(trx, 'journal_entry_lines', rows);
   }
 
   // 7. bank_transactions — bulk insert.
@@ -614,9 +683,7 @@ async function restoreAsNew(
       ai_suggested_account_id: mapOptional('chart_of_accounts', row.ai_suggested_account_id),
       journal_entry_id: mapOptional('journal_entries', row.journal_entry_id),
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('bank_transactions').insert(batch);
-    }
+    await insertBatched(trx, 'bank_transactions', rows);
   }
 
   // 8. classification_rules — bulk insert
@@ -628,9 +695,7 @@ async function restoreAsNew(
       client_id: getNewId('clients', row.client_id as number),
       account_id: row.account_id ? getNewId('chart_of_accounts', row.account_id as number) : null,
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('classification_rules').insert(batch);
-    }
+    await insertBatched(trx, 'classification_rules', rows);
   }
 
   // 9. variance_notes — bulk insert.
@@ -648,9 +713,7 @@ async function restoreAsNew(
         compare_period_id: mapOptional('periods', row.compare_period_id),
       }))
       .filter((row) => row.compare_period_id !== null);
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('variance_notes').insert(batch);
-    }
+    await insertBatched(trx, 'variance_notes', rows);
   }
 
   // 10. document_imports — bulk insert. client_id is NOT NULL and was previously
@@ -663,9 +726,7 @@ async function restoreAsNew(
       client_id: getNewId('clients', row.client_id as number),
       period_id: getNewId('periods', row.period_id as number),
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('document_imports').insert(batch);
-    }
+    await insertBatched(trx, 'document_imports', rows);
   }
 
   // Build serializable id_mappings
@@ -796,8 +857,9 @@ async function restoreReplace(
     const prepared = periodsData.map((row) =>
       remapClientId({ ...row, id: undefined, rolled_forward_from: null }),
     );
-    for (const batch of chunk(prepared, BATCH_SIZE)) {
-      const indexInWhole = prepared.indexOf(batch[0]);
+    const encoded = await encodeJsonColumns(trx, 'periods', prepared);
+    for (const batch of chunk(encoded, BATCH_SIZE)) {
+      const indexInWhole = encoded.indexOf(batch[0]);
       const ins = await trx('periods').insert(batch).returning('id');
       ins.forEach((r, i) => {
         periodIdMap.set(periodsData[indexInWhole + i].id as number, (r as { id: number }).id);
@@ -817,8 +879,9 @@ async function restoreReplace(
   const coaData = tables['chart_of_accounts'] as Array<Record<string, unknown>> | undefined;
   if (coaData && coaData.length > 0) {
     const prepared = coaData.map((row) => remapClientId({ ...row, id: undefined }));
-    for (const batch of chunk(prepared, BATCH_SIZE)) {
-      const indexInWhole = prepared.indexOf(batch[0]);
+    const encoded = await encodeJsonColumns(trx, 'chart_of_accounts', prepared);
+    for (const batch of chunk(encoded, BATCH_SIZE)) {
+      const indexInWhole = encoded.indexOf(batch[0]);
       const ins = await trx('chart_of_accounts').insert(batch).returning('id');
       ins.forEach((r, i) => {
         coaIdMap.set(coaData[indexInWhole + i].id as number, (r as { id: number }).id);
@@ -835,9 +898,7 @@ async function restoreReplace(
       period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
       account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('trial_balance').insert(batch);
-    }
+    await insertBatched(trx, 'trial_balance', rows);
   }
 
   // journal_entries — bulk
@@ -848,8 +909,9 @@ async function restoreReplace(
       id: undefined,
       period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
     }));
-    for (const batch of chunk(prepared, BATCH_SIZE)) {
-      const indexInWhole = prepared.indexOf(batch[0]);
+    const encoded = await encodeJsonColumns(trx, 'journal_entries', prepared);
+    for (const batch of chunk(encoded, BATCH_SIZE)) {
+      const indexInWhole = encoded.indexOf(batch[0]);
       const ins = await trx('journal_entries').insert(batch).returning('id');
       ins.forEach((r, i) => {
         jeIdMap.set(jeData[indexInWhole + i].id as number, (r as { id: number }).id);
@@ -866,9 +928,7 @@ async function restoreReplace(
       journal_entry_id: jeIdMap.get(row.journal_entry_id as number) ?? row.journal_entry_id,
       account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('journal_entry_lines').insert(batch);
-    }
+    await insertBatched(trx, 'journal_entry_lines', rows);
   }
 
   // bank_transactions — bulk
@@ -884,9 +944,7 @@ async function restoreReplace(
       ai_suggested_account_id: mapOptional(coaIdMap, row.ai_suggested_account_id),
       journal_entry_id: mapOptional(jeIdMap, row.journal_entry_id),
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('bank_transactions').insert(batch);
-    }
+    await insertBatched(trx, 'bank_transactions', rows);
   }
 
   // classification_rules — bulk
@@ -897,9 +955,7 @@ async function restoreReplace(
       id: undefined,
       account_id: row.account_id ? (coaIdMap.get(row.account_id as number) ?? row.account_id) : null,
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('classification_rules').insert(batch);
-    }
+    await insertBatched(trx, 'classification_rules', rows);
   }
 
   // variance_notes — bulk
@@ -916,9 +972,7 @@ async function restoreReplace(
         compare_period_id: mapOptional(periodIdMap, row.compare_period_id),
       }))
       .filter((row) => row.compare_period_id !== null);
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('variance_notes').insert(batch);
-    }
+    await insertBatched(trx, 'variance_notes', rows);
   }
 
   // document_imports — bulk
@@ -929,9 +983,7 @@ async function restoreReplace(
       id: undefined,
       period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
     }));
-    for (const batch of chunk(rows, BATCH_SIZE)) {
-      await trx('document_imports').insert(batch);
-    }
+    await insertBatched(trx, 'document_imports', rows);
   }
 }
 
@@ -1023,9 +1075,8 @@ async function restoreSettings(
     const settingsData = tables['app_settings'] as Array<Record<string, unknown>> | undefined;
     if (settingsData && settingsData.length > 0) {
       await trx('app_settings').delete();
-      for (const row of settingsData) {
-        await trx('app_settings').insert(row);
-      }
+      // app_settings.value is jsonb — encode before insert (see encodeJsonColumns).
+      await insertBatched(trx, 'app_settings', settingsData);
       report.appSettingsReplaced = true;
     }
   }
@@ -1281,12 +1332,13 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
   // 'failed' instead of leaking an orphan row alongside a second failure row.
   let historyId: number | null = null;
   try {
-    const { backupId, tempFile, uploadNonce, mode, targetClientId } = req.body as {
+    const { backupId, tempFile, uploadNonce, mode, targetClientId, includeUsers } = req.body as {
       backupId?: number;
       tempFile?: string;
       uploadNonce?: string;
       mode: string;
       targetClientId?: number;
+      includeUsers?: boolean;
     };
 
     let filePath: string;
@@ -1401,7 +1453,13 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         // Only trust app_users rows when we're restoring a backup we produced
         // (looked up by backupId). Ad-hoc uploaded .tbak files never get to
         // create accounts.
-        const allowUsers = !!backupRecord;
+        // A backup this instance produced (looked up by backupId) is trusted, so
+        // its users come back automatically. An uploaded .tbak is not: it could
+        // carry an attacker's password_hash under a new username and silently
+        // mint them a login. For that path the admin must tick "restore user
+        // accounts" explicitly — the risk is theirs to accept, but it has to be
+        // a decision rather than a side effect.
+        const allowUsers = !!backupRecord || includeUsers === true;
         settingsReport = await restoreSettings(tables, trx, { allowUsers });
       } else {
         throw new Error(`Unknown restore mode: ${mode}`);

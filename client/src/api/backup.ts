@@ -63,11 +63,23 @@ export interface UploadPreview {
   manifest: BackupManifest;
 }
 
+export interface RestoreSettingsReport {
+  taxCodesUpserted: number;
+  taxCodeMapsUpserted: number;
+  taxCodeMapsSkipped: number;
+  appSettingsReplaced: boolean;
+  usersCreated: string[];
+  usersSkipped: string[];
+}
+
 export interface RestoreResult {
   success: boolean;
   mode: string;
   newClientId: number | null;
   idMappings: Record<string, Record<number, number>>;
+  settingsReport: RestoreSettingsReport | null;
+  /** Nullable FK links nulled because the archive lacked the parent row. */
+  droppedLinks?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -158,6 +170,8 @@ export const executeRestore = (payload: {
   uploadNonce?: string;
   mode: string;
   targetClientId?: number;
+  /** Settings mode only: opt in to recreating user accounts from the archive. */
+  includeUsers?: boolean;
 }) =>
   apiFetch<RestoreResult>('/restore/execute', {
     method: 'POST',

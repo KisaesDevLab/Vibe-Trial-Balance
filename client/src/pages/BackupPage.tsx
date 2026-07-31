@@ -22,6 +22,7 @@ import {
   executeRestore,
   type BackupRecord,
   type RestoreRecord,
+  type RestoreResult,
   type UploadPreview,
 } from '../api/backup';
 
@@ -339,24 +340,32 @@ function RestoreSection({ clients }: { clients: Client[] }) {
   const [uploading, setUploading] = useState(false);
   const [mode, setMode] = useState<string>('as_new');
   const [targetClientId, setTargetClientId] = useState<number | ''>('');
-  const [result, setResult] = useState<{ success: boolean; newClientId?: number | null } | null>(null);
+  const [includeUsers, setIncludeUsers] = useState(false);
+  const [result, setResult] = useState<RestoreResult | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
   const restoreMutation = useMutation({
     mutationFn: () => {
-      const payload: { tempFile?: string; uploadNonce?: string; mode: string; targetClientId?: number } = {
+      const payload: {
+        tempFile?: string;
+        uploadNonce?: string;
+        mode: string;
+        targetClientId?: number;
+        includeUsers?: boolean;
+      } = {
         tempFile: preview?.tempFile,
         uploadNonce: preview?.uploadNonce,
         mode,
       };
       if (targetClientId) payload.targetClientId = targetClientId as number;
+      if (mode === 'settings' && includeUsers) payload.includeUsers = true;
       return executeRestore(payload);
     },
     onSuccess: (res) => {
       if (res.error) {
         setRestoreError(res.error.message);
       } else {
-        setResult({ success: true, newClientId: res.data?.newClientId ?? null });
+        if (res.data) setResult(res.data);
         qc.invalidateQueries({ queryKey: ['restore-history'] });
         qc.invalidateQueries({ queryKey: ['clients'] });
       }
@@ -506,8 +515,27 @@ function RestoreSection({ clients }: { clients: Client[] }) {
             )}
 
             {isSettings && (
-              <div className="text-xs text-gray-600 dark:text-gray-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded px-3 py-2">
-                Settings restore: tax codes will be upserted, app settings replaced, and new users added (existing users unchanged).
+              <div className="space-y-2">
+                <div className="text-xs text-gray-600 dark:text-gray-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded px-3 py-2">
+                  Settings restore: tax codes are upserted by code (existing codes keep their id, so account
+                  mappings survive) and app settings are replaced.
+                </div>
+                <label className="flex items-start gap-2 text-xs cursor-pointer text-gray-700 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={includeUsers}
+                    onChange={(e) => setIncludeUsers(e.target.checked)}
+                  />
+                  <span>
+                    Also restore user accounts from this archive
+                    <span className="block text-[11px] text-amber-600 dark:text-amber-400">
+                      Adds usernames that don't exist yet, with their original password hashes. Existing users are
+                      never modified. Only enable this for an archive you produced yourself — a file from an
+                      untrusted source can use it to create a working login.
+                    </span>
+                  </span>
+                </label>
               </div>
             )}
 
@@ -516,10 +544,40 @@ function RestoreSection({ clients }: { clients: Client[] }) {
             )}
 
             {result?.success ? (
-              <div className="text-sm bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded px-3 py-2 text-green-700 dark:text-green-400">
-                Restore completed successfully.
-                {result.newClientId && (
-                  <span className="ml-1 text-gray-600 dark:text-gray-400">(New client ID: {result.newClientId})</span>
+              <div className="text-sm bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded px-3 py-2 text-green-700 dark:text-green-400 space-y-1">
+                <div>
+                  Restore completed successfully.
+                  {result.newClientId && (
+                    <span className="ml-1 text-gray-600 dark:text-gray-400">(New client ID: {result.newClientId})</span>
+                  )}
+                </div>
+                {/* Say what actually happened — a settings restore that silently
+                    skipped every user used to look identical to one that worked. */}
+                {result.settingsReport && (
+                  <ul className="text-[11px] text-gray-600 dark:text-gray-400 list-disc list-inside">
+                    <li>{result.settingsReport.taxCodesUpserted} tax codes upserted</li>
+                    <li>
+                      {result.settingsReport.taxCodeMapsUpserted} software mappings upserted
+                      {result.settingsReport.taxCodeMapsSkipped > 0 &&
+                        ` (${result.settingsReport.taxCodeMapsSkipped} skipped — parent tax code not in archive)`}
+                    </li>
+                    <li>App settings {result.settingsReport.appSettingsReplaced ? 'replaced' : 'unchanged'}</li>
+                    <li>
+                      {result.settingsReport.usersCreated.length > 0
+                        ? `Users created: ${result.settingsReport.usersCreated.join(', ')}`
+                        : 'No users created'}
+                      {result.settingsReport.usersSkipped.length > 0 &&
+                        ` — skipped ${result.settingsReport.usersSkipped.join(', ')}${
+                          includeUsers ? ' (already exist)' : ' (enable "restore user accounts" to include them)'
+                        }`}
+                    </li>
+                  </ul>
+                )}
+                {!!result.droppedLinks && (
+                  <div className="text-[11px] text-amber-600 dark:text-amber-400">
+                    {result.droppedLinks} optional link(s) cleared — the archive didn't contain the referenced parent
+                    record.
+                  </div>
                 )}
               </div>
             ) : (
