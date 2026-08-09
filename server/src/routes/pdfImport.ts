@@ -262,7 +262,7 @@ Rules:
       const { result: aiResult, logId } = await aiComplete(
         aiProvider,
         { model: aiModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens, messages: [{ role: 'user', content: messageContent }] },
-        { endpoint: 'pdf/analyze', userId: req.user?.userId, clientId },
+        { endpoint: 'pdf/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId, periodId },
       );
 
       const analysisResult = extractJsonObject<PdfAnalysisResult>(aiResult.text);
@@ -546,7 +546,7 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Each object MUST 
     const { result: aiResult, logId } = await aiComplete(
       provider,
       { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
-      { endpoint: 'pdf/suggest-numbers', userId: req.user?.userId, clientId },
+      { endpoint: 'pdf/suggest-numbers', userId: req.user?.userId, userRole: req.user?.role, clientId },
     );
 
     type SuggestionRaw = { entryIndex: number; accountName?: string; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
@@ -648,7 +648,7 @@ If the user requests corrections to the account matching, categories, or actions
     const { result: aiResult2, logId: chatLogId } = await aiComplete(
       pdfProvider,
       { model: pdfFastModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
-      { endpoint: 'pdf/chat', userId: req.user?.userId, clientId },
+      { endpoint: 'pdf/chat', userId: req.user?.userId, userRole: req.user?.role, clientId },
     );
 
     const parsed = extractJsonObject<{ reply: string; revisedAnalysis: PdfAnalysisResult | null }>(aiResult2.text);
@@ -795,7 +795,7 @@ Rules:
     const { result: aiResult3, logId: verifyLogId } = await aiComplete(
       verifyProvider,
       { model: verifyModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
-      { endpoint: 'pdf/verify', userId: req.user?.userId, clientId: period.client_id },
+      { endpoint: 'pdf/verify', userId: req.user?.userId, userRole: req.user?.role, clientId: period.client_id, periodId },
     );
 
     type VerificationResult = {

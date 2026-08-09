@@ -43,6 +43,10 @@ export interface LLMParams {
   taskClass?: string;
   userId?: number | null;
   clientId?: number | null;
+  /** App role (admin | reviewer | preparer); router driver maps to its role union. */
+  userRole?: string | null;
+  /** Engagement dimension for the router ledger; this app uses the period id. */
+  engagementRef?: string | null;
 }
 
 export interface LLMResult {

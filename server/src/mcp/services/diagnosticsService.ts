@@ -94,7 +94,8 @@ Return 5-15 observations.`;
     const { result: aiResult, logId } = await aiComplete(
       provider,
       { model: fastModel, taskClass: TB_TASK_CLASSES.DIAGNOSTICS, maxTokens: 2048, messages: [{ role: 'user', content: prompt }] },
-      { endpoint: 'mcp/diagnostics', userId: null, clientId: null },
+      // MCP path has no authenticated app user; only the period dimension exists.
+      { endpoint: 'mcp/diagnostics', userId: null, clientId: null, periodId },
     );
 
     const observations = extractJsonArray<DiagnosticObservation>(aiResult.text);

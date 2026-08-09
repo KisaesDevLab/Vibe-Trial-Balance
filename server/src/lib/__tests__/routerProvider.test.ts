@@ -43,6 +43,8 @@ const PARAMS: LLMParams = {
   messages: [{ role: 'user', content: 'classify this' }],
   userId: 42,
   clientId: 7,
+  userRole: 'reviewer',
+  engagementRef: '12',
 };
 
 test('complete(): task-class header, attribution, and NO app-pinned model on the wire', async () => {
@@ -56,6 +58,8 @@ test('complete(): task-class header, attribution, and NO app-pinned model on the
   assert.equal(headers['x-vibe-task-class'], 'tb_classification');
   assert.equal(headers['x-vibe-user'], '42');
   assert.equal(headers['x-vibe-client'], '7');
+  assert.equal(headers['x-vibe-user-role'], 'partner', "app role 'reviewer' maps to router 'partner'");
+  assert.equal(headers['x-vibe-engagement'], '12');
   assert.equal(headers.authorization, 'Bearer tok_test');
 
   const body = JSON.parse(String(calls[0].init.body));
@@ -68,6 +72,31 @@ test('complete(): task-class header, attribution, and NO app-pinned model on the
   assert.equal(result.outputTokens, 7);
   assert.equal(result.stopReason, 'stop');
   assert.equal(result.servedModel, 'qwen3:32b');
+});
+
+test('complete(): app roles map onto the router role union, least privilege for unknowns', async () => {
+  const cases: [string, string][] = [
+    ['admin', 'admin'],
+    ['reviewer', 'partner'],
+    ['preparer', 'staff'],
+    ['bogus_future_role', 'staff'],
+  ];
+  for (const [appRole, routerRole] of cases) {
+    const { calls, fn } = captureFetch(completionResponse);
+    const provider = new RouterLLMProvider({ ...BASE, fetch: fn });
+    await provider.complete({ ...PARAMS, userRole: appRole });
+    const headers = calls[0].init.headers as Record<string, string>;
+    assert.equal(headers['x-vibe-user-role'], routerRole, `${appRole} → ${routerRole}`);
+  }
+});
+
+test('complete(): absent userRole/engagementRef emit no attribution headers', async () => {
+  const { calls, fn } = captureFetch(completionResponse);
+  const provider = new RouterLLMProvider({ ...BASE, fetch: fn });
+  await provider.complete({ ...PARAMS, userRole: null, engagementRef: null });
+  const headers = calls[0].init.headers as Record<string, string>;
+  assert.equal(headers['x-vibe-user-role'], undefined);
+  assert.equal(headers['x-vibe-engagement'], undefined);
 });
 
 test('complete(): image parts become data-URL image_url content', async () => {
@@ -126,7 +155,7 @@ function sseResponse(events: string[]): Response {
 }
 
 test('stream(): yields deltas and returns usage from the final event', async () => {
-  const { fn } = captureFetch(() =>
+  const { calls, fn } = captureFetch(() =>
     sseResponse([
       'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
       'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
@@ -144,6 +173,15 @@ test('stream(): yields deltas and returns usage from the final event', async () 
   }
   assert.equal(text, 'Hello');
   assert.deepEqual(chunk.value, { inputTokens: 5, outputTokens: 2 });
+
+  // Streaming rides the same attribution as complete() — support chat is a
+  // stream call site, so role gating must hold here too.
+  const headers = calls[0].init.headers as Record<string, string>;
+  assert.equal(headers['x-vibe-task-class'], 'tb_support_chat');
+  assert.equal(headers['x-vibe-user'], '42');
+  assert.equal(headers['x-vibe-user-role'], 'partner');
+  assert.equal(headers['x-vibe-engagement'], '12');
+  assert.equal(headers['x-vibe-client'], '7');
 });
 
 test('stream(): consumer bailing out aborts the upstream request', async () => {

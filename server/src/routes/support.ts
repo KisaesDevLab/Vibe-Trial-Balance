@@ -146,6 +146,9 @@ ${knowledge}`;
       model: primaryModel,
       taskClass: TB_TASK_CLASSES.SUPPORT_CHAT,
       userId: req.user?.userId ?? null,
+      // Attribution: the real app role, unlike the prompt-tailoring `userRole`
+      // local above whose 'staff' default is not an app role.
+      userRole: req.user?.role ?? null,
       maxTokens: 2048,
       system: systemPrompt,
       messages,

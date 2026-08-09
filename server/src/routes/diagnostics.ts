@@ -32,7 +32,7 @@ diagnosticsRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
     const period = await db('periods as p')
       .join('clients as c', 'c.id', 'p.client_id')
       .where('p.id', periodId)
-      .first('p.period_name', 'p.start_date', 'p.end_date', 'p.locked_at',
+      .first('p.period_name', 'p.start_date', 'p.end_date', 'p.locked_at', 'p.client_id',
              'c.name as client_name', 'c.entity_type');
     if (!period) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
@@ -117,7 +117,7 @@ Return 5-15 observations. Be specific and actionable.`;
     const { result: aiResult, logId } = await aiComplete(
       provider,
       { model: fastModel, taskClass: TB_TASK_CLASSES.DIAGNOSTICS, maxTokens: 2048, messages: [{ role: 'user', content: prompt }] },
-      { endpoint: 'diagnostics', userId: req.user?.userId, clientId: null },
+      { endpoint: 'diagnostics', userId: req.user?.userId, userRole: req.user?.role, clientId: period.client_id, periodId },
     );
 
     const observations = extractJsonArray(aiResult.text);

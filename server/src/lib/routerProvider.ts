@@ -115,12 +115,27 @@ function toChatMessages(params: LLMParams): ChatMessage[] {
   return out;
 }
 
+/**
+ * Map this app's roles (admin | reviewer | preparer) onto the router's role
+ * union. Unknown non-empty roles collapse to 'staff' — least privilege — so a
+ * future app role never silently rides with elevated router permissions.
+ */
+function toRouterRole(role: string | null | undefined): 'admin' | 'partner' | 'staff' | undefined {
+  if (!role) return undefined;
+  if (role === 'admin') return 'admin';
+  if (role === 'reviewer') return 'partner';
+  return 'staff';
+}
+
 function toRequestOptions(params: LLMParams, signal?: AbortSignal): RequestOptions {
   const validStops = params.stopSequences?.filter((s) => s.trim().length > 0);
+  const userRole = toRouterRole(params.userRole);
   return {
     ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
     ...(validStops?.length ? { stop: validStops } : {}),
     ...(params.userId != null ? { userId: String(params.userId) } : {}),
+    ...(userRole ? { userRole } : {}),
+    ...(params.engagementRef ? { engagementRef: String(params.engagementRef) } : {}),
     ...(params.clientId != null ? { clientRef: String(params.clientId) } : {}),
     ...(signal ? { signal } : {}),
   };

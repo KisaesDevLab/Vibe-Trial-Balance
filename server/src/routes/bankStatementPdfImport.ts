@@ -398,7 +398,7 @@ bankStatementPdfRouter.post(
           const { result: chunkResult, logId: chunkLogId } = await aiComplete(
             provider,
             { model: primaryModel, taskClass: TB_TASK_CLASSES.BANK_STATEMENT_EXTRACT, maxTokens: tokenSettings.maxTokensBankStatement, messages: [{ role: 'user', content: prompt }] },
-            { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, clientId },
+            { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId },
           );
 
           const hitTokenLimit = chunkResult.outputTokens >= tokenSettings.maxTokensBankStatement - 10;
@@ -416,7 +416,7 @@ bankStatementPdfRouter.post(
               const { result: subResult, logId: subLogId } = await aiComplete(
                 provider,
                 { model: primaryModel, taskClass: TB_TASK_CLASSES.BANK_STATEMENT_EXTRACT, maxTokens: tokenSettings.maxTokensBankStatement, messages: [{ role: 'user', content: subPrompt }] },
-                { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, clientId },
+                { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId },
               );
               console.log(`[bank-pdf] Sub-chunk ${j + 1}/${subChunks.length}: ${subResult.outputTokens} output tokens`);
               const subParsed = extractJsonObject<{ transactions?: BankStatementTransaction[]; warnings?: string[] }>(subResult.text);
@@ -473,7 +473,7 @@ bankStatementPdfRouter.post(
         const { result: aiResult, logId: singleLogId } = await aiComplete(
           aiProvider,
           { model: aiModel, taskClass: TB_TASK_CLASSES.BANK_STATEMENT_EXTRACT, maxTokens, messages: [{ role: 'user', content: messageContent! }] },
-          { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, clientId },
+          { endpoint: 'bank-statement-pdf/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId },
         );
 
         analysisResult = extractJsonObject<BankStatementAnalysisResult>(aiResult.text);

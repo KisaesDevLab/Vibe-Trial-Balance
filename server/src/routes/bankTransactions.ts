@@ -981,7 +981,7 @@ Respond with a JSON array and nothing else. Each element: { "id": number, "accou
     const { result: aiResult, logId } = await aiComplete(
       provider,
       { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: 8192, messages: [{ role: 'user', content: prompt }] },
-      { endpoint: 'bank/classify', userId: req.user?.userId, clientId },
+      { endpoint: 'bank/classify', userId: req.user?.userId, userRole: req.user?.role, clientId },
     );
 
     const suggestions = extractJsonArray<{ id: number; accountId: number; confidence: number; reasoning: string }>(aiResult.text);

@@ -443,7 +443,7 @@ Rules:
         const { result: aiResult, logId } = await aiComplete(
           provider,
           { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
-          { endpoint: 'csv/analyze', userId: req.user?.userId, clientId },
+          { endpoint: 'csv/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId, periodId },
         );
 
         const parsed = extractJsonObject<AiAnalysisResult>(aiResult.text);
@@ -611,7 +611,7 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Use the EXACT csv
     const { result: aiResult2, logId: suggestLogId } = await aiComplete(
       provider,
       { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
-      { endpoint: 'csv/suggest-numbers', userId: req.user?.userId, clientId },
+      { endpoint: 'csv/suggest-numbers', userId: req.user?.userId, userRole: req.user?.role, clientId },
     );
 
     type SuggestionRaw = { csvRow: number; accountName?: string; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
@@ -722,7 +722,7 @@ If the user requests corrections to the column mapping, account matching, or row
     const { result: aiResult3, logId: chatLogId } = await aiComplete(
       provider,
       { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
-      { endpoint: 'csv/chat', userId: req.user?.userId, clientId },
+      { endpoint: 'csv/chat', userId: req.user?.userId, userRole: req.user?.role, clientId },
     );
 
     const parsed = extractJsonObject<{ reply: string; revisedAnalysis: AiAnalysisResult | null }>(aiResult3.text);

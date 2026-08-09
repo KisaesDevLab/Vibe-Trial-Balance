@@ -221,7 +221,7 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
     // Step d: batch AI for remaining accounts
     if (needsAi.length > 0) {
       try {
-        const aiSuggestions = await getAiSuggestions(needsAi, taxCodes, entityType, activityType, { userId: req.user?.userId ?? null, clientId });
+        const aiSuggestions = await getAiSuggestions(needsAi, taxCodes, entityType, activityType, { userId: req.user?.userId ?? null, userRole: req.user?.role ?? null, clientId });
 
         for (const account of needsAi) {
           const aiResult = aiSuggestions.find((r) => r.account_number === account.account_number);
@@ -313,7 +313,7 @@ async function getAiSuggestions(
   taxCodes: TaxCodeRow[],
   entityType: string,
   activityType: string,
-  logCtx: { userId: number | null; clientId: number },
+  logCtx: { userId: number | null; userRole: string | null; clientId: number },
 ): Promise<AiSuggestionOutput[]> {
   const { provider, fastModel } = await getLLMProvider();
   const tokenSettings = await getAiTokenSettings();
@@ -368,7 +368,7 @@ Return a JSON array where each element has:
     const { result: aiResult, logId } = await aiComplete(
       provider,
       { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] },
-      { endpoint: 'tax/auto-assign', userId: logCtx.userId, clientId: logCtx.clientId },
+      { endpoint: 'tax/auto-assign', userId: logCtx.userId, userRole: logCtx.userRole, clientId: logCtx.clientId },
     );
 
     const parsed = extractJsonArray<AiSuggestionOutput>(aiResult.text);

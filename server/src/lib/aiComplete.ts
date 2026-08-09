@@ -9,6 +9,10 @@ export interface AiCompleteContext {
   endpoint: string;
   userId?: number | null;
   clientId?: number | null;
+  /** App role of the requesting user (admin | reviewer | preparer). */
+  userRole?: string | null;
+  /** Period the work belongs to; becomes the router's engagementRef dimension. */
+  periodId?: number | null;
 }
 
 export interface AiCompleteResult {
@@ -41,6 +45,9 @@ export async function aiComplete(
     ...params,
     userId: params.userId ?? ctx.userId ?? null,
     clientId: params.clientId ?? ctx.clientId ?? null,
+    userRole: params.userRole ?? ctx.userRole ?? null,
+    engagementRef:
+      params.engagementRef ?? (ctx.periodId != null ? String(ctx.periodId) : null),
   };
   try {
     const result = await provider.complete(params);

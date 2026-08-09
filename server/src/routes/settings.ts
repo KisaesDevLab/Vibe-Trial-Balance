@@ -226,7 +226,7 @@ settingsRouter.post('/ai-pricing/fetch', async (req: AuthRequest, res: Response)
 Fill in the actual USD prices per million tokens from your most current knowledge. If you don't know the pricing for a model, use 0.00.`,
         }],
       },
-      { endpoint: 'settings/ai-pricing/fetch', userId: req.user?.userId },
+      { endpoint: 'settings/ai-pricing/fetch', userId: req.user?.userId, userRole: req.user?.role },
     );
     const pricing = extractJsonObject(aiResult.text);
     if (!pricing) {
