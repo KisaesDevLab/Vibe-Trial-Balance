@@ -495,9 +495,52 @@ async function insertBatched(
   }
 }
 
+// User-attribution FKs (who edited/locked/classified a row) point at app_users,
+// but client/period archives never carry the users table — and even a settings
+// restore only materializes users on explicit opt-in. So these ids only resolve
+// when the archive came from THIS instance. For a backup we produced (looked up
+// by backupId) attribution is kept when the user still exists; for an uploaded
+// .tbak the same numeric id could be a different person on the source instance,
+// so attribution is dropped rather than misassigned. Leaving the raw id in
+// place — the previous behaviour — failed the whole restore on the FK when the
+// user was absent.
+const USER_FK_COLUMNS: Record<string, string[]> = {
+  periods: ['locked_by'],
+  trial_balance: ['updated_by'],
+  journal_entries: ['created_by'],
+  bank_transactions: ['classified_by'],
+  variance_notes: ['created_by'],
+  document_imports: ['imported_by', 'verified_by'],
+};
+
+type UserFkSanitizer = (table: string, row: Record<string, unknown>) => Record<string, unknown>;
+
+async function makeUserFkSanitizer(
+  trx: Knex.Transaction,
+  trustSourceUserIds: boolean,
+): Promise<UserFkSanitizer> {
+  const validIds = trustSourceUserIds
+    ? new Set((await trx('app_users').pluck('id')) as number[])
+    : new Set<number>();
+  return (table, row) => {
+    const cols = USER_FK_COLUMNS[table];
+    if (!cols) return row;
+    let out = row;
+    for (const col of cols) {
+      const value = out[col];
+      if (value != null && !validIds.has(value as number)) {
+        if (out === row) out = { ...row };
+        out[col] = null;
+      }
+    }
+    return out;
+  };
+}
+
 async function restoreAsNew(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
+  trustSourceUserIds: boolean,
 ): Promise<{
   newClientId: number;
   idMappings: Record<string, Record<number, number>>;
@@ -505,6 +548,7 @@ async function restoreAsNew(
   droppedLinks: number;
 }> {
   const idMap: IdMap = new Map();
+  const sanitizeUserFks = await makeUserFkSanitizer(trx, trustSourceUserIds);
 
   function getNewId(table: string, oldId: number): number {
     // Fail loudly rather than silently fall through to the old ID — if the backup
@@ -576,7 +620,7 @@ async function restoreAsNew(
   const periodsData = tables['periods'] as Array<Record<string, unknown>> | undefined;
   if (periodsData && periodsData.length > 0) {
     const periodMap = registerMap('periods');
-    const prepared = periodsData.map((row) => ({
+    const prepared = periodsData.map((row) => sanitizeUserFks('periods', {
       ...row,
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
@@ -624,7 +668,7 @@ async function restoreAsNew(
   // 4. trial_balance — bulk insert (no id mapping needed downstream)
   const tbData = tables['trial_balance'] as Array<Record<string, unknown>> | undefined;
   if (tbData && tbData.length > 0) {
-    const rows = tbData.map((row) => ({
+    const rows = tbData.map((row) => sanitizeUserFks('trial_balance', {
       ...row,
       id: undefined,
       period_id: getNewId('periods', row.period_id as number),
@@ -637,7 +681,7 @@ async function restoreAsNew(
   const jeData = tables['journal_entries'] as Array<Record<string, unknown>> | undefined;
   if (jeData && jeData.length > 0) {
     const jeMap = registerMap('journal_entries');
-    const prepared = jeData.map((row) => ({
+    const prepared = jeData.map((row) => sanitizeUserFks('journal_entries', {
       ...row,
       id: undefined,
       period_id: getNewId('periods', row.period_id as number),
@@ -673,7 +717,7 @@ async function restoreAsNew(
   // the original client's period and accounts.
   const btData = tables['bank_transactions'] as Array<Record<string, unknown>> | undefined;
   if (btData && btData.length > 0) {
-    const rows = btData.map((row) => ({
+    const rows = btData.map((row) => sanitizeUserFks('bank_transactions', {
       ...row,
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
@@ -705,7 +749,7 @@ async function restoreAsNew(
   const vnData = tables['variance_notes'] as Array<Record<string, unknown>> | undefined;
   if (vnData && vnData.length > 0) {
     const rows = vnData
-      .map((row) => ({
+      .map((row) => sanitizeUserFks('variance_notes', {
         ...row,
         id: undefined,
         account_id: getNewId('chart_of_accounts', row.account_id as number),
@@ -720,7 +764,7 @@ async function restoreAsNew(
   // left pointing at the source client.
   const diData = tables['document_imports'] as Array<Record<string, unknown>> | undefined;
   if (diData && diData.length > 0) {
-    const rows = diData.map((row) => ({
+    const rows = diData.map((row) => sanitizeUserFks('document_imports', {
       ...row,
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
@@ -817,11 +861,14 @@ async function restoreReplace(
   tables: Record<string, unknown[]>,
   targetClientId: number,
   trx: Knex.Transaction,
+  trustSourceUserIds: boolean,
 ): Promise<void> {
   // Take a per-client advisory lock first so concurrent restores on the same
   // client serialize. Any other session holding the lock (e.g. another
   // restore) blocks here until the current txn ends.
   await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, targetClientId]);
+
+  const sanitizeUserFks = await makeUserFkSanitizer(trx, trustSourceUserIds);
 
   await deleteClientData(trx, targetClientId);
 
@@ -855,7 +902,7 @@ async function restoreReplace(
   const periodsData = tables['periods'] as Array<Record<string, unknown>> | undefined;
   if (periodsData && periodsData.length > 0) {
     const prepared = periodsData.map((row) =>
-      remapClientId({ ...row, id: undefined, rolled_forward_from: null }),
+      sanitizeUserFks('periods', remapClientId({ ...row, id: undefined, rolled_forward_from: null })),
     );
     const encoded = await encodeJsonColumns(trx, 'periods', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
@@ -892,7 +939,7 @@ async function restoreReplace(
   // trial_balance — bulk
   const tbData = tables['trial_balance'] as Array<Record<string, unknown>> | undefined;
   if (tbData && tbData.length > 0) {
-    const rows = tbData.map((row) => ({
+    const rows = tbData.map((row) => sanitizeUserFks('trial_balance', {
       ...row,
       id: undefined,
       period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
@@ -904,7 +951,7 @@ async function restoreReplace(
   // journal_entries — bulk
   const jeData = tables['journal_entries'] as Array<Record<string, unknown>> | undefined;
   if (jeData && jeData.length > 0) {
-    const prepared = jeData.map((row) => ({
+    const prepared = jeData.map((row) => sanitizeUserFks('journal_entries', {
       ...row,
       id: undefined,
       period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
@@ -934,7 +981,7 @@ async function restoreReplace(
   // bank_transactions — bulk
   const btData = tables['bank_transactions'] as Array<Record<string, unknown>> | undefined;
   if (btData && btData.length > 0) {
-    const rows = btData.map((row) => ({
+    const rows = btData.map((row) => sanitizeUserFks('bank_transactions', {
       ...row,
       id: undefined,
       client_id: targetClientId,
@@ -964,7 +1011,7 @@ async function restoreReplace(
   const vnData = tables['variance_notes'] as Array<Record<string, unknown>> | undefined;
   if (vnData && vnData.length > 0) {
     const rows = vnData
-      .map((row) => ({
+      .map((row) => sanitizeUserFks('variance_notes', {
         ...row,
         id: undefined,
         account_id: coaIdMap.get(row.account_id as number) ?? row.account_id,
@@ -978,11 +1025,11 @@ async function restoreReplace(
   // document_imports — bulk
   const diData = tables['document_imports'] as Array<Record<string, unknown>> | undefined;
   if (diData && diData.length > 0) {
-    const rows = diData.map((row) => remapClientId({
+    const rows = diData.map((row) => sanitizeUserFks('document_imports', remapClientId({
       ...row,
       id: undefined,
       period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
-    }));
+    })));
     await insertBatched(trx, 'document_imports', rows);
   }
 }
@@ -1439,15 +1486,19 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
       ? (historyRow as { id: number }).id
       : Number(historyRow);
 
+    // User-attribution ids (updated_by, created_by, …) are only meaningful when
+    // the archive came from this instance — same trust line as allowUsers below.
+    const trustSourceUserIds = !!backupRecord;
+
     await db.transaction(async (trx) => {
       if (mode === 'as_new') {
-        const result = await restoreAsNew(tables, trx);
+        const result = await restoreAsNew(tables, trx, trustSourceUserIds);
         newClientId = result.newClientId;
         idMappings = result.idMappings;
         droppedLinks = result.droppedLinks;
       } else if (mode === 'replace') {
         if (!targetClientId) throw new Error('targetClientId required for replace mode');
-        await restoreReplace(tables, targetClientId, trx);
+        await restoreReplace(tables, targetClientId, trx, trustSourceUserIds);
         newClientId = targetClientId;
       } else if (mode === 'settings') {
         // Only trust app_users rows when we're restoring a backup we produced
