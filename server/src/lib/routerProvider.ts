@@ -35,8 +35,49 @@ import type {
 
 export type AiMode = 'direct' | 'router';
 
+/**
+ * Admin-set overrides loaded from the settings table (see lib/aiModeSettings.ts).
+ * Precedence: DB setting > env var > 'direct'. A switch is only ever explicit —
+ * saved by an admin through PUT /settings/ai-mode after a router health check,
+ * confirmed in the UI, and audit-logged. The MIG-1 rule stands: no SILENT
+ * cross-mode fallback; an unreachable router surfaces as an error, never a
+ * quiet hop to a direct provider.
+ *
+ * Held here (not in aiModeSettings.ts) so this module stays DB-free and the
+ * wire-contract tests run without a database.
+ */
+export interface AiModeOverrides {
+  mode: AiMode | null;
+  routerUrl: string | null;
+  routerToken: string | null;
+}
+
+let overrides: AiModeOverrides = { mode: null, routerUrl: null, routerToken: null };
+
+/** Replace the DB-backed overrides and drop the cached router driver so new creds take effect. */
+export function setAiModeOverrides(next: AiModeOverrides): void {
+  overrides = next;
+  cached = null;
+}
+
 export function aiMode(): AiMode {
+  if (overrides.mode) return overrides.mode;
   return process.env.VIBE_AI_MODE === 'router' ? 'router' : 'direct';
+}
+
+/** Where the effective mode comes from — the Settings UI shows this. */
+export function aiModeSource(): 'setting' | 'env' | 'default' {
+  if (overrides.mode) return 'setting';
+  if (process.env.VIBE_AI_MODE === 'router' || process.env.VIBE_AI_MODE === 'direct') return 'env';
+  return 'default';
+}
+
+/** Effective router connection details: DB-set values win, env fills the gaps. */
+export function routerConnection(): { baseUrl: string; token: string } {
+  return {
+    baseUrl: overrides.routerUrl || process.env.VIBE_AI_ROUTER_URL || '',
+    token: overrides.routerToken || process.env.VIBE_AI_TOKEN || '',
+  };
 }
 
 /**
@@ -255,10 +296,7 @@ let cached: RouterLLMProvider | null = null;
 
 export function routerProvider(): RouterLLMProvider {
   if (!cached) {
-    cached = new RouterLLMProvider({
-      baseUrl: process.env.VIBE_AI_ROUTER_URL ?? '',
-      token: process.env.VIBE_AI_TOKEN ?? '',
-    });
+    cached = new RouterLLMProvider(routerConnection());
   }
   return cached;
 }
@@ -277,8 +315,7 @@ export function _setRouterProviderForTests(p: RouterLLMProvider | null): void {
 export function registerTbTaskClasses(opts?: { fetch?: typeof fetch; maxAttempts?: number }): void {
   if (aiMode() !== 'router') return;
   const client = new VibeAiClient({
-    baseUrl: process.env.VIBE_AI_ROUTER_URL ?? '',
-    token: process.env.VIBE_AI_TOKEN ?? '',
+    ...routerConnection(),
     ...(opts?.fetch ? { fetch: opts.fetch } : {}),
   });
   const maxAttempts = opts?.maxAttempts ?? 10;

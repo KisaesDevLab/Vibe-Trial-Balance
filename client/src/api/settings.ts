@@ -29,11 +29,20 @@ export type LLMProvider = 'claude' | 'ollama' | 'openai' | 'openai-compat';
 
 export interface LLMProviderSettings {
   /**
-   * Deployment-level AI mode (read-only, set by the operator via VIBE_AI_MODE).
-   * 'router' → all AI traffic goes through the Vibe AI Router; every provider
-   * setting below is inert and the UI shows a managed-by-router banner.
+   * AI mode (MIG-1 dual-mode). 'router' → all AI traffic goes through the
+   * Vibe AI Router; every provider setting below is inert and the UI shows a
+   * managed-by-router banner. Admin-selectable via saveAiMode(); an in-app
+   * choice overrides the VIBE_AI_MODE env default.
    */
   aiMode?: 'direct' | 'router';
+  /** Where the effective mode comes from: admin setting, env var, or the 'direct' default. */
+  aiModeSource?: 'setting' | 'env' | 'default';
+  /** The VIBE_AI_MODE env value ('' when unset) — shown as the fallback the env provides. */
+  envAiMode?: '' | 'direct' | 'router';
+  /** Effective router base URL (admin-set value, falling back to VIBE_AI_ROUTER_URL). */
+  routerUrl?: string;
+  /** Masked router app token ('' when none is configured anywhere). */
+  routerTokenMasked?: string;
   provider: LLMProvider;
   ollamaBaseUrl: string;
   ollamaVisionModel: string;
@@ -81,6 +90,28 @@ export const saveLLMProviderSettings = (data: Partial<LLMProviderSettings>) =>
   apiFetch<{ saved: boolean }>('/settings/llm-provider', {
     method: 'PUT',
     body: JSON.stringify(data),
+  });
+
+// ── AI mode (router vs direct) ──────────────────────────────────────────────
+
+/** Secret-field semantics match mail: MAIL_SECRET_KEEP leaves the stored token
+ *  untouched, '' clears it back to the env fallback, a real value replaces it. */
+export interface AiModePatch {
+  mode: 'direct' | 'router';
+  routerUrl?: string;
+  routerToken?: string;
+}
+
+export const saveAiMode = (data: AiModePatch) =>
+  apiFetch<{ saved: boolean; aiMode: 'direct' | 'router' }>('/settings/ai-mode', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+
+export const testAiRouter = (data?: { routerUrl?: string; routerToken?: string }) =>
+  apiFetch<{ valid: boolean; message?: string }>('/settings/ai-mode/test', {
+    method: 'POST',
+    body: JSON.stringify(data ?? {}),
   });
 
 export interface OpenAIModelInfo {

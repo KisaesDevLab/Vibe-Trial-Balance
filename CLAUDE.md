@@ -53,12 +53,18 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
 - Named exports, PascalCase components, camelCase utilities, snake_case DB columns
 
 ## Key Architecture Decisions
-- **AI dual-mode (MIG-1, permanent posture):** `VIBE_AI_MODE=direct|router`. `router` sends ALL
-  AI traffic through the appliance's Vibe AI Router via `server/src/lib/routerProvider.ts`
-  (`RouterLLMProvider` behind `getLLMProvider()`); every provider/model setting in the DB is
-  then inert and the Settings UI shows a managed-by-router banner. Boot refuses `router`
-  without `VIBE_AI_ROUTER_URL` + `VIBE_AI_TOKEN`. NEVER add a silent fallback from router to
-  direct — it would ship prompts around the router's scrubber and ledger. Every AI call site
+- **AI dual-mode (MIG-1, permanent posture):** mode is `direct|router`, resolved with
+  precedence DB setting (`ai.mode` row, admin-set via Settings UI / PUT /settings/ai-mode)
+  > `VIBE_AI_MODE` env > `direct`. Router URL/token likewise: `ai.router_url`/`ai.router_token`
+  (encrypted) rows > `VIBE_AI_ROUTER_URL`/`VIBE_AI_TOKEN` env (see
+  `server/src/lib/aiModeSettings.ts` + `routerConnection()` in routerProvider.ts). `router`
+  sends ALL AI traffic through the appliance's Vibe AI Router via
+  `server/src/lib/routerProvider.ts` (`RouterLLMProvider` behind `getLLMProvider()`); every
+  provider/model setting in the DB is then inert and the Settings UI shows a managed-by-router
+  banner. Boot refuses env-set `router` without env URL+token; a DB-set mode must never brick
+  boot (load failures only log). Mode switches are explicit only: admin-confirmed in the UI,
+  router health-checked BEFORE persisting, audit-logged. NEVER add a silent fallback from
+  router to direct — it would ship prompts around the router's scrubber and ledger. Every AI call site
   must pass `taskClass` (see `TB_TASK_CLASSES`); the router driver fails closed without it.
   `server/src/lib/vibeAiClient.ts` is VENDORED from the router repo — don't edit in place.
   Tests: `npm run test:router` (server/).

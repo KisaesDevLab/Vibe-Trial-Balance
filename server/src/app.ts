@@ -51,6 +51,7 @@ import { db } from './db';
 import { sendServerError } from './lib/safeError';
 import { isAiConfigured } from './lib/aiClient';
 import { registerTbTaskClasses, validateAiModeEnv } from './lib/routerProvider';
+import { loadAiModeOverrides } from './lib/aiModeSettings';
 import { isMailerConfigured } from './lib/mailService';
 
 const app = express();
@@ -326,6 +327,10 @@ async function checkPendingMigrations(): Promise<void> {
 
 async function start(): Promise<void> {
   await checkPendingMigrations();
+  // Admin-set AI mode (settings table) overrides VIBE_AI_MODE env; load it
+  // before anything consults aiMode(). A DB read failure only logs — env keeps
+  // working — unlike bad env config, which is a fatal misconfiguration above.
+  await loadAiModeOverrides();
   const server = app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/api/v1/health`);

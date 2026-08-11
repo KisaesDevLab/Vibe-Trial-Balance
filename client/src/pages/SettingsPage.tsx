@@ -4,7 +4,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMProviderSettings, saveLLMProviderSettings, testLLM, testOcr, fetchOpenAIModels, fetchProviderModels, getMailSettings, saveMailSettings, testMail, MAIL_SECRET_KEEP, type LLMProvider, type LLMProviderSettings, type OpenAIModelInfo, type MailSettingsPatch, type MailTransport } from '../api/settings';
+import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMProviderSettings, saveLLMProviderSettings, testLLM, testOcr, fetchOpenAIModels, fetchProviderModels, getMailSettings, saveMailSettings, testMail, saveAiMode, testAiRouter, MAIL_SECRET_KEEP, type LLMProvider, type LLMProviderSettings, type OpenAIModelInfo, type MailSettingsPatch, type MailTransport } from '../api/settings';
 import { getMcpTokenStatus, generateMcpToken, revokeMcpToken } from '../api/mcpSettings';
 import { getAiPricing, saveAiPricing, fetchAiPricingFromClaude, getAiUsage, getAiModels, saveAiModels, getAvailableModels, type AiPricingMap } from '../api/aiUsage';
 import { useAuthStore } from '../store/uiStore';
@@ -46,6 +46,16 @@ export function SettingsPage() {
   const [pricingError, setPricingError] = useState<string | null>(null);
   const [fetchingPricing, setFetchingPricing] = useState(false);
   const [fetchDisclaimer, setFetchDisclaimer] = useState<string | null>(null);
+
+  // AI mode state (router vs direct, MIG-1 dual-mode)
+  const [aiModeSel, setAiModeSel] = useState<'direct' | 'router' | null>(null); // null = server value
+  const [routerUrlInput, setRouterUrlInput] = useState<string | null>(null);    // null = untouched
+  const [routerTokenInput, setRouterTokenInput] = useState('');                 // '' = keep stored token
+  const [aiModeSaving, setAiModeSaving] = useState(false);
+  const [aiModeError, setAiModeError] = useState<string | null>(null);
+  const [aiModeSaved, setAiModeSaved] = useState(false);
+  const [routerTesting, setRouterTesting] = useState(false);
+  const [routerTestResult, setRouterTestResult] = useState<{ valid: boolean; message?: string } | null>(null);
 
   // LLM provider state
   const [llmEdits, setLlmEdits] = useState<Partial<LLMProviderSettings> | null>(null);
@@ -246,6 +256,57 @@ export function SettingsPage() {
   // console; the sections below render inert with an explanatory banner.
   const routerManaged = llmData?.aiMode === 'router';
 
+  // AI mode card: the radio reflects unsaved selection, falling back to server state
+  const effectiveAiMode: 'direct' | 'router' = aiModeSel ?? llmData?.aiMode ?? 'direct';
+  const aiModeDirty =
+    (aiModeSel !== null && aiModeSel !== (llmData?.aiMode ?? 'direct')) ||
+    routerUrlInput !== null || routerTokenInput !== '';
+
+  const routerFormValues = () => ({
+    ...(routerUrlInput !== null ? { routerUrl: routerUrlInput } : {}),
+    ...(routerTokenInput !== '' ? { routerToken: routerTokenInput } : {}),
+  });
+
+  const handleTestRouter = async () => {
+    setRouterTesting(true);
+    setRouterTestResult(null);
+    const res = await testAiRouter(routerFormValues());
+    setRouterTesting(false);
+    if (res.error) setRouterTestResult({ valid: false, message: res.error.message });
+    else if (res.data) setRouterTestResult(res.data);
+  };
+
+  const handleApplyAiMode = async () => {
+    const targetMode = effectiveAiMode;
+    const changingMode = targetMode !== (llmData?.aiMode ?? 'direct');
+    if (changingMode && targetMode === 'direct') {
+      const ok = await confirmAction({
+        message: 'Switch to Direct API? AI requests will go straight to the provider configured below, bypassing the router’s scrubbing, per-class data-boundary policy, and cost ledger.',
+        tone: 'danger',
+        confirmLabel: 'Switch to Direct',
+      });
+      if (!ok) return;
+    } else if (changingMode) {
+      const ok = await confirmAction({
+        message: 'Switch to Vibe AI Router? All AI traffic will flow through the router (verified with a health check first); the provider settings below become inactive.',
+        confirmLabel: 'Switch to Router',
+      });
+      if (!ok) return;
+    }
+    setAiModeSaving(true);
+    setAiModeError(null);
+    const res = await saveAiMode({ mode: targetMode, ...routerFormValues() });
+    setAiModeSaving(false);
+    if (res.error) { setAiModeError(res.error.message); return; }
+    qc.invalidateQueries({ queryKey: ['llm-provider'] });
+    setAiModeSel(null);
+    setRouterUrlInput(null);
+    setRouterTokenInput('');
+    setRouterTestResult(null);
+    setAiModeSaved(true);
+    setTimeout(() => setAiModeSaved(false), 3000);
+  };
+
   const handleSaveLLM = async () => {
     if (!llmEdits) return;
     setLlmError(null);
@@ -439,15 +500,106 @@ export function SettingsPage() {
     <div className="p-6 max-w-2xl space-y-6">
       <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Settings</h2>
 
+      {/* AI Mode (MIG-1 dual-mode): admin-selectable router vs direct */}
+      {isAdmin && llmData && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-5 py-4">
+          <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-1">AI Mode</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            Choose how this installation sends AI requests: through the appliance&apos;s Vibe AI
+            Router (central per-task-class policy, scrubbing, budgets, cost ledger) or directly
+            to the provider configured in the AI Provider card below.
+            {llmData.aiModeSource === 'env' && llmData.envAiMode && (
+              <> Current mode comes from the <code>VIBE_AI_MODE={llmData.envAiMode}</code> environment
+              variable; a choice applied here overrides it.</>
+            )}
+          </p>
+
+          <div className="flex items-center gap-5 mb-3">
+            {(['direct', 'router'] as const).map((m) => (
+              <label key={m} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                <input
+                  type="radio"
+                  name="ai-mode"
+                  checked={effectiveAiMode === m}
+                  onChange={() => { setAiModeSel(m); setRouterTestResult(null); setAiModeError(null); }}
+                />
+                {m === 'direct' ? 'Direct API' : 'Vibe AI Router'}
+              </label>
+            ))}
+            <span className="text-xs text-gray-400 dark:text-gray-500">
+              active: {llmData.aiMode ?? 'direct'}
+              {llmData.aiModeSource === 'setting' ? ' (set in-app)' : llmData.aiModeSource === 'env' ? ' (from env)' : ' (default)'}
+            </span>
+          </div>
+
+          {effectiveAiMode === 'router' && (
+            <div className="space-y-3 mb-3">
+              <div>
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Router URL</label>
+                <input
+                  type="text"
+                  value={routerUrlInput ?? llmData.routerUrl ?? ''}
+                  onChange={(e) => setRouterUrlInput(e.target.value)}
+                  placeholder="http://vibe-ai-router:8220"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                  App Token{llmData.routerTokenMasked ? ` — saved: ${llmData.routerTokenMasked}` : ''}
+                </label>
+                <PasswordInput
+                  value={routerTokenInput}
+                  onChange={(e) => setRouterTokenInput(e.target.value)}
+                  placeholder={llmData.routerTokenMasked ? 'Leave blank to keep the existing token' : 'Token minted by the appliance ("vibe enable")'}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleApplyAiMode}
+              disabled={aiModeSaving || !aiModeDirty}
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+            >
+              {aiModeSaving ? 'Applying…' : 'Apply Mode'}
+            </button>
+            {effectiveAiMode === 'router' && (
+              <button
+                onClick={handleTestRouter}
+                disabled={routerTesting}
+                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+              >
+                {routerTesting ? 'Testing…' : 'Test Connection'}
+              </button>
+            )}
+          </div>
+
+          {routerTestResult && (
+            <div className={`mt-3 px-3 py-2 rounded text-xs ${routerTestResult.valid ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'}`}>
+              {routerTestResult.valid ? '✓ ' : '✗ '}{routerTestResult.message}
+            </div>
+          )}
+          {aiModeError && (
+            <div className="mt-3 px-3 py-2 rounded text-xs bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400">{aiModeError}</div>
+          )}
+          {aiModeSaved && (
+            <div className="mt-3 px-3 py-2 rounded text-xs bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400">AI mode applied.</div>
+          )}
+        </div>
+      )}
+
       {/* Managed by Vibe AI Router (MIG-1): provider settings are inert in router mode */}
       {isAdmin && routerManaged && (
         <div className="rounded-lg border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-900/20 px-5 py-4">
           <h3 className="text-sm font-semibold text-sky-800 dark:text-sky-300 mb-1">Managed by Vibe AI Router</h3>
           <p className="text-xs text-sky-700 dark:text-sky-400">
-            This installation sends all AI requests through the appliance&apos;s Vibe AI Router
-            (VIBE_AI_MODE=router). Model choice, data-boundary policy, scrubbing, budgets, and
-            cost tracking are configured per task class in the router console — the provider
-            settings below are inactive and kept only for standalone (direct) deployments.
+            This installation sends all AI requests through the appliance&apos;s Vibe AI Router.
+            Model choice, data-boundary policy, scrubbing, budgets, and cost tracking are
+            configured per task class in the router console — the provider settings below are
+            inactive while router mode is active. Use the AI Mode card above to switch this
+            installation to Direct API.
           </p>
         </div>
       )}

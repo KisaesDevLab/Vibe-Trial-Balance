@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RouterLLMProvider, TB_TASK_CLASSES, validateAiModeEnv, registerTbTaskClasses } from '../routerProvider';
+import { RouterLLMProvider, TB_TASK_CLASSES, validateAiModeEnv, registerTbTaskClasses, aiMode, aiModeSource, routerConnection, setAiModeOverrides } from '../routerProvider';
 import type { LLMParams } from '../llmProvider';
 
 const BASE = { baseUrl: 'http://router.test:8220', token: 'tok_test' };
@@ -214,6 +214,48 @@ test('healthCheck(): GET /healthz, throws on non-200', async () => {
 
   const bad = new RouterLLMProvider({ ...BASE, fetch: (async () => new Response('', { status: 503 })) as typeof fetch });
   await assert.rejects(bad.healthCheck(), /health check failed: HTTP 503/);
+});
+
+test('aiMode(): admin-set override wins over env; env is the fallback; direct is the default', () => {
+  const saved = process.env.VIBE_AI_MODE;
+  try {
+    process.env.VIBE_AI_MODE = 'router';
+    setAiModeOverrides({ mode: 'direct', routerUrl: null, routerToken: null });
+    assert.equal(aiMode(), 'direct', 'DB setting must beat env');
+    assert.equal(aiModeSource(), 'setting');
+
+    setAiModeOverrides({ mode: null, routerUrl: null, routerToken: null });
+    assert.equal(aiMode(), 'router', 'no DB setting → env');
+    assert.equal(aiModeSource(), 'env');
+
+    delete process.env.VIBE_AI_MODE;
+    assert.equal(aiMode(), 'direct', 'nothing set → direct');
+    assert.equal(aiModeSource(), 'default');
+  } finally {
+    if (saved === undefined) delete process.env.VIBE_AI_MODE;
+    else process.env.VIBE_AI_MODE = saved;
+    setAiModeOverrides({ mode: null, routerUrl: null, routerToken: null });
+  }
+});
+
+test('routerConnection(): admin-set URL/token win, env fills the gaps', () => {
+  const saved = { url: process.env.VIBE_AI_ROUTER_URL, token: process.env.VIBE_AI_TOKEN };
+  try {
+    process.env.VIBE_AI_ROUTER_URL = 'http://env-router:8220';
+    process.env.VIBE_AI_TOKEN = 'tok_env';
+
+    setAiModeOverrides({ mode: null, routerUrl: 'http://db-router:8220', routerToken: null });
+    assert.deepEqual(routerConnection(), { baseUrl: 'http://db-router:8220', token: 'tok_env' });
+
+    setAiModeOverrides({ mode: null, routerUrl: null, routerToken: 'tok_db' });
+    assert.deepEqual(routerConnection(), { baseUrl: 'http://env-router:8220', token: 'tok_db' });
+  } finally {
+    if (saved.url === undefined) delete process.env.VIBE_AI_ROUTER_URL;
+    else process.env.VIBE_AI_ROUTER_URL = saved.url;
+    if (saved.token === undefined) delete process.env.VIBE_AI_TOKEN;
+    else process.env.VIBE_AI_TOKEN = saved.token;
+    setAiModeOverrides({ mode: null, routerUrl: null, routerToken: null });
+  }
 });
 
 test('validateAiModeEnv(): router mode refuses to boot without URL + token', () => {

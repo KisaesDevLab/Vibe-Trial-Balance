@@ -11,7 +11,8 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import OpenAI from 'openai';
 import { getLLMProvider, DEFAULT_FAST_MODEL, DEFAULT_PRIMARY_MODEL, loadLLMSettings, buildProviderFromSettings } from '../lib/aiClient';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
-import { aiMode, TB_TASK_CLASSES } from '../lib/routerProvider';
+import { aiMode, aiModeSource, routerConnection, registerTbTaskClasses, RouterLLMProvider, TB_TASK_CLASSES } from '../lib/routerProvider';
+import { readAiModeSettings, loadAiModeOverrides, AI_MODE_KEYS } from '../lib/aiModeSettings';
 import { extractJsonObject } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 import { encrypt, decrypt, isEncrypted } from '../lib/encryption';
@@ -506,9 +507,15 @@ settingsRouter.get('/llm-provider', async (req: AuthRequest, res: Response): Pro
     }
     res.json({
       data: {
-        // Deployment-level AI mode (MIG-1). 'router' → every provider setting
-        // below is inert; the SPA renders a managed-by-router banner instead.
+        // AI mode (MIG-1 dual-mode). 'router' → every provider setting below
+        // is inert; the SPA renders a managed-by-router banner instead. The
+        // mode is admin-selectable (PUT /settings/ai-mode); a DB-set mode
+        // overrides the VIBE_AI_MODE env default.
         aiMode:                      aiMode(),
+        aiModeSource:                aiModeSource(),
+        envAiMode:                   process.env.VIBE_AI_MODE === 'router' || process.env.VIBE_AI_MODE === 'direct' ? process.env.VIBE_AI_MODE : '',
+        routerUrl:                   routerConnection().baseUrl,
+        routerTokenMasked:           routerConnection().token ? maskKey(routerConnection().token) : '',
         provider:                    s['llm.provider']                        || 'claude',
         ollamaBaseUrl:               s['llm.ollama_base_url']                 || '',
         ollamaVisionModel:           s['llm.ollama_vision_model']             || 'qwen3-vl:8b',
@@ -719,6 +726,137 @@ settingsRouter.put('/llm-provider', async (req: AuthRequest, res: Response): Pro
     res.json({ data: { saved: true }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'llm-provider');
+  }
+});
+
+// ── AI mode (router vs direct) — admin-selectable (MIG-1 dual-mode) ─────────
+//
+// Precedence: the ai.mode settings row overrides the VIBE_AI_MODE env default.
+// Switching is never silent: router mode is health-checked BEFORE anything is
+// persisted (verify-then-switch), and every save is audit-logged. Router URL
+// and token behave like mail secrets — SENTINEL_KEEP leaves the stored token
+// as-is, empty string clears the row back to the env fallback.
+
+const aiModePutSchema = z.object({
+  mode: z.enum(['direct', 'router']),
+  routerUrl: z.string().max(500).optional(),
+  routerToken: z.string().max(1000).optional(),
+});
+
+/** Effective value under keep/clear semantics: undefined|sentinel → saved, '' → env, else the new value. */
+function resolveAiModeField(
+  newVal: string | undefined,
+  savedVal: string | null,
+  envVal: string | undefined,
+): string {
+  if (newVal === undefined || newVal === SENTINEL_KEEP) return savedVal || envVal || '';
+  if (newVal === '') return envVal || '';
+  return newVal;
+}
+
+async function resolveRouterTarget(d: { routerUrl?: string; routerToken?: string }): Promise<{ baseUrl: string; token: string }> {
+  const saved = await readAiModeSettings();
+  return {
+    baseUrl: resolveAiModeField(d.routerUrl, saved.routerUrl, process.env.VIBE_AI_ROUTER_URL),
+    token: resolveAiModeField(d.routerToken, saved.routerToken, process.env.VIBE_AI_TOKEN),
+  };
+}
+
+// PUT /api/v1/settings/ai-mode (admin only)
+settingsRouter.put('/ai-mode', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  const result = aiModePutSchema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  const d = result.data;
+  try {
+    const previousMode = aiMode();
+
+    if (d.mode === 'router') {
+      const { baseUrl, token } = await resolveRouterTarget(d);
+      if (!baseUrl || !token) {
+        res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'Router mode requires both a Router URL and an app token (from the appliance\'s "vibe enable").' } });
+        return;
+      }
+      try {
+        await assertSafeOutboundUrl(baseUrl);
+      } catch (err: unknown) {
+        const reason = err instanceof Error ? err.message : 'invalid URL';
+        res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: `Router URL rejected: ${reason}` } });
+        return;
+      }
+      // Verify-then-switch: the router must answer /healthz before we persist.
+      try {
+        await new RouterLLMProvider({ baseUrl, token }).healthCheck();
+      } catch (err: unknown) {
+        const reason = err instanceof Error ? err.message : String(err);
+        res.status(400).json({ data: null, error: { code: 'ROUTER_UNREACHABLE', message: `Router health check failed — mode not changed. ${reason}` } });
+        return;
+      }
+    }
+
+    const ops: Promise<void>[] = [upsertSetting(AI_MODE_KEYS.mode, d.mode)];
+    if (d.routerUrl !== undefined) ops.push(upsertSetting(AI_MODE_KEYS.routerUrl, d.routerUrl));
+    if (d.routerToken !== undefined && d.routerToken !== SENTINEL_KEEP) {
+      ops.push(upsertSetting(AI_MODE_KEYS.routerToken, d.routerToken === '' ? '' : encrypt(d.routerToken)));
+    }
+    await Promise.all(ops);
+    await loadAiModeOverrides();
+    // Re-declare task classes when (re-)entering router mode; idempotent router-side.
+    if (aiMode() === 'router') registerTbTaskClasses();
+
+    await logAudit({
+      userId: req.user!.userId,
+      periodId: null,
+      entityType: 'setting',
+      entityId: null,
+      action: 'update',
+      description: previousMode === d.mode
+        ? `Updated AI mode settings (mode unchanged: ${d.mode})`
+        : `Switched AI mode: ${previousMode} → ${d.mode}`,
+    });
+    res.json({ data: { saved: true, aiMode: aiMode() }, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'ai-mode');
+  }
+});
+
+// POST /api/v1/settings/ai-mode/test (admin only) — health-check a router
+// URL/token combination (possibly unsaved form values) without persisting.
+settingsRouter.post('/ai-mode/test', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  const schema = z.object({
+    routerUrl: z.string().max(500).optional(),
+    routerToken: z.string().max(1000).optional(),
+  });
+  const result = schema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
+    return;
+  }
+  try {
+    const { baseUrl, token } = await resolveRouterTarget(result.data);
+    if (!baseUrl || !token) {
+      res.json({ data: { valid: false, message: 'Router URL and app token are both required.' }, error: null });
+      return;
+    }
+    try {
+      await assertSafeOutboundUrl(baseUrl);
+      await new RouterLLMProvider({ baseUrl, token }).healthCheck();
+      res.json({ data: { valid: true, message: 'Router is reachable and healthy.' }, error: null });
+    } catch (err: unknown) {
+      res.json({ data: { valid: false, message: err instanceof Error ? err.message : String(err) }, error: null });
+    }
+  } catch (err: unknown) {
+    sendServerError(res, err, 'ai-mode-test');
   }
 });
 
