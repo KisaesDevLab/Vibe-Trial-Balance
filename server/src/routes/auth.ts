@@ -12,6 +12,7 @@ import { authMiddleware, AuthRequest, invalidateAuthCache } from '../middleware/
 import { JWT_SECRET, JWT_EXPIRY } from '../lib/jwtConfig';
 import { sendServerError } from '../lib/safeError';
 import { passwordSchema } from '../lib/passwordPolicy';
+import { logAudit } from '../lib/periodGuard';
 
 const router = Router();
 
@@ -145,6 +146,7 @@ router.post('/change-password', authMiddleware, async (req: AuthRequest, res: Re
       must_change_password: false,
     });
     invalidateAuthCache(me.id);
+    await logAudit({ userId: me.id, periodId: null, entityType: 'user', entityId: me.id, action: 'update', description: `User "${me.username}" changed their own password` });
     res.json({ data: { ok: true }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'auth');
