@@ -65,6 +65,8 @@ export interface UploadPreview {
 
 export interface RestoreSettingsReport {
   taxCodesUpserted: number;
+  /** Legacy alpha system codes in the archive that were not restored (codes are numeric only). */
+  taxCodesSkippedLegacy?: number;
   taxCodeMapsUpserted: number;
   taxCodeMapsSkipped: number;
   appSettingsReplaced: boolean;

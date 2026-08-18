@@ -106,7 +106,7 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
       return;
     }
 
-    // Load available tax codes for this entity (include common codes like REPORTING_ONLY)
+    // Load available tax codes for this entity (plus any common/common codes)
     const taxCodes: TaxCodeRow[] = await db('tax_codes')
       .where('is_active', true)
       .where(function () {

@@ -144,3 +144,30 @@ export const updateSoftwareMap = (mapId: number, data: Partial<SoftwareMapInput>
 
 export const deleteSoftwareMap = (mapId: number) =>
   apiFetch<void>(`/tax-codes/mappings/${mapId}`, { method: 'DELETE' });
+
+// ── Legacy alpha tax code cleanup (Settings, admin) ───────────────────────────
+
+export interface LegacyTaxCodePreview {
+  legacyCodes: number;
+  softwareMaps: number;
+  accountsReferencing: number;
+  templateRowsReferencing: number;
+  consolidationRowsReferencing: number;
+  sample: Array<{ returnForm: string; activityType: string; taxCode: string; description: string }>;
+}
+
+export interface LegacyTaxCodePurgeResult {
+  deletedCodes: number;
+  accountsRemapped: number;
+  accountsCleared: number;
+  templateRowsRemapped: number;
+  templateRowsCleared: number;
+  consolidationRowsRemapped: number;
+  consolidationRowsDeleted: number;
+}
+
+export const getLegacyTaxCodeStatus = () =>
+  apiFetch<LegacyTaxCodePreview>('/tax-codes/legacy-alpha/status');
+
+export const purgeLegacyTaxCodes = () =>
+  apiFetch<LegacyTaxCodePurgeResult>('/tax-codes/legacy-alpha/purge', { method: 'POST' });

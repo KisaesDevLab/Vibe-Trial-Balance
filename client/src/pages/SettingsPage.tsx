@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getSettings, saveSettings, deleteClaudeApiKey, testClaudeKey, getLLMProviderSettings, saveLLMProviderSettings, testLLM, testOcr, fetchOpenAIModels, fetchProviderModels, getMailSettings, saveMailSettings, testMail, saveAiMode, testAiRouter, MAIL_SECRET_KEEP, type LLMProvider, type LLMProviderSettings, type OpenAIModelInfo, type MailSettingsPatch, type MailTransport } from '../api/settings';
 import { getMcpTokenStatus, generateMcpToken, revokeMcpToken } from '../api/mcpSettings';
+import { getLegacyTaxCodeStatus, purgeLegacyTaxCodes, type LegacyTaxCodePurgeResult } from '../api/taxCodes';
 import { changePassword } from '../api/auth';
 import { getAiPricing, saveAiPricing, fetchAiPricingFromClaude, getAiUsage, getAiModels, saveAiModels, getAvailableModels, type AiPricingMap } from '../api/aiUsage';
 import { useAuthStore } from '../store/uiStore';
@@ -462,6 +463,53 @@ export function SettingsPage() {
       return;
     }
     setMailTestResult({ ok: true, message: `Sent to ${res.data.to} via ${res.data.transport}.` });
+  };
+
+  // Legacy alpha tax codes — one-time cleanup (admin). The card retires itself
+  // once the status endpoint reports nothing left to remove.
+  const [legacyPurgeResult, setLegacyPurgeResult] = useState<LegacyTaxCodePurgeResult | null>(null);
+  const [legacyPurgeError, setLegacyPurgeError] = useState<string | null>(null);
+  const { data: legacyTaxStatus, isLoading: legacyTaxLoading } = useQuery({
+    queryKey: ['legacy-tax-code-status'],
+    queryFn: async () => {
+      const res = await getLegacyTaxCodeStatus();
+      if (res.error) throw new Error(res.error.message);
+      return res.data;
+    },
+    enabled: isAdmin,
+  });
+  const legacyPurgeMutation = useMutation({
+    mutationFn: purgeLegacyTaxCodes,
+    onSuccess: (res) => {
+      if (res.error) { setLegacyPurgeError(res.error.message); return; }
+      setLegacyPurgeError(null);
+      setLegacyPurgeResult(res.data);
+      qc.invalidateQueries({ queryKey: ['legacy-tax-code-status'] });
+      // Every tax-code consumer must refetch: dropdowns, mapping page, COA.
+      for (const key of ['tax-code', 'tax-codes', 'tax-codes-all', 'tax-codes-available', 'tax-codes-for-client']) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+      qc.invalidateQueries({ queryKey: ['chart-of-accounts'] });
+      qc.invalidateQueries({ queryKey: ['accounts'] });
+      qc.invalidateQueries({ queryKey: ['coa'] });
+    },
+    onError: (err) => setLegacyPurgeError(err instanceof Error ? err.message : 'Cleanup failed'),
+  });
+  const handleLegacyPurge = async () => {
+    if (!legacyTaxStatus) return;
+    const n = legacyTaxStatus.accountsReferencing;
+    const ok = await confirmAction({
+      title: 'Remove legacy alpha tax codes?',
+      message:
+        `This permanently deletes ${legacyTaxStatus.legacyCodes} legacy system tax codes ` +
+        `(and ${legacyTaxStatus.softwareMaps} software mappings). ` +
+        `${n} account${n === 1 ? '' : 's'} currently use${n === 1 ? 's' : ''} one of them: each is moved to its ` +
+        `numeric equivalent where that is unambiguous, otherwise it is left unmapped for you to reassign on ` +
+        `Tax Mapping. Take a backup first if you want a way back.`,
+      confirmLabel: 'Remove codes',
+      tone: 'danger',
+    });
+    if (ok) legacyPurgeMutation.mutate();
   };
 
   // MCP token queries — all users can view status; mutations are admin only
@@ -1751,6 +1799,74 @@ export function SettingsPage() {
                     {mailTestResult.ok ? `Test sent — ${mailTestResult.message}` : `Test failed: ${mailTestResult.message}`}
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Legacy tax code cleanup — one-time, admin only */}
+      {isAdmin && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+          <div className="px-5 py-4">
+            <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-1">Tax Code Cleanup</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+              System tax codes are numeric only. Older installs also carry a legacy set of alpha codes
+              (<code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">GROSS_RECEIPTS</code>,{' '}
+              <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">REPORTING_ONLY</code>, …) that duplicates
+              every line in the tax code dropdowns. This one-time action removes them and re-points any accounts
+              that used them.
+            </p>
+
+            {legacyTaxLoading ? (
+              <div className="text-sm text-gray-400 dark:text-gray-500">Checking…</div>
+            ) : legacyPurgeResult ? (
+              <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 text-green-800 dark:text-green-400 px-3 py-2 rounded text-xs">
+                <div className="font-medium mb-1">Removed {legacyPurgeResult.deletedCodes} legacy tax codes.</div>
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>
+                    Accounts: {legacyPurgeResult.accountsRemapped} moved to numeric equivalents
+                    {legacyPurgeResult.accountsCleared > 0 && (
+                      <>, <strong>{legacyPurgeResult.accountsCleared} left unmapped</strong> — reassign them on Tax Mapping</>
+                    )}
+                  </li>
+                  {(legacyPurgeResult.templateRowsRemapped + legacyPurgeResult.templateRowsCleared) > 0 && (
+                    <li>COA template rows: {legacyPurgeResult.templateRowsRemapped} remapped, {legacyPurgeResult.templateRowsCleared} cleared</li>
+                  )}
+                  {(legacyPurgeResult.consolidationRowsRemapped + legacyPurgeResult.consolidationRowsDeleted) > 0 && (
+                    <li>Export consolidation rows: {legacyPurgeResult.consolidationRowsRemapped} remapped, {legacyPurgeResult.consolidationRowsDeleted} removed</li>
+                  )}
+                </ul>
+              </div>
+            ) : !legacyTaxStatus || legacyTaxStatus.legacyCodes === 0 ? (
+              <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                Nothing to clean up — all system tax codes are numeric.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 text-amber-800 dark:text-amber-300 px-3 py-2 rounded text-xs">
+                  <div className="font-medium">
+                    {legacyTaxStatus.legacyCodes} legacy alpha tax codes found
+                    {legacyTaxStatus.accountsReferencing > 0 && ` · used by ${legacyTaxStatus.accountsReferencing} account${legacyTaxStatus.accountsReferencing === 1 ? '' : 's'}`}
+                  </div>
+                  {legacyTaxStatus.sample.length > 0 && (
+                    <div className="mt-1 font-mono text-[11px] text-amber-700 dark:text-amber-400">
+                      e.g. {legacyTaxStatus.sample.map((c) => c.taxCode).join(', ')}
+                      {legacyTaxStatus.legacyCodes > legacyTaxStatus.sample.length && ' …'}
+                    </div>
+                  )}
+                </div>
+                {legacyPurgeError && (
+                  <div className="text-xs text-red-600 dark:text-red-400">{legacyPurgeError}</div>
+                )}
+                <button
+                  onClick={handleLegacyPurge}
+                  disabled={legacyPurgeMutation.isPending}
+                  className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {legacyPurgeMutation.isPending ? 'Removing…' : 'Remove legacy alpha tax codes'}
+                </button>
               </div>
             )}
           </div>

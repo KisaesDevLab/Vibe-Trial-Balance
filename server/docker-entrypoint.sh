@@ -32,7 +32,7 @@ if [ "${MIGRATIONS_AUTO:-true}" = "true" ]; then
   if [ "$ADMIN_EXISTS" = "no" ]; then
     echo "[entrypoint] Fresh database detected — running seeds..."
     npx knex seed:run --knexfile knexfile.js
-    echo "[entrypoint] Database seeded (admin user, tax codes, templates)"
+    echo "[entrypoint] Database seeded (admin user, demo data, templates)"
   else
     echo "[entrypoint] Database already initialized — skipping seeds"
   fi

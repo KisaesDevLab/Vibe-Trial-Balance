@@ -488,11 +488,11 @@ export function EngagementPage() {
 
   const { data: periodsData } = useQuery({
     queryKey: ['periods', selectedClientId],
-    queryFn:  () => listPeriods(selectedClientId!),
+    queryFn:  async () => { const r = await listPeriods(selectedClientId!); return r.data ?? []; },
     enabled:  !!selectedClientId,
   });
 
-  const period = periodsData?.data?.find(p => p.id === selectedPeriodId);
+  const period = periodsData?.find(p => p.id === selectedPeriodId);
 
   const tabBtn = (t: Tab) =>
     `px-4 py-2 text-sm font-medium border-b-2 transition-colors ${

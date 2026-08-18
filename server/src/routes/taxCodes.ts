@@ -8,6 +8,8 @@ import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
+import { logAudit } from '../lib/periodGuard';
+import { previewLegacyTaxCodes, purgeLegacyTaxCodes } from '../lib/legacyTaxCodes';
 
 const router = Router();
 router.use(authMiddleware);
@@ -38,7 +40,8 @@ const mapSchema = z.object({
 const taxCodeSchema = z.object({
   returnForm: z.enum(RETURN_FORMS),
   activityType: z.enum(ACTIVITY_TYPES),
-  taxCode: z.string().min(1).max(50),
+  // System tax codes are numeric (UltraTax-style); alpha codes were legacy duplicates.
+  taxCode: z.string().regex(/^[0-9]+$/, 'Tax code must be numeric').max(50),
   description: z.string().min(1),
   sortOrder: z.number().int().optional(),
   isSystem: z.boolean().optional(),
@@ -287,6 +290,50 @@ router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
       return;
     }
     res.json({ data: row, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'taxCodes');
+  }
+});
+
+// ── Legacy alpha tax codes (one-time cleanup, Settings page) ──────────────────
+// System tax codes are numeric only; the old alpha canonical set is a duplicate
+// left behind by deleted seed files. Migration 20260817000002 removes it on
+// deploy; these endpoints let an admin do the same on demand. Both are no-ops
+// once nothing alpha remains, so the Settings button naturally retires itself.
+
+router.get('/legacy-alpha/status', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const preview = await previewLegacyTaxCodes(db);
+    res.json({ data: preview, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'taxCodes');
+  }
+});
+
+router.post('/legacy-alpha/purge', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const result = await db.transaction(async (trx) => {
+      const r = await purgeLegacyTaxCodes(trx);
+      if (r.deletedCodes > 0) {
+        await logAudit({
+          userId: req.user!.userId,
+          periodId: null,
+          clientId: null,
+          entityType: 'tax_code',
+          action: 'purge_legacy_alpha',
+          tableName: 'tax_codes',
+          description:
+            `Removed ${r.deletedCodes} legacy alpha system tax codes; ` +
+            `accounts remapped ${r.accountsRemapped}, cleared ${r.accountsCleared}; ` +
+            `template rows remapped ${r.templateRowsRemapped}, cleared ${r.templateRowsCleared}; ` +
+            `consolidation rows remapped ${r.consolidationRowsRemapped}, deleted ${r.consolidationRowsDeleted}`,
+        }, trx);
+      }
+      return r;
+    });
+    res.json({ data: result, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'taxCodes');
   }
@@ -663,9 +710,12 @@ function splitCsvLine(line: string): string[] {
 async function applyUpsertRows(rows: CsvTaxCodeRow[]) {
   let inserted = 0;
   let updated = 0;
+  let skippedNonNumeric = 0;
 
   for (const r of rows) {
     if (!r.tax_code || !r.return_form) continue;
+    // Tax codes are numeric only — alpha codes were the legacy duplicate set.
+    if (!/^[0-9]+$/.test(r.tax_code)) { skippedNonNumeric++; continue; }
 
     const existing = await db('tax_codes')
       .where({ tax_code: r.tax_code, return_form: r.return_form, activity_type: r.activity_type })
@@ -713,7 +763,7 @@ async function applyUpsertRows(rows: CsvTaxCodeRow[]) {
     }
   }
 
-  return { inserted, updated };
+  return { inserted, updated, skippedNonNumeric };
 }
 
 export { router as taxCodesRouter };

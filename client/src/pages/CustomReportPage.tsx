@@ -175,11 +175,12 @@ function Builder({
   const [catFilter, setCatFilter]         = useState<Account['category'] | 'all'>('all');
   const [reportName, setReportName]       = useState(initialName);
 
+  // NOTE: ['accounts', clientId] is shared across pages — it must always cache a plain Account[].
   const { data: coaData } = useQuery({
     queryKey: ['accounts', clientId],
-    queryFn:  () => listAccounts(clientId),
+    queryFn:  async () => { const r = await listAccounts(clientId); return r.data ?? []; },
   });
-  const accounts = coaData?.data ?? [];
+  const accounts = coaData ?? [];
 
   // All account IDs already in any section
   const usedIds = new Set(sections.flatMap(s => s.accountIds));

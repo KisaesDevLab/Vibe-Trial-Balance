@@ -665,14 +665,13 @@ A full reconciliation workspace for matching bank transactions to book balances:
 
 **Tax-year crosswalk updates:**
 
-The pre-seeded tax codes and software-mapping crosswalks (UltraTax CS, Lacerte, GoSystem, CCH Axcess, Generic) live in database seeds under `server/seeds/004_tax_codes_1065.js`, `005_tax_codes_1120s_1040_common.js`, and `006_tax_codes_1120.js`. They are **form-based, not year-based** — codes are organized by entity type (1040, 1065, 1120, 1120S), not by tax year.
+The system tax codes and software-mapping crosswalks (UltraTax CS, Lacerte, GoSystem, CCH Axcess) are installed by Knex migrations under `server/migrations/` (starting with `20260321000007_replace_system_tax_codes.js`), not by seed files. Tax codes are **numeric only** (UltraTax-style, e.g. `100`, `88888` = reporting only / no mapping) and are **form-based, not year-based** — codes are organized by entity type (1040, 1065, 1120, 1120S) and activity type, not by tax year. The old alpha canonical codes (`GROSS_RECEIPTS`, `REPORTING_ONLY`, …) were legacy duplicates and are removed by migration `20260817000002_remove_legacy_alpha_tax_codes.js`; the Tax Codes admin page and CSV import reject non-numeric codes. If an older install still shows duplicate alpha lines (e.g. it was updated without running migrations), an admin can remove them on demand with **Settings → Tax Code Cleanup → Remove legacy alpha tax codes**; the card reports what was remapped and disappears once nothing is left.
 
 When the IRS publishes tax-year-end changes (typically December–January each year):
 
-1. Maintainer updates the relevant seed file(s) for the new tax-year version of any code that changed.
-2. For existing databases, the change ships as a Knex migration under `server/migrations/` that upserts only the affected codes — preserving any customer overrides.
-3. Fresh installs run the updated seeds automatically on first boot.
-4. Customer-specific overrides take precedence: edits made in **Admin > Tax Codes** are persisted with `is_system: false` and are not overwritten by future migrations.
+1. The change ships as a Knex migration under `server/migrations/` that upserts only the affected codes — preserving any customer overrides.
+2. Fresh installs pick it up automatically because migrations run on first boot.
+3. Customer-specific overrides take precedence: edits made in **Admin > Tax Codes** are persisted with `is_system: false` and are not overwritten by future migrations.
 
 ### 6.10 Financial Statements
 

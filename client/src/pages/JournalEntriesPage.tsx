@@ -407,10 +407,10 @@ export function JournalEntriesPage() {
 
   const { data: periodsData } = useQuery({
     queryKey: ['periods', selectedClientId],
-    queryFn: () => listPeriods(selectedClientId!),
+    queryFn: async () => { const r = await listPeriods(selectedClientId!); return r.data ?? []; },
     enabled: !!selectedClientId,
   });
-  const currentPeriod = periodsData?.data?.find((p) => p.id === selectedPeriodId);
+  const currentPeriod = periodsData?.find((p) => p.id === selectedPeriodId);
 
   const queryKey = ['journal-entries', selectedPeriodId, typeFilter];
 

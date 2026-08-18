@@ -555,7 +555,11 @@ function RestoreSection({ clients }: { clients: Client[] }) {
                     skipped every user used to look identical to one that worked. */}
                 {result.settingsReport && (
                   <ul className="text-[11px] text-gray-600 dark:text-gray-400 list-disc list-inside">
-                    <li>{result.settingsReport.taxCodesUpserted} tax codes upserted</li>
+                    <li>
+                      {result.settingsReport.taxCodesUpserted} tax codes upserted
+                      {(result.settingsReport.taxCodesSkippedLegacy ?? 0) > 0 &&
+                        ` (${result.settingsReport.taxCodesSkippedLegacy} legacy alpha codes skipped — tax codes are numeric only)`}
+                    </li>
                     <li>
                       {result.settingsReport.taxCodeMapsUpserted} software mappings upserted
                       {result.settingsReport.taxCodeMapsSkipped > 0 &&

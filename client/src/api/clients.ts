@@ -12,6 +12,7 @@ export interface Client {
   activity_type: 'business' | 'rental' | 'farm' | 'farm_rental';
   default_tax_software: 'ultratax' | 'cch' | 'lacerte' | 'drake';
   tax_id: string | null;
+  default_source_account_id: number | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -24,6 +25,7 @@ export interface ClientInput {
   defaultTaxSoftware?: 'ultratax' | 'cch' | 'lacerte' | 'drake';
   taxId?: string | null;
   activityType?: 'business' | 'rental' | 'farm' | 'farm_rental';
+  defaultSourceAccountId?: number | null;
 }
 
 export const listClients = () => apiFetch<Client[]>('/clients');

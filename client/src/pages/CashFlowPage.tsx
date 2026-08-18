@@ -56,12 +56,13 @@ function ConfigureTab({ clientId }: { clientId: number }) {
   const qc = useQueryClient();
   const [filter, setFilter] = useState('');
 
+  // NOTE: ['accounts', clientId] is shared across pages — it must always cache a plain Account[].
   const { data: coaData } = useQuery({
     queryKey: ['accounts', clientId],
-    queryFn:  () => listAccounts(clientId),
+    queryFn:  async () => { const r = await listAccounts(clientId); return r.data ?? []; },
   });
 
-  const accounts = coaData?.data ?? [];
+  const accounts = coaData ?? [];
 
   const updateMut = useMutation({
     mutationFn: ({ id, cat }: { id: number; cat: CfCategory }) =>
@@ -346,15 +347,15 @@ export function CashFlowPage() {
   const [tab, setTab] = useState<Tab>('statement');
   const { selectedClientId, selectedPeriodId } = useUIStore();
 
-  const { data: clientsData } = useQuery({ queryKey: ['clients'], queryFn: listClients, enabled: !!selectedClientId });
+  const { data: clientsData } = useQuery({ queryKey: ['clients'], queryFn: async () => { const r = await listClients(); return r.data ?? []; }, enabled: !!selectedClientId });
   const { data: periodsData } = useQuery({
     queryKey: ['periods', selectedClientId],
-    queryFn:  () => listPeriods(selectedClientId!),
+    queryFn:  async () => { const r = await listPeriods(selectedClientId!); return r.data ?? []; },
     enabled:  !!selectedClientId,
   });
 
-  const client = clientsData?.data?.find(c => c.id === selectedClientId);
-  const period = periodsData?.data?.find(p => p.id === selectedPeriodId);
+  const client = clientsData?.find(c => c.id === selectedClientId);
+  const period = periodsData?.find(p => p.id === selectedPeriodId);
 
   const tabBtn = (t: Tab) =>
     `px-4 py-2 text-sm font-medium border-b-2 transition-colors ${

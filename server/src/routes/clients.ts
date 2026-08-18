@@ -19,7 +19,21 @@ const clientSchema = z.object({
   defaultTaxSoftware: z.enum(['ultratax', 'cch', 'lacerte', 'gosystem']).optional(),
   taxId: z.string().max(20).optional().nullable(),
   activityType: z.enum(['business', 'rental', 'farm', 'farm_rental']).optional().default('business'),
+  // Transaction Entry: pre-fills the Account column on new register rows.
+  defaultSourceAccountId: z.number().int().positive().nullable().optional(),
 });
+
+/** A default source account must be an active account owned by this client. */
+async function validateDefaultSourceAccount(
+  clientId: number,
+  accountId: number | null | undefined,
+): Promise<string | null> {
+  if (accountId === null || accountId === undefined) return null;
+  const acct = await db('chart_of_accounts')
+    .where({ id: accountId, client_id: clientId, is_active: true })
+    .first('id');
+  return acct ? null : "Default account must be an active account in this client's chart of accounts";
+}
 
 router.get('/', async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -108,8 +122,17 @@ router.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     updates.tax_id = result.data.taxId;
   if (result.data.activityType !== undefined)
     updates.activity_type = result.data.activityType;
+  if (result.data.defaultSourceAccountId !== undefined)
+    updates.default_source_account_id = result.data.defaultSourceAccountId;
 
   try {
+    if (result.data.defaultSourceAccountId !== undefined) {
+      const problem = await validateDefaultSourceAccount(id, result.data.defaultSourceAccountId);
+      if (problem) {
+        res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: problem } });
+        return;
+      }
+    }
     const [updated] = await db('clients').where({ id }).update(updates).returning('*');
     if (!updated) {
       res

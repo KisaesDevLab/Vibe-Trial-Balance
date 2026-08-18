@@ -44,10 +44,10 @@ export function TaxBasisPlPage() {
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
-  const { data: clientsData } = useQuery({ queryKey: ['clients'], queryFn: listClients });
+  const { data: clientsData } = useQuery({ queryKey: ['clients'], queryFn: async () => { const r = await listClients(); return r.data ?? []; } });
   const { data: periodsData } = useQuery({
     queryKey: ['periods', selectedClientId],
-    queryFn: () => listPeriods(selectedClientId!),
+    queryFn: async () => { const r = await listPeriods(selectedClientId!); return r.data ?? []; },
     enabled: !!selectedClientId,
   });
   const { data: tbRows, isLoading: tbLoading } = useQuery({
@@ -77,11 +77,11 @@ export function TaxBasisPlPage() {
   });
 
   const client = useMemo(
-    () => clientsData?.data?.find((c) => c.id === selectedClientId),
+    () => clientsData?.find((c) => c.id === selectedClientId),
     [clientsData, selectedClientId],
   );
   const period = useMemo(
-    () => periodsData?.data?.find((p) => p.id === selectedPeriodId),
+    () => periodsData?.find((p) => p.id === selectedPeriodId),
     [periodsData, selectedPeriodId],
   );
 

@@ -537,6 +537,48 @@ async function makeUserFkSanitizer(
   };
 }
 
+/**
+ * Legacy alpha system tax codes (GROSS_RECEIPTS, REPORTING_ONLY, …) were purged
+ * by migration 20260817000002 — system codes are numeric only. Archives written
+ * before that can still carry them, both as tax_codes rows and as
+ * chart_of_accounts.tax_code_id references.
+ */
+function isLegacyAlphaTaxCode(row: Record<string, unknown>): boolean {
+  return row.is_system === true && !/^[0-9]+$/.test(String(row.tax_code ?? ''));
+}
+
+/**
+ * Build a resolver for chart_of_accounts.tax_code_id on client restores. Client
+ * archives don't restore tax_codes, so the raw id is only meaningful on the
+ * instance that wrote the archive — and even there the code may since have been
+ * deleted (see above). Resolution: id still exists live → keep; otherwise look
+ * the archive's tax_codes row up by (return_form, activity_type, tax_code) → live
+ * id; otherwise null (the account shows as unmapped instead of failing the FK).
+ */
+async function makeTaxCodeResolver(
+  trx: Knex.Transaction,
+  tables: Record<string, unknown[]>,
+): Promise<(oldId: unknown) => number | null> {
+  const liveRows = (await trx('tax_codes').select('id', 'return_form', 'activity_type', 'tax_code')) as Array<{
+    id: number; return_form: string; activity_type: string; tax_code: string;
+  }>;
+  const liveIds = new Set(liveRows.map((r) => r.id));
+  const liveByKey = new Map(liveRows.map((r) => [`${r.return_form}|${r.activity_type}|${r.tax_code}`, r.id]));
+  const archiveById = new Map<number, string>();
+  for (const row of (tables['tax_codes'] as Array<Record<string, unknown>> | undefined) ?? []) {
+    if (typeof row.id === 'number') {
+      archiveById.set(row.id, `${row.return_form}|${row.activity_type}|${row.tax_code}`);
+    }
+  }
+  return (oldId: unknown): number | null => {
+    if (oldId === null || oldId === undefined) return null;
+    const id = oldId as number;
+    if (liveIds.has(id)) return id;
+    const key = archiveById.get(id);
+    return key !== undefined ? liveByKey.get(key) ?? null : null;
+  };
+}
+
 async function restoreAsNew(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
@@ -599,8 +641,10 @@ async function restoreAsNew(
       if (existing) {
         insertName = `${insertName} (Restored)`;
       }
+      // default_source_account_id points into chart_of_accounts, which is
+      // restored AFTER clients — insert null and patch it once accounts are mapped.
       const [inserted] = await trx('clients')
-        .insert({ ...row, id: undefined, name: insertName })
+        .insert({ ...row, id: undefined, name: insertName, default_source_account_id: null })
         .returning('id');
       const newId = (inserted as { id: number }).id;
       clientMap.set(oldId, newId);
@@ -649,10 +693,12 @@ async function restoreAsNew(
   const coaData = tables['chart_of_accounts'] as Array<Record<string, unknown>> | undefined;
   if (coaData && coaData.length > 0) {
     const coaMap = registerMap('chart_of_accounts');
+    const resolveTaxCode = await makeTaxCodeResolver(trx, tables);
     const prepared = coaData.map((row) => ({
       ...row,
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
+      tax_code_id: resolveTaxCode(row.tax_code_id),
     }));
     const encoded = await encodeJsonColumns(trx, 'chart_of_accounts', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
@@ -662,6 +708,14 @@ async function restoreAsNew(
         const oldId = coaData[indexInWhole + i].id as number;
         coaMap.set(oldId, (r as { id: number }).id);
       });
+    }
+    // Second pass: clients.default_source_account_id (deferred above).
+    for (const row of clientsData ?? []) {
+      const newDefault = mapOptional('chart_of_accounts', row.default_source_account_id);
+      const newCid = getNewId('clients', row.id as number);
+      if (newDefault !== null) {
+        await trx('clients').where('id', newCid).update({ default_source_account_id: newDefault });
+      }
     }
   }
 
@@ -883,7 +937,8 @@ async function restoreReplace(
   }
 
   // Insert client with target ID
-  await trx('clients').insert({ ...clientsData[0], id: targetClientId });
+  // default_source_account_id is patched after chart_of_accounts is restored.
+  await trx('clients').insert({ ...clientsData[0], id: targetClientId, default_source_account_id: null });
 
   const periodIdMap = new Map<number, number>();
   const coaIdMap = new Map<number, number>();
@@ -925,7 +980,10 @@ async function restoreReplace(
   // chart_of_accounts — bulk
   const coaData = tables['chart_of_accounts'] as Array<Record<string, unknown>> | undefined;
   if (coaData && coaData.length > 0) {
-    const prepared = coaData.map((row) => remapClientId({ ...row, id: undefined }));
+    const resolveTaxCode = await makeTaxCodeResolver(trx, tables);
+    const prepared = coaData.map((row) =>
+      remapClientId({ ...row, id: undefined, tax_code_id: resolveTaxCode(row.tax_code_id) }),
+    );
     const encoded = await encodeJsonColumns(trx, 'chart_of_accounts', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
       const indexInWhole = encoded.indexOf(batch[0]);
@@ -933,6 +991,10 @@ async function restoreReplace(
       ins.forEach((r, i) => {
         coaIdMap.set(coaData[indexInWhole + i].id as number, (r as { id: number }).id);
       });
+    }
+    const newDefault = mapOptional(coaIdMap, clientsData[0].default_source_account_id);
+    if (newDefault !== null) {
+      await trx('clients').where('id', targetClientId).update({ default_source_account_id: newDefault });
     }
   }
 
@@ -1036,6 +1098,8 @@ async function restoreReplace(
 
 interface RestoreSettingsReport {
   taxCodesUpserted: number;
+  /** Legacy alpha system codes in the archive, not restored (numeric only). */
+  taxCodesSkippedLegacy: number;
   taxCodeMapsUpserted: number;
   /** Software maps whose parent tax code was absent from the archive. */
   taxCodeMapsSkipped: number;
@@ -1061,6 +1125,7 @@ async function restoreSettings(
 ): Promise<RestoreSettingsReport> {
   const report: RestoreSettingsReport = {
     taxCodesUpserted: 0,
+    taxCodesSkippedLegacy: 0,
     taxCodeMapsUpserted: 0,
     taxCodeMapsSkipped: 0,
     appSettingsReplaced: false,
@@ -1083,6 +1148,7 @@ async function restoreSettings(
   const taxCodesData = tables['tax_codes'] as Array<Record<string, unknown>> | undefined;
   if (taxCodesData && taxCodesData.length > 0) {
     for (const row of taxCodesData) {
+      if (isLegacyAlphaTaxCode(row)) { report.taxCodesSkippedLegacy++; continue; }
       const { id: oldId, ...values } = row as { id?: number } & Record<string, unknown>;
       const [upserted] = await trx('tax_codes')
         .insert(values)

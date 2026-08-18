@@ -9,13 +9,17 @@ This is distinct from the Bank Transactions import workflow — use Transaction 
 
 ## The Register Grid
 Each row represents one transaction with these fields:
+- **Account** (first column): The source bank/cash account the money moved through. New rows carry forward the account from the row above, or use the client's **Default account** (see below)
 - **Date**: Transaction date (defaults to today)
 - **Ref**: Optional reference number (check number, wire ID, etc.)
 - **Payee**: The payee or payer name
-- **Account**: The COA account to assign the transaction to
+- **Category**: The COA account to assign the transaction to (the offset to the source account)
 - **Amount**: Dollar amount; positive = debit, negative = credit (use parentheses or minus sign for credits)
 
 Unsaved rows are highlighted with a light blue tint so you can see which entries haven't been posted yet.
+
+## Default Account
+Use the **Default account** dropdown in the page header to choose the source account that new rows should start with (typically the client's main operating/checking account). The choice is saved per client, so it persists across sessions and devices. Pick "— none —" to clear it. Rows that already have an account are not changed.
 
 ## Smart Payee Dropdown
 As you type in the Payee field, the system searches for previously-used payees for this client:

@@ -54,9 +54,12 @@ interface OverrideDropdownProps {
   onChange: (codeId: number | null, taxCode: string | null, description: string | null) => void;
 }
 
-/** Find the REPORTING_ONLY tax code from the list */
+/** Crosswalk code for "reporting only, no tax mapping" (present in every form/activity). */
+const REPORTING_ONLY_CODE = '88888';
+
+/** Find the reporting-only tax code from the list */
 function findReportingOnlyCode(taxCodes: TaxCode[]): TaxCode | undefined {
-  return taxCodes.find((c) => c.tax_code === 'REPORTING_ONLY');
+  return taxCodes.find((c) => c.tax_code === REPORTING_ONLY_CODE);
 }
 
 function OverrideDropdown({ currentCodeId, taxCodes, onChange }: OverrideDropdownProps) {
@@ -67,7 +70,7 @@ function OverrideDropdown({ currentCodeId, taxCodes, onChange }: OverrideDropdow
   const isReportingOnly = reportingOnlyCode != null && currentCodeId === reportingOnlyCode.id;
   const current = taxCodes.find((c) => c.id === currentCodeId);
   const filtered = taxCodes.filter((c) => {
-    if (c.tax_code === 'REPORTING_ONLY') return false; // shown separately
+    if (c.tax_code === REPORTING_ONLY_CODE) return false; // shown separately
     if (!search) return true;
     const q = search.toLowerCase();
     return c.tax_code.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
@@ -130,7 +133,7 @@ function OverrideDropdown({ currentCodeId, taxCodes, onChange }: OverrideDropdow
                 onClick={selectReportingOnly}
                 className={`w-full text-left px-3 py-1.5 text-xs hover:bg-amber-50 dark:hover:bg-amber-900/20 border-b dark:border-gray-700 ${isReportingOnly ? 'bg-amber-50 dark:bg-amber-900/20 font-medium' : ''}`}
               >
-                <span className="text-amber-600 dark:text-amber-400 font-medium">REPORTING_ONLY</span>
+                <span className="text-amber-600 dark:text-amber-400 font-medium">{REPORTING_ONLY_CODE}</span>
                 <span className="text-amber-500 dark:text-amber-500 ml-1">— Reporting only, no tax mapping</span>
               </button>
             )}

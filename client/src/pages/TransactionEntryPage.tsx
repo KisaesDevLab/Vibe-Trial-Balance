@@ -7,6 +7,7 @@ import { evalAmountExpr, evalAndFormatAmount } from '../utils/evalAmountExpr';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listPayees, listBankTransactions, createManualTransactions, updateBankTransaction, deleteBankTransaction, type Payee, type ManualTransaction } from '../api/bankTransactions';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
+import { listClients, updateClient } from '../api/clients';
 import { useUIStore } from '../store/uiStore';
 import { DateInput } from '../components/DateInput';
 
@@ -501,12 +502,30 @@ export function TransactionEntryPage() {
     select: (r) => r.data ?? [],
   });
 
+  // NOTE: ['accounts', clientId] is shared with other pages, which cache a plain
+  // Account[] — never a wrapped ApiResult — or whichever page loads first
+  // leaves the other with empty dropdowns for the whole staleTime.
   const { data: accountsData } = useQuery({
     queryKey: ['accounts', selectedClientId],
-    queryFn: () => listAccounts(selectedClientId!),
+    queryFn: async () => {
+      const r = await listAccounts(selectedClientId!);
+      if (r.error) throw new Error(r.error.message);
+      return r.data ?? [];
+    },
     enabled: !!selectedClientId,
-    select: (r) => r.data ?? [],
   });
+
+  // Current client → per-client default source account for new rows
+  const { data: clientsData } = useQuery({
+    queryKey: ['clients'],
+    queryFn: async () => {
+      const r = await listClients();
+      if (r.error) throw new Error(r.error.message);
+      return r.data ?? [];
+    },
+    enabled: !!selectedClientId,
+  });
+  const currentClient = clientsData?.find((c) => c.id === selectedClientId) ?? null;
 
   // Load existing manual transactions so they reappear when navigating back
   const { data: savedTxData } = useQuery({
@@ -535,12 +554,52 @@ export function TransactionEntryPage() {
       amountStr: (tx.amount / 100).toFixed(2),
       saved: true,
     }));
-    const lastSrcId = savedRows[savedRows.length - 1]?.sourceAccountId ?? null;
+    const lastSrcId = savedRows[savedRows.length - 1]?.sourceAccountId ?? defaultRef.current;
     setRows([...savedRows, makeRow(lastSrcId)]);
   }, [savedTxData]);
 
   const payees: Payee[] = payeesData ?? [];
   const accounts: Account[] = accountsData ?? [];
+
+  // Default account for new rows: the client's saved default, ignored if the
+  // account has since been deleted/deactivated.
+  const defaultSourceAccountId = useMemo(() => {
+    const id = currentClient?.default_source_account_id ?? null;
+    return id !== null && accounts.some((a) => a.id === id) ? id : null;
+  }, [currentClient?.default_source_account_id, accounts]);
+  const defaultRef = useRef<number | null>(null);
+  useEffect(() => { defaultRef.current = defaultSourceAccountId; }, [defaultSourceAccountId]);
+  const prevDefaultRef = useRef<number | null>(null);
+
+  // Apply the default to blank, untouched rows (the initial row and the trailing
+  // auto-added row) whenever it becomes known or changes.
+  useEffect(() => {
+    setRows((prev) => {
+      let changed = false;
+      const next = prev.map((r) => {
+        const blank = !r.saved && !r.id && !r.payee.trim() && !r.amountStr.trim() && !r.accountId && !r.ref.trim();
+        if (!blank || r.sourceAccountId === defaultSourceAccountId) return r;
+        // Only overwrite when the row is empty or still carries the previous default
+        if (r.sourceAccountId !== null && r.sourceAccountId !== prevDefaultRef.current) return r;
+        changed = true;
+        return { ...r, sourceAccountId: defaultSourceAccountId };
+      });
+      prevDefaultRef.current = defaultSourceAccountId;
+      return changed ? next : prev;
+    });
+  }, [defaultSourceAccountId]);
+
+  const setDefaultMutation = useMutation({
+    mutationFn: (accountId: number | null) =>
+      updateClient(selectedClientId!, { defaultSourceAccountId: accountId }),
+    onSuccess: (res, accountId) => {
+      if (res.error) { showToast(`Could not save default account: ${res.error.message}`, 'error'); return; }
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      const acct = accounts.find((a) => a.id === accountId);
+      showToast(acct ? `Default account set to ${acct.account_number} - ${acct.account_name}.` : 'Default account cleared.', 'success');
+    },
+    onError: (err) => showToast(err instanceof Error ? err.message : 'Could not save default account', 'error'),
+  });
 
   // Stat cards. Sign convention: positive amount = money INTO the bank
   // account = a DEBIT to cash (the JE sync debits the source account), so
@@ -565,7 +624,7 @@ export function TransactionEntryPage() {
   useEffect(() => {
     const last = rows[rows.length - 1];
     if (last && !last.saved && last.payee.trim()) {
-      setRows((prev) => [...prev, makeRow(last.sourceAccountId)]);
+      setRows((prev) => [...prev, makeRow(last.sourceAccountId ?? defaultRef.current)]);
     }
   }, [rows]);
 
@@ -591,7 +650,7 @@ export function TransactionEntryPage() {
     }
     setRows((prev) => {
       const next = prev.filter((r) => r._id !== id);
-      return next.length === 0 ? [makeRow()] : next;
+      return next.length === 0 ? [makeRow(defaultRef.current)] : next;
     });
     setPayeeMap((m) => { const n = new Map(m); n.delete(id); return n; });
     showToast('Transaction deleted.', 'success');
@@ -771,13 +830,30 @@ export function TransactionEntryPage() {
           <h1 className="text-base font-semibold text-gray-900 dark:text-white">Transaction Entry</h1>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Tab · Shift+Tab moves between cells &nbsp;·&nbsp; Enter moves down &nbsp;·&nbsp; ↑↓ moves between rows</p>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={unsavedValid.length === 0 || saveMutation.isPending}
-          className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          {saveMutation.isPending ? 'Saving…' : `Save ${unsavedValid.length > 0 ? unsavedValid.length : ''} transaction${unsavedValid.length !== 1 ? 's' : ''}`}
-        </button>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+            <span className="whitespace-nowrap">Default account</span>
+            <select
+              value={defaultSourceAccountId ?? ''}
+              disabled={setDefaultMutation.isPending || accounts.length === 0}
+              title="Pre-fills the Account column on new rows for this client"
+              className="max-w-[16rem] px-1.5 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white dark:bg-gray-700 dark:text-white disabled:opacity-50"
+              onChange={(e) => setDefaultMutation.mutate(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">— none —</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.account_number} - {a.account_name}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={handleSave}
+            disabled={unsavedValid.length === 0 || saveMutation.isPending}
+            className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {saveMutation.isPending ? 'Saving…' : `Save ${unsavedValid.length > 0 ? unsavedValid.length : ''} transaction${unsavedValid.length !== 1 ? 's' : ''}`}
+          </button>
+        </div>
       </div>
 
       {/* Stat cards */}
