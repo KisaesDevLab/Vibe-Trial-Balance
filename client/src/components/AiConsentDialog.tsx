@@ -91,4 +91,10 @@ export const AI_PII = {
     { label: 'Bank statement content', detail: 'Full text or page images from the bank statement — account numbers are masked to last 4 digits in text mode' },
     { label: 'Transaction details', detail: 'Dates, descriptions, amounts, check numbers, and payee names visible in the statement' },
   ],
+  scannedSheet: [
+    { label: 'Scanned sheet page images', detail: 'Each page of the uploaded PDF is sent as an image (or as OCR text) to the configured AI provider' },
+    { label: 'Handwritten line items', detail: 'Descriptions, amounts, dates, and reference numbers written on the sheet' },
+    { label: 'Known payee names', detail: "Up to 150 payee names from this client's transaction history, so the AI can match handwriting to known payees" },
+    { label: 'Chart of accounts & rules', detail: 'Account numbers/names and existing classification rules, so the AI can suggest a category for each line' },
+  ],
 };

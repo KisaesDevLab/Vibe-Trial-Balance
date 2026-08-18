@@ -31,6 +31,16 @@ As you type in the Payee field, the system searches for previously-used payees f
 ## Smart Category Selection
 The Account dropdown for each row shows a **Previously Used** section at the top with accounts you've recently assigned to this payee. Below that is the full chart of accounts. This makes re-entering monthly recurring transactions fast.
 
+## Import a Scanned Sheet (AI)
+Clients often hand in a handwritten sheet listing what they spent and deposited. Click **Import scanned sheet…** in the page header, drop the scanned PDF (up to 10 pages), set the **sheet date** (used for every line unless a date is written on the line) and the bank account, and click **Read sheet**. After the AI data-use notice, the AI reads each page — description, amount, and whether each line is money in or out — and shows a review screen with the scanned page on the left and the extracted rows on the right:
+- Rows are colour-coded by confidence; **amber cells** are values the AI was unsure about (illegible digits, unclear in/out) — click any cell to correct it, or click the in/out badge to flip it
+- The **Payee** box is free text, pre-filled with exactly what was written on the sheet; type to change it — known payees are suggested as you type but never substituted for the client's wording
+- Categories are pre-filled from a matching payee's rule / most-used account, and the **AI suggests a category** for every remaining row (badge "AI 86%"; amber when it's unsure). Use "AI: fill missing categories" / "re-suggest all" in the toolbar to run it again; anything you set by hand is never overwritten
+- Untick rows you don't want; use "Apply to all rows" to reset dates to the sheet date
+- **Add N rows to register** places them in the register as **unsaved** rows — nothing is posted until you press **Save**, so you get the normal validation, rule learning, and journal entries
+
+Requirements: a vision-capable AI provider (Claude, OpenAI, an Ollama vision model, or the Vibe AI Router) and, for scanned PDFs, poppler-utils on the server (included in the Docker image). If OCR pre-processing is configured under Settings, it can be ticked as an alternative for scans the vision model struggles with.
+
 ## Adding and Managing Rows
 - The grid starts with 5 blank rows
 - Click **+ Add Row** to add more rows

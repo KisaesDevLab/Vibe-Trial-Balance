@@ -10,6 +10,8 @@ import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { listClients, updateClient } from '../api/clients';
 import { useUIStore } from '../store/uiStore';
 import { DateInput } from '../components/DateInput';
+import { ScannedSheetImportDialog, type ImportedDraftRow } from '../components/ScannedSheetImportDialog';
+import { resolvePayeeAccount } from '../utils/matchPayee';
 
 // Shared class for all register input controls — keeps height and font consistent
 const inputCls = 'w-full px-1.5 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 dark:bg-gray-700 dark:text-white';
@@ -66,6 +68,11 @@ interface RegisterRow {
   amountStr: string;
   saved: boolean;
   _incomplete?: boolean;
+}
+
+/** A row the user hasn't touched: safe to overwrite defaults on or drop when inserting imports. */
+function isBlankRow(r: RegisterRow): boolean {
+  return !r.saved && !r.id && !r.payee.trim() && !r.amountStr.trim() && !r.accountId && !r.ref.trim();
 }
 
 // Column indices (used for data-col attributes and navigation)
@@ -528,7 +535,7 @@ export function TransactionEntryPage() {
   const currentClient = clientsData?.find((c) => c.id === selectedClientId) ?? null;
 
   // Load existing manual transactions so they reappear when navigating back
-  const { data: savedTxData } = useQuery({
+  const { data: savedTxData, isFetched: savedTxFetched } = useQuery({
     queryKey: ['bank-transactions', selectedClientId, 'manual-register', selectedPeriodId],
     queryFn: () => listBankTransactions(selectedClientId!, {
       status: 'manual',
@@ -577,8 +584,7 @@ export function TransactionEntryPage() {
     setRows((prev) => {
       let changed = false;
       const next = prev.map((r) => {
-        const blank = !r.saved && !r.id && !r.payee.trim() && !r.amountStr.trim() && !r.accountId && !r.ref.trim();
-        if (!blank || r.sourceAccountId === defaultSourceAccountId) return r;
+        if (!isBlankRow(r) || r.sourceAccountId === defaultSourceAccountId) return r;
         // Only overwrite when the row is empty or still carries the previous default
         if (r.sourceAccountId !== null && r.sourceAccountId !== prevDefaultRef.current) return r;
         changed = true;
@@ -675,13 +681,51 @@ export function TransactionEntryPage() {
     });
   }
 
+  // ── Scanned-sheet import ──────────────────────────────────────────────────
+  const [showScanImport, setShowScanImport] = useState(false);
+
+  /** Keys of rows already in the register — the import dialog uses them for a soft duplicate warning. */
+  const existingRowKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const r of rows) {
+      const cents = parseDollarInput(r.amountStr);
+      if (r.payee.trim() && cents !== null) keys.add(`${r.date}|${r.payee.trim().toLowerCase()}|${cents}`);
+    }
+    return keys;
+  }, [rows]);
+
+  /** Drop AI-read rows into the register as unsaved rows; the normal Save flow posts them. */
+  const insertImportedRows = useCallback((drafts: ImportedDraftRow[]) => {
+    if (drafts.length === 0) return;
+    const newRows: RegisterRow[] = drafts.map((d) => ({
+      ...makeRow(d.sourceAccountId ?? defaultRef.current),
+      date: d.date,
+      ref: d.ref,
+      payee: d.payee,
+      accountId: d.accountId, // already resolved (and possibly cleared on purpose) in the dialog
+      amountStr: (d.amountCents / 100).toFixed(2),
+    }));
+    setPayeeMap((m) => {
+      const n = new Map(m);
+      newRows.forEach((r, i) => { const p = drafts[i].matchedPayee; if (p) n.set(r._id, p); });
+      return n;
+    });
+    setRows((prev) => {
+      const kept = [...prev];
+      while (kept.length > 0 && isBlankRow(kept[kept.length - 1])) kept.pop();
+      const lastSrc = newRows[newRows.length - 1].sourceAccountId ?? defaultRef.current;
+      return [...kept, ...newRows, makeRow(lastSrc)];
+    });
+    showToast(`${newRows.length} row${newRows.length !== 1 ? 's' : ''} added from the scanned sheet — review them, then Save.`, 'success');
+  }, []);
+
   function onPayeeSelect(rowId: number, value: string, payee: Payee | null) {
     const patch: Partial<RegisterRow> = { payee: value };
     if (payee) {
       setPayeeMap((m) => { const n = new Map(m); n.set(rowId, payee); return n; });
       // Auto-fill category from rule, or most used
-      if (payee.ruleAccountId) patch.accountId = payee.ruleAccountId;
-      else if (payee.categories[0]) patch.accountId = payee.categories[0].accountId;
+      const suggested = resolvePayeeAccount(payee);
+      if (suggested !== null) patch.accountId = suggested;
     } else {
       setPayeeMap((m) => { const n = new Map(m); n.delete(rowId); return n; });
     }
@@ -831,6 +875,15 @@ export function TransactionEntryPage() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Tab · Shift+Tab moves between cells &nbsp;·&nbsp; Enter moves down &nbsp;·&nbsp; ↑↓ moves between rows</p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowScanImport(true)}
+            disabled={!savedTxFetched}
+            title="Upload a scanned PDF of a handwritten sheet and let the AI read the line items into the register"
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+          >
+            Import scanned sheet…
+          </button>
           <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
             <span className="whitespace-nowrap">Default account</span>
             <select
@@ -1021,6 +1074,19 @@ export function TransactionEntryPage() {
           </tbody>
         </table>
       </div>
+
+      {showScanImport && (
+        <ScannedSheetImportDialog
+          key={selectedClientId}
+          clientId={selectedClientId}
+          accounts={accounts}
+          payees={payees}
+          defaultSourceAccountId={defaultSourceAccountId}
+          existingRowKeys={existingRowKeys}
+          onClose={() => setShowScanImport(false)}
+          onInsert={insertImportedRows}
+        />
+      )}
     </div>
   );
 }
