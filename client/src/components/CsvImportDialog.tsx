@@ -209,6 +209,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
       const newMatches = result.data.matches.map((m) => ({ ...m }));
       setAnalysis(newAnalysis);
       setMatches(newMatches);
+      setPreSkipAction({});
 
       const missingNumbers = newAnalysis.columns.accountNumber === null;
       setNumberChoice(missingNumbers ? 'pending' : null);
@@ -266,6 +267,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
 
         setAnalysis(revised);
         setMatches(revised.matches.map((m) => ({ ...m })));
+        setPreSkipAction({});
         if (!needsAccountNumbers(revised.matches)) setNumberChoice(null);
 
         const dropWarning = dropped > 0
@@ -378,6 +380,42 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
     }
   };
 
+  // ── Row inclusion ──────────────────────────────────────────────────────────
+  // Excluding a row sets the same 'skip' action the AI puts on headers and
+  // subtotals, which is the flag the server already drops on confirm — so a
+  // hand-excluded row rides the path that is known to work. Remember what the
+  // row was before, so re-including restores it instead of guessing.
+
+  const [preSkipAction, setPreSkipAction] = useState<Record<number, EditableMatch['action']>>({});
+
+  const setRowIncluded = (idx: number, included: boolean) => {
+    const m = matches[idx];
+    if (!m) return;
+    if (!included) {
+      if (m.action === 'skip') return;
+      setPreSkipAction((prev) => ({ ...prev, [idx]: m.action }));
+      updateMatch(idx, { action: 'skip' });
+      return;
+    }
+    if (m.action !== 'skip') return;
+    handleActionChange(idx, preSkipAction[idx] ?? 'match');
+  };
+
+  const setAllIncluded = (included: boolean) => {
+    if (!included) {
+      setPreSkipAction((prev) => {
+        const next = { ...prev };
+        matches.forEach((m, i) => { if (m.action !== 'skip') next[i] = m.action; });
+        return next;
+      });
+      setMatches((prev) => prev.map((m) => (m.action === 'skip' ? m : { ...m, action: 'skip' })));
+      return;
+    }
+    setMatches((prev) => prev.map((m, i) => (
+      m.action === 'skip' ? { ...m, action: preSkipAction[i] ?? 'match' } : m
+    )));
+  };
+
   // ── Confirm ────────────────────────────────────────────────────────────────
 
   const [taxCodeNote, setTaxCodeNote] = useState<string | null>(null);
@@ -408,6 +446,8 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
   const createCount = matches.filter((m) => m.action === 'create_new').length;
   const skipCount = matches.filter((m) => m.action === 'skip').length;
   const totalActive = matchCount + createCount;
+  const allIncluded = matches.length > 0 && skipCount === 0;
+  const someIncluded = totalActive > 0 && skipCount > 0;
 
   const activeMatches = matches.filter((m) => m.action !== 'skip');
   const totalDebit = activeMatches.reduce((s, m) => s + m.debitCents, 0);
@@ -617,6 +657,19 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
               <table className="w-full text-sm border-collapse">
                 <thead className="bg-gray-50 dark:bg-gray-800/60 sticky top-0 z-10">
                   <tr>
+                    <th className="text-center px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-14">
+                      <span className="flex flex-col items-center gap-0.5">
+                        <input
+                          type="checkbox"
+                          checked={allIncluded}
+                          ref={(el) => { if (el) el.indeterminate = someIncluded; }}
+                          onChange={(e) => setAllIncluded(e.target.checked)}
+                          aria-label="Include all rows in the import"
+                          className="rounded border-gray-300 dark:border-gray-600 text-blue-600"
+                        />
+                        <span className="normal-case">Import</span>
+                      </span>
+                    </th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-10">Row</th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-28">Acct #</th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700">CSV Account Name</th>
@@ -633,6 +686,16 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                       key={idx}
                       className={`${rowBorderClass(match)} hover:bg-gray-50 dark:hover:bg-gray-700/50 ${match.action === 'skip' ? 'line-through text-gray-400 dark:text-gray-500' : ''}`}
                     >
+                      <td className="px-3 py-1.5 text-center border-b dark:border-gray-700 no-underline">
+                        <input
+                          type="checkbox"
+                          checked={match.action !== 'skip'}
+                          onChange={(e) => setRowIncluded(idx, e.target.checked)}
+                          aria-label={`Include row ${idx + 1} in the import`}
+                          title={match.action === 'skip' ? 'Excluded — check to import this row' : 'Included — uncheck to leave this row out'}
+                          className="rounded border-gray-300 dark:border-gray-600 text-blue-600 align-middle"
+                        />
+                      </td>
                       <td className="px-3 py-1.5 text-xs text-gray-400 dark:text-gray-500 border-b dark:border-gray-700">{match.csvRow + 1}</td>
                       <td className="px-3 py-1.5 font-mono text-xs border-b dark:border-gray-700">
                         {match.action === 'create_new' ? (

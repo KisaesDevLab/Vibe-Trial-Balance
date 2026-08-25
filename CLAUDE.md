@@ -124,6 +124,13 @@ All planned phases complete. App is feature-complete.
 - Period Controls + Audit Trail + Dashboard (locking with TB balance check, admin-only unlock, roll-forward copies tickmarks)
 - User Management (admin CRUD)
 - COA import from CSV with column mapping, copy-from-client
+- **Every file-import preview has a per-row include checkbox** so rows can be left out before
+  committing: CsvImportDialog / PdfImportDialog (ticking off sets the row's `action` to `'skip'`,
+  the same flag the AI puts on headers/subtotals and the server already drops on confirm; the
+  pre-skip action is remembered so re-ticking restores it), ChartOfAccountsPage ImportModal
+  (`excluded` index set; rows with parse errors are never tickable), plus the checkboxes that
+  already existed on BankStatementPdfImportDialog, ScannedSheetImportDialog and the PY tie-out
+  dialogs. Preview tables must render every row — you can't untick what isn't drawn.
 - TB Import (current + prior year), PY comparison columns
 - AI Diagnostics page (Claude Haiku) with Spinner loading state
 - Bank Reconciliation (full workspace, admin reopen)

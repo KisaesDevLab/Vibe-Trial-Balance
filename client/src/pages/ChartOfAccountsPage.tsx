@@ -494,6 +494,9 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
     subcategoryCol: '', taxLineCol: '', workpaperRefCol: '', unitCol: '',
   });
   const [fileName, setFileName] = useState('');
+  // Rows the user has unticked in the preview, by position in mappedRows.
+  // Cleared whenever a new file is loaded — the positions wouldn't survive it.
+  const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const importMutation = useMutation({
@@ -513,6 +516,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
       const hdrs = all[0].map((h) => h.trim());
       setHeaders(hdrs);
       setRawRows(all.slice(1));
+      setExcluded(new Set());
       setMapping(autoDetectMapping(hdrs));
     };
     reader.readAsText(file);
@@ -522,8 +526,25 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
     setMapping((m) => ({ ...m, [k]: v }));
 
   const mappedRows = step === 'mapping' ? applyMapping(rawRows, headers, mapping) : [];
-  const validRows  = mappedRows.filter((r) => r._errors.length === 0);
+  // A row is imported only if it parsed cleanly AND the user left it ticked.
+  const validRows  = mappedRows.filter((r, i) => r._errors.length === 0 && !excluded.has(i));
   const errorCount = mappedRows.filter((r) => r._errors.length > 0).length;
+  const excludedCount = mappedRows.filter((_, i) => excluded.has(i)).length;
+
+  const toggleExcluded = (i: number) => setExcluded((prev) => {
+    const next = new Set(prev);
+    next.has(i) ? next.delete(i) : next.add(i);
+    return next;
+  });
+
+  // Select-all covers the rows that could actually be imported; rows with
+  // parse errors are never importable, so they aren't counted either way.
+  const importable = mappedRows.filter((r) => r._errors.length === 0).length;
+  const allIncluded = importable > 0 && validRows.length === importable;
+  const someIncluded = validRows.length > 0 && !allIncluded;
+  const setAllIncluded = (included: boolean) => setExcluded(
+    included ? new Set() : new Set(mappedRows.map((_, i) => i).filter((i) => mappedRows[i]._errors.length === 0)),
+  );
   const canProceed = !!mapping.accountNumberCol && !!mapping.accountNameCol &&
                      !!mapping.categoryCol;
 
@@ -641,13 +662,25 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
               <div>
                 <div className="flex items-center gap-4 mb-2 text-sm">
                   <span className="text-gray-700 dark:text-gray-300">{mappedRows.length} rows</span>
-                  <span className="text-green-700 dark:text-green-400 font-medium">{validRows.length} valid</span>
+                  <span className="text-green-700 dark:text-green-400 font-medium">{validRows.length} to import</span>
+                  {excludedCount > 0 && <span className="text-gray-500 dark:text-gray-400 font-medium">{excludedCount} excluded</span>}
                   {errorCount > 0 && <span className="text-red-600 dark:text-red-400 font-medium">{errorCount} with errors</span>}
                 </div>
-                <div className="border border-gray-200 dark:border-gray-700 rounded overflow-auto max-h-44">
+                {/* Every row renders (no cap): you can't untick a row you can't see. */}
+                <div className="border border-gray-200 dark:border-gray-700 rounded overflow-auto max-h-72">
                   <table className="w-full text-xs">
                     <thead className="bg-gray-50 dark:bg-gray-800/60 sticky top-0">
                       <tr>
+                        <th className="px-2 py-1.5 text-center font-semibold text-gray-500 dark:text-gray-400 w-8">
+                          <input
+                            type="checkbox"
+                            checked={allIncluded}
+                            ref={(el) => { if (el) el.indeterminate = someIncluded; }}
+                            onChange={(e) => setAllIncluded(e.target.checked)}
+                            aria-label="Import all rows"
+                            className="rounded border-gray-300 dark:border-gray-600 text-blue-600"
+                          />
+                        </th>
                         <th className="px-2 py-1.5 text-left font-semibold text-gray-500 dark:text-gray-400 w-5">#</th>
                         <th className="px-2 py-1.5 text-left font-semibold text-gray-500 dark:text-gray-400">Acct #</th>
                         <th className="px-2 py-1.5 text-left font-semibold text-gray-500 dark:text-gray-400">Name</th>
@@ -657,8 +690,22 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                      {mappedRows.slice(0, 50).map((r, i) => (
-                        <tr key={i} className={r._errors.length > 0 ? 'bg-red-50 dark:bg-red-900/20' : ''}>
+                      {mappedRows.map((r, i) => (
+                        <tr key={i} className={
+                          r._errors.length > 0 ? 'bg-red-50 dark:bg-red-900/20'
+                          : excluded.has(i) ? 'opacity-40 line-through' : ''
+                        }>
+                          <td className="px-2 py-1 text-center no-underline">
+                            <input
+                              type="checkbox"
+                              checked={r._errors.length === 0 && !excluded.has(i)}
+                              disabled={r._errors.length > 0}
+                              onChange={() => toggleExcluded(i)}
+                              aria-label={`Import row ${i + 1}`}
+                              title={r._errors.length > 0 ? "This row can't be imported until its errors are fixed" : 'Untick to leave this row out of the import'}
+                              className="rounded border-gray-300 dark:border-gray-600 text-blue-600 disabled:opacity-40"
+                            />
+                          </td>
                           <td className="px-2 py-1 text-gray-400 dark:text-gray-500">{i + 1}</td>
                           <td className="px-2 py-1 font-mono text-sm">{r.accountNumber}</td>
                           <td className="px-2 py-1 max-w-32 truncate">{r.accountName}</td>
@@ -670,9 +717,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
                     </tbody>
                   </table>
                 </div>
-                {mappedRows.length > 50 && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Showing first 50 of {mappedRows.length} rows.</p>
-                )}
+
               </div>
             )}
 
