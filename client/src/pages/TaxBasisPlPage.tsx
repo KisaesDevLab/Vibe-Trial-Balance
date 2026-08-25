@@ -12,6 +12,7 @@ import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { listTaxCodes, type TaxCode } from '../api/taxCodes';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { categoryNet } from '../lib/accounting';
+import { hasReportableActivity } from '../utils/tbActivity';
 
 const fmt = (cents: number) => {
   if (cents === 0) return '—';
@@ -30,6 +31,9 @@ function taxNet(r: TBRow) {
 
 interface TaxGroup {
   taxCodeId: number | null;
+  /** Plain tax code, used in the per-row cell. */
+  code: string;
+  /** Heading label — carries a category suffix when a code split. */
   taxCode: string;
   description: string;
   sortOrder: number;
@@ -99,55 +103,37 @@ export function TaxBasisPlPage() {
       (a) => a.is_active && (a.category === 'revenue' || a.category === 'expenses'),
     );
 
-    // Group by tax_code_id. Unassigned accounts are split by category —
-    // otherwise a mixed revenue/expense "Unassigned" group's subtotal adds
-    // both as positive and the group subtotals no longer sum to net income.
-    const groupMap = new Map<string, TaxGroup>();
+    // Group by tax_code_id AND category. Rows render revenue as cr−dr and
+    // expenses as dr−cr, both positive, so a group holding both would subtotal
+    // them as if they were the same sign — a credit-balance revenue account
+    // adding into the total like a debit — and the group subtotals would stop
+    // summing to net income. Splitting by category is what keeps the arithmetic
+    // honest; it applies to real tax codes (88888 "reporting only" routinely
+    // holds a mix) exactly as it always has to Unassigned. Codes with only one
+    // category are unaffected — they produce a single group with a plain label.
+    const groupMap = new Map<string, TaxGroup & { category: string }>();
 
     for (const account of plAccounts) {
       const tbRow = tbMap.get(account.id);
+      // Dormant accounts — no beginning balance, no activity, no ending
+      // balance — stay off the report (utils/tbActivity.ts). An account with
+      // no TB row at all is dormant by definition.
+      if (!tbRow || !hasReportableActivity(tbRow)) continue;
       const tcId = account.tax_code_id;
       const tc = tcId !== null ? taxCodeMap.get(tcId) : undefined;
-      const groupKey = tcId !== null ? `tc-${tcId}` : `unassigned-${account.category}`;
+      const groupKey = `${tcId !== null ? `tc-${tcId}` : 'unassigned'}-${account.category}`;
 
-      // Build a full TBRow — use real data if available, otherwise zero balances
-      const r: TBRow = tbRow ?? {
-        period_id: selectedPeriodId ?? 0,
-        account_id: account.id,
-        account_number: account.account_number,
-        account_name: account.account_name,
-        category: account.category,
-        normal_balance: account.normal_balance,
-        tax_line: account.tax_line,
-        workpaper_ref: account.workpaper_ref,
-        unit: account.unit,
-        is_active: account.is_active,
-        preparer_notes: account.preparer_notes,
-        reviewer_notes: account.reviewer_notes,
-        unadjusted_debit: 0,
-        unadjusted_credit: 0,
-        prior_year_debit: 0,
-        prior_year_credit: 0,
-        trans_adj_debit: 0,
-        trans_adj_credit: 0,
-        post_trans_debit: 0,
-        post_trans_credit: 0,
-        book_adj_debit: 0,
-        book_adj_credit: 0,
-        tax_adj_debit: 0,
-        tax_adj_credit: 0,
-        book_adjusted_debit: 0,
-        book_adjusted_credit: 0,
-        tax_adjusted_debit: 0,
-        tax_adjusted_credit: 0,
-      };
+      // Real TB row: dormant/absent accounts were skipped above.
+      const r: TBRow = tbRow;
 
       if (!groupMap.has(groupKey)) {
         groupMap.set(groupKey, {
           taxCodeId: tcId,
-          taxCode: tc?.tax_code ?? (account.category === 'revenue' ? 'Unassigned — Revenue' : 'Unassigned — Expenses'),
+          code: tc?.tax_code ?? 'Unassigned',
+          taxCode: tc?.tax_code ?? 'Unassigned',
           description: tc?.description ?? '(no tax code assigned)',
           sortOrder: tc?.sort_order ?? (account.category === 'revenue' ? 99998 : 99999),
+          category: account.category,
           rows: [],
           net: 0,
         });
@@ -157,7 +143,19 @@ export function TaxBasisPlPage() {
       grp.net += taxNet(r);
     }
 
-    return Array.from(groupMap.values()).sort((a, b) => a.sortOrder - b.sortOrder || a.taxCode.localeCompare(b.taxCode));
+    // Only disambiguate the label where a tax code really did split, so the
+    // common single-category group keeps its plain code as its heading.
+    const codeCounts = new Map<string, number>();
+    for (const g of groupMap.values()) codeCounts.set(g.code, (codeCounts.get(g.code) ?? 0) + 1);
+
+    return Array.from(groupMap.values())
+      .map(({ category, ...g }) => ({
+        ...g,
+        taxCode: (codeCounts.get(g.code) ?? 0) > 1
+          ? `${g.code} — ${category === 'revenue' ? 'Revenue' : 'Expenses'}`
+          : g.code,
+      }))
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.taxCode.localeCompare(b.taxCode));
   }, [tbRows, coaAccounts, tcData, selectedPeriodId]);
 
   // Net Income = total revenue - total expenses (both displayed as positive)
@@ -255,7 +253,7 @@ export function TaxBasisPlPage() {
                   {/* Account rows */}
                   {grp.rows.map((r, i) => (
                     <tr key={r.account_id} className={`border-t border-gray-100 dark:border-gray-700 ${i % 2 === 1 ? 'bg-gray-50/50 dark:bg-gray-800/30' : ''}`}>
-                      <td className="px-3 py-1.5 text-sm font-mono text-gray-400 dark:text-gray-500">{grp.taxCodeId === null ? '—' : grp.taxCode}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-gray-400 dark:text-gray-500">{grp.taxCodeId === null ? '—' : grp.code}</td>
                       <td className="px-3 py-1.5 text-sm font-mono text-gray-600 dark:text-gray-400">{r.account_number}</td>
                       <td className="px-3 py-1.5 text-sm text-gray-900 dark:text-gray-200">{r.account_name}</td>
                       <td className={`px-3 py-1.5 text-right font-mono tabular-nums text-sm ${taxNet(r) < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-200'}`}>

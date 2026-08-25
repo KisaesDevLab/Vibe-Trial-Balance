@@ -10,6 +10,7 @@ import { listPeriods } from '../api/periods';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
+import { filterReportableRows } from '../utils/tbActivity';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -393,7 +394,9 @@ export function FinancialStatementsPage() {
   const client = clients?.find((c) => c.id === selectedClientId);
   const period = periods?.find((p) => p.id === selectedPeriodId);
 
-  const rows = (data ?? []).filter((r) => r.is_active);
+  // Dormant accounts (no beginning balance, no activity, no ending balance)
+  // are left off reports — see utils/tbActivity.ts.
+  const rows = filterReportableRows((data ?? []).filter((r) => r.is_active));
 
   const handleExport = () => {
     if (!rows.length) return;

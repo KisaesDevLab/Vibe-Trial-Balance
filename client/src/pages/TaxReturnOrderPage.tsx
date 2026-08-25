@@ -11,6 +11,8 @@ import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { listTaxCodes, type TaxCode } from '../api/taxCodes';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
+import { categoryNet } from '../lib/accounting';
+import { hasReportableActivity } from '../utils/tbActivity';
 
 const CATEGORY_LABELS: Record<string, string> = {
   assets: 'Assets', liabilities: 'Liabilities', equity: 'Equity',
@@ -25,10 +27,12 @@ const fmt = (cents: number) => {
   return cents < 0 ? `(${s})` : s;
 };
 
+// Category-based signing, not per-account normal_balance: an account whose
+// COA normal_balance disagrees with its category (contra accounts, or a
+// mis-set flag) would otherwise render — and subtotal — with the sign
+// inverted. See lib/accounting.ts.
 function taxNet(r: TBRow) {
-  return r.normal_balance === 'debit'
-    ? r.tax_adjusted_debit - r.tax_adjusted_credit
-    : r.tax_adjusted_credit - r.tax_adjusted_debit;
+  return categoryNet(r.category, r.tax_adjusted_debit, r.tax_adjusted_credit);
 }
 
 interface TaxGroup {
@@ -104,39 +108,15 @@ export function TaxReturnOrderPage() {
     const groupMap = new Map<number | null, TaxGroup>();
     for (const account of filteredAccounts) {
       const tbRow = tbMap.get(account.id);
+      // Dormant accounts — no beginning balance, no activity, no ending
+      // balance — stay off the report (utils/tbActivity.ts). An account with
+      // no TB row at all is dormant by definition.
+      if (!tbRow || !hasReportableActivity(tbRow)) continue;
       const tcId = account.tax_code_id;
       const tc = tcId !== null ? taxCodeMap.get(tcId) : undefined;
 
-      const r: TBRow = tbRow ?? {
-        period_id: selectedPeriodId ?? 0,
-        account_id: account.id,
-        account_number: account.account_number,
-        account_name: account.account_name,
-        category: account.category,
-        normal_balance: account.normal_balance,
-        tax_line: account.tax_line,
-        workpaper_ref: account.workpaper_ref,
-        unit: account.unit,
-        is_active: account.is_active,
-        preparer_notes: account.preparer_notes,
-        reviewer_notes: account.reviewer_notes,
-        unadjusted_debit: 0,
-        unadjusted_credit: 0,
-        prior_year_debit: 0,
-        prior_year_credit: 0,
-        trans_adj_debit: 0,
-        trans_adj_credit: 0,
-        post_trans_debit: 0,
-        post_trans_credit: 0,
-        book_adj_debit: 0,
-        book_adj_credit: 0,
-        tax_adj_debit: 0,
-        tax_adj_credit: 0,
-        book_adjusted_debit: 0,
-        book_adjusted_credit: 0,
-        tax_adjusted_debit: 0,
-        tax_adjusted_credit: 0,
-      };
+      // Real TB row: dormant/absent accounts were skipped above.
+      const r: TBRow = tbRow;
 
       if (!groupMap.has(tcId)) {
         groupMap.set(tcId, {

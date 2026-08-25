@@ -11,6 +11,8 @@ import { useUIStore, useAuthStore } from '../store/uiStore';
 import { getTBTickmarks, TICKMARK_COLOR_CLASSES, type TBTickmarkMap } from '../api/tickmarks';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
+import { categoryNet } from '../lib/accounting';
+import { filterReportableRows } from '../utils/tbActivity';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -41,10 +43,11 @@ const CAT_LABEL: Record<string, string> = {
   revenue: 'Revenue', expenses: 'Expenses',
 };
 
+// CY-vs-PY variance signing. Category-based, so a contra account (or one
+// whose normal_balance flag disagrees with its category) doesn't get a
+// variance with the sign inverted. See lib/accounting.ts.
 function netRow(r: TBRow, dk: keyof TBRow, ck: keyof TBRow): number {
-  const dr = r[dk] as number;
-  const cr = r[ck] as number;
-  return r.normal_balance === 'debit' ? dr - cr : cr - dr;
+  return categoryNet(r.category, r[dk] as number, r[ck] as number);
 }
 
 // Adjusted balances present NETTED per account (only the winning side shows),
@@ -159,7 +162,9 @@ export function TrialBalanceReportPage() {
   const client = clients?.find((c) => c.id === selectedClientId);
   const period = periods?.find((p) => p.id === selectedPeriodId);
 
-  const rows = (data ?? []).filter((r) => r.is_active);
+  // Dormant accounts (no beginning balance, no activity, no ending balance)
+  // are left off reports — see utils/tbActivity.ts.
+  const rows = filterReportableRows((data ?? []).filter((r) => r.is_active));
 
   const handleExport = () => {
     const header: string[] = ['Account #', 'Account Name', 'Category', 'Tax Line', 'Workpaper Ref'];

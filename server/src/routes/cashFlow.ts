@@ -7,6 +7,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
+import { whereHasActivity } from '../lib/tbActivity';
 
 export const cashFlowRouter = Router({ mergeParams: true });
 cashFlowRouter.use(authMiddleware);
@@ -49,16 +50,17 @@ cashFlowRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
       .join('chart_of_accounts as c', 'c.id', 'tb.account_id')
       .where('tb.period_id', periodId)
       .where('tb.is_active', true)
+      .modify(whereHasActivity, 'tb')
       .select(
         'tb.account_id', 'tb.account_number', 'tb.account_name',
         'tb.category', 'tb.normal_balance',
         'tb.book_adjusted_debit', 'tb.book_adjusted_credit',
         'tb.prior_year_debit', 'tb.prior_year_credit',
         'c.cash_flow_category',
-      );
+      ) as Record<string, unknown>[];
 
     // Normalise bigint strings
-    const parsed = rows.map(r => ({
+    const parsed = rows.map((r) => ({
       ...r,
       book_adjusted_debit:  Number(r.book_adjusted_debit  ?? 0),
       book_adjusted_credit: Number(r.book_adjusted_credit ?? 0),

@@ -20,6 +20,8 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
 import { PdfTemplateService } from '../pdf/PdfTemplateService';
 import type { Content, TableCell } from 'pdfmake/interfaces';
+import { whereHasActivity } from '../lib/tbActivity';
+import { categoryNet } from '../lib/accounting';
 
 export const exportsRouter = Router({ mergeParams: true });
 exportsRouter.use(authMiddleware);
@@ -97,7 +99,11 @@ function sanitizeCell<T>(value: T): T | string {
 function netBalance(r: Record<string, unknown>): number {
   const dr = Number(r.tax_adjusted_debit ?? 0);
   const cr = Number(r.tax_adjusted_credit ?? 0);
-  return r.normal_balance === 'debit' ? (dr - cr) / 100 : (cr - dr) / 100;
+  // Signed by category, not by the per-account normal_balance flag: a contra
+  // account (Accumulated Depreciation is category 'assets', normal_balance
+  // 'credit') has to export negative within its category, and an account whose
+  // flag simply disagrees with its category must not export inverted.
+  return categoryNet(String(r.category), dr, cr) / 100;
 }
 
 /** Build a styled Excel workbook and return the buffer */
@@ -142,6 +148,7 @@ async function getTbRows(periodId: number, software?: string) {
     .leftJoin('tax_codes as tc', 'tc.id', 'coa.tax_code_id')
     .where('tb.period_id', periodId)
     .where('tb.is_active', true)
+    .modify(whereHasActivity, 'tb')
     .select(
       'tb.account_id',
       'coa.account_number',

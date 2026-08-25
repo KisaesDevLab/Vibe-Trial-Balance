@@ -9,13 +9,18 @@ import { listTickmarks, getTBTickmarks, TICKMARK_COLOR_CLASSES, type Tickmark, t
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsxMultiSheet } from '../utils/downloadXlsx';
+import { categoryNet } from '../lib/accounting';
+import { filterReportableRows } from '../utils/tbActivity';
 
 type ColSet = 'book' | 'tax' | 'both';
 
+// Category-based signing (matches the PDF generator and lib/accounting.ts) —
+// per-account normal_balance would invert any account whose flag disagrees
+// with its category.
 function netBalance(row: TBRow, colSet: 'book' | 'tax'): number {
   const dr = colSet === 'book' ? row.book_adjusted_debit : row.tax_adjusted_debit;
   const cr = colSet === 'book' ? row.book_adjusted_credit : row.tax_adjusted_credit;
-  return row.normal_balance === 'debit' ? dr - cr : cr - dr;
+  return categoryNet(row.category, dr, cr);
 }
 
 function fmt(cents: number): string {
@@ -94,7 +99,9 @@ export function WorkpaperIndexPage() {
     enabled: !!selectedPeriodId,
   });
 
-  const rows = (data ?? []).filter((r) => r.is_active);
+  // Dormant accounts (no beginning balance, no activity, no ending balance)
+  // are left off reports — see utils/tbActivity.ts.
+  const rows = filterReportableRows((data ?? []).filter((r) => r.is_active));
 
   // Group by workpaper_ref; null → 'Unassigned'
   const groups = new Map<string, TBRow[]>();

@@ -49,6 +49,17 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
 - Knex.js for all DB queries and migrations (JS migration files for Windows compat)
 - TanStack Query for server state in React, Zustand only for UI state
 - Adjusted balances are NEVER stored, always computed via DB view
+- **Dormant accounts are hidden on reports:** an account with no beginning balance (`prior_year_*`),
+  no activity (`unadjusted_*`, `trans_adj_*`, `book_adj_*`, `tax_adj_*` all zero) and therefore no
+  ending balance is dropped from every report view, PDF and export. Shared predicate:
+  `server/src/lib/tbActivity.ts` (`whereHasActivity` knex modifier + `hasReportableActivity`) and
+  `client/src/utils/tbActivity.ts` (`hasReportableActivity` / `filterReportableRows`) — keep the two
+  in sync. NOT applied to the editable TB grid, Tax Mapping, COA, JEs or PY Tie-Out: you can't type a
+  balance into a row that isn't rendered.
+- **Report amounts are signed by `category`, never by `normal_balance`:** use `categoryNet()` /
+  `netIncomeContribution()` from `lib/accounting.ts` (client and server copies). `normal_balance` is a
+  per-account COA flag the user can set independently of category, so signing by it inverts contra
+  accounts and any account whose flag disagrees with its category.
 - API routes return: { data, error, meta }
 - Named exports, PascalCase components, camelCase utilities, snake_case DB columns
 
@@ -89,7 +100,7 @@ All planned phases complete. App is feature-complete.
   - System tax codes are **numeric only** and live in migrations (crosswalk set from `20260321000007` on). The legacy alpha seed files (`seeds/004–006`) were deleted and migration `20260817000002` purges any alpha system codes they left behind (they duplicated every line). `88888` = reporting only / no mapping (was `REPORTING_ONLY`). The same cleanup is available on demand via `server/src/lib/legacyTaxCodes.ts` (Settings → Tax Code Cleanup; `GET/POST /tax-codes/legacy-alpha/{status,purge}`, admin) — keep it in sync with the migration. Never re-add alpha system codes.
 - Plan Phase 5: Tax Mapping View — TaxMappingPage (separate page): account table with tax code dropdowns, progress bar, category subtotals, net income row, balance sheet check, optimistic updates with flash; dual-write COA PATCH (tax_code_id → also sets tax_line for compat)
 - Plan Phase 6: PDF Report Generation — pdfmake server-side PDFs for all 8 report types, PdfTemplateService (Roboto fonts, branded header/footer, formatCents), 8 PDF endpoints; client PDF buttons replace window.print() on all report pages
-- Plan Phase 7: Financial Statements — Tax-Basis P&L (income/expense grouped by tax code, sort_order, per-code subtotals, net income), Tax Return Order (all accounts in tax return order with category filter); PDF + frontend for both; IS/BS/CashFlow already complete from prior phases
+- Plan Phase 7: Financial Statements — Tax-Basis P&L (income/expense grouped by tax code AND category — a code holding both, e.g. 88888, splits into "code — Revenue"/"code — Expenses" so subtotals don't add revenue and expenses together; sort_order, per-code subtotals, net income), Tax Return Order (all accounts in tax return order with category filter); PDF + frontend for both; IS/BS/CashFlow already complete from prior phases
 - Plan Phase 8: Multi-Period Comparison — comparison API (GET /periods/:id/compare/:compareId) with book-adjusted variance rows; per-account variance notes (PUT with compare_period_id); Flux Analysis PDF; MultiPeriodPage with category grouping, $ and % variance, significance threshold highlighting, inline note editing; added to Reports group in sidebar
 - Plan Phase 9: Exports — UltraTax/CCH/Lacerte/GoSystem/Generic CSV+Excel exports, Working TB Excel export, Bookkeeper Letter PDF, ExportDialog with pre-export validation (unmapped accounts, out-of-balance check), ExportsPage under Reports sidebar group
 - Plan Phase 11: AI Tax Line Auto-Assignment — POST /tax-lines/auto-assign (5-step waterfall: existing→prior-period→cross-client→AI→unmappable), bulk-confirm with dual-write, GET patterns endpoint, AssignmentPreviewModal with confidence color coding and override dropdowns, "Auto-assign Tax Codes" button wired to TaxMappingPage

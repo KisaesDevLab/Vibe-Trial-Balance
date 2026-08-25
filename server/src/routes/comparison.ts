@@ -9,6 +9,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
 import { categoryNet } from '../lib/accounting';
+import { whereHasActivity } from '../lib/tbActivity';
 
 export const comparisonRouter = Router({ mergeParams: true });
 comparisonRouter.use(authMiddleware);
@@ -45,6 +46,7 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
     const [currentRows, compareRows] = await Promise.all([
       db('v_adjusted_trial_balance as vtb')
         .where('vtb.period_id', periodId)
+        .modify(whereHasActivity, 'vtb')
         .select(
           'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
           'vtb.category', 'vtb.normal_balance', 'vtb.is_active',
@@ -53,6 +55,7 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
         .orderBy('vtb.account_number', 'asc'),
       db('v_adjusted_trial_balance as vtb')
         .where('vtb.period_id', comparePeriodId)
+        .modify(whereHasActivity, 'vtb')
         .select(
           'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
           'vtb.category', 'vtb.normal_balance', 'vtb.is_active',

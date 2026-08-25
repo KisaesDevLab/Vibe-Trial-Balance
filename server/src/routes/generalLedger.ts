@@ -12,7 +12,9 @@ glPeriodRouter.use(authMiddleware);
 
 // GET /api/v1/periods/:periodId/general-ledger
 // Returns one entry per account that has either a TB balance or JE activity,
-// with the unadjusted TB balance and all JE lines for the period.
+// with the unadjusted TB balance and all JE lines for the period. Dormant
+// accounts — no beginning balance, no activity, no ending balance — are left
+// out (see lib/tbActivity.ts).
 glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const periodId = Number(req.params.periodId);
   if (isNaN(periodId)) {
@@ -33,6 +35,8 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
         'coa.normal_balance',
         'tb.unadjusted_debit',
         'tb.unadjusted_credit',
+        'tb.prior_year_debit',
+        'tb.prior_year_credit',
       )
       .orderBy('coa.account_number');
 
@@ -58,7 +62,7 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
       .orderBy(['coa.account_number', 'je.entry_date', 'je.entry_number']);
 
     // Index TB rows by account_id
-    interface TBRow { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; unadjusted_debit: unknown; unadjusted_credit: unknown; }
+    interface TBRow { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; unadjusted_debit: unknown; unadjusted_credit: unknown; prior_year_debit: unknown; prior_year_credit: unknown; }
     interface JELine { account_id: number; account_number: string; account_name: string; category: string; normal_balance: string; journal_entry_id: number; entry_date: string; entry_number: number; entry_type: string; description: string | null; debit: unknown; credit: unknown; }
 
     const tbMap = new Map<number, TBRow>();
@@ -87,7 +91,7 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
       a.account_number.localeCompare(b.account_number, undefined, { numeric: true }),
     );
 
-    const result = accounts.map((acct) => {
+    const result = accounts.flatMap((acct) => {
       const tb = tbMap.get(acct.account_id);
       const lines = (linesByAccount.get(acct.account_id) ?? []).map((l) => ({
         journal_entry_id: l.journal_entry_id,
@@ -98,16 +102,23 @@ glPeriodRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =
         debit: Number(l.debit),
         credit: Number(l.credit),
       }));
-      return {
+      const unadjustedDebit  = tb ? Number(tb.unadjusted_debit)  : 0;
+      const unadjustedCredit = tb ? Number(tb.unadjusted_credit) : 0;
+      const dormant =
+        lines.length === 0 &&
+        unadjustedDebit === 0 && unadjustedCredit === 0 &&
+        Number(tb?.prior_year_debit ?? 0) === 0 && Number(tb?.prior_year_credit ?? 0) === 0;
+      if (dormant) return [];
+      return [{
         account_id: acct.account_id,
         account_number: acct.account_number,
         account_name: acct.account_name,
         category: acct.category,
         normal_balance: acct.normal_balance,
-        unadjusted_debit: tb ? Number(tb.unadjusted_debit) : 0,
-        unadjusted_credit: tb ? Number(tb.unadjusted_credit) : 0,
+        unadjusted_debit: unadjustedDebit,
+        unadjusted_credit: unadjustedCredit,
         lines,
-      };
+      }];
     });
 
     res.json({ data: result, error: null, meta: { count: result.length } });

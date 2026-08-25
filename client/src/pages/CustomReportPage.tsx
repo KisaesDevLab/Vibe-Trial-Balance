@@ -18,6 +18,8 @@ import {
   ReportColumn,
   ReportConfig,
 } from '../api/savedReports';
+import { categoryNet } from '../lib/accounting';
+import { filterReportableRows } from '../utils/tbActivity';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -35,7 +37,8 @@ function netBalance(row: TBRow, col: ReportColumn): number {
   } else {
     dr = row.prior_year_debit; cr = row.prior_year_credit;
   }
-  return row.normal_balance === 'debit' ? dr - cr : cr - dr;
+  // Category-based signing — see lib/accounting.ts.
+  return categoryNet(row.category, dr, cr);
 }
 
 const COL_LABELS: Record<ReportColumn, string> = {
@@ -56,7 +59,8 @@ function ReportViewer({ config, periodId }: { config: ReportConfig; periodId: nu
     queryFn:  () => getTrialBalance(periodId),
   });
 
-  const tbRows = tbData?.data ?? [];
+  // Dormant accounts are left off reports — see utils/tbActivity.ts.
+  const tbRows = filterReportableRows(tbData?.data ?? []);
   const tbMap = new Map<number, TBRow>(tbRows.map(r => [r.account_id, r]));
 
   const thCls = 'num px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700';

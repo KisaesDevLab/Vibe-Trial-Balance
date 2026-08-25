@@ -10,6 +10,7 @@ import { Knex } from 'knex';
 import type { Content, TableCell } from 'pdfmake/interfaces';
 import { PdfTemplateService, DocOptions } from './PdfTemplateService';
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
+import { whereHasActivity } from '../lib/tbActivity';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared DB helpers
@@ -60,6 +61,7 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
 
   const rows = await db('v_adjusted_trial_balance')
     .where({ period_id: periodId, is_active: true })
+    .modify(whereHasActivity)
     .orderBy('account_number', 'asc');
 
   const showGroup = (g: string) => !visibleGroups || visibleGroups.includes(g);
@@ -434,6 +436,7 @@ export async function generateGeneralLedgerPdf(
       'coa.id as account_id', 'coa.account_number', 'coa.account_name',
       'coa.normal_balance',
       'tb.unadjusted_debit', 'tb.unadjusted_credit',
+      'tb.prior_year_debit', 'tb.prior_year_credit',
     )
     .orderBy('coa.account_number');
 
@@ -492,6 +495,15 @@ export async function generateGeneralLedgerPdf(
     const unadjCr    = Number(acct.unadjusted_credit ?? 0);
     const normalBal  = acct.normal_balance as string;
 
+    // Skip dormant accounts — no beginning balance, no entries, no ending
+    // balance — so the ledger matches the on-screen GL (lib/tbActivity.ts).
+    const acctLines = (linesByAccount.get(aid) ?? []) as Record<string, unknown>[];
+    if (
+      acctLines.length === 0 &&
+      unadjDr === 0 && unadjCr === 0 &&
+      Number(acct.prior_year_debit ?? 0) === 0 && Number(acct.prior_year_credit ?? 0) === 0
+    ) continue;
+
     // Opening balance
     let balance = normalBal === 'debit' ? unadjDr - unadjCr : unadjCr - unadjDr;
 
@@ -505,7 +517,7 @@ export async function generateGeneralLedgerPdf(
     ));
     rowIdx++;
 
-    for (const line of (linesByAccount.get(aid) ?? []) as Record<string, unknown>[]) {
+    for (const line of acctLines) {
       const dr = Number(line.debit  ?? 0);
       const cr = Number(line.credit ?? 0);
       balance += normalBal === 'debit' ? dr - cr : cr - dr;
@@ -566,6 +578,7 @@ export async function generateIncomeStatementPdf(
   const rows = await db('v_adjusted_trial_balance')
     .where({ period_id: periodId, is_active: true })
     .whereIn('category', ['revenue', 'expenses'])
+    .modify(whereHasActivity)
     .orderBy('account_number', 'asc');
 
   const cols = includePriorYear
@@ -673,6 +686,7 @@ export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promi
   // Include revenue/expense for net income calculation
   const rows = await db('v_adjusted_trial_balance')
     .where({ period_id: periodId, is_active: true })
+    .modify(whereHasActivity)
     .orderBy('account_number', 'asc');
 
   const cols   = ['Acct #', 'Account Name', 'Amount'];
@@ -801,6 +815,7 @@ export async function generateTaxCodeReportPdf(
     .leftJoin('tax_codes as tc', 'tc.id', 'coa.tax_code_id')
     .where('vtb.period_id', periodId)
     .where('vtb.is_active', true)
+    .modify(whereHasActivity, 'vtb')
     .select(
       'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
       drCol, crCol,
@@ -888,6 +903,7 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number, page
   const rows = await db('v_adjusted_trial_balance as vtb')
     .where('vtb.period_id', periodId)
     .where('vtb.is_active', true)
+    .modify(whereHasActivity, 'vtb')
     .select(
       'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
       'vtb.category',
@@ -914,20 +930,10 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number, page
   const widths = [40, '*', 40, 60, 60, 35, '*'];
   const tableLayout = { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' };
 
-  const bookBal = (r: Record<string, unknown>): number => {
-    const dr = Number(r.book_adjusted_debit ?? 0);
-    const cr = Number(r.book_adjusted_credit ?? 0);
-    const cat = r.category as string;
-    const creditNormal = cat === 'revenue' || cat === 'liabilities' || cat === 'equity';
-    return creditNormal ? cr - dr : dr - cr;
-  };
-  const taxBal = (r: Record<string, unknown>): number => {
-    const dr = Number(r.tax_adjusted_debit ?? 0);
-    const cr = Number(r.tax_adjusted_credit ?? 0);
-    const cat = r.category as string;
-    const creditNormal = cat === 'revenue' || cat === 'liabilities' || cat === 'equity';
-    return creditNormal ? cr - dr : dr - cr;
-  };
+  const bookBal = (r: Record<string, unknown>): number => categoryNet(
+    r.category as string, Number(r.book_adjusted_debit ?? 0), Number(r.book_adjusted_credit ?? 0));
+  const taxBal = (r: Record<string, unknown>): number => categoryNet(
+    r.category as string, Number(r.tax_adjusted_debit ?? 0), Number(r.tax_adjusted_credit ?? 0));
 
   // Group by workpaper_ref
   const wpGroups = new Map<string, Record<string, unknown>[]>();
@@ -1038,6 +1044,7 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
     .where('vtb.period_id', periodId)
     .where('vtb.is_active', true)
     .whereIn('vtb.category', ['revenue', 'expenses'])
+    .modify(whereHasActivity, 'vtb')
     .select(
       'vtb.account_number', 'vtb.account_name', 'vtb.normal_balance', 'vtb.category',
       'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
@@ -1050,22 +1057,36 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
   const widths = [55, '*', 45, '*', 80];
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
 
-  // Unassigned accounts are split by category so a mixed revenue/expense
-  // "Unassigned" group's subtotal stays meaningful and group subtotals sum
-  // to net income (mirrors TaxBasisPlPage).
-  const groups = new Map<string, { label: string; desc: string; unassigned: boolean; rows: TbRow[] }>();
+  // Every group is split by category, not just Unassigned: rows render revenue
+  // as cr−dr and expenses as dr−cr, both positive, so a group holding both
+  // would subtotal them as if they shared a sign — a credit-balance revenue
+  // account adding in like a debit — and group subtotals would stop summing to
+  // net income. 88888 "reporting only" routinely holds such a mix. Codes with
+  // one category produce a single group and keep their plain label. Mirrors
+  // TaxBasisPlPage.
+  const groups = new Map<string, { code: string; label: string; desc: string; unassigned: boolean; category: string; rows: TbRow[] }>();
   for (const r of rows) {
-    const key = r.tax_code ?? `__UNASSIGNED__${r.category}`;
+    const key = `${r.tax_code ?? '__UNASSIGNED__'}|${r.category}`;
     if (!groups.has(key)) {
-      const unassignedLabel = r.category === 'revenue' ? 'Unassigned — Revenue' : 'Unassigned — Expenses';
       groups.set(key, {
-        label: r.tax_code ?? unassignedLabel,
+        code: r.tax_code ?? 'Unassigned',
+        label: r.tax_code ?? 'Unassigned',
         desc: r.tc_description ?? '(no tax code assigned)',
         unassigned: r.tax_code === null,
+        category: r.category,
         rows: [],
       });
     }
     groups.get(key)!.rows.push(r);
+  }
+
+  // Only disambiguate labels where a code actually split across categories.
+  const codeCounts = new Map<string, number>();
+  for (const g of groups.values()) codeCounts.set(g.code, (codeCounts.get(g.code) ?? 0) + 1);
+  for (const g of groups.values()) {
+    if ((codeCounts.get(g.code) ?? 0) > 1) {
+      g.label = `${g.code} — ${g.category === 'revenue' ? 'Revenue' : 'Expenses'}`;
+    }
   }
 
   let grandRevenue = 0;
@@ -1083,7 +1104,9 @@ export async function generateTaxBasisPlPdf(db: Knex, periodId: number): Promise
       grpNet += net;
       if (r.category === 'revenue') grandRevenue += net;
       else grandExpenses += net;
-      tableBody.push(svc.dataRow([grp.unassigned ? '—' : grp.label, '', r.account_number, r.account_name, net], { isAlt: rowIdx % 2 === 1 }));
+      // Plain code in the per-row cell; the split suffix belongs on the
+      // section header and subtotal, not on every line.
+      tableBody.push(svc.dataRow([grp.unassigned ? '—' : grp.code, '', r.account_number, r.account_name, net], { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
     }
     tableBody.push(svc.dataRow(['', '', '', `Total ${grp.label}`, grpNet], { bold: true, shade: true }));
@@ -1124,6 +1147,7 @@ export async function generateTaxReturnOrderPdf(db: Knex, periodId: number): Pro
     .leftJoin('tax_codes as tc', 'tc.id', 'coa.tax_code_id')
     .where('vtb.period_id', periodId)
     .where('vtb.is_active', true)
+    .modify(whereHasActivity, 'vtb')
     .select(
       'vtb.account_number', 'vtb.account_name', 'vtb.category', 'vtb.normal_balance',
       'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
@@ -1154,7 +1178,8 @@ export async function generateTaxReturnOrderPdf(db: Knex, periodId: number): Pro
     }
     const dr  = Number(r.tax_adjusted_debit  ?? 0);
     const cr  = Number(r.tax_adjusted_credit ?? 0);
-    const net = r.normal_balance === 'debit' ? dr - cr : cr - dr;
+    // Category-based signing (lib/accounting.ts) — matches TaxReturnOrderPage.
+    const net = categoryNet(r.category, dr, cr);
     balanceCheck += dr - cr;
     tableBody.push(svc.dataRow([
       r.sort_order !== null ? String(r.sort_order) : '—',
@@ -1207,10 +1232,12 @@ export async function generateFluxAnalysisPdf(
   const [currentRows, compareRows] = await Promise.all([
     db('v_adjusted_trial_balance as vtb')
       .where('vtb.period_id', periodId)
+      .modify(whereHasActivity, 'vtb')
       .select(cmpSelect)
       .orderBy('vtb.account_number', 'asc'),
     db('v_adjusted_trial_balance as vtb')
       .where('vtb.period_id', comparePeriodId)
+      .modify(whereHasActivity, 'vtb')
       .select(cmpSelect),
   ]);
 
@@ -1321,6 +1348,7 @@ export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<B
     .join('chart_of_accounts as c', 'c.id', 'tb.account_id')
     .where('tb.period_id', periodId)
     .where('tb.is_active', true)
+    .modify(whereHasActivity, 'tb')
     .select(
       'tb.account_number', 'tb.account_name',
       'tb.category', 'tb.normal_balance',
@@ -1629,6 +1657,7 @@ export async function generateTaxBasisSchedulePdf(db: Knex, periodId: number): P
 
   const rows = await db('v_adjusted_trial_balance')
     .where({ period_id: periodId, is_active: true })
+    .modify(whereHasActivity)
     .orderBy('account_number', 'asc') as Array<Record<string, unknown>>;
 
   // Match category sign convention from client: assets/expenses = dr-cr,

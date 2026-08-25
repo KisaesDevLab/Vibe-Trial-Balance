@@ -23,6 +23,7 @@ import {
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
+import { filterReportableRows } from '../utils/tbActivity';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -427,7 +428,8 @@ function TaxBasisTab({ periodId }: { periodId: number }) {
     queryFn:  () => getTrialBalance(periodId),
   });
 
-  const rows = tbData?.data ?? [];
+  // Dormant accounts are left off reports — see utils/tbActivity.ts.
+  const rows = filterReportableRows(tbData?.data ?? []);
 
   const handlePreview = async () => {
     if (!token) return;

@@ -11,15 +11,17 @@ import { getCashFlow } from '../api/cashFlow';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
 import { getTBTickmarks, listTickmarks } from '../api/tickmarks';
+import { categoryNet } from '../lib/accounting';
+import { filterReportableRows } from '../utils/tbActivity';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const fmtD = (cents: number) =>
   (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Category-based signing — see lib/accounting.ts.
 function bookNet(r: TBRow): number {
-  const dr = r.book_adjusted_debit, cr = r.book_adjusted_credit;
-  return r.normal_balance === 'debit' ? dr - cr : cr - dr;
+  return categoryNet(r.category, r.book_adjusted_debit, r.book_adjusted_credit);
 }
 
 const CATEGORIES: TBRow['category'][] = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'];
@@ -347,7 +349,8 @@ export function WorkpaperPackagePage() {
 
   const client = clientsData?.find(c => c.id === selectedClientId);
   const period = periodsData?.find(p => p.id === selectedPeriodId);
-  const tbRows = tbData?.data ?? [];
+  // Dormant accounts are left off reports — see utils/tbActivity.ts.
+  const tbRows = filterReportableRows(tbData?.data ?? []);
   const tickmarkMap  = tickmarkMapData?.data ?? {};
   const tickmarkLibrary = tickmarkLibData?.data ?? [];
 

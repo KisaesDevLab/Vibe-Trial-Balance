@@ -9,6 +9,7 @@ import { listTaxCodes } from '../api/taxCodes';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
+import { filterReportableRows } from '../utils/tbActivity';
 
 type ColSet = 'book' | 'tax';
 
@@ -80,7 +81,9 @@ export function TaxCodeReportPage() {
   });
   const tcDescMap = new Map((taxCodesData ?? []).map((tc) => [tc.tax_code, tc.description]));
 
-  const rows = (data ?? []).filter((r) => r.is_active);
+  // Dormant accounts (no beginning balance, no activity, no ending balance)
+  // are left off reports — see utils/tbActivity.ts.
+  const rows = filterReportableRows((data ?? []).filter((r) => r.is_active));
 
   // Group by tax_line; null → 'Unassigned'
   const groups = new Map<string, TBRow[]>();
