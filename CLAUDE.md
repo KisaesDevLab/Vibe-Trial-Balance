@@ -130,7 +130,13 @@ All planned phases complete. App is feature-complete.
 - Tax Workpapers: M-1 Worksheet (with input validation), Tax Basis Schedule (SheetJS Excel)
 - Engagement Management: Period Checklist, All Open Items with drill-down "View Checklist →"
 - Custom Report Builder (saved_reports table)
-- Workpaper Package + Tickmarks (tickmark_library + tb_tickmarks, TB superscripts + legend)
+- Workpaper Package + Tickmarks (tickmark_library + tb_tickmarks, TB superscripts + legend).
+  PDF report options live in `PDF_REPORT_SECTIONS` (WorkpaperPackagePage) and `REPORT_GENERATORS`
+  (routes/pdfReports.ts) — keep ids and labels in step. That array's order is binder order: it drives
+  both the checkbox list and the merge sequence, and the Workpaper Index leads. `workpaper-merged`
+  prepends a generated Table of Contents (`generateWorkpaperTocPdf`) listing each selected report and
+  its page range in the merged file; the TOC counts itself as page 1, so the route rebuilds it if its
+  own length changes the numbers.
 - Variance notes (per account per period, TB Report inline editing)
 - QA Round 1 & 2: 30-item UX audit — period lock enforcement on TB grid, batch op toasts,
   reopen reconciliation feedback, engagement double-submit prevention, FS comparative layout,

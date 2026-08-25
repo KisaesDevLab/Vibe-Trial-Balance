@@ -1719,3 +1719,73 @@ export async function generateTaxBasisSchedulePdf(db: Knex, periodId: number): P
     content,
   }));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (n) Workpaper Package — Table of Contents
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TocEntry {
+  label: string;
+  /** 1-based page of the merged document where this report starts. */
+  startPage: number;
+  pageCount: number;
+}
+
+/**
+ * Front matter for the merged workpaper package. Page numbers are positions in
+ * the merged document, counting the table of contents itself as page 1 — so a
+ * number on this page is the page you turn to in the combined file.
+ *
+ * The caller has to know how long this document is before it can hand over
+ * correct start pages, so it builds once with an assumed length and rebuilds if
+ * the assumption was wrong (see the workpaper-merged route).
+ */
+export async function generateWorkpaperTocPdf(
+  db: Knex,
+  periodId: number,
+  entries: TocEntry[],
+): Promise<Buffer> {
+  const svc  = await PdfTemplateService.fromDb(db);
+  const info = await getPeriodInfo(db, periodId);
+
+  const cols   = ['#', 'Report', 'Pages'];
+  const widths = [26, '*', 60];
+
+  const tableBody: TableCell[][] = [svc.headerRow(cols)];
+  entries.forEach((e, i) => {
+    const lastPage = e.startPage + e.pageCount - 1;
+    const range = e.pageCount > 1 ? `${e.startPage}–${lastPage}` : String(e.startPage);
+    // Page numbers are strings, not numbers: dataRow formats numeric cells as
+    // money. Right-align them by hand, keeping the service's row styling.
+    const row = svc.dataRow([String(i + 1), e.label, range], { isAlt: i % 2 === 1 });
+    (row[0] as Record<string, unknown>).alignment = 'right';
+    (row[2] as Record<string, unknown>).alignment = 'right';
+    tableBody.push(row);
+  });
+
+  const totalPages = entries.reduce((s, e) => s + e.pageCount, 0);
+  // "6 pages", not a bare 6: every other number in this column is a page
+  // number you turn to, and the total is a count.
+  const totalRow = svc.dataRow(
+    ['', `${entries.length} report${entries.length === 1 ? '' : 's'}`, `${totalPages} pages`],
+    { bold: true, shade: true },
+  );
+  (totalRow[2] as Record<string, unknown>).alignment = 'right';
+  tableBody.push(totalRow);
+
+  const content: Content[] = [{
+    table: { headerRows: 1, widths, body: tableBody },
+    layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
+  }];
+
+  return svc.generateBuffer(svc.buildDocument({
+    title:      'Table of Contents',
+    clientName: info.client_name,
+    ein:        info.ein ?? undefined,
+    periodName: info.name,
+    startDate:  fmtDate(info.start_date),
+    endDate:    fmtDate(info.end_date),
+    pageOrientation: 'portrait',
+    content,
+  }));
+}

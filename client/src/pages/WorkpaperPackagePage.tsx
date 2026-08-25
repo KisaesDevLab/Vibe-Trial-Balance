@@ -297,7 +297,12 @@ interface PdfReportSection {
   filename: (periodId: number) => string;
 }
 
+// Order here is binder order: it drives the checkbox list AND the sequence the
+// merged PDF is assembled in, so the Workpaper Index leads the package. Keep
+// the ids and labels in step with REPORT_GENERATORS in routes/pdfReports.ts —
+// the merged PDF's table of contents prints the server-side labels.
 const PDF_REPORT_SECTIONS: PdfReportSection[] = [
+  { id: 'pdf-wp-index',     label: 'Workpaper Index (PDF)',       url: (id) => pdfReports.workpaperIndex(id),  filename: (id) => `workpaper-index-${id}.pdf` },
   { id: 'pdf-tb',           label: 'Trial Balance (PDF)',         url: (id) => pdfReports.trialBalance(id),    filename: (id) => `trial-balance-${id}.pdf` },
   { id: 'pdf-is',           label: 'Income Statement (PDF)',      url: (id) => pdfReports.incomeStatement(id), filename: (id) => `income-statement-${id}.pdf` },
   { id: 'pdf-bs',           label: 'Balance Sheet (PDF)',         url: (id) => pdfReports.balanceSheet(id),    filename: (id) => `balance-sheet-${id}.pdf` },
@@ -305,9 +310,9 @@ const PDF_REPORT_SECTIONS: PdfReportSection[] = [
   { id: 'pdf-aje',          label: 'AJE Listing (PDF)',           url: (id) => pdfReports.ajeListing(id),      filename: (id) => `aje-listing-${id}.pdf` },
   { id: 'pdf-gl',           label: 'General Ledger (PDF)',        url: (id) => pdfReports.generalLedger(id),   filename: (id) => `general-ledger-${id}.pdf` },
   { id: 'pdf-tax-code',     label: 'Tax Code Report (PDF)',       url: (id) => pdfReports.taxCodeReport(id),   filename: (id) => `tax-code-report-${id}.pdf` },
-  { id: 'pdf-wp-index',     label: 'Workpaper Index (PDF)',       url: (id) => pdfReports.workpaperIndex(id),  filename: (id) => `workpaper-index-${id}.pdf` },
   { id: 'pdf-tax-pl',       label: 'Tax-Basis P&L (PDF)',         url: (id) => pdfReports.taxBasisPl(id),      filename: (id) => `tax-basis-pl-${id}.pdf` },
   { id: 'pdf-tax-return',   label: 'Tax Return Order (PDF)',      url: (id) => pdfReports.taxReturnOrder(id),  filename: (id) => `tax-return-order-${id}.pdf` },
+  { id: 'pdf-m1',           label: 'M-1 Worksheet (PDF)',         url: (id) => pdfReports.m1(id),              filename: (id) => `m1-worksheet-${id}.pdf` },
 ];
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -501,6 +506,10 @@ export function WorkpaperPackagePage() {
         >
           {pdfDownloading ? 'Merging…' : 'Merge into Single PDF'}
         </button>
+        <p className="basis-full text-xs text-gray-500 dark:text-gray-400">
+          The merged PDF opens with a table of contents listing each selected report and the page it
+          starts on, in the order shown above.
+        </p>
         {pdfErrors.length > 0 && (
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 text-xs px-3 py-2 rounded space-y-1">
             {pdfErrors.map((e, i) => <p key={i}>{e}</p>)}

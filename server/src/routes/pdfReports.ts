@@ -21,6 +21,8 @@ import {
   generateCashFlowPdf,
   generateM1Pdf,
   generateTaxBasisSchedulePdf,
+  generateWorkpaperTocPdf,
+  type TocEntry,
 } from '../pdf/reportGenerators';
 
 export const pdfReportsRouter = Router({ mergeParams: true });
@@ -336,18 +338,25 @@ pdfReportsRouter.get('/periods/:periodId/tax-return-order', async (req: AuthRequ
 // Merges selected PDF reports into a single PDF file
 // ─────────────────────────────────────────────────────────────────────────────
 
-const REPORT_GENERATORS: Record<string, (periodId: number) => Promise<Buffer>> = {
-  'pdf-tb':         (id) => generateTrialBalancePdf(db, id),
-  'pdf-is':         (id) => generateIncomeStatementPdf(db, id),
-  'pdf-bs':         (id) => generateBalanceSheetPdf(db, id),
-  'pdf-je':         (id) => generateJournalEntryListingPdf(db, id),
-  'pdf-aje':        (id) => generateAjeListingPdf(db, id),
-  'pdf-gl':         (id) => generateGeneralLedgerPdf(db, id),
-  'pdf-tax-code':   (id) => generateTaxCodeReportPdf(db, id),
-  'pdf-wp-index':   (id) => generateWorkpaperIndexPdf(db, id),
-  'pdf-tax-pl':     (id) => generateTaxBasisPlPdf(db, id),
-  'pdf-tax-return': (id) => generateTaxReturnOrderPdf(db, id),
+// Labels are what the table of contents prints, so they must read as binder
+// tabs — keep them in step with PDF_REPORT_SECTIONS in WorkpaperPackagePage.
+const REPORT_GENERATORS: Record<string, { label: string; generate: (periodId: number) => Promise<Buffer> }> = {
+  'pdf-wp-index':   { label: 'Workpaper Index',   generate: (id) => generateWorkpaperIndexPdf(db, id) },
+  'pdf-tb':         { label: 'Trial Balance',     generate: (id) => generateTrialBalancePdf(db, id) },
+  'pdf-is':         { label: 'Income Statement',  generate: (id) => generateIncomeStatementPdf(db, id) },
+  'pdf-bs':         { label: 'Balance Sheet',     generate: (id) => generateBalanceSheetPdf(db, id) },
+  'pdf-je':         { label: 'Journal Entries',   generate: (id) => generateJournalEntryListingPdf(db, id) },
+  'pdf-aje':        { label: 'AJE Listing',       generate: (id) => generateAjeListingPdf(db, id) },
+  'pdf-gl':         { label: 'General Ledger',    generate: (id) => generateGeneralLedgerPdf(db, id) },
+  'pdf-tax-code':   { label: 'Tax Code Report',   generate: (id) => generateTaxCodeReportPdf(db, id) },
+  'pdf-tax-pl':     { label: 'Tax-Basis P&L',     generate: (id) => generateTaxBasisPlPdf(db, id) },
+  'pdf-tax-return': { label: 'Tax Return Order',  generate: (id) => generateTaxReturnOrderPdf(db, id) },
+  'pdf-m1':         { label: 'M-1 Worksheet',     generate: (id) => generateM1Pdf(db, id) },
 };
+
+/** Max rebuilds of the TOC while its own length settles. Two is already more
+ *  than the page count can need; the third is pure belt and braces. */
+const TOC_REBUILD_LIMIT = 3;
 
 pdfReportsRouter.get('/periods/:periodId/workpaper-merged', async (req: AuthRequest, res: Response): Promise<void> => {
   const periodId = getPeriodId(req);
@@ -363,16 +372,51 @@ pdfReportsRouter.get('/periods/:periodId/workpaper-merged', async (req: AuthRequ
   }
 
   try {
-    const mergedPdf = await PDFDocument.create();
-
+    // Build every selected report first: the table of contents can't be
+    // written until each one's page count is known.
+    const built: Array<{ label: string; doc: PDFDocument; pageCount: number }> = [];
     for (const reportId of reportIds) {
-      const generator = REPORT_GENERATORS[reportId];
-      if (!generator) continue;
+      const report = REPORT_GENERATORS[reportId];
+      if (!report) continue;
 
-      const pdfBuffer = await generator(periodId);
-      const srcDoc = await PDFDocument.load(pdfBuffer);
-      const pages = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
-      for (const page of pages) {
+      const srcDoc = await PDFDocument.load(await report.generate(periodId));
+      built.push({ label: report.label, doc: srcDoc, pageCount: srcDoc.getPageCount() });
+    }
+
+    if (built.length === 0) {
+      res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'None of the requested reports exist' } });
+      return;
+    }
+
+    // The contents page numbers itself, so its own length shifts every number
+    // on it. Assume one page, and rebuild if that assumption was wrong — the
+    // entries don't change size with the numbers, so this settles at once.
+    const buildToc = (tocPageCount: number): Promise<Buffer> => {
+      const entries: TocEntry[] = [];
+      let cursor = tocPageCount + 1;
+      for (const b of built) {
+        entries.push({ label: b.label, startPage: cursor, pageCount: b.pageCount });
+        cursor += b.pageCount;
+      }
+      return generateWorkpaperTocPdf(db, periodId, entries);
+    };
+
+    let tocPageCount = 1;
+    let tocBuffer = await buildToc(tocPageCount);
+    for (let attempt = 0; attempt < TOC_REBUILD_LIMIT; attempt++) {
+      const actual = (await PDFDocument.load(tocBuffer)).getPageCount();
+      if (actual === tocPageCount) break;
+      tocPageCount = actual;
+      tocBuffer = await buildToc(tocPageCount);
+    }
+
+    const mergedPdf = await PDFDocument.create();
+    const tocDoc = await PDFDocument.load(tocBuffer);
+    for (const page of await mergedPdf.copyPages(tocDoc, tocDoc.getPageIndices())) {
+      mergedPdf.addPage(page);
+    }
+    for (const b of built) {
+      for (const page of await mergedPdf.copyPages(b.doc, b.doc.getPageIndices())) {
         mergedPdf.addPage(page);
       }
     }
