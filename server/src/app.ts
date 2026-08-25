@@ -147,7 +147,9 @@ app.use('/api/', rateLimit({
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } },
 }));
 
-// Stricter limits for file upload / AI endpoints — 20 per hour per user
+// Stricter limits for file upload / first-pass AI endpoints — 20 per hour per
+// user. One of these is a whole document being uploaded and read, so the count
+// tracks documents and 20/hour is generous.
 const uploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 20,
@@ -156,7 +158,35 @@ const uploadLimiter = rateLimit({
   keyGenerator: rateLimitKey,
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many upload/AI requests. Please try again later.' } },
 });
-app.use('/api/v1/import/', uploadLimiter);
+
+// Follow-up work on a document that has already been uploaded. These do NOT
+// cost one request per document: account numbering is chunked (one request per
+// SUGGEST_CHUNK_SIZE rows, so the count scales with the size of the trial
+// balance) and import chat is conversational. Confirm costs nothing at all —
+// no upload, no AI, just the write. Sharing the 20/hour upload budget meant a
+// few hundred accounts spent it on their own numbering and were then refused
+// at confirm, which is the one request that must not fail.
+const aiStepLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKey,
+  message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many import requests. Please try again later.' } },
+});
+
+// Anything under /import/ that isn't the upload+analyze pass. Matched on the
+// path tail so it holds for every source (csv, pdf, bank-statement, scanned).
+const IMPORT_FOLLOW_UP = /\/(confirm|suggest-numbers|chat|categorize|imports)$/;
+
+app.use('/api/v1/import/', (req, res, next) => {
+  // GETs are reads (listing imports, cached verification results) — never an
+  // upload, so they have no business spending the upload budget either.
+  if (req.method === 'GET' || IMPORT_FOLLOW_UP.test(req.path)) {
+    return aiStepLimiter(req, res, next);
+  }
+  return uploadLimiter(req, res, next);
+});
 app.use('/api/v1/support/chat', uploadLimiter);
 app.use('/api/v1/periods/:periodId/diagnostics', uploadLimiter);
 
