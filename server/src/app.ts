@@ -147,12 +147,12 @@ app.use('/api/', rateLimit({
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } },
 }));
 
-// Stricter limits for file upload / first-pass AI endpoints — 20 per hour per
+// Stricter limits for file upload / first-pass AI endpoints — 40 per hour per
 // user. One of these is a whole document being uploaded and read, so the count
-// tracks documents and 20/hour is generous.
+// tracks documents, not rows.
 const uploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 20,
+  max: 40,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: rateLimitKey,
