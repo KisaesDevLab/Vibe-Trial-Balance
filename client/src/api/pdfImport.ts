@@ -133,13 +133,20 @@ export async function chatPdfImport(
   });
 }
 
+/**
+ * Suggest account numbers for the rows passed in. Call this a chunk at a time
+ * (see SUGGEST_CHUNK_SIZE in PdfImportDialog): a whole statement in one request
+ * runs long enough for the proxy in front of the AI router to abandon it with a
+ * 524. `reservedNumbers` carries what earlier chunks already claimed.
+ */
 export async function suggestPdfAccountNumbers(
   clientId: number,
   matches: PdfMatchRow[],
+  reservedNumbers: string[] = [],
 ): Promise<{ data: { suggestions: PdfAccountNumberSuggestion[] } | null; error: { code: string; message: string } | null }> {
   return apiFetch<{ suggestions: PdfAccountNumberSuggestion[] }>('/import/pdf/suggest-numbers', {
     method: 'POST',
-    body: JSON.stringify({ clientId, matches }),
+    body: JSON.stringify({ clientId, matches, reservedNumbers }),
   });
 }
 

@@ -549,11 +549,27 @@ Rules:
 
 // ── POST /api/v1/import/csv/suggest-numbers ──────────────────────────────────
 
+// A trial balance with no account-number column needs a number for EVERY row,
+// and that used to go out as ONE model call sized at rows × 150 tokens. For a
+// 400-account file that asks for ~60k output tokens: past the model's output
+// ceiling, and minutes of wall clock — long enough for the proxy in front of
+// the AI router to give up and hand back a 524 before the server ever answered.
+//
+// So the work is split two ways. Here, rows are assigned in small batches with
+// the numbers chosen so far fed forward, so each model call stays short and
+// later batches still avoid earlier ones. And the caller pages through the rows
+// as well (SUGGEST_CHUNK_SIZE in CsvImportDialog), handing back the numbers it
+// already holds as `reservedNumbers` — that keeps any ONE request short no
+// matter how big the file is, which is what the proxy actually cares about.
+const SUGGEST_BATCH_SIZE = 25;
+const SUGGEST_MAX_TOKENS = 8000;
+
 csvImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { clientId, matches } = req.body as {
+    const { clientId, matches, reservedNumbers } = req.body as {
       clientId: number;
       matches: CsvMatchRow[];
+      reservedNumbers?: string[];
     };
 
     if (!clientId || !Array.isArray(matches)) {
@@ -566,6 +582,12 @@ csvImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response)
       .where({ client_id: clientId, is_active: true })
       .select('account_number', 'account_name', 'category');
     const existingNumbers = new Set(existing.map((a: { account_number: string }) => a.account_number));
+    // Numbers the caller was already handed for earlier chunks of this same
+    // import — not in the COA yet, but spoken for.
+    for (const n of Array.isArray(reservedNumbers) ? reservedNumbers : []) {
+      const clean = String(n).replace(/[^0-9]/g, '');
+      if (clean) existingNumbers.add(clean);
+    }
 
     // Only process rows that need numbers (no csvAccountNumber)
     const needNumbers = matches.filter((m) => m.action !== 'skip' && (!m.csvAccountNumber || m.csvAccountNumber.trim() === ''));
@@ -579,11 +601,12 @@ csvImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response)
       `${a.account_number} — ${a.account_name} (${a.category})`
     ).join('\n');
 
-    const accountList = needNumbers.map((m) =>
+    const buildPrompt = (batch: CsvMatchRow[], alsoAvoid: string[]): string => {
+    const accountList = batch.map((m) =>
       `csvRow ${m.csvRow}: "${m.csvAccountName ?? 'Unknown'}"${m.newCategory ? ` [category hint: ${m.newCategory}]` : ''}`
     ).join('\n');
 
-    const prompt = `You are an expert accountant. Assign standard chart of accounts numbers to these accounts.
+    return `You are an expert accountant. Assign standard chart of accounts numbers to these accounts.
 
 Standard numbering conventions:
 - 1000-1999: Assets (1000-1099 cash/bank, 1100-1199 receivables, 1200-1299 inventory, 1300-1499 prepaid/other current, 1500-1999 fixed assets)
@@ -596,6 +619,7 @@ Standard numbering conventions:
 
 Existing account numbers already in use (avoid conflicts):
 ${existingList || '(none)'}
+${alsoAvoid.length > 0 ? `\nAlso already assigned earlier in this same import (avoid these too):\n${alsoAvoid.join(', ')}\n` : ''}
 
 Accounts that need numbers:
 ${accountList}
@@ -606,20 +630,49 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Use the EXACT csv
 [
   { "csvRow": 0, "accountName": "Cash", "suggestedNumber": "1000", "suggestedCategory": "assets", "suggestedNormalBalance": "debit" }
 ]`;
-
-    const { provider, fastModel } = await getLLMProvider();
-    const { result: aiResult2, logId: suggestLogId } = await aiComplete(
-      provider,
-      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
-      { endpoint: 'csv/suggest-numbers', userId: req.user?.userId, userRole: req.user?.role, clientId },
-    );
+    };
 
     type SuggestionRaw = { csvRow: number; accountName?: string; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
-    const rawSuggestions = extractJsonArray<SuggestionRaw>(aiResult2.text);
-    if (!rawSuggestions) {
-      const detail = `finish=${aiResult2.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult2.text.slice(0, 500))}`;
-      console.error('[csv/suggest-numbers] Failed to parse AI response:', detail);
-      markAiUsageParseError(suggestLogId, `Invalid JSON. ${detail}`);
+
+    const { provider, fastModel } = await getLLMProvider();
+    const rawSuggestions: SuggestionRaw[] = [];
+    const assignedSoFar: string[] = [];
+    let batchFailures = 0;
+
+    for (let i = 0; i < needNumbers.length; i += SUGGEST_BATCH_SIZE) {
+      const batch = needNumbers.slice(i, i + SUGGEST_BATCH_SIZE);
+      const batchNo = Math.floor(i / SUGGEST_BATCH_SIZE) + 1;
+      const { result: aiResult2, logId: suggestLogId } = await aiComplete(
+        provider,
+        {
+          model: fastModel,
+          taskClass: TB_TASK_CLASSES.CLASSIFICATION,
+          // Clamped: an unbounded rows × 150 can exceed the model's own output
+          // ceiling and fail the call outright.
+          maxTokens: Math.min(SUGGEST_MAX_TOKENS, Math.max(2048, batch.length * 150)),
+          messages: [{ role: 'user', content: buildPrompt(batch, assignedSoFar) }],
+        },
+        { endpoint: 'csv/suggest-numbers', userId: req.user?.userId, userRole: req.user?.role, clientId },
+      );
+
+      const parsed = extractJsonArray<SuggestionRaw>(aiResult2.text);
+      if (!parsed) {
+        const detail = `finish=${aiResult2.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult2.text.slice(0, 500))}`;
+        console.error(`[csv/suggest-numbers] Batch ${batchNo} failed to parse:`, detail);
+        markAiUsageParseError(suggestLogId, `Batch ${batchNo} invalid JSON. ${detail}`);
+        // One bad batch shouldn't sink the run — those rows come back without
+        // a suggestion and the user fills them in by hand.
+        batchFailures++;
+        continue;
+      }
+      rawSuggestions.push(...parsed);
+      for (const sug of parsed) {
+        const clean = String(sug.suggestedNumber ?? '').replace(/[^0-9]/g, '');
+        if (clean) assignedSoFar.push(clean);
+      }
+    }
+
+    if (rawSuggestions.length === 0 && batchFailures > 0) {
       res.status(500).json({ data: null, error: { code: 'PARSE_ERROR', message: 'AI returned unexpected format' } });
       return;
     }

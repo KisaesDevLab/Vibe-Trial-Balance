@@ -79,6 +79,13 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
   must pass `taskClass` (see `TB_TASK_CLASSES`); the router driver fails closed without it.
   `server/src/lib/vibeAiClient.ts` is VENDORED from the router repo — don't edit in place.
   Tests: `npm run test:router` (server/).
+  **Keep any one HTTP request's AI work short.** There is a ~100s proxy timeout in front of the
+  router; exceed it and the caller gets a 524 with no error from us. Never size one call at
+  rows × tokens over an unbounded row count — batch server-side AND let the client page through
+  (see `SUGGEST_BATCH_SIZE` / `SUGGEST_CHUNK_SIZE` on the csv+pdf `suggest-numbers` routes, which
+  pass `reservedNumbers` forward so chunks don't collide). `tb_classification` is local_only, so
+  its calls are the slowest — those are the ones to watch. Known remaining exposure:
+  `POST /tax-lines/auto-assign` loops all its batches inside one request.
 - Trial Balance Grid = editing balances ONLY, no category subtotals
 - Tax Mapping View (Plan Phase 5) = SEPARATE page: assign tax codes, read-only balances, category subtotals, net income, balance check
 - tax_line VARCHAR on chart_of_accounts: legacy field kept for compat. New system uses tax_code_id FK → tax_codes table. Dual-write: when tax_code_id assigned, also write tax_code string to tax_line.

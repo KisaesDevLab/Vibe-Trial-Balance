@@ -489,9 +489,19 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
 
 // ── POST /api/v1/import/pdf/suggest-numbers ──────────────────────────────────
 
+// Batched for the same reason as the CSV route — see the note there. One call
+// sized at rows × 150 tokens runs long enough on a big statement for the proxy
+// in front of the AI router to abandon it with a 524.
+const SUGGEST_BATCH_SIZE = 25;
+const SUGGEST_MAX_TOKENS = 8000;
+
 pdfImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { clientId, matches } = req.body as { clientId: number; matches: PdfMatchRow[] };
+    const { clientId, matches, reservedNumbers } = req.body as {
+      clientId: number;
+      matches: PdfMatchRow[];
+      reservedNumbers?: string[];
+    };
 
     if (!clientId || !Array.isArray(matches)) {
       res.status(400).json({ data: null, error: { code: 'INVALID_PARAMS', message: 'clientId and matches are required' } });
@@ -502,6 +512,11 @@ pdfImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response)
       .where({ client_id: clientId, is_active: true })
       .select('account_number', 'account_name', 'category');
     const existingNumbers = new Set(existing.map((a: { account_number: string }) => a.account_number));
+    // Numbers the caller was already handed for earlier chunks of this import.
+    for (const n of Array.isArray(reservedNumbers) ? reservedNumbers : []) {
+      const clean = String(n).replace(/[^0-9]/g, '');
+      if (clean) existingNumbers.add(clean);
+    }
 
     // Only process create_new rows that have no account number yet
     const needNumbers = matches.filter((m) => m.action === 'create_new' && !m.pdfAccountNumber?.trim() && !m.newAccountNumber?.trim());
@@ -514,11 +529,14 @@ pdfImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response)
       `${a.account_number} — ${a.account_name} (${a.category})`
     ).join('\n');
 
-    const accountList = needNumbers.map((m, i) =>
-      `Entry ${i}: "${m.pdfAccountName}"${m.newCategory ? ` [category hint: ${m.newCategory}]` : m.category ? ` [detected category: ${m.category}]` : ''}`
+    // Entries keep their index within this request's needNumbers, so the
+    // entryIndex that comes back still resolves after batching.
+    const buildPrompt = (batch: PdfMatchRow[], startIndex: number, alsoAvoid: string[]): string => {
+    const accountList = batch.map((m, i) =>
+      `Entry ${startIndex + i}: "${m.pdfAccountName}"${m.newCategory ? ` [category hint: ${m.newCategory}]` : m.category ? ` [detected category: ${m.category}]` : ''}`
     ).join('\n');
 
-    const prompt = `You are an expert accountant. Assign standard chart of accounts numbers to these accounts extracted from a PDF financial statement.
+    return `You are an expert accountant. Assign standard chart of accounts numbers to these accounts extracted from a PDF financial statement.
 
 Standard numbering conventions:
 - 1000-1999: Assets (1000-1099 cash/bank, 1100-1199 receivables, 1200-1299 inventory, 1300-1499 prepaid/other current, 1500-1999 fixed assets)
@@ -531,6 +549,7 @@ Standard numbering conventions:
 
 Existing account numbers already in use (avoid conflicts):
 ${existingList || '(none)'}
+${alsoAvoid.length > 0 ? `\nAlso already assigned earlier in this same import (avoid these too):\n${alsoAvoid.join(', ')}\n` : ''}
 
 Accounts that need numbers assigned:
 ${accountList}
@@ -541,20 +560,47 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Each object MUST 
 [
   { "entryIndex": 0, "accountName": "Cash", "suggestedNumber": "1000", "suggestedCategory": "assets", "suggestedNormalBalance": "debit" }
 ]`;
-
-    const { provider, fastModel } = await getLLMProvider();
-    const { result: aiResult, logId } = await aiComplete(
-      provider,
-      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: Math.max(2048, needNumbers.length * 150), messages: [{ role: 'user', content: prompt }] },
-      { endpoint: 'pdf/suggest-numbers', userId: req.user?.userId, userRole: req.user?.role, clientId },
-    );
+    };
 
     type SuggestionRaw = { entryIndex: number; accountName?: string; suggestedNumber: string; suggestedCategory: string; suggestedNormalBalance: string };
-    const rawSuggestions = extractJsonArray<SuggestionRaw>(aiResult.text);
-    if (!rawSuggestions) {
-      const detail = `finish=${aiResult.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`;
-      console.error('[pdf/suggest-numbers] Failed to parse AI response:', detail);
-      markAiUsageParseError(logId, `Invalid JSON. ${detail}`);
+
+    const { provider, fastModel } = await getLLMProvider();
+    const rawSuggestions: SuggestionRaw[] = [];
+    const assignedSoFar: string[] = [];
+    let batchFailures = 0;
+
+    for (let i = 0; i < needNumbers.length; i += SUGGEST_BATCH_SIZE) {
+      const batch = needNumbers.slice(i, i + SUGGEST_BATCH_SIZE);
+      const batchNo = Math.floor(i / SUGGEST_BATCH_SIZE) + 1;
+      const { result: aiResult, logId } = await aiComplete(
+        provider,
+        {
+          model: fastModel,
+          taskClass: TB_TASK_CLASSES.CLASSIFICATION,
+          // Clamped: an unbounded rows × 150 can exceed the model's own output
+          // ceiling and fail the call outright.
+          maxTokens: Math.min(SUGGEST_MAX_TOKENS, Math.max(2048, batch.length * 150)),
+          messages: [{ role: 'user', content: buildPrompt(batch, i, assignedSoFar) }],
+        },
+        { endpoint: 'pdf/suggest-numbers', userId: req.user?.userId, userRole: req.user?.role, clientId },
+      );
+
+      const parsed = extractJsonArray<SuggestionRaw>(aiResult.text);
+      if (!parsed) {
+        const detail = `finish=${aiResult.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`;
+        console.error(`[pdf/suggest-numbers] Batch ${batchNo} failed to parse:`, detail);
+        markAiUsageParseError(logId, `Batch ${batchNo} invalid JSON. ${detail}`);
+        batchFailures++;
+        continue;
+      }
+      rawSuggestions.push(...parsed);
+      for (const sug of parsed) {
+        const clean = String(sug.suggestedNumber ?? '').replace(/[^0-9]/g, '');
+        if (clean) assignedSoFar.push(clean);
+      }
+    }
+
+    if (rawSuggestions.length === 0 && batchFailures > 0) {
       res.status(500).json({ data: null, error: { code: 'PARSE_ERROR', message: 'AI returned unexpected format' } });
       return;
     }

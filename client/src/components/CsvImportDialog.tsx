@@ -13,6 +13,7 @@ import {
   type CsvMatchRow,
   type CsvAnalysisResult,
   type ChatMessage,
+  type AccountNumberSuggestion,
 } from '../api/csvImport';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { AiConsentDialog, AI_PII } from './AiConsentDialog';
@@ -151,6 +152,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
   // Account number state
   const [numberChoice, setNumberChoice] = useState<'pending' | 'ai' | 'manual' | null>(null);
   const [suggestingNumbers, setSuggestingNumbers] = useState(false);
+  const [suggestProgress, setSuggestProgress] = useState<{ done: number; total: number } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -294,15 +296,48 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
 
   // ── Account number assignment ──────────────────────────────────────────────
 
+  // Ask for numbers a chunk of rows at a time. A CSV with no account-number
+  // column needs one for every row, and putting a whole trial balance into a
+  // single request keeps it open long enough for the proxy in front of the AI
+  // router to abandon it with a 524. Chunking bounds each request no matter how
+  // big the file is, and gives us something honest to show while it runs.
+  const SUGGEST_CHUNK_SIZE = 25;
+
+  const needsNumber = (m: EditableMatch): boolean =>
+    m.action !== 'skip' && !m.csvAccountNumber?.trim();
+
   const handleAiAssignNumbers = async () => {
     if (!analysis) return;
     setSuggestingNumbers(true);
     setChatError(null);
     setChatMessages((prev) => [...prev, { role: 'user', content: 'Please have AI assign account numbers.' }]);
     try {
-      const result = await suggestAccountNumbers(clientId, matches);
-      if (result.error) { setChatError(result.error.message); return; }
-      const suggestions = result.data?.suggestions ?? [];
+      const pending = matches.filter(needsNumber);
+      const suggestions: AccountNumberSuggestion[] = [];
+      // Numbers handed out so far, so later chunks don't reuse them.
+      const reserved: string[] = [];
+      let chunkError: string | null = null;
+
+      for (let i = 0; i < pending.length; i += SUGGEST_CHUNK_SIZE) {
+        setSuggestProgress({ done: i, total: pending.length });
+        const result = await suggestAccountNumbers(clientId, pending.slice(i, i + SUGGEST_CHUNK_SIZE), reserved);
+        if (result.error) { chunkError = result.error.message; break; }
+        const got = result.data?.suggestions ?? [];
+        suggestions.push(...got);
+        reserved.push(...got.map((sg) => sg.suggestedNumber));
+      }
+      setSuggestProgress(null);
+
+      // Keep whatever came back before the failure — re-running only has to
+      // cover the rows still missing a number.
+      if (chunkError) {
+        setChatError(
+          suggestions.length > 0
+            ? `${chunkError} — ${suggestions.length} of ${pending.length} accounts were assigned before this failed. Run it again to finish the rest.`
+            : chunkError,
+        );
+        if (suggestions.length === 0) return;
+      }
       if (suggestions.length === 0) {
         setChatMessages((prev) => [...prev, { role: 'assistant', content: 'No accounts needed numbers assigned.' }]);
         setNumberChoice('ai');
@@ -332,6 +367,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
     } catch (e) {
       setChatError(e instanceof Error ? e.message : 'Failed to suggest account numbers');
     } finally {
+      setSuggestProgress(null);
       setSuggestingNumbers(false);
     }
   };
@@ -591,7 +627,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                     {suggestingNumbers ? (
                       <span className="flex items-center justify-center gap-1.5">
                         <span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        Assigning…
+                        {suggestProgress ? `Assigning… ${suggestProgress.done} of ${suggestProgress.total}` : 'Assigning…'}
                       </span>
                     ) : 'AI Assign Account Numbers'}
                   </button>
@@ -816,7 +852,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                     {suggestingNumbers ? (
                       <span className="flex items-center gap-1.5">
                         <span className="inline-block w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                        Suggesting…
+                        {suggestProgress ? `Suggesting… ${suggestProgress.done} of ${suggestProgress.total}` : 'Suggesting…'}
                       </span>
                     ) : 'AI Assign Account Numbers'}
                   </button>

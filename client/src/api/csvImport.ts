@@ -100,13 +100,21 @@ export interface AccountNumberSuggestion {
   suggestedNormalBalance: 'debit' | 'credit';
 }
 
+/**
+ * Suggest account numbers for the rows passed in. Call this a chunk at a time
+ * (see SUGGEST_CHUNK_SIZE in CsvImportDialog): a whole trial balance in one
+ * request runs long enough for the proxy in front of the AI router to abandon
+ * it with a 524. `reservedNumbers` carries the numbers earlier chunks already
+ * claimed so this one doesn't hand out the same ones.
+ */
 export async function suggestAccountNumbers(
   clientId: number,
   matches: CsvMatchRow[],
+  reservedNumbers: string[] = [],
 ): Promise<{ data: { suggestions: AccountNumberSuggestion[] } | null; error: { code: string; message: string } | null }> {
   return apiFetch<{ suggestions: AccountNumberSuggestion[] }>('/import/csv/suggest-numbers', {
     method: 'POST',
-    body: JSON.stringify({ clientId, matches }),
+    body: JSON.stringify({ clientId, matches, reservedNumbers }),
   });
 }
 
