@@ -217,6 +217,7 @@ export function TaxMappingPage() {
   const [autoAssignLoading, setAutoAssignLoading] = useState(false);
   const [autoAssignSuggestions, setAutoAssignSuggestions] = useState<AssignmentSuggestion[]>([]);
   const [autoAssignError, setAutoAssignError] = useState<string | null>(null);
+  const [autoAssignProgress, setAutoAssignProgress] = useState<{ done: number; total: number } | null>(null);
 
   // Data fetches
   const { data: clientsData } = useQuery({
@@ -382,23 +383,57 @@ export function TaxMappingPage() {
   };
 
   // Auto-assign handlers
+
+  // Page the accounts rather than asking the server to do a whole COA in one
+  // request. Each account costs the server two lookups in the waterfall, and
+  // whatever falls through to the AI is a tb_tax_code_assign call — on a large
+  // unmapped COA that adds up past the ~100s proxy timeout in front of the AI
+  // router, which surfaces as a bare 524 with no error of our own.
+  const AUTO_ASSIGN_CHUNK_SIZE = 25;
+
   const handleAutoAssignOpen = async () => {
     if (!selectedClientId) return;
     setAutoAssignLoading(true);
     setAutoAssignError(null);
     setAutoAssignSuggestions([]);
     try {
-      const res = await autoAssignTaxLines(selectedClientId, { includeAll: false });
-      if (res.error) {
-        setAutoAssignError(res.error.message);
+      // The same population the server picks for includeAll:false — active and
+      // unmapped — chosen here so it can be handed over a chunk at a time.
+      const targets = accounts.filter((a: Account) => a.tax_code_id === null).map((a: Account) => a.id);
+      if (targets.length === 0) {
+        setAutoAssignSuggestions([]);
+        setAutoAssignOpen(true);
         return;
       }
+
+      const collected: AssignmentSuggestion[] = [];
+      let chunkError: string | null = null;
+      for (let i = 0; i < targets.length; i += AUTO_ASSIGN_CHUNK_SIZE) {
+        setAutoAssignProgress({ done: i, total: targets.length });
+        const res = await autoAssignTaxLines(selectedClientId, {
+          accountIds: targets.slice(i, i + AUTO_ASSIGN_CHUNK_SIZE),
+        });
+        if (res.error) { chunkError = res.error.message; break; }
+        collected.push(...(res.data?.suggestions ?? []));
+      }
+      setAutoAssignProgress(null);
+
+      // Show what was analyzed before the failure — confirming those is still
+      // useful, and a re-run only has to cover what is still unmapped.
+      if (chunkError && collected.length === 0) {
+        setAutoAssignError(chunkError);
+        return;
+      }
+      if (chunkError) {
+        setAutoAssignError(`${chunkError} — ${collected.length} of ${targets.length} accounts were analyzed before this failed. Confirm these, then run it again for the rest.`);
+      }
       // Set suggestions first, then open modal so useState initializer sees real data
-      setAutoAssignSuggestions(res.data?.suggestions ?? []);
+      setAutoAssignSuggestions(collected);
       setAutoAssignOpen(true);
     } catch (err: unknown) {
       setAutoAssignError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
+      setAutoAssignProgress(null);
       setAutoAssignLoading(false);
     }
   };
@@ -518,7 +553,9 @@ export function TaxMappingPage() {
             disabled={isLoading || autoAssignLoading || !selectedClientId}
             className="px-3 py-1.5 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {autoAssignLoading ? 'Analyzing…' : 'Auto-assign Tax Codes'}
+            {autoAssignLoading
+              ? (autoAssignProgress ? `Analyzing… ${autoAssignProgress.done} of ${autoAssignProgress.total}` : 'Analyzing…')
+              : 'Auto-assign Tax Codes'}
           </button>
         </div>
       </div>

@@ -59,6 +59,14 @@ interface SuggestionResult {
 
 // ── POST /api/v1/tax-lines/auto-assign ───────────────────────────────────────
 
+// Callers should page this by `accountIds` rather than asking for a whole COA
+// at once (TaxMappingPage uses AUTO_ASSIGN_CHUNK_SIZE). Each account costs two
+// lookups in the waterfall below, and whatever falls through to step (d) is a
+// tb_tax_code_assign call; on a large unmapped COA the total runs past the
+// ~100s proxy timeout in front of the AI router and the caller just sees a 524.
+// The AI step batches at BATCH_SIZE internally as well, which guards against
+// output truncation but does nothing for total request time.
+
 taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Response): Promise<void> => {
   const { clientId, accountIds, includeAll } = req.body as {
     clientId?: number;
@@ -367,7 +375,7 @@ Return a JSON array where each element has:
 
     const { result: aiResult, logId } = await aiComplete(
       provider,
-      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.TAX_CODE_ASSIGN, maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] },
       { endpoint: 'tax/auto-assign', userId: logCtx.userId, userRole: logCtx.userRole, clientId: logCtx.clientId },
     );
 

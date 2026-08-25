@@ -453,7 +453,7 @@ scannedSheetRouter.post(
         try {
           const { result, logId } = await aiComplete(
             aiProvider,
-            { model: aiModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens: tokensFor(input), messages: [{ role: 'user', content }] },
+            { model: aiModel, taskClass: TB_TASK_CLASSES.SCANNED_SHEET_EXTRACT, maxTokens: tokensFor(input), messages: [{ role: 'user', content }] },
             { endpoint: 'scanned-sheet/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId },
           );
           const parsed = extractJsonObject<{ rows?: unknown; warnings?: unknown }>(result.text);
@@ -578,7 +578,7 @@ Respond with a JSON array and nothing else. Each element: { "key": number, "acco
     const { provider, fastModel } = await getLLMProvider();
     const { result: aiResult, logId } = await aiComplete(
       provider,
-      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: 8192, messages: [{ role: 'user', content: prompt }] },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.SCANNED_SHEET_CLASSIFY, maxTokens: 8192, messages: [{ role: 'user', content: prompt }] },
       { endpoint: 'scanned-sheet/categorize', userId: req.user?.userId, userRole: req.user?.role, clientId },
     );
     const raw = extractJsonArray<Record<string, unknown>>(aiResult.text);

@@ -81,11 +81,22 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
   Tests: `npm run test:router` (server/).
   **Keep any one HTTP request's AI work short.** There is a ~100s proxy timeout in front of the
   router; exceed it and the caller gets a 524 with no error from us. Never size one call at
-  rows × tokens over an unbounded row count — batch server-side AND let the client page through
-  (see `SUGGEST_BATCH_SIZE` / `SUGGEST_CHUNK_SIZE` on the csv+pdf `suggest-numbers` routes, which
-  pass `reservedNumbers` forward so chunks don't collide). `tb_classification` is local_only, so
-  its calls are the slowest — those are the ones to watch. Known remaining exposure:
-  `POST /tax-lines/auto-assign` loops all its batches inside one request.
+  rows × tokens over an unbounded row count — batch server-side AND let the client page through.
+  Both are done for csv+pdf `suggest-numbers` (`SUGGEST_BATCH_SIZE` / `SUGGEST_CHUNK_SIZE`, with
+  `reservedNumbers` passed forward so chunks don't hand out the same number) and for
+  `POST /tax-lines/auto-assign` (`AUTO_ASSIGN_CHUNK_SIZE` in TaxMappingPage pages by `accountIds`).
+- **One task class per major AI step** (`TB_TASK_CLASSES` in `lib/routerProvider.ts`), so the router
+  carries a separate sensitivity policy and model choice for each. Adding a step means adding a
+  class AND declaring it in `registerTbTaskClasses()`; the router test asserts the declared set and
+  the constants are identical, so neither can drift. Steps reached from two entry points share one
+  class: account numbering and import chat are each driven from both the CSV and PDF dialogs, but
+  send the same shape of data, so splitting them would be two knobs for one decision.
+  A class the router has not seen before **starts local_only** until the operator widens it.
+  The old catch-alls were retired in v0.1.13 — carry their policy across per step:
+  | was | now |
+  | --- | --- |
+  | `tb_classification` | `tb_csv_analyze`, `tb_account_numbering`, `tb_import_chat`, `tb_bank_classify`, `tb_scanned_sheet_classify`, `tb_tax_code_assign` |
+  | `tb_doc_extract` | `tb_pdf_extract`, `tb_pdf_verify`, `tb_scanned_sheet_extract`, `tb_import_chat` |
 - Trial Balance Grid = editing balances ONLY, no category subtotals
 - Tax Mapping View (Plan Phase 5) = SEPARATE page: assign tax codes, read-only balances, category subtotals, net income, balance check
 - tax_line VARCHAR on chart_of_accounts: legacy field kept for compat. New system uses tax_code_id FK → tax_codes table. Dual-write: when tax_code_id assigned, also write tax_code string to tax_line.

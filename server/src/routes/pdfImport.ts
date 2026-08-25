@@ -261,7 +261,7 @@ Rules:
       const maxTokens = Math.max(tokenSettings.maxTokensDefault, Math.min(tokenSettings.maxTokensBankStatement, estimatedAccounts * 200));
       const { result: aiResult, logId } = await aiComplete(
         aiProvider,
-        { model: aiModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens, messages: [{ role: 'user', content: messageContent }] },
+        { model: aiModel, taskClass: TB_TASK_CLASSES.PDF_EXTRACT, maxTokens, messages: [{ role: 'user', content: messageContent }] },
         { endpoint: 'pdf/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId, periodId },
       );
 
@@ -576,7 +576,7 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Each object MUST 
         provider,
         {
           model: fastModel,
-          taskClass: TB_TASK_CLASSES.CLASSIFICATION,
+          taskClass: TB_TASK_CLASSES.ACCOUNT_NUMBERING,
           // Clamped: an unbounded rows × 150 can exceed the model's own output
           // ceiling and fail the call outright.
           maxTokens: Math.min(SUGGEST_MAX_TOKENS, Math.max(2048, batch.length * 150)),
@@ -693,7 +693,7 @@ If the user requests corrections to the account matching, categories, or actions
     const { provider: pdfProvider, fastModel: pdfFastModel } = await getLLMProvider();
     const { result: aiResult2, logId: chatLogId } = await aiComplete(
       pdfProvider,
-      { model: pdfFastModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
+      { model: pdfFastModel, taskClass: TB_TASK_CLASSES.IMPORT_CHAT, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
       { endpoint: 'pdf/chat', userId: req.user?.userId, userRole: req.user?.role, clientId },
     );
 
@@ -840,7 +840,7 @@ Rules:
     const { provider: verifyProvider, fastModel: verifyModel } = await getLLMProvider();
     const { result: aiResult3, logId: verifyLogId } = await aiComplete(
       verifyProvider,
-      { model: verifyModel, taskClass: TB_TASK_CLASSES.DOC_EXTRACT, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
+      { model: verifyModel, taskClass: TB_TASK_CLASSES.PDF_VERIFY, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
       { endpoint: 'pdf/verify', userId: req.user?.userId, userRole: req.user?.role, clientId: period.client_id, periodId },
     );
 

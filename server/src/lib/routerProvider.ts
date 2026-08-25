@@ -103,23 +103,56 @@ export function validateAiModeEnv(): string | null {
 // ── this app's task classes ──────────────────────────────────────────────────
 
 /**
- * Task classes vibe-tb uses. The first three are default-pack classes (already
- * declared router-side with reviewed sensitivities); the last three are new and
- * start local_only on the router until the operator widens them.
+ * Task classes vibe-tb uses — one per major AI step, so the router can carry a
+ * separate sensitivity policy and model choice for each.
+ *
+ * Steps reached from more than one entry point share a class: account numbering
+ * and import chat are each driven from both the CSV and the PDF dialog, but they
+ * send the same shape of data and want the same model, so splitting them would
+ * only produce two knobs for one decision.
+ *
+ * Adding a class here means adding it to registerTbTaskClasses() below, and a
+ * class the router has not seen before starts local_only until the operator
+ * widens it.
+ *
+ * Superseded — do not reuse the keys: `tb_classification` and `tb_doc_extract`
+ * were catch-alls covering eight and five call sites. Whatever policy they held
+ * has to be carried across per step; the mapping is in CLAUDE.md.
  */
 export const TB_TASK_CLASSES = {
-  /** Account/tax-line classification, CSV mapping, bank-txn categorization (local_only) */
-  CLASSIFICATION: 'tb_classification',
-  /** Trial-balance PDF import — vision + structured extraction (cloud_deidentified) */
-  DOC_EXTRACT: 'tb_doc_extract',
-  /** Public-knowledge lookups with no client data, e.g. model pricing fetch (cloud_allowed) */
-  RESEARCH_SUMMARY: 'tb_research_summary',
-  /** NEW: bank-statement PDF transaction extraction (full statements — starts local_only) */
+  // ── Trial-balance import ───────────────────────────────────────────────────
+  /** CSV import — column detection and account matching (rows are parsed in code) */
+  CSV_ANALYZE: 'tb_csv_analyze',
+  /** Trial-balance PDF import — vision + structured extraction */
+  PDF_EXTRACT: 'tb_pdf_extract',
+  /** Trial-balance PDF import — line-by-line verification against the source */
+  PDF_VERIFY: 'tb_pdf_verify',
+  /** Import review chat, CSV and PDF dialogs alike */
+  IMPORT_CHAT: 'tb_import_chat',
+  /** Account-number and category suggestion for new accounts, CSV and PDF alike */
+  ACCOUNT_NUMBERING: 'tb_account_numbering',
+
+  // ── Bookkeeping ────────────────────────────────────────────────────────────
+  /** Bank-statement PDF transaction extraction (full statements) */
   BANK_STATEMENT_EXTRACT: 'tb_bank_statement_extract',
-  /** NEW: in-app support chat over the knowledge base (streaming — starts local_only) */
-  SUPPORT_CHAT: 'tb_support_chat',
-  /** NEW: period diagnostics observations over TB/GL data (starts local_only) */
+  /** Bank-transaction categorization against the COA and rules */
+  BANK_CLASSIFY: 'tb_bank_classify',
+  /** Scanned handwritten sheets — per-page transcription (vision) */
+  SCANNED_SHEET_EXTRACT: 'tb_scanned_sheet_extract',
+  /** Scanned handwritten sheets — account suggestion for transcribed rows */
+  SCANNED_SHEET_CLASSIFY: 'tb_scanned_sheet_classify',
+
+  // ── Tax ────────────────────────────────────────────────────────────────────
+  /** Tax-code auto-assignment over unmapped accounts */
+  TAX_CODE_ASSIGN: 'tb_tax_code_assign',
+
+  // ── Everything else ────────────────────────────────────────────────────────
+  /** Period diagnostics observations over TB/GL data */
   DIAGNOSTICS: 'tb_diagnostics',
+  /** In-app support chat over the knowledge base (streaming) */
+  SUPPORT_CHAT: 'tb_support_chat',
+  /** Public-knowledge lookups with no client data, e.g. model pricing fetch */
+  RESEARCH_SUMMARY: 'tb_research_summary',
 } as const;
 
 // ── the provider ─────────────────────────────────────────────────────────────
@@ -328,17 +361,27 @@ export function registerTbTaskClasses(opts?: { fetch?: typeof fetch; maxAttempts
         app: 'vibe-tb',
         version: process.env.npm_package_version ?? 'unknown',
         classes: [
-          // Existing default-pack classes: declarations match the pack exactly.
-          { key: TB_TASK_CLASSES.CLASSIFICATION, description: 'Trial-balance account classification', requires: { json_schema: true }, defaultMaxTokens: 2048 },
-          { key: TB_TASK_CLASSES.DOC_EXTRACT, description: 'Source-document field extraction', requires: { json_schema: true, vision: true }, defaultMaxTokens: 4096 },
-          { key: TB_TASK_CLASSES.RESEARCH_SUMMARY, description: 'Public-guidance research summarization', requires: {}, defaultMaxTokens: 8192 },
-          // New classes — start local_only on the router until the operator widens them.
+          // One entry per major AI step. defaultMaxTokens tracks what the call
+          // site actually asks for, so the router's own ceiling doesn't clip a
+          // step that legitimately needs a long answer.
+          { key: TB_TASK_CLASSES.CSV_ANALYZE, description: 'Trial-balance CSV import - column detection and account matching', requires: { json_schema: true }, defaultMaxTokens: 4096 },
+          { key: TB_TASK_CLASSES.PDF_EXTRACT, description: 'Trial-balance PDF import - vision + structured extraction', requires: { json_schema: true, vision: true }, defaultMaxTokens: 32768 },
+          { key: TB_TASK_CLASSES.PDF_VERIFY, description: 'Trial-balance PDF import - line-by-line verification against the source', requires: { json_schema: true }, defaultMaxTokens: 4096 },
+          { key: TB_TASK_CLASSES.IMPORT_CHAT, description: 'Import review chat (CSV and PDF dialogs)', requires: {}, defaultMaxTokens: 2048 },
+          { key: TB_TASK_CLASSES.ACCOUNT_NUMBERING, description: 'Account-number and category suggestion for new accounts', requires: { json_schema: true }, defaultMaxTokens: 8192 },
           { key: TB_TASK_CLASSES.BANK_STATEMENT_EXTRACT, description: 'Bank-statement PDF transaction extraction (full statements)', requires: { json_schema: true, vision: true }, defaultMaxTokens: 32768 },
-          { key: TB_TASK_CLASSES.SUPPORT_CHAT, description: 'In-app support chat over the TB knowledge base (streaming)', requires: {}, defaultMaxTokens: 2048 },
+          { key: TB_TASK_CLASSES.BANK_CLASSIFY, description: 'Bank-transaction categorization against the COA and rules', requires: { json_schema: true }, defaultMaxTokens: 8192 },
+          { key: TB_TASK_CLASSES.SCANNED_SHEET_EXTRACT, description: 'Scanned handwritten sheets - per-page transcription', requires: { json_schema: true, vision: true }, defaultMaxTokens: 32768 },
+          { key: TB_TASK_CLASSES.SCANNED_SHEET_CLASSIFY, description: 'Scanned handwritten sheets - account suggestion for transcribed rows', requires: { json_schema: true }, defaultMaxTokens: 8192 },
+          { key: TB_TASK_CLASSES.TAX_CODE_ASSIGN, description: 'Tax-code auto-assignment over unmapped accounts', requires: { json_schema: true }, defaultMaxTokens: 4096 },
           { key: TB_TASK_CLASSES.DIAGNOSTICS, description: 'Period diagnostics observations over TB/GL data', requires: {}, defaultMaxTokens: 2048 },
+          { key: TB_TASK_CLASSES.SUPPORT_CHAT, description: 'In-app support chat over the TB knowledge base (streaming)', requires: {}, defaultMaxTokens: 2048 },
+          { key: TB_TASK_CLASSES.RESEARCH_SUMMARY, description: 'Public-guidance research summarization', requires: {}, defaultMaxTokens: 8192 },
         ],
       });
-      console.info(`[router-mode] task classes registered (${res.registered.length})`);
+      // Name them: a class the router has not seen before starts local_only,
+      // so the operator needs to know which ones to go and widen.
+      console.info(`[router-mode] task classes registered (${res.registered.length}): ${Object.values(TB_TASK_CLASSES).join(', ')}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (attempt >= maxAttempts) {

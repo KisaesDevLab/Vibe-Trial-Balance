@@ -442,7 +442,7 @@ Rules:
         const { provider, fastModel } = await getLLMProvider();
         const { result: aiResult, logId } = await aiComplete(
           provider,
-          { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
+          { model: fastModel, taskClass: TB_TASK_CLASSES.CSV_ANALYZE, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
           { endpoint: 'csv/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId, periodId },
         );
 
@@ -646,7 +646,7 @@ Return ONLY a valid JSON array (no prose, no markdown fences). Use the EXACT csv
         provider,
         {
           model: fastModel,
-          taskClass: TB_TASK_CLASSES.CLASSIFICATION,
+          taskClass: TB_TASK_CLASSES.ACCOUNT_NUMBERING,
           // Clamped: an unbounded rows × 150 can exceed the model's own output
           // ceiling and fail the call outright.
           maxTokens: Math.min(SUGGEST_MAX_TOKENS, Math.max(2048, batch.length * 150)),
@@ -774,7 +774,7 @@ If the user requests corrections to the column mapping, account matching, or row
     const { provider, fastModel } = await getLLMProvider();
     const { result: aiResult3, logId: chatLogId } = await aiComplete(
       provider,
-      { model: fastModel, taskClass: TB_TASK_CLASSES.CLASSIFICATION, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
+      { model: fastModel, taskClass: TB_TASK_CLASSES.IMPORT_CHAT, maxTokens: 2048, system: systemPrompt, messages: aiMessages },
       { endpoint: 'csv/chat', userId: req.user?.userId, userRole: req.user?.role, clientId },
     );
 

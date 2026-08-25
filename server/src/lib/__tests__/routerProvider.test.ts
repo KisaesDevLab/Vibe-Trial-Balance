@@ -37,7 +37,7 @@ function captureFetch(response: () => Response) {
 
 const PARAMS: LLMParams = {
   model: 'vibe-router',
-  taskClass: TB_TASK_CLASSES.CLASSIFICATION,
+  taskClass: TB_TASK_CLASSES.CSV_ANALYZE,
   maxTokens: 2048,
   system: 'sys',
   messages: [{ role: 'user', content: 'classify this' }],
@@ -55,7 +55,7 @@ test('complete(): task-class header, attribution, and NO app-pinned model on the
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'http://router.test:8220/v1/chat/completions');
   const headers = calls[0].init.headers as Record<string, string>;
-  assert.equal(headers['x-vibe-task-class'], 'tb_classification');
+  assert.equal(headers['x-vibe-task-class'], 'tb_csv_analyze');
   assert.equal(headers['x-vibe-user'], '42');
   assert.equal(headers['x-vibe-client'], '7');
   assert.equal(headers['x-vibe-user-role'], 'partner', "app role 'reviewer' maps to router 'partner'");
@@ -104,7 +104,7 @@ test('complete(): image parts become data-URL image_url content', async () => {
   const provider = new RouterLLMProvider({ ...BASE, fetch: fn });
   await provider.complete({
     ...PARAMS,
-    taskClass: TB_TASK_CLASSES.DOC_EXTRACT,
+    taskClass: TB_TASK_CLASSES.PDF_EXTRACT,
     messages: [{
       role: 'user',
       content: [
@@ -287,7 +287,7 @@ test('validateAiModeEnv(): router mode refuses to boot without URL + token', () 
   }
 });
 
-test('registerTbTaskClasses(): declares all six vibe-tb classes, router mode only', async () => {
+test('registerTbTaskClasses(): declares one class per AI step, router mode only', async () => {
   const saved = { ...process.env };
   try {
     process.env.VIBE_AI_MODE = 'router';
@@ -304,13 +304,32 @@ test('registerTbTaskClasses(): declares all six vibe-tb classes, router mode onl
     assert.equal(calls[0].url, 'http://router.test:8220/v1/task-classes/register');
     const body = JSON.parse(String(calls[0].init.body));
     assert.equal(body.app, 'vibe-tb');
+    // Every step gets its own key, so the router can hold a separate policy
+    // and model choice for each. The superseded catch-alls (tb_classification,
+    // tb_doc_extract) must not come back.
     assert.deepEqual(
       body.classes.map((c: { key: string }) => c.key).sort(),
-      ['tb_bank_statement_extract', 'tb_classification', 'tb_diagnostics', 'tb_doc_extract', 'tb_research_summary', 'tb_support_chat'],
+      [
+        'tb_account_numbering', 'tb_bank_classify', 'tb_bank_statement_extract',
+        'tb_csv_analyze', 'tb_diagnostics', 'tb_import_chat', 'tb_pdf_extract',
+        'tb_pdf_verify', 'tb_research_summary', 'tb_scanned_sheet_classify',
+        'tb_scanned_sheet_extract', 'tb_support_chat', 'tb_tax_code_assign',
+      ],
+    );
+    // Declared keys and the constants the call sites use are the same set —
+    // a class that is declared but never referenced (or the reverse) is a bug.
+    assert.deepEqual(
+      body.classes.map((c: { key: string }) => c.key).sort(),
+      Object.values(TB_TASK_CLASSES).sort(),
     );
     const bank = body.classes.find((c: { key: string }) => c.key === 'tb_bank_statement_extract');
     assert.deepEqual(bank.requires, { json_schema: true, vision: true });
     assert.equal(bank.defaultMaxTokens, 32768);
+    // Vision is required by exactly the steps that send images.
+    assert.deepEqual(
+      body.classes.filter((c: { requires: { vision?: boolean } }) => c.requires.vision).map((c: { key: string }) => c.key).sort(),
+      ['tb_bank_statement_extract', 'tb_pdf_extract', 'tb_scanned_sheet_extract'],
+    );
 
     // direct mode: no registration traffic at all
     process.env.VIBE_AI_MODE = 'direct';
