@@ -6,6 +6,7 @@ import { Router, Response } from 'express';
 import { PDFDocument } from 'pdf-lib';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { engagementFilename, pdfDisposition } from '../lib/reportFilename';
 import {
   generateTrialBalancePdf,
   generateJournalEntryListingPdf,
@@ -38,13 +39,23 @@ function sendPdf(
   filename: string,
   preview: boolean,
 ): void {
-  const disposition = preview
-    ? `inline; filename="${filename}"`
-    : `attachment; filename="${filename}"`;
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', disposition);
+  res.setHeader('Content-Disposition', pdfDisposition(filename, preview));
   res.setHeader('Content-Length', String(buffer.length));
   res.send(buffer);
+}
+
+/**
+ * Name a report for the engagement it belongs to. Falls back to the bare
+ * report name if the period has gone missing.
+ */
+async function reportFilename(periodId: number, baseName: string): Promise<string> {
+  const row = await db('periods')
+    .join('clients', 'clients.id', 'periods.client_id')
+    .where('periods.id', periodId)
+    .first('periods.period_name as period_name', 'clients.name as client_name');
+  if (!row) return baseName;
+  return engagementFilename(row.period_name as string, row.client_name as string, baseName);
 }
 
 function getPeriodId(req: AuthRequest): number | null {
@@ -80,7 +91,7 @@ pdfReportsRouter.get('/periods/:periodId/flux/:comparePeriodId', async (req: Aut
       return;
     }
     const buffer = await generateFluxAnalysisPdf(db, periodId, comparePeriodId);
-    sendPdf(res, buffer, `flux-analysis-${periodId}-vs-${comparePeriodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `flux-analysis-${periodId}-vs-${comparePeriodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -99,7 +110,7 @@ pdfReportsRouter.get('/periods/:periodId/trial-balance', async (req: AuthRequest
   try {
     const columns = typeof req.query.columns === 'string' ? req.query.columns.split(',') : undefined;
     const buffer = await generateTrialBalancePdf(db, periodId, columns);
-    sendPdf(res, buffer, `trial-balance-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `trial-balance-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     const status = e.status ?? 500;
@@ -119,7 +130,7 @@ pdfReportsRouter.get('/periods/:periodId/journal-entries', async (req: AuthReque
   const typeFilter = typeof req.query.type === 'string' ? req.query.type : 'all';
   try {
     const buffer = await generateJournalEntryListingPdf(db, periodId, typeFilter);
-    sendPdf(res, buffer, `journal-entries-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `journal-entries-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -137,7 +148,7 @@ pdfReportsRouter.get('/periods/:periodId/aje-listing', async (req: AuthRequest, 
   }
   try {
     const buffer = await generateAjeListingPdf(db, periodId);
-    sendPdf(res, buffer, `aje-listing-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `aje-listing-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -160,7 +171,7 @@ pdfReportsRouter.get('/periods/:periodId/general-ledger', async (req: AuthReques
   }
   try {
     const buffer = await generateGeneralLedgerPdf(db, periodId, accountId);
-    sendPdf(res, buffer, `general-ledger-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `general-ledger-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -179,7 +190,7 @@ pdfReportsRouter.get('/periods/:periodId/income-statement', async (req: AuthRequ
   const includePY = req.query.priorYear === 'true' || req.query.priorYear === '1';
   try {
     const buffer = await generateIncomeStatementPdf(db, periodId, includePY);
-    sendPdf(res, buffer, `income-statement-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `income-statement-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -197,7 +208,7 @@ pdfReportsRouter.get('/periods/:periodId/balance-sheet', async (req: AuthRequest
   }
   try {
     const buffer = await generateBalanceSheetPdf(db, periodId);
-    sendPdf(res, buffer, `balance-sheet-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `balance-sheet-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -217,7 +228,7 @@ pdfReportsRouter.get('/periods/:periodId/tax-code-report', async (req: AuthReque
     // Adjustment layer must follow the user's on-screen selection (book vs tax).
     const columns = req.query.columns === 'book' ? 'book' : 'tax';
     const buffer = await generateTaxCodeReportPdf(db, periodId, columns);
-    sendPdf(res, buffer, `tax-code-report-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `tax-code-report-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -236,7 +247,7 @@ pdfReportsRouter.get('/periods/:periodId/workpaper-index', async (req: AuthReque
   try {
     const pageBreak = req.query.pageBreak !== 'false'; // default true
     const buffer = await generateWorkpaperIndexPdf(db, periodId, pageBreak);
-    sendPdf(res, buffer, `workpaper-index-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `workpaper-index-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -254,7 +265,7 @@ pdfReportsRouter.get('/periods/:periodId/tax-basis-pl', async (req: AuthRequest,
   }
   try {
     const buffer = await generateTaxBasisPlPdf(db, periodId);
-    sendPdf(res, buffer, `tax-basis-pl-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `tax-basis-pl-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -272,7 +283,7 @@ pdfReportsRouter.get('/periods/:periodId/cash-flow', async (req: AuthRequest, re
   }
   try {
     const buffer = await generateCashFlowPdf(db, periodId);
-    sendPdf(res, buffer, `cash-flow-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `cash-flow-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -290,7 +301,7 @@ pdfReportsRouter.get('/periods/:periodId/tax-basis-schedule', async (req: AuthRe
   }
   try {
     const buffer = await generateTaxBasisSchedulePdf(db, periodId);
-    sendPdf(res, buffer, `tax-basis-schedule-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `tax-basis-schedule-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -308,7 +319,7 @@ pdfReportsRouter.get('/periods/:periodId/m1', async (req: AuthRequest, res: Resp
   }
   try {
     const buffer = await generateM1Pdf(db, periodId);
-    sendPdf(res, buffer, `m1-reconciliation-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `m1-reconciliation-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -326,7 +337,7 @@ pdfReportsRouter.get('/periods/:periodId/tax-return-order', async (req: AuthRequ
   }
   try {
     const buffer = await generateTaxReturnOrderPdf(db, periodId);
-    sendPdf(res, buffer, `tax-return-order-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, buffer, await reportFilename(periodId, `tax-return-order-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
@@ -422,7 +433,7 @@ pdfReportsRouter.get('/periods/:periodId/workpaper-merged', async (req: AuthRequ
     }
 
     const mergedBuffer = await mergedPdf.save();
-    sendPdf(res, Buffer.from(mergedBuffer), `workpaper-package-${periodId}.pdf`, isPreview(req));
+    sendPdf(res, Buffer.from(mergedBuffer), await reportFilename(periodId, `workpaper-package-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });

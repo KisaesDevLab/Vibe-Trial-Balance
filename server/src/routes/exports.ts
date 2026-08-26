@@ -18,6 +18,7 @@ import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
+import { engagementFilename, pdfDisposition } from '../lib/reportFilename';
 import { PdfTemplateService } from '../pdf/PdfTemplateService';
 import type { Content, TableCell } from 'pdfmake/interfaces';
 import { whereHasActivity } from '../lib/tbActivity';
@@ -935,9 +936,9 @@ exportsRouter.get('/bookkeeper-letter', async (req: AuthRequest, res: Response):
     }));
 
     const preview = req.query.preview === 'true' || req.query.preview === '1';
-    const disposition = preview
-      ? `inline; filename="bookkeeper-letter-${periodId}.pdf"`
-      : `attachment; filename="bookkeeper-letter-${periodId}.pdf"`;
+    // Named for the engagement, same as every report PDF.
+    const filename = engagementFilename(info.name as string, info.client_name as string, `bookkeeper-letter-${periodId}.pdf`);
+    const disposition = pdfDisposition(filename, preview);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', disposition);

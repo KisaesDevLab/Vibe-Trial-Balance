@@ -7,7 +7,9 @@
     "build": "tsc",
     "start": "node dist/app.js",
     "test:router": "tsx --test src/lib/__tests__/routerProvider.test.ts",
-    "test:import": "tsx --test src/routes/__tests__/csvImport.test.ts"
+    "test:import": "tsx --test src/routes/__tests__/csvImport.test.ts",
+    "test:filenames": "tsx --test src/lib/__tests__/reportFilename.test.ts",
+    "test": "tsx --test src/lib/__tests__/routerProvider.test.ts src/lib/__tests__/reportFilename.test.ts src/routes/__tests__/csvImport.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

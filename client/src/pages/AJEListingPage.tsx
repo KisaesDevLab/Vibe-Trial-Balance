@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { listJournalEntries, type JournalEntry } from '../api/journalEntries';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
-import { downloadExport, bookkeeperLetterUrl } from '../api/exports';
+import { bookkeeperLetterUrl } from '../api/exports';
 import { downloadXlsx } from '../utils/downloadXlsx';
 
 function fmt(cents: number): string {
@@ -204,9 +204,11 @@ export function AJEListingPage() {
           </button>
           <button
             onClick={async () => {
-              if (!selectedPeriodId) return;
+              if (!token || !selectedPeriodId) return;
               try {
-                await downloadExport(bookkeeperLetterUrl(selectedPeriodId, false), `bookkeeper-letter-${selectedPeriodId}.pdf`);
+                // downloadPdf, not downloadExport: it takes the engagement-prefixed
+                // filename off the response instead of using the one passed here.
+                await downloadPdf(bookkeeperLetterUrl(selectedPeriodId, false), `bookkeeper-letter-${selectedPeriodId}.pdf`, token);
               } catch { /* ignore */ }
             }}
             disabled={!entries.length}

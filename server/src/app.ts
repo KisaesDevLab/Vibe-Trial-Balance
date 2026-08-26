@@ -115,6 +115,10 @@ app.use(cors({
     return cb(null, false);
   },
   credentials: true,
+  // Downloads read their filename off this header; without exposing it the
+  // browser hides it cross-origin and every PDF saves under the caller's
+  // fallback name.
+  exposedHeaders: ['Content-Disposition'],
 }));
 app.use(express.json({ limit: '10mb' }));
 
