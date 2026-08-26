@@ -44,6 +44,18 @@ function parseDollarInput(s: string): number | null {
 }
 
 let nextRowId = 1;
+/**
+ * "Ref007" — the sequence the scanned-sheet import stamps on rows the sheet did
+ * not number itself. Sheet lines usually share one date, so this is the only
+ * thing that can hold them in the order they were written once they round-trip
+ * through the database.
+ */
+const REF_SEQ = /^ref[\s-]?(\d+)$/i;
+function refSeq(ref: string | null | undefined): number | null {
+  const m = REF_SEQ.exec((ref ?? '').trim());
+  return m ? parseInt(m[1], 10) : null;
+}
+
 function makeRow(sourceAccountId: number | null = null): RegisterRow {
   return {
     _id: nextRowId++,
@@ -542,7 +554,16 @@ export function TransactionEntryPage() {
       periodId: selectedPeriodId ?? undefined,
     }),
     enabled: !!selectedClientId,
-    select: (r) => (r.data ?? []).slice().sort((a, b) => a.transaction_date.localeCompare(b.transaction_date)),
+    // Date, then the Ref### sequence, then entry order — the API hands rows back
+    // newest-id-first, which would reverse an imported sheet within its date.
+    select: (r) => (r.data ?? []).slice().sort((a, b) => {
+      const byDate = a.transaction_date.slice(0, 10).localeCompare(b.transaction_date.slice(0, 10));
+      if (byDate !== 0) return byDate;
+      const sa = refSeq(a.check_number);
+      const sb = refSeq(b.check_number);
+      if (sa !== null && sb !== null && sa !== sb) return sa - sb;
+      return a.id - b.id;
+    }),
   });
 
   // Seed rows from DB on first load (only runs once per mount when data arrives)
@@ -692,6 +713,16 @@ export function TransactionEntryPage() {
       if (r.payee.trim() && cents !== null) keys.add(`${r.date}|${r.payee.trim().toLowerCase()}|${cents}`);
     }
     return keys;
+  }, [rows]);
+
+  /** Next Ref### for an import, so a second sheet continues the register's run instead of restarting at 001. */
+  const nextRefSeed = useMemo(() => {
+    let max = 0;
+    for (const r of rows) {
+      const n = refSeq(r.ref);
+      if (n !== null && n > max) max = n;
+    }
+    return max + 1;
   }, [rows]);
 
   /** Drop AI-read rows into the register as unsaved rows; the normal Save flow posts them. */
@@ -1083,6 +1114,7 @@ export function TransactionEntryPage() {
           payees={payees}
           defaultSourceAccountId={defaultSourceAccountId}
           existingRowKeys={existingRowKeys}
+          refSeed={nextRefSeed}
           onClose={() => setShowScanImport(false)}
           onInsert={insertImportedRows}
         />

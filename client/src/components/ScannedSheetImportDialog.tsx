@@ -45,6 +45,8 @@ interface Props {
   defaultSourceAccountId: number | null;
   /** Rows already in the register (date|payee|cents) — used for a soft duplicate warning. */
   existingRowKeys?: Set<string>;
+  /** First sequence number for generated Ref### references (register continues its own run). */
+  refSeed?: number;
   onClose: () => void;
   onInsert: (drafts: ImportedDraftRow[]) => void;
 }
@@ -78,6 +80,13 @@ interface PreviewRow extends ScannedSheetRow {
  * the client's wording. (`match` is accepted for call-site symmetry.)
  */
 const derivePayeeText = (description: string, _match: PayeeMatch | null): string => description.trim();
+
+/**
+ * Sequence reference stamped on rows the sheet did not number itself. A sheet's
+ * lines usually share one date, and the register sorts same-date rows by this
+ * reference, so it is what keeps the entries in the order they were written.
+ */
+const seqRef = (n: number): string => `Ref${String(n).padStart(3, '0')}`;
 
 /** A row that can actually be posted: something to describe and a non-zero amount. */
 const isPostable = (r: PreviewRow): boolean => r.description.trim().length > 0 && r.amount !== 0;
@@ -186,7 +195,7 @@ function EditableCell({
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSourceAccountId, existingRowKeys, onClose, onInsert }: Props) {
+export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSourceAccountId, existingRowKeys, refSeed = 1, onClose, onInsert }: Props) {
   const [stage, setStage] = useState<Stage>('upload');
   const [showConsent, setShowConsent] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -282,11 +291,17 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
 
   // ── Analyze ────────────────────────────────────────────────────────────────
 
+  // Numbered by position in the extraction, so a Ref### maps to a line on the
+  // sheet even after rows around it are unticked. A check number the AI actually
+  // read off the sheet wins — that reference is real and belongs in the field.
   const buildPreviewRows = (data: ScannedSheetAnalysisResult): PreviewRow[] =>
-    data.rows.map((r) => {
+    data.rows.map((r, i) => {
       const match = matchPayee(r.description, payees, r.matchedPayee);
+      const written = r.ref?.trim();
       return {
         ...r,
+        ref: written || seqRef(refSeed + i),
+        uncertain: written ? r.uncertain : r.uncertain.filter((u) => u !== 'ref'),
         _key: nextKey++,
         include: r.confidence >= 0.3 && r.amount !== 0,
         effectiveDate: plausibleDate(r.date, data.sheetDate) ? (r.date as string) : data.sheetDate,
