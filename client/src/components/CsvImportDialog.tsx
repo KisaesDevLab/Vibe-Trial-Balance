@@ -387,6 +387,15 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
     setMatches((prev) => prev.map((m, i) => i === idx ? { ...m, ...updates } : m));
   };
 
+  // Files often land an amount in the wrong column (revenue parsed as a debit).
+  // Swapping is purely client-side: the server writes each row's debitCents /
+  // creditCents verbatim on confirm, and the footer totals recompute from state.
+  const swapRowAmounts = (idx: number) => {
+    const m = matches[idx];
+    if (!m) return;
+    updateMatch(idx, { debitCents: m.creditCents, creditCents: m.debitCents });
+  };
+
   const handleActionChange = (idx: number, action: EditableMatch['action']) => {
     const m = matches[idx];
     const updates: Partial<EditableMatch> = { action };
@@ -713,6 +722,7 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700">Matched Account / New Fields</th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-16">Conf.</th>
                     <th className="text-right px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-28">Debit</th>
+                    <th className="px-1 py-2 border-b dark:border-gray-700 w-8"><span className="sr-only">Swap debit and credit</span></th>
                     <th className="text-right px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-28">Credit</th>
                   </tr>
                 </thead>
@@ -793,6 +803,21 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                       </td>
                       <td className="px-3 py-1.5 border-b">{confidenceBadge(match)}</td>
                       <td className="px-3 py-1.5 text-right font-mono text-xs tabular-nums border-b">{fmtCents(match.debitCents)}</td>
+                      <td className="px-1 py-1.5 text-center border-b no-underline">
+                        <button
+                          type="button"
+                          onClick={() => swapRowAmounts(idx)}
+                          disabled={match.action === 'skip' || (match.debitCents === 0 && match.creditCents === 0)}
+                          title="Swap this row's debit and credit"
+                          aria-label={`Swap debit and credit on row ${match.csvRow + 1}`}
+                          className="p-0.5 rounded text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-30 disabled:hover:text-gray-400 disabled:hover:bg-transparent disabled:cursor-default"
+                        >
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true">
+                            <path d="M2 5.5h10M9.5 3 12 5.5 9.5 8" />
+                            <path d="M14 10.5H4M6.5 8 4 10.5 6.5 13" />
+                          </svg>
+                        </button>
+                      </td>
                       <td className="px-3 py-1.5 text-right font-mono text-xs tabular-nums border-b">{fmtCents(match.creditCents)}</td>
                     </tr>
                   ))}
