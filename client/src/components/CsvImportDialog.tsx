@@ -842,6 +842,13 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                 </span>
                 <span className="text-gray-400">|</span>
                 <span>{totalActive} rows to import</span>
+                <span className="text-gray-400">|</span>
+                <span
+                  className={matches.length < (analysis?.totalRows ?? matches.length) ? 'text-amber-600 dark:text-amber-400' : ''}
+                  title="Every non-blank line in the file is listed above — nothing is dropped during analysis. Tick a row to bring it in."
+                >
+                  {matches.length} of {analysis?.totalRows ?? matches.length} file rows listed
+                </span>
               </div>
 
               {!isBalanced && totalActive > 0 && (

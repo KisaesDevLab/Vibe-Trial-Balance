@@ -13,6 +13,7 @@ import { getLLMProvider } from '../lib/aiClient';
 import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
+import { looksLikeTotalRow } from '../lib/importSkipRules';
 
 // ── Excel → CSV conversion ──────────────────────────────────────────────────
 
@@ -266,10 +267,17 @@ function buildFallbackColumnDetection(lines: string[], rawCsv: string): Omit<AiA
 }
 
 /**
- * Deterministic row parser — processes EVERY row in the file from dataStartRow
- * to EOF using the detected column mapping. No row limit, no passes.
+ * Deterministic row parser — EVERY non-blank line in the file becomes a row,
+ * from the top of the file to EOF, using the detected column mapping.
+ *
+ * Nothing is dropped. A line that isn't an account — the header, a section
+ * heading, a subtotal, a line the model flagged, a line the mapping can't read
+ * — comes back with action 'skip' so the preview still draws it and the user
+ * can tick it back in. Dropping those lines here is what made imports look like
+ * they lost rows: a mis-flagged account never reached the screen at all, so
+ * there was nothing to correct.
  */
-function parseAllRows(
+export function parseAllRows(
   allLines: string[],
   columns: AiAnalysisResult['columns'],
   delimiter: string,
@@ -280,17 +288,23 @@ function parseAllRows(
   const skipSet = new Set(rowsToSkip);
   const matches: CsvMatchRow[] = [];
 
-  for (let i = dataStartRow; i < allLines.length; i++) {
-    if (skipSet.has(i)) continue;
+  for (let i = 0; i < allLines.length; i++) {
     const line = allLines[i];
-    if (!line.trim()) continue;
+    if (!line.trim()) continue; // a truly empty line has nothing to show
     const cells = splitCsvRow(line, delimiter);
 
     const csvAccountNumber = columns.accountNumber !== null ? (cells[columns.accountNumber] ?? null) : null;
     const csvAccountName = columns.accountName !== null ? (cells[columns.accountName] ?? null) : null;
 
-    // Skip rows with no identifiable account data
-    if (!csvAccountName?.trim() && !csvAccountNumber?.trim()) continue;
+    // Not an account line: above the first data row, flagged by the model,
+    // carrying no account name/number under this mapping, or a "Total…" line
+    // carried down from the source report. Shown, not dropped.
+    const isAccountLine = !!(csvAccountName?.trim() || csvAccountNumber?.trim());
+    // The label lands in whichever column the report used — plenty of exports
+    // write "Total Income" into the account-number column and leave the name
+    // blank — so both are tested.
+    const isTotalLine = looksLikeTotalRow(csvAccountName) || looksLikeTotalRow(csvAccountNumber);
+    const skipped = i < dataStartRow || skipSet.has(i) || !isAccountLine || isTotalLine;
 
     let debitCents = 0;
     let creditCents = 0;
@@ -316,13 +330,30 @@ function parseAllRows(
       matchedAccountName: null,
       confidence: 0,
       matchType: 'none',
-      action: 'create_new',
+      action: skipped ? 'skip' : 'create_new',
       debitCents,
       creditCents,
     });
   }
 
   return matches;
+}
+
+/** How many lines of the file the model is shown. */
+const SAMPLE_LINES = 30;
+
+/**
+ * The model only ever sees the first SAMPLE_LINES lines, so a skip index past
+ * the sample is a guess about a line it never read, and a negative or
+ * fractional one is noise. Every row reaches the preview either way, but a
+ * guessed skip still hands the user a real account with its box already
+ * unticked — which reads exactly like the import dropped it.
+ */
+function sanitizeRowsToSkip(raw: unknown, sampleCount: number): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((n) => Number(n))
+    .filter((n) => Number.isInteger(n) && n >= 0 && n < sampleCount);
 }
 
 // ── POST /api/v1/import/csv/analyze ─────────────────────────────────────────
@@ -358,7 +389,7 @@ csvImportRouter.post(
         rawCsv = rawCsv.slice(1);
       }
       const allLines = rawCsv.split('\n');
-      const first30Lines = allLines.slice(0, 30);
+      const sampleLines = allLines.slice(0, SAMPLE_LINES);
 
       // Load client COA
       const coa = await db('chart_of_accounts')
@@ -373,11 +404,19 @@ csvImportRouter.post(
         return `${a.id}|${a.account_number}|${a.account_name}|${a.category}|${a.normal_balance}|${aliasStr}`;
       }).join('\n');
 
+      // The model is asked for the file's SHAPE, not its contents: every line is
+      // parsed here and shown to the user, so a `matches` array in the reply
+      // would be discarded. Asking for one anyway used to push the response
+      // toward the token ceiling, and a truncated reply is unparseable JSON —
+      // which drops the whole analysis into heuristic fallback, where a wrong
+      // column guess makes real accounts read as blank lines.
+      const numberedSample = sampleLines.map((l, i) => `${i}| ${l}`).join('\n');
+
       const prompt = `You are an expert accountant analyzing a CSV trial balance file.
 
-Here are the first 30 rows of the CSV:
+Here are the first ${sampleLines.length} lines of the file${allLines.length > sampleLines.length ? ` (of ${allLines.length} — the rest follow the same layout)` : ''}. Each line is prefixed with its 0-based file line index and "| "; that prefix is NOT part of the data:
 \`\`\`
-${first30Lines.join('\n')}
+${numberedSample}
 \`\`\`
 
 Here is the client's chart of accounts (format: id|account_number|account_name|category|normal_balance|import_aliases):
@@ -385,7 +424,9 @@ Here is the client's chart of accounts (format: id|account_number|account_name|c
 ${coaSummary || '(no accounts yet)'}
 \`\`\`
 
-Analyze the CSV and return ONLY a valid JSON object (no prose, no markdown, no code fences) with this exact structure:
+You are NOT extracting the rows — every line of this file is parsed and shown to the user. Your job is to describe the file's shape so the parser reads every line correctly, and to name the few lines that are not accounts.
+
+Return ONLY a valid JSON object (no prose, no markdown, no code fences) with this exact structure:
 {
   "delimiter": ",",
   "hasHeaders": true,
@@ -399,38 +440,20 @@ Analyze the CSV and return ONLY a valid JSON object (no prose, no markdown, no c
     "credit": 3,
     "amount": null
   },
-  "rowsToSkip": [],
-  "matches": [
-    {
-      "csvRow": 1,
-      "csvAccountNumber": "1000",
-      "csvAccountName": "Cash",
-      "csvDebit": "15000.00",
-      "csvCredit": "0.00",
-      "matchedAccountId": 42,
-      "matchedAccountNumber": "1000",
-      "matchedAccountName": "Cash - Operating",
-      "confidence": 0.95,
-      "matchType": "exact",
-      "action": "match",
-      "debitCents": 1500000,
-      "creditCents": 0
-    }
-  ]
+  "rowsToSkip": []
 }
 
 Rules:
-- amountFormat: "separate_dr_cr" if debit and credit columns exist separately, "single_signed" if one amount column (negative = credit), "single_parentheses" if one amount column with parentheses for negatives
-- For each data row (skip headers, subtotals, blank rows, total rows), produce one match object
-- matchedAccountId: use the id from the COA if confident match, else null
-- confidence: 0-1 where 1=exact account number match, 0.95=matched via import alias, 0.8=same number different name, 0.7=fuzzy name match, 0=no match
-- matchType: "exact" (same account number), "alias" (matched an import alias), "fuzzy" (name/partial match), "none" (no match)
-- When the CSV account name matches an entry in the import_aliases column, use matchType "alias" with confidence 0.95
-- action: "match" if matched, "create_new" if no match but looks like a real account, "skip" if subtotal/header/blank
-- debitCents and creditCents: the parsed amounts in integer cents (multiply dollars by 100, round to nearest cent)
-- For parentheses negatives like (1,234.56): treat as credit amount 123456 cents
-- rowsToSkip: row indexes (0-based from start of file) of total/subtotal/header rows that should be ignored
-- Include ALL data rows up to row 30 in matches (including rows where action="skip")`;
+- delimiter: the character separating fields — "," ";" "|" or a tab
+- headerRow: 0-based index of the header line, or -1 when the file has none
+- dataStartRow: 0-based index of the FIRST line that is an account. Every line above it is left out of the import, so never point it past the first account.
+- columns: 0-based indexes into a split line; null for a column this file does not have. accountNumber and accountName must be different columns. Pick the column that holds the account's own amount, not a running-balance or prior-year column.
+- amountFormat: "separate_dr_cr" when debit and credit are separate columns, "single_signed" when one amount column uses a minus sign for credits, "single_parentheses" when one amount column wraps credits in parentheses
+- rowsToSkip: 0-based indexes of lines that are NOT accounts — the header, section headings like "Income" or "Expenses", subtotal and total lines, and page furniture like a report title or a page number.
+
+Before you answer, verify rowsToSkip line by line. Read back each index you listed and look at the line it names: if that line carries an account name or number together with its own amount, it is a real account — take the index out. Then read every remaining sample line in order and confirm each one is either an account the parser should import or an index you listed on purpose; no line may fall between the two. Every line you do not list is imported, so a line listed by mistake is exactly what makes rows go missing.
+
+Only give indexes for lines shown above — the file may be longer, and you must not guess at lines you cannot see. Describe this file; do not repeat the example values above.`;
 
       // ── Step 1: Detect column mapping ─────────────────────────────────────
       // AI analyzes first 30 rows to detect delimiter, columns, and format.
@@ -442,7 +465,7 @@ Rules:
         const { provider, fastModel } = await getLLMProvider();
         const { result: aiResult, logId } = await aiComplete(
           provider,
-          { model: fastModel, taskClass: TB_TASK_CLASSES.CSV_ANALYZE, maxTokens: 4096, messages: [{ role: 'user', content: prompt }] },
+          { model: fastModel, taskClass: TB_TASK_CLASSES.CSV_ANALYZE, maxTokens: 2048, messages: [{ role: 'user', content: prompt }] },
           { endpoint: 'csv/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId, periodId },
         );
 
@@ -456,10 +479,15 @@ Rules:
           delimiter: parsed.delimiter,
           hasHeaders: parsed.hasHeaders,
           headerRow: parsed.headerRow,
-          dataStartRow: parsed.hasHeaders ? Math.max(parsed.dataStartRow, 1) : 0,
+          // Clamped to the sample: a dataStartRow past the lines the model read
+          // would silently untick real accounts it never saw.
+          dataStartRow: Math.min(
+            parsed.hasHeaders ? Math.max(parsed.dataStartRow, 1) : 0,
+            sampleLines.length,
+          ),
           amountFormat: parsed.amountFormat,
           columns: parsed.columns,
-          rowsToSkip: parsed.rowsToSkip ?? [],
+          rowsToSkip: sanitizeRowsToSkip(parsed.rowsToSkip, sampleLines.length),
         };
       } catch (_aiErr) {
         // Fallback: heuristic column detection
@@ -479,10 +507,21 @@ Rules:
         columnMapping.rowsToSkip,
       );
 
-      console.log(`[csv/analyze] Parsed ${allMatches.length} data rows from ${allLines.length} total lines (dataStartRow=${columnMapping.dataStartRow})`);
+      const nonBlankLines = allLines.filter((l) => l.trim()).length;
+      const skippedRows = allMatches.filter((m) => m.action === 'skip').length;
+      console.log(
+        `[csv/analyze] Listed ${allMatches.length} of ${nonBlankLines} non-blank lines ` +
+        `(${skippedRows} pre-skipped, dataStartRow=${columnMapping.dataStartRow}, fallback=${fallbackMode})`,
+      );
+      if (allMatches.length !== nonBlankLines) {
+        console.warn(`[csv/analyze] ROW SHORTFALL: ${nonBlankLines - allMatches.length} line(s) never reached the preview`);
+      }
 
       // ── Step 3: Match ALL rows against COA ────────────────────────────────
+      // Skipped rows are matched too but keep their action: the match is what
+      // the row needs the moment the user ticks it back in.
       for (const match of allMatches) {
+        const keepSkipped = match.action === 'skip';
         // 1. Exact account number match
         if (match.csvAccountNumber?.trim()) {
           const numMatch = (coa as CoaRow[]).find((a) => a.account_number.trim() === match.csvAccountNumber!.trim());
@@ -492,7 +531,7 @@ Rules:
             match.matchedAccountName = numMatch.account_name;
             match.confidence = 1.0;
             match.matchType = 'exact';
-            match.action = 'match';
+            if (!keepSkipped) match.action = 'match';
             continue;
           }
         }
@@ -510,7 +549,7 @@ Rules:
             match.matchedAccountName = aliasMatch.account_name;
             match.confidence = 0.95;
             match.matchType = 'alias';
-            match.action = 'match';
+            if (!keepSkipped) match.action = 'match';
             continue;
           }
 
@@ -525,7 +564,7 @@ Rules:
             match.matchedAccountName = nameMatch.account_name;
             match.confidence = 0.55;
             match.matchType = 'fuzzy';
-            match.action = 'match';
+            if (!keepSkipped) match.action = 'match';
           }
         }
       }
@@ -536,8 +575,8 @@ Rules:
         data: {
           ...analysisResult,
           fallbackMode,
-          totalRows: allLines.filter((l) => l.trim()).length,
-          rawPreview: first30Lines,
+          totalRows: nonBlankLines,
+          rawPreview: sampleLines,
         },
         error: null,
       });

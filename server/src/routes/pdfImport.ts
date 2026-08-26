@@ -16,6 +16,7 @@ import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
+import { looksLikeTotalRow } from '../lib/importSkipRules';
 import { loadOcrSettings, isOcrConfigured, ocrPages } from '../lib/ocrProvider';
 
 export const pdfImportRouter = Router();
@@ -212,7 +213,16 @@ Rules:
 - action: "match" if matched to COA, "create_new" if no match but looks like a real account, "skip" if subtotal/header/total/blank
 - category: your best guess at "assets", "liabilities", "equity", "revenue", or "expenses" based on the account name and document section
 - warnings: array of strings for any issues found (e.g., "Document appears to be comparative — using current year column", "No account numbers found in document")
-- Include ALL line items including those with action="skip"`;
+- Include ALL line items including those with action="skip"
+
+Before you answer, verify the extraction is complete. Walk the document from its first
+line item to its last and confirm every one appears in "matches" exactly once, in the
+order it is printed — including the ones you marked "skip", and including any that
+continue onto a later page. Do not condense, summarise, or leave out a line because it
+looks like a duplicate, carries no amount, or repeats a name you have already used: a
+line item missing from "matches" is a balance the user never gets to see. If the totals
+printed on the document do not agree with the line items you extracted, keep every line
+item and say so in "warnings" — never drop or invent a row to make a total agree.`;
 
       let messageContent: string | LLMContentPart[];
       if (effectivelyScanned) {
@@ -273,6 +283,15 @@ Rules:
         markAiUsageParseError(logId, `Invalid JSON. ${detail}`);
         res.status(500).json({ data: null, error: { code: 'AI_ERROR', message: 'AI returned invalid format' } });
         return;
+      }
+
+      // A "Total…" line is a total carried down from the source statement, not
+      // an account: importing it double-counts the accounts above it. Start it
+      // unticked no matter what the model called it — the row is still drawn,
+      // so an account genuinely named "Total…" is one tick from coming back in.
+      for (const m of analysisResult.matches ?? []) {
+        const isTotal = looksLikeTotalRow(m.pdfAccountName) || looksLikeTotalRow(m.pdfAccountNumber);
+        if (m.action !== 'skip' && isTotal) m.action = 'skip';
       }
 
       // Merge any OCR/fallback warnings into the analysis result
