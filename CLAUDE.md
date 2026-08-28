@@ -253,7 +253,12 @@ All planned phases complete. App is feature-complete.
   `buildWorkpaperPackage` in `lib/workpaperPackage.ts` is the single path both use.
   **pdfjs-dist is double-lazy** (React.lazy + dynamic import inside the effect) — a top-level import
   would add ~1 MB to the initial bundle. Its `?url` worker module is a `.js`, which is what lets
-  `deploy/web-entrypoint.sh` rewrite the `__VIBE_BASE_PATH__` sentinel in it.
+  `deploy/web-entrypoint.sh` rewrite the `__VIBE_BASE_PATH__` sentinel in it; the worker that shim
+  points at is a **`.mjs`**, and nginx's bundled `mime.types` has no entry for that extension, so it
+  falls through to `default_type application/octet-stream` and the browser refuses to execute the
+  module ("Failed to fetch dynamically imported module"). Both nginx configs therefore carry a
+  `location ~ \.mjs$ { default_type application/javascript; }` — as a LOCATION, because a
+  `types { ... }` block at server level replaces the whole inherited table instead of adding to it.
 - **Lead schedule notes** (`lead_sheet_notes`) — the review conversation on a lead sheet. **Per
   period**, unlike membership: a query about the 2024 cash reconciliation says nothing about 2025.
   `account_id` NULL means the note is about the schedule as a whole; set, it is the query on that one

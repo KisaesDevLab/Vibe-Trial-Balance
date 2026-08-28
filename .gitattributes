@@ -1,0 +1,13 @@
+# Shell scripts must keep LF endings in the working tree.
+#
+# `deploy/web-entrypoint.sh` and `server/docker-entrypoint.sh` are COPYed into
+# Linux images and exec'd. A CRLF checkout gives the shebang a trailing \r, and
+# the kernel then looks for an interpreter literally named "/bin/sh\r" — the
+# container dies with "not found" and no useful diagnostic. Git stores these as
+# LF, so CI on Linux is unaffected; without this file a Windows checkout builds
+# a broken image locally.
+*.sh text eol=lf
+
+# Same reasoning: read by a shell inside a container.
+Dockerfile* text eol=lf
+*.conf text eol=lf
