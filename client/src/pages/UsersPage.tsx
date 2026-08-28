@@ -9,13 +9,15 @@ import {
   createUser,
   updateUser,
   deactivateUser,
+  sendUserInvite,
   type AppUser,
   type UserInput,
   type UserPatch,
 } from '../api/users';
-import { useAuthStore } from '../store/uiStore';
+import { useAuthStore, pushToast } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
 import { PasswordInput } from '../components/PasswordInput';
+import { useFeatures } from '../hooks/useFeatures';
 
 const ROLE_BADGE: Record<string, { label: string; cls: string }> = {
   admin:    { label: 'Admin',    cls: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400' },
@@ -40,18 +42,25 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
 interface UserFormProps {
   initial?: Partial<UserInput & { isActive: boolean }>;
   isEdit?: boolean;
+  /** False when no mail transport is configured — the invite path is hidden. */
+  canInvite?: boolean;
   onSave: (data: UserInput | UserPatch) => void;
   onCancel: () => void;
   saving: boolean;
   error: string | null;
 }
 
-function UserForm({ initial, isEdit, onSave, onCancel, saving, error }: UserFormProps) {
+function UserForm({ initial, isEdit, canInvite, onSave, onCancel, saving, error }: UserFormProps) {
   const [username, setUsername] = useState(initial?.username ?? '');
   const [displayName, setDisplayName] = useState(initial?.displayName ?? '');
   const [email, setEmail] = useState(initial?.email ?? '');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<UserInput['role']>(initial?.role ?? 'preparer');
+  // Inviting is the better default on a mail-enabled install: the admin never
+  // learns the user's password, so there's nothing to hand over out of band.
+  const [sendInvite, setSendInvite] = useState(!!canInvite && !isEdit);
+
+  const inviting = !isEdit && sendInvite;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,7 +70,13 @@ function UserForm({ initial, isEdit, onSave, onCancel, saving, error }: UserForm
       if (password) patch.password = password;
       onSave(patch);
     } else {
-      onSave({ username, displayName, email: trimmedEmail === '' ? null : trimmedEmail, password, role });
+      onSave({
+        username,
+        displayName,
+        email: trimmedEmail === '' ? null : trimmedEmail,
+        role,
+        ...(inviting ? { sendInvite: true } : { password }),
+      });
     }
   };
 
@@ -82,24 +97,41 @@ function UserForm({ initial, isEdit, onSave, onCancel, saving, error }: UserForm
       </div>
       <div>
         <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Email <span className="text-gray-400 dark:text-gray-500">(needed for self-service password reset)</span>
+          Email {inviting
+            ? <span className="text-gray-400 dark:text-gray-500">(the invite is sent here)</span>
+            : <span className="text-gray-400 dark:text-gray-500">(needed for self-service password reset)</span>}
         </label>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={320}
+          required={inviting}
           autoComplete="email"
           className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white" />
       </div>
-      <div>
-        <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-          {isEdit ? 'New Password (leave blank to keep current)' : 'Password'}
+      {!isEdit && canInvite && (
+        <label className="flex items-start gap-2 text-xs text-gray-700 dark:text-gray-300 cursor-pointer">
+          <input type="checkbox" checked={sendInvite} onChange={(e) => setSendInvite(e.target.checked)}
+            className="mt-0.5 rounded border-gray-300 dark:border-gray-600" />
+          <span>
+            Send an invite email
+            <span className="block text-gray-400 dark:text-gray-500">
+              The user sets their own password from a link valid for 7 days. No password is set here.
+            </span>
+          </span>
         </label>
-        <PasswordInput
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required={!isEdit}
-          minLength={6}
-          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-        />
-      </div>
+      )}
+      {!inviting && (
+        <div>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+            {isEdit ? 'New Password (leave blank to keep current)' : 'Password'}
+          </label>
+          <PasswordInput
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required={!isEdit}
+            minLength={6}
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+          />
+        </div>
+      )}
       <div>
         <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
         <select value={role} onChange={(e) => setRole(e.target.value as UserInput['role'])}
@@ -112,19 +144,28 @@ function UserForm({ initial, isEdit, onSave, onCancel, saving, error }: UserForm
       <div className="flex justify-end gap-2 pt-2">
         <button type="button" onClick={onCancel} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300">Cancel</button>
         <button type="submit" disabled={saving} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? 'Saving…' : inviting ? 'Create & Send Invite' : 'Save'}
         </button>
       </div>
     </form>
   );
 }
 
+/** Where a user sits in the invite lifecycle, for the Status column. */
+function inviteState(u: AppUser): 'none' | 'pending' | 'accepted' {
+  if (!u.invited_at) return 'none';
+  return u.invite_accepted_at ? 'accepted' : 'pending';
+}
+
 export function UsersPage() {
   const { user: currentUser } = useAuthStore();
   const qc = useQueryClient();
+  const features = useFeatures();
+  const canInvite = features?.mailEnabled ?? false;
   const [showAdd, setShowAdd] = useState(false);
   const [editUser, setEditUser] = useState<AppUser | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [invitingId, setInvitingId] = useState<number | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['users'],
@@ -141,7 +182,33 @@ export function UsersPage() {
     mutationFn: (input: UserInput) => createUser(input),
     onSuccess: (res) => {
       if (res.error) { setFormError(res.error.message); return; }
+      // The account is created even when the invite send fails — say so
+      // plainly rather than reporting a clean success.
+      const invite = res.data?.invite;
+      if (invite && !invite.sent) {
+        pushToast(`User created, but the invite wasn't sent: ${invite.message}`, 'error');
+      } else if (invite?.sent) {
+        pushToast(`Invite sent to ${invite.email}.`, 'success');
+      }
       invalidate(); setShowAdd(false); setFormError(null);
+    },
+  });
+
+  const inviteMutation = useMutation({
+    mutationFn: (id: number) => sendUserInvite(id),
+    onMutate: (id: number) => { setInvitingId(id); },
+    onSettled: () => { setInvitingId(null); },
+    onSuccess: (res) => {
+      if (res.error) { pushToast(res.error.message, 'error'); return; }
+      const sent = res.data;
+      pushToast(
+        sent ? `Invite ${sent.resend ? 'resent' : 'sent'} to ${sent.email}.` : 'Invite sent.',
+        'success',
+      );
+      invalidate();
+    },
+    onError: (err: unknown) => {
+      pushToast(err instanceof Error ? err.message : 'Could not send the invite.', 'error');
     },
   });
 
@@ -216,6 +283,7 @@ export function UsersPage() {
                 users.map((u) => {
                   const badge = ROLE_BADGE[u.role] ?? ROLE_BADGE.preparer;
                   const isSelf = u.id === currentUser?.id;
+                  const invite = inviteState(u);
                   return (
                     <tr key={u.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 ${!u.is_active ? 'opacity-50' : ''}`}>
                       <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">
@@ -227,11 +295,28 @@ export function UsersPage() {
                         <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold ${badge.cls}`}>{badge.label}</span>
                       </td>
                       <td className="px-4 py-2.5">
-                        {u.is_active
-                          ? <span className="text-xs text-green-600 dark:text-green-400 font-medium">Active</span>
-                          : <span className="text-xs text-gray-400 dark:text-gray-500">Inactive</span>}
+                        {!u.is_active
+                          ? <span className="text-xs text-gray-400 dark:text-gray-500">Inactive</span>
+                          : invite === 'pending'
+                            ? <span className="text-xs text-amber-600 dark:text-amber-400 font-medium" title={`Invited ${new Date(u.invited_at!).toLocaleDateString()}`}>Invite pending</span>
+                            : <span className="text-xs text-green-600 dark:text-green-400 font-medium">Active</span>}
                       </td>
                       <td className="px-4 py-2.5 text-right">
+                        {canInvite && u.is_active && (
+                          <button
+                            onClick={() => inviteMutation.mutate(u.id)}
+                            disabled={!u.email || invitingId === u.id}
+                            title={u.email
+                              ? invite === 'none'
+                                ? `Email an invite to ${u.email}`
+                                : `Send a fresh link to ${u.email} — the previous one stops working`
+                              : 'Add an email address for this user first'}
+                            className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 mr-3 disabled:opacity-40 disabled:cursor-not-allowed">
+                            {invitingId === u.id
+                              ? 'Sending…'
+                              : invite === 'none' ? 'Invite' : 'Resend invite'}
+                          </button>
+                        )}
                         <button onClick={() => { setEditUser(u); setFormError(null); }}
                           className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 mr-3">
                           Edit
@@ -261,6 +346,7 @@ export function UsersPage() {
       {showAdd && (
         <Modal title="Add User" onClose={() => setShowAdd(false)}>
           <UserForm
+            canInvite={canInvite}
             onSave={(data) => createMutation.mutate(data as UserInput)}
             onCancel={() => setShowAdd(false)}
             saving={createMutation.isPending}

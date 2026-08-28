@@ -6,8 +6,11 @@ import { apiFetch, type ApiResult } from './client';
 
 export interface FeatureFlags {
   ai: boolean;
+  /** A mail transport is configured — gates invites and self-service reset. */
+  mailEnabled: boolean;
 }
 
 export function getFeatures(): Promise<ApiResult<FeatureFlags>> {
-  return apiFetch<FeatureFlags>('/api/v1/features');
+  // apiFetch already prepends API_BASE_URL (/api/v1) — do not repeat it here.
+  return apiFetch<FeatureFlags>('/features');
 }

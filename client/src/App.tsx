@@ -30,6 +30,8 @@ import { CashFlowPage } from './pages/CashFlowPage';
 import { CustomReportPage } from './pages/CustomReportPage';
 import { WorkpaperPackagePage } from './pages/WorkpaperPackagePage';
 import { TickmarksPage } from './pages/TickmarksPage';
+import { LeadSheetsPage } from './pages/LeadSheetsPage';
+import { StoragePage } from './pages/StoragePage';
 import { TaxCodesPage } from './pages/TaxCodesPage';
 import { TaxMappingPage } from './pages/TaxMappingPage';
 import { TaxBasisPlPage } from './pages/TaxBasisPlPage';
@@ -64,6 +66,9 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/password-reset/request" element={<PasswordResetRequestPage />} />
         <Route path="/password-reset/confirm" element={<PasswordResetConfirmPage />} />
+        {/* Invite links land here; the page reads the token's purpose and
+            swaps in invite copy. Same verify/confirm endpoints either way. */}
+        <Route path="/invite/accept" element={<PasswordResetConfirmPage />} />
         <Route
           path="/"
           element={
@@ -96,6 +101,8 @@ export default function App() {
           <Route path="custom-reports" element={<CustomReportPage />} />
           <Route path="workpaper-package" element={<WorkpaperPackagePage />} />
           <Route path="tickmarks" element={<TickmarksPage />} />
+          <Route path="lead-sheets" element={<LeadSheetsPage />} />
+          <Route path="storage" element={<StoragePage />} />
           <Route path="tax-mapping" element={<TaxMappingPage />} />
           <Route path="tax-basis-pl" element={<TaxBasisPlPage />} />
           <Route path="tax-return-order" element={<TaxReturnOrderPage />} />

@@ -35,15 +35,18 @@ export function requestPasswordReset(identifier: string) {
   });
 }
 
+/** `purpose` distinguishes an invite link from a reset link so the confirm
+ *  page can show the right copy — both use this endpoint. */
 export function verifyPasswordResetToken(token: string) {
-  return apiFetch<{ valid: boolean; reason?: 'expired' | 'consumed' | 'unknown' }>(
-    '/auth/password-reset/verify',
-    { method: 'POST', body: JSON.stringify({ token }) },
-  );
+  return apiFetch<{
+    valid: boolean;
+    reason?: 'expired' | 'consumed' | 'unknown';
+    purpose?: 'reset' | 'invite';
+  }>('/auth/password-reset/verify', { method: 'POST', body: JSON.stringify({ token }) });
 }
 
 export function confirmPasswordReset(token: string, newPassword: string) {
-  return apiFetch<{ ok: true }>('/auth/password-reset/confirm', {
+  return apiFetch<{ ok: true; purpose: 'reset' | 'invite' }>('/auth/password-reset/confirm', {
     method: 'POST',
     body: JSON.stringify({ token, newPassword }),
   });
@@ -52,6 +55,7 @@ export function confirmPasswordReset(token: string, newPassword: string) {
 export interface PublicFeatures {
   ai: boolean;
   passwordResetEnabled: boolean;
+  mailEnabled: boolean;
 }
 
 export function getFeatures() {

@@ -13,6 +13,7 @@ import { sendServerError } from '../lib/safeError';
 import { passwordSchema } from '../lib/passwordPolicy';
 import { logAudit } from '../lib/periodGuard';
 import { getMailer } from '../lib/mailService';
+import { actionButton, buildTokenUrl, escapeHtml, fallbackLink } from '../lib/mailTemplates';
 
 const router = Router();
 
@@ -65,11 +66,7 @@ function hashToken(raw: string): string {
 }
 
 function buildResetUrl(rawToken: string): string {
-  // Match the existing convention used elsewhere: prefer APP_BASE_URL, fall
-  // back to the first ALLOWED_ORIGIN entry, then localhost for dev.
-  const allowedFirst = (process.env.ALLOWED_ORIGIN || '').split(',')[0]?.trim();
-  const base = (process.env.APP_BASE_URL?.trim() || allowedFirst || 'http://localhost:5173').replace(/\/$/, '');
-  return `${base}/password-reset/confirm?token=${encodeURIComponent(rawToken)}`;
+  return buildTokenUrl('/password-reset/confirm', rawToken);
 }
 
 function buildResetEmail(displayName: string, link: string): { subject: string; html: string; text: string } {
@@ -87,22 +84,11 @@ function buildResetEmail(displayName: string, link: string): { subject: string; 
   const html = `
     <p>Hi ${escapeHtml(displayName)},</p>
     <p>We received a request to reset your Vibe TB password.</p>
-    <p>
-      <a href="${escapeAttr(link)}" style="display:inline-block;background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:500">
-        Reset password
-      </a>
-    </p>
-    <p style="color:#555;font-size:13px">Or paste this link into your browser (valid for 30 minutes):<br><span style="word-break:break-all">${escapeHtml(link)}</span></p>
+    ${actionButton('Reset password', link)}
+    ${fallbackLink(link, 'valid for 30 minutes')}
     <p style="color:#555;font-size:13px">If you didn't request this, you can ignore this email — your password will not change.</p>
   `;
   return { subject, html, text };
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
-}
-function escapeAttr(s: string): string {
-  return escapeHtml(s);
 }
 
 // POST /password-reset/request
@@ -182,8 +168,9 @@ router.post('/password-reset/request', requestLimiter, async (req: Request, res:
 });
 
 // POST /password-reset/verify — preflight used by the confirm page to gate
-// the new-password form. Returns { valid: boolean, reason? } so the UI can
-// show a meaningful error before the user types a password.
+// the new-password form. Returns { valid: boolean, reason?, purpose? } so the
+// UI can show a meaningful error before the user types a password, and so an
+// invite link renders invite copy rather than reset copy.
 router.post('/password-reset/verify', verifyLimiter, async (req: Request, res: Response): Promise<void> => {
   const parsed = verifySchema.safeParse(req.body);
   if (!parsed.success) {
@@ -197,15 +184,16 @@ router.post('/password-reset/verify', verifyLimiter, async (req: Request, res: R
       res.json({ data: { valid: false, reason: 'unknown' }, error: null });
       return;
     }
+    const purpose = row.purpose === 'invite' ? 'invite' : 'reset';
     if (row.consumed_at) {
-      res.json({ data: { valid: false, reason: 'consumed' }, error: null });
+      res.json({ data: { valid: false, reason: 'consumed', purpose }, error: null });
       return;
     }
     if (new Date(row.expires_at).getTime() < Date.now()) {
-      res.json({ data: { valid: false, reason: 'expired' }, error: null });
+      res.json({ data: { valid: false, reason: 'expired', purpose }, error: null });
       return;
     }
-    res.json({ data: { valid: true }, error: null });
+    res.json({ data: { valid: true, purpose }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'password-reset/verify');
   }
@@ -226,7 +214,9 @@ router.post('/password-reset/confirm', verifyLimiter, async (req: Request, res: 
     let userId: number | null = null;
     let username: string | null = null;
 
-    await db.transaction(async (trx) => {
+    // Returned out of the transaction rather than assigned to an outer `let`
+    // so the narrowed union survives for the audit/response below.
+    const purpose = await db.transaction(async (trx): Promise<'reset' | 'invite'> => {
       const tokenRow = await trx('password_reset_tokens')
         .where({ token_hash: tokenHash })
         .forUpdate()
@@ -244,18 +234,25 @@ router.post('/password-reset/confirm', verifyLimiter, async (req: Request, res: 
 
       userId = user.id;
       username = user.username;
+      const purpose: 'reset' | 'invite' = tokenRow.purpose === 'invite' ? 'invite' : 'reset';
 
-      await trx('app_users').where({ id: user.id }).update({
+      const updates: Record<string, unknown> = {
         password_hash: newHash,
         must_change_password: false,
         email_verified_at: trx.fn.now(),
         updated_at: trx.fn.now(),
-      });
+      };
+      // First password set from an invite link completes the invitation.
+      if (purpose === 'invite') updates.invite_accepted_at = trx.fn.now();
+
+      await trx('app_users').where({ id: user.id }).update(updates);
 
       // Mark this token consumed and invalidate every other unconsumed token for this user.
       await trx('password_reset_tokens')
         .where({ user_id: user.id, consumed_at: null })
         .update({ consumed_at: trx.fn.now() });
+
+      return purpose;
     });
 
     if (userId !== null) {
@@ -265,12 +262,15 @@ router.post('/password-reset/confirm', verifyLimiter, async (req: Request, res: 
         periodId: null,
         entityType: 'user',
         entityId: userId,
-        action: 'password_reset_completed',
-        description: `Password reset completed for "${username ?? userId}"`,
+        action: purpose === 'invite' ? 'invite_accepted' : 'password_reset_completed',
+        description:
+          purpose === 'invite'
+            ? `Invite accepted — password set for "${username ?? userId}"`
+            : `Password reset completed for "${username ?? userId}"`,
       });
     }
 
-    res.json({ data: { ok: true }, error: null });
+    res.json({ data: { ok: true, purpose }, error: null });
   } catch (err: unknown) {
     const e = err as { status?: number; code?: string; message?: string };
     if (e?.status && e?.code) {
