@@ -6,7 +6,8 @@
  * Object-key layout. Written fresh — Time & Billing has no fiscal-year tier —
  * but built on its four path primitives.
  *
- *   <prefix>/<Client Name (id)>/<Section>/FY<year>/<filename>
+ *   Clients/Jack Black LLC/Workpapers & Support/2025/<filename>
+ *   <prefix>/<client folder>/<section>/<year>/<filename>
  *
  * Section before year, so all years of one document kind sit together.
  *
@@ -29,22 +30,61 @@ import {
 export interface ClientFolderInput {
   id: number;
   name: string;
+  /** The firm's own identifier for the client, if they use one. */
+  code?: string | null;
+}
+
+/** Default client-folder pattern. */
+export const DEFAULT_CLIENT_FOLDER_FORMAT = '{name}';
+
+/** Placeholders a client-folder pattern may use. */
+export const CLIENT_FOLDER_PLACEHOLDERS = ['{name}', '{code}', '{id}'] as const;
+
+/** A pattern must include the name, or folders stop being recognisable. */
+export function isValidClientFolderFormat(format: string): boolean {
+  return format.includes('{name}');
 }
 
 /**
- * `Acme Holdings, LLC (12)`.
+ * `Jack Black LLC` — the client's name, sanitised, and nothing else.
  *
- * The id suffix is not decoration: `clients.name` has no unique index, so two
- * clients may legitimately share a name. The id is the only stable
- * disambiguator, and it keeps the folder recognisable when the bucket is
- * browsed directly.
+ * `clients.name` has no unique index, so two clients CAN share a name. That is
+ * handled where it actually matters rather than by mangling every folder name:
+ * createClientFolder walks for a free name (`Jack Black LLC (2)`), and the
+ * sentinel file — not the path — is what identifies the client, so a duplicate
+ * name can never silently cross-link two of them.
  */
-export function clientFolderName(client: ClientFolderInput): string {
-  return sanitizeForWindows(`${client.name} (${client.id})`);
+export function clientFolderName(client: ClientFolderInput, format?: string): string {
+  const pattern = format && isValidClientFolderFormat(format) ? format : DEFAULT_CLIENT_FOLDER_FORMAT;
+  const rendered = pattern
+    .replace('{name}', client.name ?? '')
+    .replace('{code}', (client.code ?? '').trim())
+    .replace('{id}', String(client.id));
+  // A pattern like "{code} - {name}" leaves a dangling separator when the
+  // client has no code, so tidy the seams rather than producing " - Smith".
+  const tidied = rendered
+    .replace(/\s*[-_]\s*[-_]\s*/g, ' - ')
+    .replace(/^[\s\-_]+|[\s\-_]+$/g, '')
+    .replace(/\s{2,}/g, ' ');
+  return sanitizeForWindows(tidied || client.name);
+}
+
+/** Default year-folder pattern. `{year}` is the only supported placeholder. */
+export const DEFAULT_YEAR_FORMAT = '{year}';
+
+/** A pattern is only usable if it actually places the year somewhere. */
+export function isValidYearFormat(format: string): boolean {
+  return format.includes('{year}');
 }
 
 export interface FiscalYearInput {
-  /** periods.end_date — the stable anchor. */
+  /**
+   * periods.folder_year — an explicit label set on the period. Wins over
+   * derivation, which cannot know about a short year, a stub period, or a
+   * firm's own naming.
+   */
+  folderYear?: string | null;
+  /** periods.end_date — the stable anchor when no explicit label is set. */
   endDate: string | Date | null;
   /** periods.start_date, used only as a fallback. */
   startDate?: string | Date | null;
@@ -55,16 +95,26 @@ export interface FiscalYearInput {
 }
 
 /**
- * `FY2024`.
+ * `2025`, or whatever the year-format setting asks for.
  *
- * Derived from `end_date`, never from `period_name` — a period name is free
+ * An explicit `periods.folder_year` wins. Otherwise derived from `end_date`,
+ * never from `period_name` — a period name is free
  * text a user can rename at will, and a rename must not orphan stored files.
  *
  * When the client has a non-calendar year end, a period ending after that date
  * belongs to the NEXT fiscal year. A client with a 06-30 year end whose period
  * ends 2024-12-31 is in FY2025, which a naive `year(end_date)` gets wrong.
  */
-export function fiscalYearFolder(input: FiscalYearInput): string {
+export function fiscalYearFolder(input: FiscalYearInput, format?: string): string {
+  const pattern = format && isValidYearFormat(format) ? format : DEFAULT_YEAR_FORMAT;
+  const render = (year: string | number): string =>
+    sanitizeForWindows(pattern.replace('{year}', String(year)));
+
+  // An explicit label on the period is used as-is: the point of the field is to
+  // say something derivation can't work out.
+  const explicit = (input.folderYear ?? '').trim();
+  if (explicit) return sanitizeForWindows(explicit);
+
   const end = toYmd(input.endDate) ?? toYmd(input.startDate ?? null);
   if (end) {
     let year = end.year;
@@ -72,12 +122,12 @@ export function fiscalYearFolder(input: FiscalYearInput): string {
     if (fye && (end.month > fye.month || (end.month === fye.month && end.day > fye.day))) {
       year += 1;
     }
-    return `FY${year}`;
+    return render(year);
   }
   // Digit-boundary lookarounds, not \b: in "FY2022" the position between 'Y'
   // and '2' is not a word boundary, so \b would never match.
   const fromName = /(?<!\d)(19|20)\d{2}(?!\d)/.exec(input.periodName ?? '');
-  return fromName ? `FY${fromName[0]}` : 'FY-unknown';
+  return fromName ? render(fromName[0]) : 'unknown-year';
 }
 
 /**
@@ -116,6 +166,8 @@ function parseMonthDay(raw: string | null | undefined): { month: number; day: nu
 export interface DocumentKeyInput {
   prefix?: string;
   client: ClientFolderInput;
+  /** Client-folder pattern; defaults to `{name}`. */
+  clientFolderFormat?: string;
   /** A section name from the folder template, e.g. 'Workpapers'. */
   section: string;
   fiscalYear: string;
@@ -132,7 +184,7 @@ export interface DocumentKeyInput {
 export function buildDocumentKey(input: DocumentKeyInput): string {
   const segments = [
     normalizeTopPrefix(input.prefix),
-    clientFolderName(input.client),
+    clientFolderName(input.client, input.clientFolderFormat),
     sanitizeForWindows(input.section),
     sanitizeForWindows(input.fiscalYear),
   ];
@@ -184,6 +236,10 @@ export async function buildUniqueDocumentKeyUnder(
 }
 
 /** The client's folder, with a trailing slash — what a link row records. */
-export function clientFolderPath(prefix: string | undefined, client: ClientFolderInput): string {
-  return `${joinPath(normalizeTopPrefix(prefix), clientFolderName(client))}/`;
+export function clientFolderPath(
+  prefix: string | undefined,
+  client: ClientFolderInput,
+  format?: string,
+): string {
+  return `${joinPath(normalizeTopPrefix(prefix), clientFolderName(client, format))}/`;
 }

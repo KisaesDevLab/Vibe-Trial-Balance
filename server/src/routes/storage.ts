@@ -24,6 +24,8 @@ import { encrypt } from '../lib/encryption';
 import { B2StorageDriver, explainStorageError } from '../lib/storage/b2Driver';
 import {
   DEFAULT_PREFIX,
+  isValidYearFormat,
+  isValidClientFolderFormat,
   getStorageConfig,
   invalidateStorageCache,
   loadStorageConfig,
@@ -56,6 +58,8 @@ const SECRET_KEEP = '__keep__';
 const settingsSchema = z.object({
   provider: z.enum(['local', 'b2']),
   prefix: z.string().trim().max(100).optional(),
+  yearFormat: z.string().trim().max(60).optional(),
+  clientFolderFormat: z.string().trim().max(60).optional(),
   b2Endpoint: z.string().trim().max(500).optional(),
   b2Region: z.string().trim().max(100).optional(),
   b2Bucket: z.string().trim().max(255).optional(),
@@ -91,6 +95,8 @@ storageRouter.get('/settings', adminOnly, async (_req: AuthRequest, res: Respons
       data: {
         provider: cfg.provider,
         prefix: cfg.prefix || DEFAULT_PREFIX,
+        yearFormat: cfg.yearFormat,
+        clientFolderFormat: cfg.clientFolderFormat,
         b2: {
           endpoint: cfg.b2?.endpoint ?? '',
           region: cfg.b2?.region ?? '',
@@ -120,11 +126,27 @@ storageRouter.put('/settings', adminOnly, async (req: AuthRequest, res: Response
     return;
   }
   const d = parsed.data;
+
+  // A pattern that never places its placeholder is unusable, so reject it here
+  // rather than storing something that will be ignored. This runs BEFORE any
+  // upsert: `upsertSetting` starts its query the moment it is called, so a
+  // rejection after the ops array is built still writes provider and prefix.
+  if (d.yearFormat !== undefined && !isValidYearFormat(d.yearFormat)) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'The year folder format must contain {year}.' } });
+    return;
+  }
+  if (d.clientFolderFormat !== undefined && !isValidClientFolderFormat(d.clientFolderFormat)) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'The client folder format must contain {name}.' } });
+    return;
+  }
+
   try {
     const ops: Promise<void>[] = [
       upsertSetting('storage.provider', d.provider),
       upsertSetting('storage.prefix', d.prefix || DEFAULT_PREFIX),
     ];
+    if (d.yearFormat !== undefined) ops.push(upsertSetting('storage.year_format', d.yearFormat));
+    if (d.clientFolderFormat !== undefined) ops.push(upsertSetting('storage.client_folder_format', d.clientFolderFormat));
     if (d.b2Endpoint !== undefined) ops.push(upsertSetting('storage.b2_endpoint', d.b2Endpoint));
     if (d.b2Region !== undefined) ops.push(upsertSetting('storage.b2_region', d.b2Region));
     if (d.b2Bucket !== undefined) ops.push(upsertSetting('storage.b2_bucket', d.b2Bucket));

@@ -25,6 +25,8 @@ import {
   buildDocumentKey,
   buildUniqueDocumentKey,
   clientFolderPath,
+  isValidYearFormat,
+  isValidClientFolderFormat,
 } from '../storage/keys';
 
 // ── joinPath ─────────────────────────────────────────────────────────────────
@@ -116,48 +118,88 @@ test('resolveCollision returns the desired key when it is free', async () => {
 
 // ── client folder ────────────────────────────────────────────────────────────
 
-test('the client folder carries the id, because names are not unique', () => {
-  // clients.name has no unique index — two clients may share a name, and the
-  // id is the only stable disambiguator.
-  assert.equal(clientFolderName({ id: 12, name: 'Acme Holdings, LLC' }), 'Acme Holdings, LLC (12)');
-  assert.equal(clientFolderName({ id: 7, name: 'Acme Holdings, LLC' }), 'Acme Holdings, LLC (7)');
-  assert.notEqual(
-    clientFolderName({ id: 12, name: 'Same Name' }),
-    clientFolderName({ id: 13, name: 'Same Name' }),
-  );
+test('the client folder is the plain client name', () => {
+  // Duplicate names are handled where it matters — createClientFolder walks for
+  // a free name, and the sentinel file identifies the client — rather than by
+  // mangling every folder name with an id.
+  assert.equal(clientFolderName({ id: 12, name: 'Jack Black LLC' }), 'Jack Black LLC');
+  assert.equal(clientFolderName({ id: 7, name: 'Jack Black LLC' }), 'Jack Black LLC');
+});
+
+test('the client-folder pattern can include the firm code or the id', () => {
+  const c = { id: 12, name: 'Jack Black LLC', code: '0042' };
+  assert.equal(clientFolderName(c, '{code} - {name}'), '0042 - Jack Black LLC');
+  assert.equal(clientFolderName(c, '{name} ({id})'), 'Jack Black LLC (12)');
+  assert.equal(clientFolderName(c, '{name}'), 'Jack Black LLC');
+});
+
+test('a client with no code leaves no dangling separator', () => {
+  // "{code} - {name}" must not render as " - Smith LLC".
+  assert.equal(clientFolderName({ id: 5, name: 'Smith LLC' }, '{code} - {name}'), 'Smith LLC');
+  assert.equal(clientFolderName({ id: 5, name: 'Smith LLC', code: '  ' }, '{code} - {name}'), 'Smith LLC');
+});
+
+test('a client-folder pattern must contain the name, or the default is used', () => {
+  assert.equal(isValidClientFolderFormat('{code} - {name}'), true);
+  assert.equal(isValidClientFolderFormat('{code}'), false);
+  assert.equal(clientFolderName({ id: 9, name: 'Real Name', code: 'X1' }, '{code}'), 'Real Name');
 });
 
 test('a client name with forbidden characters still yields a usable folder', () => {
-  assert.equal(clientFolderName({ id: 3, name: 'A/B: "C"' }), 'A_B_ _C_ (3)');
+  assert.equal(clientFolderName({ id: 3, name: 'A/B: "C"' }), 'A_B_ _C_');
 });
 
 // ── fiscal year ──────────────────────────────────────────────────────────────
 
-test('a calendar-year client takes the end_date year', () => {
-  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: '12-31' }), 'FY2024');
-  assert.equal(fiscalYearFolder({ endDate: '2024-07-31', taxYearEnd: '12-31' }), 'FY2024');
+test('a calendar-year client takes the end_date year, bare by default', () => {
+  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: '12-31' }), '2024');
+  assert.equal(fiscalYearFolder({ endDate: '2024-07-31', taxYearEnd: '12-31' }), '2024');
+});
+
+test('the year folder format is a pattern', () => {
+  const p = { endDate: '2024-12-31', taxYearEnd: '12-31' };
+  assert.equal(fiscalYearFolder(p, 'FY{year}'), 'FY2024');
+  assert.equal(fiscalYearFolder(p, '{year} Tax Year'), '2024 Tax Year');
+  // A pattern that never places the year is unusable, so the default wins.
+  assert.equal(fiscalYearFolder(p, 'no placeholder'), '2024');
+  assert.equal(isValidYearFormat('FY{year}'), true);
+  assert.equal(isValidYearFormat('nope'), false);
+});
+
+test('an explicit folder_year on the period wins over derivation', () => {
+  // The field exists to express what derivation cannot work out — a short year,
+  // a stub period, or the firm's own naming.
+  assert.equal(
+    fiscalYearFolder({ folderYear: '2025 short year', endDate: '2024-12-31', taxYearEnd: '12-31' }),
+    '2025 short year',
+  );
+  // Used verbatim, not run through the year pattern.
+  assert.equal(fiscalYearFolder({ folderYear: '2023', endDate: '2024-12-31' }, 'FY{year}'), '2023');
+  // Blank or whitespace falls through to derivation.
+  assert.equal(fiscalYearFolder({ folderYear: '   ', endDate: '2024-12-31' }), '2024');
+  assert.equal(fiscalYearFolder({ folderYear: null, endDate: '2024-12-31' }), '2024');
 });
 
 test('a non-calendar year end rolls a later period into the next FY', () => {
   // The case a naive year(end_date) gets wrong: FYE 06-30 means a period
   // ending 2024-12-31 belongs to FY2025.
-  assert.equal(fiscalYearFolder({ endDate: '2025-06-30', taxYearEnd: '06-30' }), 'FY2025');
-  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: '06-30' }), 'FY2025');
-  assert.equal(fiscalYearFolder({ endDate: '2024-03-31', taxYearEnd: '06-30' }), 'FY2024');
+  assert.equal(fiscalYearFolder({ endDate: '2025-06-30', taxYearEnd: '06-30' }), '2025');
+  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: '06-30' }), '2025');
+  assert.equal(fiscalYearFolder({ endDate: '2024-03-31', taxYearEnd: '06-30' }), '2024');
   // Exactly on the year end stays in that year.
-  assert.equal(fiscalYearFolder({ endDate: '2024-06-30', taxYearEnd: '06-30' }), 'FY2024');
+  assert.equal(fiscalYearFolder({ endDate: '2024-06-30', taxYearEnd: '06-30' }), '2024');
 });
 
 test('a missing or malformed tax_year_end degrades to the calendar year', () => {
-  assert.equal(fiscalYearFolder({ endDate: '2024-12-31' }), 'FY2024');
-  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: '' }), 'FY2024');
-  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: 'junk' }), 'FY2024');
-  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: '13-45' }), 'FY2024');
+  assert.equal(fiscalYearFolder({ endDate: '2024-12-31' }), '2024');
+  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: '' }), '2024');
+  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: 'junk' }), '2024');
+  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', taxYearEnd: '13-45' }), '2024');
 });
 
 test('the fiscal year never comes from period_name when a date exists', () => {
   // period_name is free text a user can rename; a rename must not move files.
-  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', periodName: 'FY2019' }), 'FY2024');
+  assert.equal(fiscalYearFolder({ endDate: '2024-12-31', periodName: 'FY2019' }), '2024');
 });
 
 test('a Date at local midnight is not shifted a day by timezone', () => {
@@ -166,26 +208,26 @@ test('a Date at local midnight is not shifted a day by timezone', () => {
   // 2024-07-01 period end would read as 6/30 and a 06-30 year end would file
   // the documents under the wrong FY.
   const julyFirst = new Date(2024, 6, 1); // local midnight, 1 July 2024
-  assert.equal(fiscalYearFolder({ endDate: julyFirst, taxYearEnd: '06-30' }), 'FY2025');
+  assert.equal(fiscalYearFolder({ endDate: julyFirst, taxYearEnd: '06-30' }), '2025');
   const juneThirtieth = new Date(2024, 5, 30);
-  assert.equal(fiscalYearFolder({ endDate: juneThirtieth, taxYearEnd: '06-30' }), 'FY2024');
+  assert.equal(fiscalYearFolder({ endDate: juneThirtieth, taxYearEnd: '06-30' }), '2024');
   // A plain YYYY-MM-DD string is read textually, never via Date.
-  assert.equal(fiscalYearFolder({ endDate: '2024-07-01', taxYearEnd: '06-30' }), 'FY2025');
-  assert.equal(fiscalYearFolder({ endDate: '2024-01-01', taxYearEnd: '12-31' }), 'FY2024');
+  assert.equal(fiscalYearFolder({ endDate: '2024-07-01', taxYearEnd: '06-30' }), '2025');
+  assert.equal(fiscalYearFolder({ endDate: '2024-01-01', taxYearEnd: '12-31' }), '2024');
 });
 
-test('period_name is the last resort, then FY-unknown', () => {
-  assert.equal(fiscalYearFolder({ endDate: null, periodName: 'FY2022 final' }), 'FY2022');
-  assert.equal(fiscalYearFolder({ endDate: null, startDate: '2021-01-01' }), 'FY2021');
-  assert.equal(fiscalYearFolder({ endDate: null, periodName: 'no year here' }), 'FY-unknown');
-  assert.equal(fiscalYearFolder({ endDate: null }), 'FY-unknown');
+test('period_name is the last resort, then unknown-year', () => {
+  assert.equal(fiscalYearFolder({ endDate: null, periodName: 'FY2022 final' }), '2022');
+  assert.equal(fiscalYearFolder({ endDate: null, startDate: '2021-01-01' }), '2021');
+  assert.equal(fiscalYearFolder({ endDate: null, periodName: 'no year here' }), 'unknown-year');
+  assert.equal(fiscalYearFolder({ endDate: null }), 'unknown-year');
 });
 
 // ── full key ─────────────────────────────────────────────────────────────────
 
-const CLIENT = { id: 12, name: 'Acme Holdings, LLC' };
+const CLIENT = { id: 12, name: 'Jack Black LLC' };
 
-test('the key is prefix / client / section / FY / filename', () => {
+test('the key is prefix / client / section / year / filename', () => {
   assert.equal(
     buildDocumentKey({
       prefix: 'vibe-tb',
@@ -194,7 +236,7 @@ test('the key is prefix / client / section / FY / filename', () => {
       fiscalYear: 'FY2024',
       filename: '2024 Q4 Bank Stmt.pdf',
     }),
-    'vibe-tb/Acme Holdings, LLC (12)/Support/FY2024/2024 Q4 Bank Stmt.pdf',
+    'vibe-tb/Jack Black LLC/Support/FY2024/2024 Q4 Bank Stmt.pdf',
   );
 });
 
@@ -208,14 +250,14 @@ test('a subfolder adds one tier inside the year', () => {
       subfolder: 'Lead Sheets',
       filename: 'A001.pdf',
     }),
-    'vibe-tb/Acme Holdings, LLC (12)/Workpapers/FY2024/Lead Sheets/A001.pdf',
+    'vibe-tb/Jack Black LLC/Workpapers/FY2024/Lead Sheets/A001.pdf',
   );
 });
 
 test('an empty prefix drops the leading segment cleanly', () => {
   assert.equal(
     buildDocumentKey({ client: CLIENT, section: 'Support', fiscalYear: 'FY2024', filename: 'x.pdf' }),
-    'Acme Holdings, LLC (12)/Support/FY2024/x.pdf',
+    'Jack Black LLC/Support/FY2024/x.pdf',
   );
 });
 
@@ -236,16 +278,16 @@ test('a filename that would break a path is sanitised, not rejected', () => {
 });
 
 test('buildUniqueDocumentKey resolves a collision', async () => {
-  const base = 'Acme Holdings, LLC (12)/Support/FY2024/dup.pdf';
+  const base = 'Jack Black LLC/Support/FY2024/dup.pdf';
   const taken = new Set([base]);
   const key = await buildUniqueDocumentKey(
     { client: CLIENT, section: 'Support', fiscalYear: 'FY2024', filename: 'dup.pdf' },
     async (k) => taken.has(k),
   );
-  assert.equal(key, 'Acme Holdings, LLC (12)/Support/FY2024/dup (2).pdf');
+  assert.equal(key, 'Jack Black LLC/Support/FY2024/dup (2).pdf');
 });
 
 test('clientFolderPath ends with a slash', () => {
-  assert.equal(clientFolderPath('vibe-tb', CLIENT), 'vibe-tb/Acme Holdings, LLC (12)/');
-  assert.equal(clientFolderPath(undefined, CLIENT), 'Acme Holdings, LLC (12)/');
+  assert.equal(clientFolderPath('vibe-tb', CLIENT), 'vibe-tb/Jack Black LLC/');
+  assert.equal(clientFolderPath(undefined, CLIENT), 'Jack Black LLC/');
 });

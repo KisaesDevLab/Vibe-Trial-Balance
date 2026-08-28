@@ -591,6 +591,47 @@ async function buildPeriodView(periodId: number, leadSheetId: number | null) {
     marksBy.get(aid)!.push({ id: t.tickmark_id, symbol: t.symbol, description: t.description, color: t.color });
   }
 
+  // Attachments per ACCOUNT, so each member row can show its own ref codes and
+  // its own paperclip — the way MyBooks does it.
+  const attachBy = new Map<number, Array<{ id: number; refCode: string; marks: number }>>();
+  if (await db.schema.hasTable('lead_sheet_attachments')) {
+    const atts = await db('lead_sheet_attachments')
+      .where({ period_id: periodId })
+      .whereNull('deleted_at')
+      .orderBy('ref_code', 'asc')
+      .select('id', 'account_id', 'ref_code', 'annotations');
+    for (const a of atts as Array<Record<string, unknown>>) {
+      const aid = a.account_id as number | null;
+      if (aid === null) continue;
+      if (!attachBy.has(aid)) attachBy.set(aid, []);
+      const marks = Array.isArray(a.annotations) ? a.annotations.length : 0;
+      attachBy.get(aid)!.push({ id: a.id as number, refCode: a.ref_code as string, marks });
+    }
+  }
+
+  // Notes, split the same way: per account for the row, plus the sheet-level
+  // ones the page lists underneath.
+  const notesBy = new Map<number, Array<Record<string, unknown>>>();
+  const sheetNotes = new Map<number, Array<Record<string, unknown>>>();
+  if (await db.schema.hasTable('lead_sheet_notes')) {
+    const notes = await db('lead_sheet_notes')
+      .where({ period_id: periodId })
+      .orderBy([{ column: 'resolved_at', order: 'asc' }, { column: 'created_at', order: 'desc' }])
+      .select('*');
+    for (const n of notes as Array<Record<string, unknown>>) {
+      const aid = n.account_id as number | null;
+      const lsId = n.lead_sheet_id as number | null;
+      if (aid !== null) {
+        if (!notesBy.has(aid)) notesBy.set(aid, []);
+        notesBy.get(aid)!.push(n);
+      }
+      if (lsId !== null) {
+        if (!sheetNotes.has(lsId)) sheetNotes.set(lsId, []);
+        sheetNotes.get(lsId)!.push(n);
+      }
+    }
+  }
+
   const stamps = await currentStampsForClient(db, periodId, clientId);
   const signoffs = await loadSignoffs(db, periodId);
 
@@ -598,9 +639,15 @@ async function buildPeriodView(periodId: number, leadSheetId: number | null) {
     const id = s.id as number;
     const members = (rows as Array<Record<string, unknown>>)
       .filter((r) => r.lead_sheet_id === id)
-      .map((r) => ({ ...r, tickmarks: marksBy.get(r.account_id as number) ?? [] }));
+      .map((r) => ({
+        ...r,
+        tickmarks: marksBy.get(r.account_id as number) ?? [],
+        attachments: attachBy.get(r.account_id as number) ?? [],
+        notes: notesBy.get(r.account_id as number) ?? [],
+      }));
     const stamp = stamps.get(id) ?? emptyStamp();
     const live = signoffs.get(id) ?? {};
+    const allNotes = sheetNotes.get(id) ?? [];
     return {
       leadSheet: s,
       rows: members,
@@ -608,6 +655,8 @@ async function buildPeriodView(periodId: number, leadSheetId: number | null) {
       currentStamp: stamp,
       signoffs: live,
       status: statusPair(live, stamp),
+      notes: allNotes,
+      openNoteCount: allNotes.filter((n) => !n.resolved_at).length,
     };
   });
 }
@@ -763,5 +812,117 @@ leadSheetPeriodRouter.post('/:leadSheetId/unsign', async (req: AuthRequest, res:
       return;
     }
     sendServerError(res, err, 'lead-sheets');
+  }
+});
+
+// ─── Notes ───────────────────────────────────────────────────────────────────
+// Per period, unlike lead sheet membership: a query about the 2024 cash
+// reconciliation has nothing to say about 2025. A note hangs off the lead sheet
+// as a whole (accountId omitted) or off one account on it.
+//
+// Resolvable, never deletable by design — a resolved query is evidence that
+// review happened, which is the point of a workpaper.
+
+const noteSchema = z.object({
+  leadSheetId: z.number().int().positive().nullable().optional(),
+  accountId: z.number().int().positive().nullable().optional(),
+  body: z.string().trim().min(1).max(4000),
+});
+
+leadSheetPeriodRouter.get('/:leadSheetId/notes', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = Number(req.params.periodId);
+  const leadSheetId = Number(req.params.leadSheetId);
+  if (isNaN(periodId) || isNaN(leadSheetId)) { badId(res, 'period or lead sheet'); return; }
+  try {
+    const rows = await db('lead_sheet_notes as n')
+      .leftJoin('chart_of_accounts as coa', 'coa.id', 'n.account_id')
+      .where({ 'n.period_id': periodId, 'n.lead_sheet_id': leadSheetId })
+      .orderBy([{ column: 'n.resolved_at', order: 'asc' }, { column: 'n.created_at', order: 'desc' }])
+      .select('n.*', 'coa.account_number', 'coa.account_name');
+    res.json({ data: rows, error: null, meta: { open: rows.filter((r) => !r.resolved_at).length } });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'lead-sheet-notes');
+  }
+});
+
+leadSheetPeriodRouter.post('/:leadSheetId/notes', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = Number(req.params.periodId);
+  const leadSheetId = Number(req.params.leadSheetId);
+  if (isNaN(periodId) || isNaN(leadSheetId)) { badId(res, 'period or lead sheet'); return; }
+  const parsed = noteSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    return;
+  }
+  try {
+    const clientId = await periodClientId(periodId);
+    if (clientId === null) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } }); return; }
+    if (!(await leadSheetsOwned(clientId, [leadSheetId]))) {
+      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'That lead sheet belongs to a different client.' } });
+      return;
+    }
+    if (parsed.data.accountId) {
+      const strays = await accountsNotOwned(clientId, [parsed.data.accountId]);
+      if (strays.length > 0) {
+        res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'That account belongs to a different client.' } });
+        return;
+      }
+    }
+
+    const user = await db('app_users').where({ id: req.user!.userId }).first('display_name', 'username');
+    const [row] = await db('lead_sheet_notes').insert({
+      client_id: clientId,
+      period_id: periodId,
+      lead_sheet_id: leadSheetId,
+      account_id: parsed.data.accountId ?? null,
+      body: parsed.data.body,
+      author_id: req.user!.userId,
+      author_name: (user?.display_name as string | undefined) ?? (user?.username as string | undefined) ?? null,
+    }).returning('*');
+
+    await logAudit({
+      userId: req.user!.userId, periodId, clientId,
+      entityType: 'lead_sheet_note', entityId: row.id, action: 'create',
+      description: `Added a note on lead sheet ${leadSheetId}`,
+    });
+    res.status(201).json({ data: row, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'lead-sheet-notes');
+  }
+});
+
+// Resolve / reopen. Not a delete: the note itself is the audit trail.
+leadSheetPeriodRouter.post('/:leadSheetId/notes/:noteId/resolve', async (req: AuthRequest, res: Response): Promise<void> => {
+  const noteId = Number(req.params.noteId);
+  if (isNaN(noteId)) { badId(res, 'note'); return; }
+  const parsed = z.object({ resolved: z.boolean() }).safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    return;
+  }
+  try {
+    const note = await db('lead_sheet_notes').where({ id: noteId }).first();
+    if (!note) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Note not found' } }); return; }
+
+    const user = await db('app_users').where({ id: req.user!.userId }).first('display_name', 'username');
+    const [row] = await db('lead_sheet_notes').where({ id: noteId }).update(
+      parsed.data.resolved
+        ? {
+            resolved_at: db.fn.now(),
+            resolved_by: req.user!.userId,
+            resolved_by_name: (user?.display_name as string | undefined) ?? (user?.username as string | undefined) ?? null,
+            updated_at: db.fn.now(),
+          }
+        : { resolved_at: null, resolved_by: null, resolved_by_name: null, updated_at: db.fn.now() },
+    ).returning('*');
+
+    await logAudit({
+      userId: req.user!.userId, periodId: note.period_id as number, clientId: note.client_id as number,
+      entityType: 'lead_sheet_note', entityId: noteId, action: 'update',
+      description: parsed.data.resolved ? 'Resolved a lead sheet note' : 'Reopened a lead sheet note',
+    });
+    res.json({ data: row, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'lead-sheet-notes');
   }
 });

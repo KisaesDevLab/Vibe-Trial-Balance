@@ -212,7 +212,7 @@ export async function createClientFolder(
   folderName: string | null,
   userId: number | null,
 ): Promise<LinkResult | LinkConflict> {
-  const client = await db('clients').where({ id: clientId }).first('id', 'name');
+  const client = await db('clients').where({ id: clientId }).first('id', 'name', 'client_code');
   if (!client) throw new StorageError('Client not found', 'NOT_FOUND', 404);
 
   const existing = await getLink(clientId);
@@ -228,7 +228,10 @@ export async function createClientFolder(
   const prefix = normalizeTopPrefix(cfg.prefix);
   const base = folderName
     ? sanitizeForWindows(folderName)
-    : clientFolderName({ id: clientId, name: client.name as string });
+    : clientFolderName(
+        { id: clientId, name: client.name as string, code: client.client_code as string | null },
+        cfg.clientFolderFormat,
+      );
 
   // Walk for a free name rather than failing on a collision.
   const driver = await getStorageDriver();
@@ -368,5 +371,10 @@ async function touchLink(id: number, updates: Record<string, unknown>): Promise<
 /** The default path a client's folder would get, for the "create" preview. */
 export async function suggestedFolderPath(clientId: number, name: string): Promise<string> {
   const cfg = await getStorageConfig();
-  return clientFolderPath(cfg.prefix, { id: clientId, name });
+  const client = await db('clients').where({ id: clientId }).first('client_code');
+  return clientFolderPath(
+    cfg.prefix,
+    { id: clientId, name, code: (client?.client_code as string | null) ?? null },
+    cfg.clientFolderFormat,
+  );
 }

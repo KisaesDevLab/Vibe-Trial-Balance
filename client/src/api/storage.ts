@@ -12,6 +12,10 @@ export const SECRET_KEEP = '__keep__';
 export interface StorageSettings {
   provider: StorageProvider;
   prefix: string;
+  /** Year-folder pattern, e.g. `{year}` or `FY{year}`. */
+  yearFormat: string;
+  /** Client-folder pattern, e.g. `{name}` or `{code} - {name}`. */
+  clientFolderFormat: string;
   b2: {
     endpoint: string;
     region: string;
@@ -30,6 +34,8 @@ export interface StorageSettings {
 export interface StorageSettingsPatch {
   provider: StorageProvider;
   prefix?: string;
+  yearFormat?: string;
+  clientFolderFormat?: string;
   b2Endpoint?: string;
   b2Region?: string;
   b2Bucket?: string;

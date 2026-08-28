@@ -49,7 +49,33 @@ export interface LeadSheetTickmark {
   color: string;
 }
 
-export type LeadSheetMemberRow = TBRow & { tickmarks: LeadSheetTickmark[] };
+export interface RowAttachmentRef {
+  id: number;
+  refCode: string;
+  /** How many tickmarks are burned into it. */
+  marks: number;
+}
+
+export interface LeadSheetNote {
+  id: number;
+  period_id: number;
+  lead_sheet_id: number | null;
+  account_id: number | null;
+  body: string;
+  author_name: string | null;
+  resolved_at: string | null;
+  resolved_by_name: string | null;
+  created_at: string;
+  account_number?: string | null;
+  account_name?: string | null;
+}
+
+/** One member row, with everything that hangs off THAT account. */
+export type LeadSheetMemberRow = TBRow & {
+  tickmarks: LeadSheetTickmark[];
+  attachments: RowAttachmentRef[];
+  notes: LeadSheetNote[];
+};
 
 export interface LeadSheetPeriodDetail {
   leadSheet: LeadSheet;
@@ -58,6 +84,8 @@ export interface LeadSheetPeriodDetail {
   currentStamp: string;
   signoffs: Partial<Record<SignoffRole, LeadSheetSignoff>>;
   status: Record<SignoffRole, SignoffStatus>;
+  notes: LeadSheetNote[];
+  openNoteCount: number;
 }
 
 export interface LeadSheetSuggestion {
@@ -170,3 +198,30 @@ export const unsignLeadSheet = (periodId: number, leadSheetId: number, role: Sig
     `/periods/${periodId}/lead-sheets/${leadSheetId}/unsign`,
     { method: 'POST', body: JSON.stringify({ role }) },
   );
+
+// ─── Notes ───────────────────────────────────────────────────────────────────
+
+export const listLeadSheetNotes = (periodId: number, leadSheetId: number) =>
+  apiFetch<LeadSheetNote[]>(`/periods/${periodId}/lead-sheets/${leadSheetId}/notes`);
+
+export const addLeadSheetNote = (
+  periodId: number,
+  leadSheetId: number,
+  input: { body: string; accountId?: number | null },
+) =>
+  apiFetch<LeadSheetNote>(`/periods/${periodId}/lead-sheets/${leadSheetId}/notes`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+/** Resolve or reopen. Notes are never deleted — the note is the audit trail. */
+export const setLeadSheetNoteResolved = (
+  periodId: number,
+  leadSheetId: number,
+  noteId: number,
+  resolved: boolean,
+) =>
+  apiFetch<LeadSheetNote>(`/periods/${periodId}/lead-sheets/${leadSheetId}/notes/${noteId}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ resolved }),
+  });

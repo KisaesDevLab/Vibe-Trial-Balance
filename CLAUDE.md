@@ -216,11 +216,20 @@ All planned phases complete. App is feature-complete.
   sentinel a later verify adopts; the reverse loses the binding. Migration `20260828000004`
   **backfills a legacy link for every existing client**, or requiring a link would make every current
   client un-uploadable on upgrade.
-  Key layout is `<prefix>/<Client Name (id)>/<Section>/FY<year>/<file>` — section BEFORE year. The
-  fiscal year comes from `periods.end_date` adjusted by `clients.tax_year_end`, never from
-  `period_name` (free text a user can rename). Sections come from the editable
-  `storage_folder_template`, with partial unique indexes enforcing exactly one workpaper target and
-  one upload default. Keys are STORED, never re-derived, so renames move nothing.
+  Key layout is `<prefix>/<client folder>/<Section>/<year>/<file>` — section BEFORE year — which for
+  the shipped defaults reads `Clients/Jack Black LLC/Workpapers & Support/2025/file.pdf`. Both the
+  client-folder and year patterns are **settings**, not constants (`storage.client_folder_format`,
+  default `{name}`, placeholders `{name}`/`{code}`/`{id}`; `storage.year_format`, default `{year}`);
+  each is rejected at the route unless it actually places its required placeholder, and that check
+  runs BEFORE any `upsertSetting`, since those start their query the moment they are called.
+  `{code}` is `clients.client_code` — the firm's own client number, the same idea as Vibe Time &
+  Billing's `tax_software_id`; a pattern like `{code} - {name}` tidies its own seams when a client has
+  no code. The fiscal year comes from `periods.folder_year` when set, otherwise from
+  `periods.end_date` adjusted by `clients.tax_year_end`, never from `period_name` (free text a user
+  can rename). `folder_year` exists because derivation cannot know about a short year, a stub period
+  or a firm's own naming. Sections come from the editable `storage_folder_template` (seeded as the
+  single `Workpapers & Support`), with partial unique indexes enforcing exactly one workpaper target
+  and one upload default. Keys are STORED, never re-derived, so renames move nothing.
 - **Lead sheet attachments** (`lead_sheet_attachments`) — auto-named `A001`, `A002`, `B001`,
   **period-scoped** so a 12/31 file never surfaces in a 7/31 package. `UNIQUE (period_id, ref_code)`
   is the allocator's source of truth, not the SELECT; a 23505 triggers a compensating object delete
@@ -235,17 +244,31 @@ All planned phases complete. App is feature-complete.
   StandardFonts cannot encode the seeded `✓` (U+2713) and throw**, so a real TTF is embedded via
   `@pdf-lib/fontkit`, reusing the `ROBOTO_MEDIUM` buffer exported from `PdfTemplateService` — there is
   a test pinning that StandardFonts genuinely throws on `✓` but not on `†`.
+  An attachment carries an optional `account_id`, so it hangs off **one row of the schedule** — the
+  paperclip in each member row's Files cell — or off the schedule as a whole when it is null. The
+  sheet-level Supporting files panel lists both, labelling the per-account ones with their account
+  number; it is the index, not a second store.
   The workpaper binder can optionally merge attachments (`?includeAttachments=1`, default off), and
   `POST .../workpaper-merged/save` writes the same bytes into the client's workpaper folder.
   `buildWorkpaperPackage` in `lib/workpaperPackage.ts` is the single path both use.
   **pdfjs-dist is double-lazy** (React.lazy + dynamic import inside the effect) — a top-level import
   would add ~1 MB to the initial bundle. Its `?url` worker module is a `.js`, which is what lets
   `deploy/web-entrypoint.sh` rewrite the `__VIBE_BASE_PATH__` sentinel in it.
+- **Lead schedule notes** (`lead_sheet_notes`) — the review conversation on a lead sheet. **Per
+  period**, unlike membership: a query about the 2024 cash reconciliation says nothing about 2025.
+  `account_id` NULL means the note is about the schedule as a whole; set, it is the query on that one
+  row (the Notes cell shows `open/total`). Notes are **resolved, never deleted** — a closed query is
+  the evidence that review happened, which is the point of a workpaper — and both the page and the
+  Lead Sheets PDF print resolved notes greyed rather than dropping them. The PDF renders them between
+  the schedule's total row and the sign-off block, so a reviewer signs with the open queries in view.
 - **Backups carry rows, not bytes.** `client_documents` was previously missing from backups entirely
   (it appeared only in `deleteClientData`). On restore, a document row whose client id CHANGED has its
   `object_key`/`bucket`/`file_path` nulled and a `client_folder_links` row is skipped altogether —
   otherwise a restored-as-new client would claim the original's objects and folder, and deleting
-  either client's copy would destroy the other's bytes.
+  either client's copy would destroy the other's bytes. **This applies to `replace` mode too**, which
+  takes an arbitrary `targetClientId` and so cannot assume the archive came from that client; without
+  the guard the insert dies on the partial unique index over `(bucket, object_key)`. Restoring into
+  the SAME client keeps its keys and its link, which is the whole point of that mode.
 - Variance notes (per account per period, TB Report inline editing)
 - QA Round 1 & 2: 30-item UX audit — period lock enforcement on TB grid, batch op toasts,
   reopen reconciliation feedback, engagement double-submit prevention, FS comparative layout,

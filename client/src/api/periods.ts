@@ -11,6 +11,8 @@ export interface Period {
   start_date: string | null;
   end_date: string | null;
   is_current: boolean;
+  /** Overrides the derived year folder for stored documents. */
+  folder_year: string | null;
   rolled_forward_from: number | null;
   locked_at: string | null;
   locked_by: number | null;
@@ -22,6 +24,7 @@ export interface PeriodInput {
   startDate?: string;
   endDate?: string;
   isCurrent?: boolean;
+  folderYear?: string | null;
 }
 
 export const listPeriods = (clientId: number) =>

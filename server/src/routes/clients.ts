@@ -13,6 +13,10 @@ const router = Router();
 router.use(authMiddleware);
 
 const clientSchema = z.object({
+  // The firm's own identifier for this client (their tax software's client
+  // number). Optional, and only appears in a folder name if the client-folder
+  // format asks for it.
+  clientCode: z.string().trim().max(50).nullable().optional(),
   name: z.string().min(1).max(255),
   entityType: z.enum(['1065', '1120', '1120S', '1040_C']),
   taxYearEnd: z.string().max(4).optional(),
@@ -54,7 +58,7 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
     return;
   }
 
-  const { name, entityType, taxYearEnd, defaultTaxSoftware, taxId, activityType } = result.data;
+  const { name, entityType, taxYearEnd, defaultTaxSoftware, taxId, activityType, clientCode } = result.data;
 
   try {
     const [client] = await db('clients')
@@ -62,6 +66,7 @@ router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
         name,
         entity_type: entityType,
         tax_year_end: taxYearEnd ?? '1231',
+        client_code: clientCode ?? null,
         default_tax_software: defaultTaxSoftware ?? 'ultratax',
         tax_id: taxId ?? null,
         activity_type: activityType ?? 'business',
@@ -116,6 +121,7 @@ router.patch('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   if (result.data.name !== undefined) updates.name = result.data.name;
   if (result.data.entityType !== undefined) updates.entity_type = result.data.entityType;
   if (result.data.taxYearEnd !== undefined) updates.tax_year_end = result.data.taxYearEnd;
+  if (result.data.clientCode !== undefined) updates.client_code = result.data.clientCode;
   if (result.data.defaultTaxSoftware !== undefined)
     updates.default_tax_software = result.data.defaultTaxSoftware;
   if (result.data.taxId !== undefined)

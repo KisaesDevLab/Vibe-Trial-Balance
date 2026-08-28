@@ -12,6 +12,8 @@ export interface Client {
   activity_type: 'business' | 'rental' | 'farm' | 'farm_rental';
   default_tax_software: 'ultratax' | 'cch' | 'lacerte' | 'drake';
   tax_id: string | null;
+  /** The firm's own client number, as used in their tax software. */
+  client_code: string | null;
   default_source_account_id: number | null;
   is_active: boolean;
   created_at: string;
@@ -24,6 +26,7 @@ export interface ClientInput {
   taxYearEnd?: string;
   defaultTaxSoftware?: 'ultratax' | 'cch' | 'lacerte' | 'drake';
   taxId?: string | null;
+  clientCode?: string | null;
   activityType?: 'business' | 'rental' | 'farm' | 'farm_rental';
   defaultSourceAccountId?: number | null;
 }

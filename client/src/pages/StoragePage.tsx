@@ -56,6 +56,8 @@ export function StoragePage() {
 
   const [provider, setProvider] = useState<StorageProvider>('local');
   const [prefix, setPrefix] = useState('');
+  const [yearFormat, setYearFormat] = useState('{year}');
+  const [clientFolderFormat, setClientFolderFormat] = useState('{name}');
   const [endpoint, setEndpoint] = useState('');
   const [region, setRegion] = useState('');
   const [bucket, setBucket] = useState('');
@@ -71,6 +73,8 @@ export function StoragePage() {
     if (!s) return;
     setProvider(s.provider);
     setPrefix(s.prefix);
+    setYearFormat(s.yearFormat);
+    setClientFolderFormat(s.clientFolderFormat);
     setEndpoint(s.b2.endpoint);
     setRegion(s.b2.region);
     setBucket(s.b2.bucket);
@@ -84,6 +88,8 @@ export function StoragePage() {
   const buildPatch = () => ({
     provider,
     prefix,
+    yearFormat,
+    clientFolderFormat,
     b2Endpoint: endpoint,
     b2Region: region,
     b2Bucket: bucket,
@@ -241,6 +247,37 @@ export function StoragePage() {
               Key prefix <span className="text-gray-400 dark:text-gray-500">(lets one bucket host several apps)</span>
             </label>
             <input value={prefix} onChange={(e) => setPrefix(e.target.value)} className={`${inputCls} max-w-xs`} placeholder="vibe-tb" />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Client folder format
+              </label>
+              <input value={clientFolderFormat} onChange={(e) => setClientFolderFormat(e.target.value)} className={inputCls} placeholder="{name}" />
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                <code>{'{name}'}</code>, <code>{'{code}'}</code> (the client ID) and <code>{'{id}'}</code>.
+                Must include <code>{'{name}'}</code>.
+              </p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Year folder format
+              </label>
+              <input value={yearFormat} onChange={(e) => setYearFormat(e.target.value)} className={inputCls} placeholder="{year}" />
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                Must include <code>{'{year}'}</code>. A period can override the whole folder with its own year label.
+              </p>
+            </div>
+          </div>
+
+          <div className="text-xs bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 rounded px-3 py-2 text-gray-600 dark:text-gray-400">
+            Documents will be filed as{' '}
+            <code className="font-mono text-gray-800 dark:text-gray-200">
+              {[prefix, clientFolderFormat.replace('{name}', 'Jack Black LLC').replace('{code}', '0042').replace('{id}', '12'),
+                sections[0]?.name ?? 'Workpapers & Support',
+                yearFormat.replace('{year}', '2025'), 'file.pdf'].filter(Boolean).join('/')}
+            </code>
           </div>
 
           {provider === 'b2' && (

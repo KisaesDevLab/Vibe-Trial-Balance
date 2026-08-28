@@ -17,7 +17,10 @@ import {
   signLeadSheet,
   unsignLeadSheet,
   SIGNOFF_BADGE_CLASSES,
+  addLeadSheetNote,
+  setLeadSheetNoteResolved,
   type LeadSheet,
+  type LeadSheetNote,
   type LeadSheetPeriodDetail,
   type LeadSheetMemberRow,
   type SignoffRole,
@@ -28,6 +31,7 @@ import { useUIStore, pushToast } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
 import { categoryNet } from '../lib/accounting';
 import { LeadSheetAssignmentModal } from '../components/LeadSheetAssignmentModal';
+import { LeadSheetNotesModal } from '../components/LeadSheetNotesModal';
 import {
   listAttachments,
   uploadAttachment,
@@ -135,7 +139,12 @@ export function LeadSheetsPage() {
   const [busyRole, setBusyRole] = useState<SignoffRole | null>(null);
   const [viewing, setViewing] = useState<LeadSheetAttachment | null>(null);
   const [uploading, setUploading] = useState(false);
+  // Which account row's paperclip is mid-upload, so only that row shows a spinner.
+  const [uploadingFor, setUploadingFor] = useState<number | null>(null);
+  const [notesFor, setNotesFor] = useState<LeadSheetMemberRow | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const rowFileInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingAccountRef = useRef<number | null>(null);
 
   const sheetsQuery = useQuery({
     queryKey: ['lead-sheets', selectedClientId, selectedPeriodId],
@@ -298,6 +307,38 @@ export function LeadSheetsPage() {
     if (!res.ok) { pushToast(res.message, 'error'); return; }
     pushToast(`Attached as ${res.refCode}.`, 'success');
     invalidate();
+  };
+
+  /**
+   * Attach a file to ONE account row, the way MyBooks does it — the ref code
+   * still comes from the lead sheet (A001, A002...), but the file hangs off
+   * this account so the row shows its own supporting documents.
+   */
+  const attachToAccount = (accountId: number) => {
+    pendingAccountRef.current = accountId;
+    rowFileInputRef.current?.click();
+  };
+
+  const handleRowUpload = async (file: File) => {
+    const accountId = pendingAccountRef.current;
+    pendingAccountRef.current = null;
+    if (!selectedPeriodId || !active || accountId === null) return;
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      pushToast(`That file is too large. The limit is ${Math.round(MAX_ATTACHMENT_BYTES / (1024 * 1024))} MB.`, 'error');
+      return;
+    }
+    setUploadingFor(accountId);
+    const res = await uploadAttachment(selectedPeriodId, file, { leadSheetId: active.id, accountId });
+    setUploadingFor(null);
+    if (!res.ok) { pushToast(res.message, 'error'); return; }
+    pushToast(`Attached as ${res.refCode}.`, 'success');
+    invalidate();
+  };
+
+  /** Open the viewer for a row's attachment. */
+  const openAttachment = (attachmentId: number) => {
+    const found = attachments.find((a) => a.id === attachmentId);
+    if (found) setViewing(found);
   };
 
   const removeAttachment = async (a: LeadSheetAttachment) => {
@@ -586,6 +627,8 @@ export function LeadSheetsPage() {
                           <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Book Bal</th>
                           <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Tax Bal</th>
                           <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Marks</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Files</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Notes</th>
                           <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">W/P Ref</th>
                         </tr>
                       </thead>
@@ -624,6 +667,40 @@ export function LeadSheetsPage() {
                                 ))}
                               </span>
                             </td>
+                            <td className="px-3 py-2">
+                              <span className="flex items-center gap-1 flex-wrap">
+                                {r.attachments.map((a) => (
+                                  <button
+                                    key={a.id}
+                                    onClick={() => openAttachment(a.id)}
+                                    title={`Open ${a.refCode}${a.marks ? ` — ${a.marks} mark${a.marks === 1 ? '' : 's'}` : ''}`}
+                                    className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/60"
+                                  >
+                                    {a.refCode}
+                                  </button>
+                                ))}
+                                <button
+                                  onClick={() => attachToAccount(r.account_id)}
+                                  disabled={uploadingFor === r.account_id}
+                                  title={`Attach a file to ${r.account_number}`}
+                                  aria-label={`Attach a file to ${r.account_number}`}
+                                  className="text-gray-400 hover:text-blue-600 dark:text-gray-500 dark:hover:text-blue-400 disabled:opacity-40"
+                                >
+                                  {uploadingFor === r.account_id ? '…' : '📎'}
+                                </button>
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <button
+                                onClick={() => setNotesFor(r)}
+                                title={r.notes.length ? `${r.notes.filter((n) => !n.resolved_at).length} open of ${r.notes.length}` : 'Add a note'}
+                                className={`text-xs ${r.notes.some((n) => !n.resolved_at)
+                                  ? 'text-amber-700 dark:text-amber-400 font-medium'
+                                  : 'text-gray-400 hover:text-blue-600 dark:text-gray-500 dark:hover:text-blue-400'}`}
+                              >
+                                {r.notes.length ? `${r.notes.filter((n) => !n.resolved_at).length}/${r.notes.length}` : '+'}
+                              </button>
+                            </td>
                             <td className="px-3 py-2 text-gray-500 dark:text-gray-400 text-xs">{r.workpaper_ref ?? ''}</td>
                           </tr>
                         ))}
@@ -648,7 +725,7 @@ export function LeadSheetsPage() {
                           <td className="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">
                             {fmt(activeDetail.rows.reduce((s, r) => s + net(r, r.tax_adjusted_debit, r.tax_adjusted_credit), 0))}
                           </td>
-                          <td colSpan={2} />
+                          <td colSpan={4} />
                         </tr>
                       </tfoot>
                     </table>
@@ -684,7 +761,9 @@ export function LeadSheetsPage() {
                       </div>
                     </div>
                     <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
-                      PDF, PNG or JPEG. Images are converted to PDF so every attachment can carry
+                      Every file attached to this lead schedule, whether from the paperclip on an
+                      account row or from here. A file added here belongs to the schedule as a whole.
+                      PDF, PNG or JPEG; images are converted to PDF so every attachment can carry
                       tickmarks. Files are named automatically —{' '}
                       <span className="font-mono">{active.code ?? 'LS'}001</span>, and so on.
                     </p>
@@ -697,7 +776,14 @@ export function LeadSheetsPage() {
                             <span className="font-mono text-xs px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">
                               {a.ref_code}
                             </span>
-                            <span className="text-sm text-gray-700 dark:text-gray-300 truncate flex-1">{a.source_file_name}</span>
+                            <span className="text-sm text-gray-700 dark:text-gray-300 truncate flex-1">
+                              {a.source_file_name}
+                              {a.account_id != null && (
+                                <span className="ml-2 text-xs text-gray-400 dark:text-gray-500 font-mono">
+                                  {activeDetail?.rows.find((r) => r.account_id === a.account_id)?.account_number ?? ''}
+                                </span>
+                              )}
+                            </span>
                             {a.annotations?.length > 0 && (
                               <span className="text-xs text-gray-400 dark:text-gray-500">
                                 {a.annotations.length} mark{a.annotations.length === 1 ? '' : 's'}
@@ -715,10 +801,42 @@ export function LeadSheetsPage() {
                     )}
                   </div>
                 )}
+
+                {/* ── Lead schedule notes ──────────────────────────────── */}
+                {selectedPeriodId && activeDetail && (
+                  <SheetNotesCard
+                    periodId={selectedPeriodId}
+                    leadSheetId={active.id}
+                    notes={activeDetail.notes.filter((n) => n.account_id === null)}
+                    onChanged={invalidate}
+                  />
+                )}
               </>
             )}
           </div>
         </div>
+      )}
+
+      <input
+        ref={rowFileInputRef}
+        type="file"
+        accept={ACCEPTED_ATTACHMENT_TYPES}
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void handleRowUpload(f);
+          e.target.value = '';
+        }}
+      />
+
+      {notesFor && selectedPeriodId && active && (
+        <LeadSheetNotesModal
+          periodId={selectedPeriodId}
+          leadSheetId={active.id}
+          row={notesFor}
+          onClose={() => setNotesFor(null)}
+          onChanged={invalidate}
+        />
       )}
 
       {viewing && (
@@ -740,6 +858,128 @@ export function LeadSheetsPage() {
           onApplied={() => { setShowAssign(false); invalidate(); }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The notes on the lead schedule as a whole — "re-foot this schedule", "tie to
+ * the 12/31 bank statement" — as opposed to the per-account queries that hang
+ * off a row's Notes cell.
+ *
+ * Same resolve-don't-delete rule as the per-account modal: a closed query is
+ * the evidence that review happened.
+ */
+function SheetNotesCard({
+  periodId,
+  leadSheetId,
+  notes,
+  onChanged,
+}: {
+  periodId: number;
+  leadSheetId: number;
+  notes: LeadSheetNote[];
+  onChanged: () => void;
+}) {
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [showResolved, setShowResolved] = useState(false);
+
+  const open = notes.filter((n) => !n.resolved_at);
+  const visible = showResolved ? notes : open;
+
+  const add = async () => {
+    const text = body.trim();
+    if (!text) return;
+    setBusy(true);
+    const res = await addLeadSheetNote(periodId, leadSheetId, { body: text });
+    setBusy(false);
+    if (res.error) { pushToast(res.error.message, 'error'); return; }
+    setBody('');
+    onChanged();
+  };
+
+  const toggle = async (n: LeadSheetNote) => {
+    setBusy(true);
+    const res = await setLeadSheetNoteResolved(periodId, leadSheetId, n.id, !n.resolved_at);
+    setBusy(false);
+    if (res.error) { pushToast(res.error.message, 'error'); return; }
+    onChanged();
+  };
+
+  return (
+    <div className="border-t border-gray-100 dark:border-gray-700 px-5 py-4">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+          Schedule notes ({open.length} open)
+        </h4>
+        {notes.length > open.length && (
+          <button
+            onClick={() => setShowResolved((v) => !v)}
+            className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400"
+          >
+            {showResolved ? 'Hide resolved' : `Show resolved (${notes.length - open.length})`}
+          </button>
+        )}
+      </div>
+
+      {visible.length === 0 ? (
+        <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
+          No notes on this lead schedule.
+        </p>
+      ) : (
+        <ul className="space-y-2 mb-3">
+          {visible.map((n) => (
+            <li
+              key={n.id}
+              className={`border rounded p-2.5 ${n.resolved_at
+                ? 'border-gray-200 dark:border-gray-700 opacity-60'
+                : 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20'}`}
+            >
+              <p className={`text-sm whitespace-pre-wrap ${n.resolved_at
+                ? 'text-gray-500 dark:text-gray-400 line-through'
+                : 'text-gray-900 dark:text-white'}`}>
+                {n.body}
+              </p>
+              <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                <span>{n.author_name ?? 'Unknown'}</span>
+                <span>·</span>
+                <span>{new Date(n.created_at).toLocaleDateString()}</span>
+                {n.resolved_at && (
+                  <span className="text-green-700 dark:text-green-400">
+                    · resolved by {n.resolved_by_name ?? 'someone'}
+                  </span>
+                )}
+                <button
+                  onClick={() => void toggle(n)}
+                  disabled={busy}
+                  className="ml-auto text-blue-600 hover:text-blue-800 dark:text-blue-400 disabled:opacity-50"
+                >
+                  {n.resolved_at ? 'Reopen' : 'Resolve'}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="flex gap-2">
+        <input
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void add(); } }}
+          maxLength={4000}
+          placeholder="Add a note for this lead schedule…"
+          className="flex-1 border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+        />
+        <button
+          onClick={() => void add()}
+          disabled={busy || !body.trim()}
+          className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
+        >
+          Add note
+        </button>
+      </div>
     </div>
   );
 }

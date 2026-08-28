@@ -16,6 +16,9 @@ export const periodItemRouter = Router();
 periodItemRouter.use(authMiddleware);
 
 const periodSchema = z.object({
+  // Overrides the year folder derived from end_date and the client's year end
+  // — for a short year, a stub period, or the firm's own naming.
+  folderYear: z.string().trim().max(20).nullable().optional(),
   periodName: z.string().min(1).max(100),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
@@ -51,7 +54,7 @@ periodCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promis
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
     return;
   }
-  const { periodName, startDate, endDate, isCurrent } = result.data;
+  const { periodName, startDate, endDate, isCurrent, folderYear } = result.data;
 
   try {
     await db.transaction(async (trx) => {
@@ -62,6 +65,7 @@ periodCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promis
         .insert({
           client_id: clientId,
           period_name: periodName,
+          folder_year: folderYear ?? null,
           start_date: startDate ?? null,
           end_date: endDate ?? null,
           is_current: isCurrent ?? false,
@@ -99,6 +103,7 @@ periodItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<
       }
       const updates: Record<string, unknown> = {};
       if (d.periodName !== undefined) updates.period_name = d.periodName;
+      if (d.folderYear !== undefined) updates.folder_year = d.folderYear;
       if (d.startDate !== undefined) updates.start_date = d.startDate;
       if (d.endDate !== undefined) updates.end_date = d.endDate;
       if (d.isCurrent !== undefined) updates.is_current = d.isCurrent;

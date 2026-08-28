@@ -53,6 +53,7 @@ function ClientForm({ initial, onSave, onCancel, saving, error }: ClientFormProp
     taxYearEnd: initial?.taxYearEnd ?? '1231',
     defaultTaxSoftware: initial?.defaultTaxSoftware ?? 'ultratax',
     taxId: initial?.taxId ?? '',
+    clientCode: initial?.clientCode ?? '',
     activityType: initial?.activityType ?? 'business',
   });
 
@@ -116,6 +117,17 @@ function ClientForm({ initial, onSave, onCancel, saving, error }: ClientFormProp
           >
             {TAX_SOFTWARE.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Client ID</label>
+          <input
+            value={form.clientCode ?? ''}
+            onChange={(e) => set('clientCode', e.target.value || null)}
+            placeholder="e.g. 0042"
+            maxLength={50}
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+          />
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Your tax software's client number. Optional; used in the document folder name if the format asks for it.</p>
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">EIN / Tax ID</label>
@@ -188,6 +200,7 @@ export function ClientsPage() {
     return allClients.filter((c) =>
       c.name.toLowerCase().includes(q) ||
       (c.tax_id ?? '').toLowerCase().includes(q) ||
+      (c.client_code ?? '').toLowerCase().includes(q) ||
       c.entity_type.toLowerCase().includes(q),
     );
   }, [allClients, search]);
@@ -232,6 +245,7 @@ export function ClientsPage() {
             <thead>
               <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Name</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Client ID</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Entity</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Activity</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">EIN</th>
@@ -243,7 +257,7 @@ export function ClientsPage() {
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {filteredClients.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-gray-400 dark:text-gray-500">
+                  <td colSpan={8} className="px-4 py-8 text-center text-gray-400 dark:text-gray-500">
                     {search ? `No clients match "${search}".` : 'No clients yet. Click "+ Add Client" to create one.'}
                   </td>
                 </tr>
@@ -265,6 +279,7 @@ export function ClientsPage() {
                           <span className="font-medium text-gray-900 dark:text-white">{c.name}</span>
                         </div>
                       </td>
+                      <td className="px-4 py-2.5 text-gray-500 dark:text-gray-500 font-mono text-sm">{c.client_code ?? '—'}</td>
                       <td className="px-4 py-2.5 text-gray-600 dark:text-gray-400">{c.entity_type}</td>
                       <td className="px-4 py-2.5 text-gray-600 dark:text-gray-400 capitalize">{(c.activity_type ?? 'business').replace('_', ' ')}</td>
                       <td className="px-4 py-2.5 text-gray-500 dark:text-gray-500 font-mono text-sm">{c.tax_id ?? '—'}</td>
@@ -328,6 +343,7 @@ export function ClientsPage() {
               taxYearEnd: editClient.tax_year_end,
               defaultTaxSoftware: editClient.default_tax_software,
               taxId: editClient.tax_id,
+              clientCode: editClient.client_code,
               activityType: editClient.activity_type ?? 'business',
             }}
             onSave={(input) => updateMutation.mutate({ id: editClient.id, input })}

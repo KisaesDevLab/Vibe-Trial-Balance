@@ -24,6 +24,7 @@ import { decrypt, isEncrypted } from '../encryption';
 import { B2StorageDriver } from './b2Driver';
 import { LocalStorageDriver } from './localDriver';
 import type { StorageBackend, StorageDriver } from './types';
+import { DEFAULT_CLIENT_FOLDER_FORMAT, DEFAULT_YEAR_FORMAT } from './keys';
 
 export const STORAGE_SETTING_KEYS = [
   'storage.provider',
@@ -34,6 +35,8 @@ export const STORAGE_SETTING_KEYS = [
   'storage.b2_key_id',
   'storage.b2_application_key',
   'storage.install_id',
+  'storage.year_format',
+  'storage.client_folder_format',
 ] as const;
 
 export type StorageSettingKey = (typeof STORAGE_SETTING_KEYS)[number];
@@ -41,6 +44,10 @@ export type StorageSettingKey = (typeof STORAGE_SETTING_KEYS)[number];
 export interface StorageConfig {
   provider: StorageBackend;
   prefix: string;
+  /** Year-folder pattern, e.g. `{year}` or `FY{year}`. */
+  yearFormat: string;
+  /** Client-folder pattern, e.g. `{name}` or `{code} - {name}`. */
+  clientFolderFormat: string;
   b2?: {
     endpoint: string;
     region: string;
@@ -54,7 +61,7 @@ export interface StorageConfig {
   envOverride: boolean;
 }
 
-export const DEFAULT_PREFIX = 'vibe-tb';
+export const DEFAULT_PREFIX = 'Clients';
 
 /** Where the local driver writes. Same base documents.ts has always used. */
 export function localStorageRoot(): string {
@@ -96,10 +103,13 @@ export async function loadStorageConfig(): Promise<StorageConfig> {
 
   const provider = ((dbVals['storage.provider'] || process.env.STORAGE_PROVIDER || 'local')
     .trim().toLowerCase()) as StorageBackend;
-  const prefix = (dbVals['storage.prefix'] || process.env.STORAGE_PREFIX || DEFAULT_PREFIX).trim();
+  const prefix = (dbVals['storage.prefix'] ?? process.env.STORAGE_PREFIX ?? DEFAULT_PREFIX).trim();
+  const yearFormat = (dbVals['storage.year_format'] || process.env.STORAGE_YEAR_FORMAT || DEFAULT_YEAR_FORMAT).trim();
+  const clientFolderFormat =
+    (dbVals['storage.client_folder_format'] || process.env.STORAGE_CLIENT_FOLDER_FORMAT || DEFAULT_CLIENT_FOLDER_FORMAT).trim();
 
   if (provider !== 'b2') {
-    return { provider: 'local', prefix, envOverride: !hasDbProvider };
+    return { provider: 'local', prefix, yearFormat, clientFolderFormat, envOverride: !hasDbProvider };
   }
 
   const endpoint = (dbVals['storage.b2_endpoint'] || process.env.B2_ENDPOINT || '').trim();
@@ -119,6 +129,8 @@ export async function loadStorageConfig(): Promise<StorageConfig> {
   return {
     provider: 'b2',
     prefix,
+    yearFormat,
+    clientFolderFormat,
     b2: { endpoint, region, bucket, keyId, applicationKey },
     configError: missing.length > 0
       ? `Object storage is selected but incomplete — missing: ${missing.join(', ')}.`

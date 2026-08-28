@@ -50,13 +50,14 @@ function PeriodForm({ initial, onSave, onCancel, saving, error }: PeriodFormProp
     startDate: initial?.startDate ?? '',
     endDate: initial?.endDate ?? '',
     isCurrent: initial?.isCurrent ?? false,
+    folderYear: initial?.folderYear ?? '',
   });
 
   const set = <K extends keyof PeriodInput>(k: K, v: PeriodInput[K]) =>
     setForm((p) => ({ ...p, [k]: v }));
 
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave({ ...form, startDate: form.startDate || undefined, endDate: form.endDate || undefined }); }} className="space-y-4">
+    <form onSubmit={(e) => { e.preventDefault(); onSave({ ...form, startDate: form.startDate || undefined, endDate: form.endDate || undefined, folderYear: form.folderYear?.trim() || null }); }} className="space-y-4">
       {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-sm">{error}</div>}
       <div>
         <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Period Name</label>
@@ -86,6 +87,20 @@ function PeriodForm({ initial, onSave, onCancel, saving, error }: PeriodFormProp
             className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
           />
         </div>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Document Year Folder</label>
+        <input
+          value={form.folderYear ?? ''}
+          onChange={(e) => set('folderYear', e.target.value)}
+          placeholder="Derived from the end date"
+          maxLength={20}
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+        />
+        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+          The year folder documents for this period are filed under. Leave blank to derive it from the
+          end date and the client's tax year end — set it for a short year, a stub period, or your own naming.
+        </p>
       </div>
       <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
         <input
@@ -498,6 +513,7 @@ export function PeriodsPage() {
               startDate: editPeriod.start_date?.slice(0, 10) ?? '',
               endDate: editPeriod.end_date?.slice(0, 10) ?? '',
               isCurrent: editPeriod.is_current,
+              folderYear: editPeriod.folder_year,
             }}
             onSave={(input) => updateMutation.mutate({ id: editPeriod.id, input })}
             onCancel={() => setEditPeriod(null)}

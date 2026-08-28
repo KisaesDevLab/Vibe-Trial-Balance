@@ -1105,6 +1105,31 @@ export async function generateLeadSheetsPdf(db: Knex, periodId: number): Promise
     }
   }
 
+
+  // Review notes for this period, per lead sheet. Resolved notes still print —
+  // a closed query is the evidence that the review happened, which is the whole
+  // point of putting it in the workpaper.
+  const notesBySheet = new Map<number, Array<{ body: string; author: string | null; created: string; resolved: boolean; account: string | null }>>();
+  if (await db.schema.hasTable('lead_sheet_notes')) {
+    const noteRows = await db('lead_sheet_notes as n')
+      .leftJoin('chart_of_accounts as a', 'a.id', 'n.account_id')
+      .where('n.period_id', periodId)
+      .whereNotNull('n.lead_sheet_id')
+      .orderBy([{ column: 'n.resolved_at', order: 'asc', nulls: 'first' }, { column: 'n.created_at', order: 'asc' }])
+      .select('n.lead_sheet_id', 'n.body', 'n.author_name', 'n.created_at', 'n.resolved_at', 'a.account_number');
+    for (const n of noteRows as Array<Record<string, unknown>>) {
+      const lsId = n.lead_sheet_id as number;
+      if (!notesBySheet.has(lsId)) notesBySheet.set(lsId, []);
+      notesBySheet.get(lsId)!.push({
+        body: String(n.body ?? ''),
+        author: (n.author_name as string | null) ?? null,
+        created: String(n.created_at ?? ''),
+        resolved: n.resolved_at != null,
+        account: (n.account_number as string | null) ?? null,
+      });
+    }
+  }
+
   const net = (r: Record<string, unknown>, d: string, c: string): number =>
     categoryNet(String(r.category), Number(r[d] ?? 0), Number(r[c] ?? 0));
 
@@ -1178,6 +1203,27 @@ export async function generateLeadSheetsPdf(db: Knex, periodId: number): Promise
     recap.push({ label, book, tax });
 
     content.push({ table: { headerRows: 1, widths, body: tableBody }, layout: tableLayout } as Content);
+
+    // Review notes, above the sign-off — a reviewer signing the page should be
+    // looking at the open queries on it.
+    const notes = g.id !== null ? (notesBySheet.get(g.id) ?? []) : [];
+    if (notes.length > 0) {
+      content.push({ text: 'Notes', fontSize: 9, bold: true, margin: [0, 10, 0, 4] } as Content);
+      const noteBody: TableCell[][] = [];
+      for (let ni = 0; ni < notes.length; ni++) {
+        const n = notes[ni];
+        const who = `${n.author ?? 'Unknown'}  ${fmtDate(n.created)}${n.resolved ? '  (resolved)' : ''}`;
+        noteBody.push([
+          { text: n.account ?? '', fontSize: 7, color: '#555555' },
+          { text: n.body, fontSize: 8, color: n.resolved ? '#777777' : '#000000' },
+          { text: who, fontSize: 7, color: '#555555', alignment: 'right' },
+        ]);
+      }
+      content.push({
+        table: { widths: [45, '*', 130], body: noteBody },
+        layout: { hLineWidth: (i: number) => (i === 0 ? 0 : 0.5), vLineWidth: () => 0, hLineColor: () => '#e5e5e5' },
+      } as Content);
+    }
 
     // Sign-off block. Printed signature rules when unsigned, so a paper page is
     // still signable by hand.

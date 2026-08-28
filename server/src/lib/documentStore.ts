@@ -93,19 +93,25 @@ export async function storeDocument(input: StoreDocumentInput): Promise<StoredDo
   // or after the client is renamed in-app.
   const link = await requireLink(input.clientId);
 
-  const client = await db('clients').where({ id: input.clientId }).first('id', 'name', 'tax_year_end');
+  const client = await db('clients').where({ id: input.clientId }).first('id', 'name', 'tax_year_end', 'client_code');
   if (!client) throw new StorageError('Client not found', 'NOT_FOUND', 404);
 
-  let fy = 'FY-unknown';
+  const cfg = await getStorageConfig();
+
+  let fy = 'unknown-year';
   if (input.periodId) {
-    const period = await db('periods').where({ id: input.periodId }).first('start_date', 'end_date', 'period_name');
+    const period = await db('periods')
+      .where({ id: input.periodId })
+      .first('start_date', 'end_date', 'period_name', 'folder_year');
     if (period) {
       fy = fiscalYearFolder({
+        // An explicit label on the period wins over derivation.
+        folderYear: period.folder_year as string | null,
         endDate: period.end_date as string | null,
         startDate: period.start_date as string | null,
         periodName: period.period_name as string | null,
         taxYearEnd: client.tax_year_end as string | null,
-      });
+      }, cfg.yearFormat);
     }
   }
 
@@ -138,7 +144,7 @@ export async function storeDocument(input: StoreDocumentInput): Promise<StoredDo
       file_type: input.mimeType,
       storage_backend: driver.kind,
       object_key: key,
-      bucket: driver.kind === 'b2' ? (await getStorageConfig()).b2?.bucket ?? null : null,
+      bucket: driver.kind === 'b2' ? cfg.b2?.bucket ?? null : null,
       sha256,
       etag: meta.etag,
       section,
