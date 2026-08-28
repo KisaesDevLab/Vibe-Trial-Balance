@@ -56,16 +56,50 @@ export const saveConsolSettings = (periodId: number, software: TaxSoftware, sett
     body: JSON.stringify({ software, settings }),
   });
 
+/**
+ * How a single export-wide unit number is applied.
+ *   column — Unit column only, account number untouched
+ *   prefix — unit#-coa#
+ *   suffix — coa#-unit#
+ * The Unit column is added in every mode; the mode only decides whether the
+ * account number is rewritten too.
+ */
+export type UnitMode = 'column' | 'prefix' | 'suffix';
+
+export interface UnitOption {
+  /** Digits only — the server rejects anything else and omits the column. */
+  unit: string;
+  mode: UnitMode;
+}
+
+/** The exports whose layout carries an account number to combine a unit with.
+ *  Lacerte and GoSystem export a tax LineCode instead, which must not be
+ *  rewritten — they get the Unit column but ignore prefix/suffix. */
+export const SOFTWARE_HAS_ACCOUNT_NUMBER: Record<TaxSoftware, boolean> = {
+  ultratax: true,
+  cch: true,
+  generic: true,
+  lacerte: false,
+  gosystem: false,
+};
+
+/** Preview of the account number a unit option will produce, for the UI. */
+export function previewUnitAccountNumber(sampleAcct: string, opt: UnitOption | null): string {
+  if (!opt || opt.mode === 'column') return sampleAcct;
+  if (!sampleAcct) return opt.unit;
+  return opt.mode === 'prefix' ? `${opt.unit}-${sampleAcct}` : `${sampleAcct}-${opt.unit}`;
+}
+
 /** Returns a URL for a tax software CSV/XLSX export (use as <a href> or window.open) */
 export function taxSoftwareExportUrl(
   periodId: number,
   software: TaxSoftware,
   consolidateIds?: number[],
   overrides?: Map<number, { acctNum: string; acctName: string }>,
+  unitOption?: UnitOption | null,
 ): string {
-  let url = `${BASE_URL}/periods/${periodId}/exports/${software}`;
+  const params = new URLSearchParams();
   if (consolidateIds && consolidateIds.length > 0) {
-    const params = new URLSearchParams();
     params.set('consolidate', consolidateIds.join(','));
     if (overrides && overrides.size > 0) {
       const obj: Record<string, { n: string; d: string }> = {};
@@ -74,9 +108,13 @@ export function taxSoftwareExportUrl(
       }
       params.set('overrides', JSON.stringify(obj));
     }
-    url += `?${params.toString()}`;
   }
-  return url;
+  if (unitOption && /^\d{1,9}$/.test(unitOption.unit)) {
+    params.set('unit', unitOption.unit);
+    params.set('unitMode', unitOption.mode);
+  }
+  const qs = params.toString();
+  return `${BASE_URL}/periods/${periodId}/exports/${software}${qs ? `?${qs}` : ''}`;
 }
 
 export function workingTbExportUrl(periodId: number): string {

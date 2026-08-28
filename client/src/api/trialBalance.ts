@@ -14,6 +14,10 @@ export interface TBRow {
   tax_line: string | null;
   workpaper_ref: string | null;
   unit: string | null;
+  lead_sheet_id: number | null;
+  lead_sheet_code: string | null;
+  lead_sheet_name: string | null;
+  lead_sheet_sort: number | null;
   is_active: boolean;
   preparer_notes: string | null;
   reviewer_notes: string | null;

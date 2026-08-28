@@ -28,6 +28,9 @@ import { m1CollectionRouter, m1ItemRouter } from './routes/taxWorkpapers';
 import { engagementCollectionRouter, engagementItemRouter, engagementSummaryRouter } from './routes/engagement';
 import { cashFlowRouter } from './routes/cashFlow';
 import { tickmarkLibraryCollectionRouter, tickmarkLibraryItemRouter, tbTickmarkRouter, systemTickmarkCollectionRouter, systemTickmarkItemRouter } from './routes/tickmarks';
+import { leadSheetCollectionRouter, leadSheetItemRouter, leadSheetPeriodRouter } from './routes/leadSheets';
+import { storageRouter } from './routes/storage';
+import { leadSheetAttachmentCollectionRouter, leadSheetAttachmentItemRouter } from './routes/leadSheetAttachments';
 import { savedReportCollectionRouter, savedReportItemRouter } from './routes/savedReports';
 import { varianceNotesRouter } from './routes/varianceNotes';
 import { pdfReportsRouter } from './routes/pdfReports';
@@ -258,12 +261,15 @@ app.get('/api/v1/features', async (_req, res) => {
   } catch {
     passwordResetEnabled = !!process.env.MAIL_TRANSPORT;
   }
+  // Same underlying fact — a mail transport is configured — under a name that
+  // reads right for every mail-dependent feature, not just password reset.
+  const mailEnabled = passwordResetEnabled;
   try {
     const ai = await isAiConfigured();
-    res.json({ data: { ai, passwordResetEnabled }, error: null });
+    res.json({ data: { ai, passwordResetEnabled, mailEnabled }, error: null });
   } catch {
     // If the settings table query fails (e.g., DB down), fall back to env.
-    res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY, passwordResetEnabled }, error: null });
+    res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY, passwordResetEnabled, mailEnabled }, error: null });
   }
 });
 
@@ -298,6 +304,12 @@ app.use('/api/v1/tickmarks/:id', tickmarkLibraryItemRouter);
 app.use('/api/v1/periods/:periodId/tb-tickmarks', tbTickmarkRouter);
 app.use('/api/v1/system-tickmarks', systemTickmarkCollectionRouter);
 app.use('/api/v1/system-tickmarks/:id', systemTickmarkItemRouter);
+app.use('/api/v1/clients/:clientId/lead-sheets', leadSheetCollectionRouter);
+app.use('/api/v1/lead-sheets/:id', leadSheetItemRouter);
+app.use('/api/v1/periods/:periodId/lead-sheets', leadSheetPeriodRouter);
+app.use('/api/v1/storage', storageRouter);
+app.use('/api/v1/periods/:periodId/lead-sheet-attachments', leadSheetAttachmentCollectionRouter);
+app.use('/api/v1/lead-sheet-attachments/:id', leadSheetAttachmentItemRouter);
 app.use('/api/v1/clients/:clientId/saved-reports', savedReportCollectionRouter);
 app.use('/api/v1/saved-reports/:id', savedReportItemRouter);
 app.use('/api/v1/periods/:periodId/variance-notes', varianceNotesRouter);

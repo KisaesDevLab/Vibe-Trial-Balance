@@ -54,6 +54,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
   const [entryType, setEntryType] = useState<'book' | 'tax'>('book');
   const [entryDate, setEntryDate] = useState('');
   const [description, setDescription] = useState('');
+  const [workpaperRef, setWorkpaperRef] = useState('');
   const [lines, setLines] = useState<FormLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isTrans, setIsTrans] = useState(false);
@@ -88,6 +89,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
       const initialType = jeData.entry_type === 'trans' ? 'book' : jeData.entry_type;
       const initialDate = jeData.entry_date.slice(0, 10);
       const initialDesc = jeData.description ?? '';
+      const initialWpRef = jeData.workpaper_ref ?? '';
       const initialLines = jeData.lines.map((l) => ({
         _key: newEditLineKey(),
         accountId: l.account_id,
@@ -97,10 +99,12 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
       setEntryType(initialType);
       setEntryDate(initialDate);
       setDescription(initialDesc);
+      setWorkpaperRef(initialWpRef);
       setIsTrans(jeData.entry_type === 'trans');
       setLines(initialLines);
       setInitialSnapshot(
         JSON.stringify({ entryType: initialType, entryDate: initialDate, description: initialDesc,
+          workpaperRef: initialWpRef,
           lines: initialLines.map((l) => ({ accountId: l.accountId, debit: l.debit, credit: l.credit })) }),
       );
       setLoaded(true);
@@ -113,7 +117,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
   const { totalDebit, totalCredit, balanced } = lineStatus;
 
   const currentSnapshot = JSON.stringify({
-    entryType, entryDate, description,
+    entryType, entryDate, description, workpaperRef,
     lines: lines.map((l) => ({ accountId: l.accountId, debit: l.debit, credit: l.credit })),
   });
   const dirty = loaded && currentSnapshot !== initialSnapshot;
@@ -162,6 +166,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
       ...(isTrans ? {} : { entryType }),
       entryDate,
       description: description || null,
+      workpaperRef: workpaperRef.trim() || null,
       lines: lineStatus.lines,
     });
   };
@@ -196,7 +201,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
             <form onSubmit={handleSubmit} className="space-y-4">
               {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-sm">{error}</div>}
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
                   {isTrans ? (
@@ -219,6 +224,17 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
                     onChange={(e) => setEntryDate(e.target.value)}
                     required
                     className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">W/P Ref</label>
+                  <input
+                    value={workpaperRef}
+                    onChange={(e) => setWorkpaperRef(e.target.value)}
+                    maxLength={20}
+                    placeholder="e.g. B-2"
+                    title="Workpaper supporting this entry — printed on the AJE listing"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                   />
                 </div>
                 <div>

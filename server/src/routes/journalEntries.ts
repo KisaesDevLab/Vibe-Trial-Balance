@@ -30,6 +30,8 @@ const jeSchema = z.object({
   entryType: z.enum(['book', 'tax']),
   entryDate: z.string(),
   description: z.string().optional(),
+  /** Workpaper supporting this entry — printed on the AJE listing. */
+  workpaperRef: z.string().max(20).optional(),
   isRecurring: z.boolean().optional(),
   lines: z.array(lineSchema).min(2),
 });
@@ -98,7 +100,7 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
     return;
   }
-  const { periodId, entryType, entryDate, description, isRecurring, lines } = result.data;
+  const { periodId, entryType, entryDate, description, workpaperRef, isRecurring, lines } = result.data;
 
   const totalDebit = lines.reduce((s, l) => s + l.debit, 0);
   const totalCredit = lines.reduce((s, l) => s + l.credit, 0);
@@ -130,6 +132,7 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
           entry_type: entryType,
           entry_date: entryDate,
           description: description ?? null,
+          workpaper_ref: workpaperRef?.trim() || null,
           is_recurring: isRecurring ?? false,
           created_by: req.user!.userId,
         })
@@ -276,6 +279,7 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
     entryType: z.enum(['book', 'tax']).optional(),
     entryDate: z.string().optional(),
     description: z.string().nullable().optional(),
+    workpaperRef: z.string().max(20).nullable().optional(),
     lines: z.array(lineSchema).min(2).optional(),
   });
   const result = patchSchema.safeParse(req.body);
@@ -283,7 +287,7 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
     return;
   }
-  const { entryType, entryDate, description, lines } = result.data;
+  const { entryType, entryDate, description, workpaperRef, lines } = result.data;
 
   if (lines) {
     const totalDebit = lines.reduce((s, l) => s + l.debit, 0);
@@ -307,6 +311,7 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
       if (entryType !== undefined && existing.entry_type !== 'trans') headerUpdates.entry_type = entryType;
       if (entryDate !== undefined) headerUpdates.entry_date = entryDate;
       if (description !== undefined) headerUpdates.description = description;
+      if (workpaperRef !== undefined) headerUpdates.workpaper_ref = workpaperRef?.trim() || null;
 
       const [entry] = await trx('journal_entries').where({ id }).update(headerUpdates).returning('*');
       if (!entry) throw new Error('NOT_FOUND');

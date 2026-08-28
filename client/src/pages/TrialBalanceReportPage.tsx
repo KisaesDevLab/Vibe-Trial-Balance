@@ -167,7 +167,7 @@ export function TrialBalanceReportPage() {
   const rows = filterReportableRows((data ?? []).filter((r) => r.is_active));
 
   const handleExport = () => {
-    const header: string[] = ['Account #', 'Account Name', 'Category', 'Tax Line', 'Workpaper Ref'];
+    const header: string[] = ['Account #', 'Account Name', 'Category', 'Tax Line', 'Lead Sheet', 'Workpaper Ref'];
     if (show('priorYear'))    { header.push('PY Dr', 'PY Cr'); }
     if (show('unadjusted'))   { header.push('Unadj Dr', 'Unadj Cr'); }
     if (show('bookAje'))      { header.push('Book AJE Dr', 'Book AJE Cr'); }
@@ -176,7 +176,7 @@ export function TrialBalanceReportPage() {
     if (show('taxAdjusted'))  { header.push('Tax Adj Dr', 'Tax Adj Cr'); }
 
     const dataRows = rows.map((r) => {
-      const row: string[] = [r.account_number, r.account_name, r.category, r.tax_line ?? '', r.workpaper_ref ?? ''];
+      const row: string[] = [r.account_number, r.account_name, r.category, r.tax_line ?? '', r.lead_sheet_code ?? '', r.workpaper_ref ?? ''];
       if (show('priorYear'))    { row.push(String(r.prior_year_debit / 100), String(r.prior_year_credit / 100)); }
       if (show('unadjusted'))   { row.push(String(r.unadjusted_debit / 100), String(r.unadjusted_credit / 100)); }
       if (show('bookAje'))      { row.push(String(r.book_adj_debit / 100), String(r.book_adj_credit / 100)); }
@@ -200,7 +200,7 @@ export function TrialBalanceReportPage() {
   }
 
   const grand = sumRows(rows);
-  const totalColSpan = 3 + (show('priorYear') ? 2 : 0) + (show('unadjusted') ? 2 : 0) + (show('bookAje') ? 2 : 0) + (show('bookAdjusted') ? 2 : 0) + (show('taxAje') ? 2 : 0) + (show('taxAdjusted') ? 2 : 0) + (show('variance') ? 3 : 0);
+  const totalColSpan = 4 + (show('priorYear') ? 2 : 0) + (show('unadjusted') ? 2 : 0) + (show('bookAje') ? 2 : 0) + (show('bookAdjusted') ? 2 : 0) + (show('taxAje') ? 2 : 0) + (show('taxAdjusted') ? 2 : 0) + (show('variance') ? 3 : 0);
 
   return (
     <div className="p-6">
@@ -280,6 +280,7 @@ export function TrialBalanceReportPage() {
               <tr className="bg-gray-50 dark:bg-gray-800/60 border-b border-gray-300 dark:border-gray-600">
                 <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-24 border-r border-gray-200 dark:border-gray-700">Acct #</th>
                 <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700">Account Name</th>
+                <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-14 border-r border-gray-200 dark:border-gray-700">Lead Sheet</th>
                 <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-16 border-r border-gray-200 dark:border-gray-700">WP Ref</th>
                 {show('priorYear') && <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">Prior Year</th>}
                 {show('unadjusted') && <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 border-r border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800">Unadjusted</th>}
@@ -290,7 +291,7 @@ export function TrialBalanceReportPage() {
                 {show('variance') && <th colSpan={3} className="px-2 py-1 text-center text-xs font-semibold text-teal-700 dark:text-teal-400 bg-teal-50 dark:bg-teal-900/20">CY vs PY</th>}
               </tr>
               <tr className="bg-gray-50 dark:bg-gray-800/60 border-b-2 border-gray-400 dark:border-gray-600">
-                <th className="border-r border-gray-200 dark:border-gray-700" /><th className="border-r border-gray-200 dark:border-gray-700" /><th className="border-r border-gray-200 dark:border-gray-700" />
+                <th className="border-r border-gray-200 dark:border-gray-700" /><th className="border-r border-gray-200 dark:border-gray-700" /><th className="border-r border-gray-200 dark:border-gray-700" /><th className="border-r border-gray-200 dark:border-gray-700" />
                 {show('priorYear') && <><th className={`${thCls} bg-gray-50 dark:bg-gray-800/60`}>Dr</th><th className={`${thCls} bg-gray-50 dark:bg-gray-800/60 border-r border-gray-300 dark:border-gray-600`}>Cr</th></>}
                 {show('unadjusted') && <><th className={thCls}>Dr</th><th className={`${thCls} border-r border-gray-300 dark:border-gray-600`}>Cr</th></>}
                 {show('bookAje') && <><th className={`${thCls} bg-blue-50 dark:bg-blue-900/20`}>Dr</th><th className={`${thCls} bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600`}>Cr</th></>}
@@ -328,6 +329,7 @@ export function TrialBalanceReportPage() {
                               ))}
                             </span>
                           </td>
+                          <td className="px-2 py-1 text-xs font-mono text-gray-500 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700" title={r.lead_sheet_name ?? undefined}>{r.lead_sheet_code ?? ''}</td>
                           <td className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700">{r.workpaper_ref ?? ''}</td>
                           {show('priorYear') && <><td className={`${tdCls} bg-gray-50/50 dark:bg-gray-800/30 text-gray-500 dark:text-gray-400`}>{fmt(r.prior_year_debit)}</td><td className={`${tdCls} bg-gray-50/50 dark:bg-gray-800/30 text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600`}>{fmt(r.prior_year_credit)}</td></>}
                           {show('unadjusted') && <><td className={tdCls}>{fmt(r.unadjusted_debit)}</td><td className={`${tdCls} border-r border-gray-300 dark:border-gray-600`}>{fmt(r.unadjusted_credit)}</td></>}
@@ -340,7 +342,7 @@ export function TrialBalanceReportPage() {
                       );
                     })}
                     <tr key={`${cat}-tot`} className="border-t border-gray-300 dark:border-gray-600">
-                      <td className="px-2 py-1 border-r border-gray-200 dark:border-gray-700" /><td className={`${tdTotalCls} text-left`}>Total {CAT_LABEL[cat]}</td><td className="px-2 border-r border-gray-200 dark:border-gray-700 border-t border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/60" />
+                      <td className="px-2 py-1 border-r border-gray-200 dark:border-gray-700" /><td className={`${tdTotalCls} text-left`}>Total {CAT_LABEL[cat]}</td><td className="px-2 border-r border-gray-200 dark:border-gray-700 border-t border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/60" /><td className="px-2 border-r border-gray-200 dark:border-gray-700 border-t border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/60" />
                       {show('priorYear') && <><td className={`${tdTotalCls} bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400`}>{fmtTotal(tot.pyd)}</td><td className={`${tdTotalCls} bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(tot.pyc)}</td></>}
                       {show('unadjusted') && <><td className={tdTotalCls}>{fmtTotal(tot.ud)}</td><td className={`${tdTotalCls} border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(tot.uc)}</td></>}
                       {show('bookAje') && <><td className={`${tdTotalCls} bg-blue-50 dark:bg-blue-900/20`}>{fmtTotal(tot.bad)}</td><td className={`${tdTotalCls} bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(tot.bac)}</td></>}
@@ -355,7 +357,7 @@ export function TrialBalanceReportPage() {
               })}
               {/* Grand Total */}
               <tr>
-                <td className="px-2 border-r border-gray-200 dark:border-gray-700" /><td className={`${tdGrandCls} text-left`}>Grand Total</td><td className="px-2 border-r border-gray-200 dark:border-gray-700 border-t-2 border-gray-700 dark:border-gray-500 bg-gray-100 dark:bg-gray-700" />
+                <td className="px-2 border-r border-gray-200 dark:border-gray-700" /><td className={`${tdGrandCls} text-left`}>Grand Total</td><td className="px-2 border-r border-gray-200 dark:border-gray-700 border-t-2 border-gray-700 dark:border-gray-500 bg-gray-100 dark:bg-gray-700" /><td className="px-2 border-r border-gray-200 dark:border-gray-700 border-t-2 border-gray-700 dark:border-gray-500 bg-gray-100 dark:bg-gray-700" />
                 {show('priorYear') && <><td className={`${tdGrandCls} bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400`}>{fmtTotal(grand.pyd)}</td><td className={`${tdGrandCls} bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(grand.pyc)}</td></>}
                 {show('unadjusted') && <><td className={tdGrandCls}>{fmtTotal(grand.ud)}</td><td className={`${tdGrandCls} border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(grand.uc)}</td></>}
                 {show('bookAje') && <><td className={`${tdGrandCls} bg-blue-50 dark:bg-blue-900/20`}>{fmtTotal(grand.bad)}</td><td className={`${tdGrandCls} bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600`}>{fmtTotal(grand.bac)}</td></>}

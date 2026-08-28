@@ -210,6 +210,13 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
       }
 
       // Copy tickmark assignments
+      // Lead sheets need no copy step here. Membership lives on the
+      // chart_of_accounts row, which is client-scoped and shared across
+      // periods, so it carries forward on its own. Sign-offs are keyed by
+      // period, so the new period correctly starts unsigned — evidence must
+      // never roll forward. keepWorkpaperRefs deliberately does NOT clear
+      // lead_sheet_id either: a W/P ref is a per-year annotation, a lead sheet
+      // is structure.
       const tbTickmarks = await trx('tb_tickmarks').where({ period_id: sourceId });
       if (tbTickmarks.length > 0) {
         await trx('tb_tickmarks').insert(

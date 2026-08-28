@@ -21,6 +21,8 @@ export interface JournalEntry {
   entry_type: 'book' | 'tax' | 'trans';
   entry_date: string;
   description: string | null;
+  /** Workpaper supporting this entry — printed on the AJE listing. */
+  workpaper_ref: string | null;
   is_recurring: boolean;
   created_by: number | null;
   created_at: string;
@@ -33,6 +35,7 @@ export interface JEInput {
   entryType: 'book' | 'tax';
   entryDate: string;
   description?: string;
+  workpaperRef?: string;
   isRecurring?: boolean;
   lines: { accountId: number; debit: number; credit: number }[];
 }
@@ -69,6 +72,7 @@ export const updateJournalEntry = (
     entryType?: 'book' | 'tax';
     entryDate?: string;
     description?: string | null;
+    workpaperRef?: string | null;
     lines?: { accountId: number; debit: number; credit: number }[];
   },
 ) =>

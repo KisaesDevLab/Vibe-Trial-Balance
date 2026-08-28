@@ -27,6 +27,8 @@ export interface JournalEntry {
   entry_type: string;
   entry_date: string;
   description: string | null;
+  /** Supporting workpaper, set in the app — read-only over MCP for now. */
+  workpaper_ref: string | null;
   lines: Array<{ account_id: number; account_number: string; account_name: string; debit: number; credit: number }>;
 }
 

@@ -49,6 +49,8 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
 - Knex.js for all DB queries and migrations (JS migration files for Windows compat)
 - TanStack Query for server state in React, Zustand only for UI state
 - Adjusted balances are NEVER stored, always computed via DB view
+  (authoritative `v_adjusted_trial_balance` definition: `migrations/20260828000002_tb_view_lead_sheet.js` —
+  a migration adding a column must copy THAT SQL, and must LEFT JOIN or it drops unassigned accounts)
 - **Dormant accounts are hidden on reports:** an account with no beginning balance (`prior_year_*`),
   no activity (`unadjusted_*`, `trans_adj_*`, `book_adj_*`, `tax_adj_*` all zero) and therefore no
   ending balance is dropped from every report view, PDF and export. Shared predicate:
@@ -162,6 +164,88 @@ All planned phases complete. App is feature-complete.
   prepends a generated Table of Contents (`generateWorkpaperTocPdf`) listing each selected report and
   its page range in the merged file; the TOC counts itself as page 1, so the route rebuilds it if its
   own length changes the numbers.
+- **Lead Sheets** (`lead_sheets` + `chart_of_accounts.lead_sheet_id` + `lead_sheet_signoffs`).
+  One lead sheet per account; membership **persists across periods** because it lives on the COA row,
+  so roll-forward carries it with no code and `keepWorkpaperRefs: false` must NOT clear it (a W/P ref
+  is a per-year annotation, a lead sheet is structure). Seeded A–O from `DEFAULT_LEAD_SHEETS` in
+  `server/src/lib/leadSheets.ts`, but **letters are data, not code** — users rename/reorder/delete/add
+  them and `suggestLeadSheet()` returns a *code* the route resolves against the client's own rows.
+  That constant's array order is **display** order; a separate `specificity` field drives
+  first-match-wins, because this app's `category` has five values where MyBooks had nine (K/N share
+  `revenue`; L/M/O share `expenses`). Signals are category + account-name keywords + the
+  **leading digit** of the account number (never a numeric range — templates are 5-digit, seeds are
+  4-digit). Two traps pinned by tests: rule O must not read `subcategory` (hundreds of template
+  accounts carry `subcategory = "Other Expenses"` while being ordinary operating expenses), and its
+  name test must be **anchored** (`Car & Truck Other Expenses` is an operating expense; `Other
+  Expenses` is not). Auto-assign is **re-runnable** with a preview/confirm modal (default
+  `unassigned_only`, so a re-run never stomps a hand-set assignment), not MyBooks' seed-once.
+  `copy-from-client` remaps lead sheets **by code**, never by id.
+  Sign-off: `preparer`/`reviewer`, **anyone may sign either line — no role gate, no order gate, no
+  preparer→reviewer cascade**; a partial unique index `(lead_sheet_id, period_id, role) WHERE
+  invalidated_at IS NULL` enforces one live signature per slot and unsign is soft. Staleness is a
+  **SHA-256 content hash** of the members' raw TB amounts (`leadSheetBalanceStamp`), not a timestamp —
+  a timestamp misses JE deletion (which *lowers* max(updated_at)) and goes false-positive on restore.
+  Every stamp producer must use `loadStampRows()` in `lib/leadSheetStamp.ts` (`is_active` only, **no**
+  `whereHasActivity`) or the PDF and the screen will disagree. Sign-off **warns, never blocks** —
+  balances stay editable and the sheet just goes STALE. The Lead Sheets PDF sits between
+  `pdf-wp-index` and `pdf-tb` in both binder arrays.
+- **Document storage (pluggable: local disk or Backblaze B2)** — `server/src/lib/storage/`
+  (`paths.ts` / `keys.ts` / `localDriver.ts` / `b2Driver.ts` / `sentinel.ts` / `index.ts`), ported from
+  Vibe Time & Billing. Resolution is **settings row > env > local**, memoised like `mailService.ts`
+  with `invalidateStorageCache()` — credentials are NEVER written into `process.env`. B2 being
+  misconfigured is **not** a boot failure (it would brick an appliance over an optional feature): it
+  surfaces as `configError`, writes fail 503, reads of existing rows still work.
+  **`getStorageDriverFor(backend)` is load-bearing** — reads route by *the row's* `storage_backend`,
+  writes by *current* config, so a B2 row keeps working after an admin flips back to local and a
+  legacy row keeps working after B2 is switched on. A row with `object_key IS NULL` is LEGACY and is
+  read from its absolute `file_path`; never rewrite those implicitly.
+  B2 quirks that are load-bearing, each commented at its site: `CopySource` must encode **each path
+  segment separately** (`encodeURIComponent` turns `/` into `%2F` and every nested key 404s);
+  HEAD on a missing key throws; ETags come quoted and are **not** content hashes (hence the separate
+  `sha256` column); the health probe leads with `list()` because a HEAD carries no response body and
+  the SDK degrades to a bare `UnknownError`. Operators must set the bucket lifecycle to
+  "keep only the last version" — that is B2-native, not settable over S3.
+- **Client ↔ folder linking with sentinels** (`client_folder_links` + `lib/clientFolders.ts`).
+  Linking is **explicit**: no auto-create, and an upload for an unlinked client is refused with
+  `CLIENT_NOT_LINKED`. Identity lives in `<folder>/_Vibe/client.json`, **not the path**, which is what
+  lets a folder renamed in the B2 console be re-bound by Verify instead of orphaning every key
+  (`clients.name` has no unique index, so the sentinel is also what tells two same-named clients
+  apart). `install_id` replaces the reference's `firm_id` — this app is single-tenant. `client_id`
+  and `install_id` are immutable through `updateSentinel` (type + runtime throw + re-pin).
+  **Storage write comes BEFORE the DB commit** everywhere: a failed DB write leaves an orphan
+  sentinel a later verify adopts; the reverse loses the binding. Migration `20260828000004`
+  **backfills a legacy link for every existing client**, or requiring a link would make every current
+  client un-uploadable on upgrade.
+  Key layout is `<prefix>/<Client Name (id)>/<Section>/FY<year>/<file>` — section BEFORE year. The
+  fiscal year comes from `periods.end_date` adjusted by `clients.tax_year_end`, never from
+  `period_name` (free text a user can rename). Sections come from the editable
+  `storage_folder_template`, with partial unique indexes enforcing exactly one workpaper target and
+  one upload default. Keys are STORED, never re-derived, so renames move nothing.
+- **Lead sheet attachments** (`lead_sheet_attachments`) — auto-named `A001`, `A002`, `B001`,
+  **period-scoped** so a 12/31 file never surfaces in a 7/31 package. `UNIQUE (period_id, ref_code)`
+  is the allocator's source of truth, not the SELECT; a 23505 triggers a compensating object delete
+  and a retry. **Deleting an attachment leaves a TOMBSTONE** (`deleted_at`, `document_id` SET NULL) so
+  its ref code is never reissued — a reissued code would collide with one already printed in a
+  binder. `nextRefCode` therefore counts tombstones too. PDF, PNG and JPEG are accepted; images are
+  converted to PDF on upload so every attachment stays stampable and mergeable.
+  **Tickmark stamps are BURNED INTO the stored PDF**, not applied at download, because the bucket is
+  browsable and an archive whose marks live only in the app is not an archive. The accepted
+  consequence is that a stamp **cannot be removed** — the viewer confirms before placing and offers no
+  delete. Only the NEW mark is drawn each time (re-drawing would double-ink). **pdf-lib's
+  StandardFonts cannot encode the seeded `✓` (U+2713) and throw**, so a real TTF is embedded via
+  `@pdf-lib/fontkit`, reusing the `ROBOTO_MEDIUM` buffer exported from `PdfTemplateService` — there is
+  a test pinning that StandardFonts genuinely throws on `✓` but not on `†`.
+  The workpaper binder can optionally merge attachments (`?includeAttachments=1`, default off), and
+  `POST .../workpaper-merged/save` writes the same bytes into the client's workpaper folder.
+  `buildWorkpaperPackage` in `lib/workpaperPackage.ts` is the single path both use.
+  **pdfjs-dist is double-lazy** (React.lazy + dynamic import inside the effect) — a top-level import
+  would add ~1 MB to the initial bundle. Its `?url` worker module is a `.js`, which is what lets
+  `deploy/web-entrypoint.sh` rewrite the `__VIBE_BASE_PATH__` sentinel in it.
+- **Backups carry rows, not bytes.** `client_documents` was previously missing from backups entirely
+  (it appeared only in `deleteClientData`). On restore, a document row whose client id CHANGED has its
+  `object_key`/`bucket`/`file_path` nulled and a `client_folder_links` row is skipped altogether —
+  otherwise a restored-as-new client would claim the original's objects and folder, and deleting
+  either client's copy would destroy the other's bytes.
 - Variance notes (per account per period, TB Report inline editing)
 - QA Round 1 & 2: 30-item UX audit — period lock enforcement on TB grid, batch op toasts,
   reopen reconciliation feedback, engagement double-submit prevention, FS comparative layout,

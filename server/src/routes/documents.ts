@@ -10,14 +10,20 @@
  * DELETE /api/v1/documents/:id                     -> delete file + DB row
  * PUT    /api/v1/documents/:id/link                -> link to account or JE
  */
-import { Router, Response } from 'express';
+import { Router, Response, NextFunction } from 'express';
 import multer from 'multer';
-import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
+import { logAudit } from '../lib/periodGuard';
+import {
+  storeDocument,
+  openDocument,
+  deleteDocument as removeDocument,
+  defaultUploadSection,
+  type DocumentRow,
+} from '../lib/documentStore';
 
 export const documentsCollectionRouter = Router({ mergeParams: true });
 export const documentsItemRouter = Router({ mergeParams: true });
@@ -49,21 +55,57 @@ const BLOCKED_EXTENSIONS = new Set([
   '.scr', '.pif', '.vbs', '.vbe', '.wsf', '.wsh',
 ]);
 
+export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+  limits: { fileSize: MAX_DOCUMENT_BYTES },
 });
 
+/**
+ * Wrap multer so its rejections become 400s with a readable reason. Left
+ * unwrapped, an oversize file surfaces as an unhandled 500.
+ */
+function uploadSingle(field: string) {
+  return (req: AuthRequest, res: Response, next: NextFunction): void => {
+    upload.single(field)(req, res, (err: unknown) => {
+      if (!err) { next(); return; }
+      const e = err as { code?: string; message?: string };
+      const message = e.code === 'LIMIT_FILE_SIZE'
+        ? `File is too large. The limit is ${Math.round(MAX_DOCUMENT_BYTES / (1024 * 1024))} MB.`
+        : e.message ?? 'Upload failed.';
+      res.status(400).json({ data: null, error: { code: e.code ?? 'UPLOAD_FAILED', message } });
+    });
+  };
+}
+
+/**
+ * Cheap magic-byte check: the declared MIME type is attacker-controlled, and a
+ * mismatch between extension, type and content is the classic upload dodge.
+ * Only formats with an unambiguous signature are checked; anything else passes.
+ */
+function contentMatchesType(mime: string, buf: Buffer): boolean {
+  const starts = (sig: number[]): boolean => sig.every((b, i) => buf[i] === b);
+  if (mime === 'application/pdf') return buf.subarray(0, 5).toString('latin1') === '%PDF-';
+  if (mime === 'image/png') return starts([0x89, 0x50, 0x4e, 0x47]);
+  if (mime === 'image/jpeg') return starts([0xff, 0xd8, 0xff]);
+  if (mime === 'image/gif') return buf.subarray(0, 3).toString('latin1') === 'GIF';
+  // OOXML containers are ZIPs.
+  if (mime.startsWith('application/vnd.openxmlformats-')) return starts([0x50, 0x4b, 0x03, 0x04]);
+  return true;
+}
+
+/** StorageError carries its own status; anything else is a genuine 500. */
+function handleDocError(err: unknown, res: Response): void {
+  const e = err as { name?: string; code?: string; status?: number; message?: string };
+  if (e?.name === 'StorageError') {
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'STORAGE_ERROR', message: e.message ?? 'Storage error' } });
+    return;
+  }
+  sendServerError(res, err, 'documents');
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-function getUploadsDir(clientId: number): string {
-  // server/uploads/{clientId}/
-  return path.resolve(__dirname, '../../uploads', String(clientId));
-}
-
-function ensureDir(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true });
-}
 
 // ─── GET /api/v1/clients/:clientId/documents ─────────────────────────────────
 
@@ -79,6 +121,7 @@ documentsCollectionRouter.get('/', async (req: AuthRequest, res: Response): Prom
       .leftJoin('journal_entries as je', 'je.id', 'd.linked_journal_entry_id')
       .leftJoin('app_users as u', 'u.id', 'd.uploaded_by')
       .where('d.client_id', clientId)
+      .whereNull('d.deleted_at')
       .select(
         'd.id',
         'd.client_id',
@@ -89,6 +132,10 @@ documentsCollectionRouter.get('/', async (req: AuthRequest, res: Response): Prom
         'd.linked_journal_entry_id',
         'd.uploaded_by',
         'd.uploaded_at',
+        'd.period_id',
+        'd.section',
+        'd.storage_backend',
+        'd.object_key',
         'coa.account_number',
         'coa.account_name',
         'je.entry_number as je_entry_number',
@@ -105,7 +152,7 @@ documentsCollectionRouter.get('/', async (req: AuthRequest, res: Response): Prom
 
 documentsCollectionRouter.post(
   '/',
-  upload.single('file'),
+  uploadSingle('file'),
   async (req: AuthRequest, res: Response): Promise<void> => {
     const clientId = Number(req.params.clientId);
     if (isNaN(clientId)) {
@@ -127,34 +174,38 @@ documentsCollectionRouter.post(
       return;
     }
 
+    if (!contentMatchesType(req.file.mimetype, req.file.buffer)) {
+      res.status(400).json({ data: null, error: { code: 'CONTENT_MISMATCH', message: `The file content does not match its declared type (${req.file.mimetype}).` } });
+      return;
+    }
+
     try {
-      const uploadsDir = getUploadsDir(clientId);
-      ensureDir(uploadsDir);
+      // periodId and section are optional; the store falls back to the folder
+      // template's default upload section.
+      const periodId = req.body?.periodId ? Number(req.body.periodId) : null;
+      const section = typeof req.body?.section === 'string' && req.body.section
+        ? req.body.section
+        : await defaultUploadSection();
 
-      // Sanitize original name: replace spaces/special chars
-      const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-      // Use timestamp + random suffix so two concurrent uploads of the same
-      // filename in the same millisecond can't collide and silently clobber.
-      const uniqueSuffix = crypto.randomBytes(6).toString('hex');
-      const storedFilename = `${Date.now()}_${uniqueSuffix}_${safeName}`;
-      const filePath = path.join(uploadsDir, storedFilename);
+      const doc = await storeDocument({
+        clientId,
+        periodId: periodId && !isNaN(periodId) ? periodId : null,
+        section,
+        filename: req.file.originalname,
+        mimeType: req.file.mimetype,
+        buffer: req.file.buffer,
+        uploadedBy: req.user?.userId ?? null,
+      });
 
-      await fs.promises.writeFile(filePath, req.file.buffer);
-
-      const [doc] = await db('client_documents')
-        .insert({
-          client_id: clientId,
-          filename: req.file.originalname,
-          file_path: filePath,
-          file_size: req.file.size,
-          file_type: req.file.mimetype,
-          uploaded_by: req.user?.userId ?? null,
-        })
-        .returning('*');
+      await logAudit({
+        userId: req.user?.userId ?? null, periodId: null, clientId,
+        entityType: 'client_document', entityId: doc.id as number, action: 'create',
+        description: `Uploaded document "${req.file.originalname}"`,
+      });
 
       res.status(201).json({ data: doc, error: null });
     } catch (err: unknown) {
-      sendServerError(res, err, 'documents');
+      handleDocError(err, res);
     }
   },
 );
@@ -174,32 +225,16 @@ documentsItemRouter.get('/:id/download', async (req: AuthRequest, res: Response)
       return;
     }
 
-    // Resolve the stored path against the uploads root and reject anything
-    // that escapes it. file_path in the DB is historical data — treat it as
-    // untrusted.
-    const uploadsRoot = path.resolve(__dirname, '../../uploads');
-    const resolvedPath = path.resolve(doc.file_path as string);
-    if (!resolvedPath.startsWith(uploadsRoot + path.sep) && resolvedPath !== uploadsRoot) {
-      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Path outside uploads root' } });
-      return;
-    }
-
-    if (!fs.existsSync(resolvedPath)) {
-      res.status(404).json({ data: null, error: { code: 'FILE_MISSING', message: 'File not found on disk' } });
-      return;
-    }
-
-    // Stream rather than buffer — a 25 MB file loaded into memory per concurrent
-    // download is fine on a dev box but bleeds the Pi's heap under load.
-    const stat = fs.statSync(resolvedPath);
-    res.setHeader('Content-Type', doc.file_type as string);
+    // Backend and era are the store's problem: a legacy row reads from its
+    // absolute disk path, a driver-era row from local or B2 by its own backend.
+    const { body, sizeBytes } = await openDocument(doc as DocumentRow);
+    res.setHeader('Content-Type', (doc.file_type as string) ?? 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(doc.filename as string)}"`);
-    res.setHeader('Content-Length', stat.size);
-    const stream = fs.createReadStream(resolvedPath);
-    stream.on('error', (streamErr) => sendServerError(res, streamErr, 'documents'));
-    stream.pipe(res);
+    if (sizeBytes) res.setHeader('Content-Length', sizeBytes);
+    body.on('error', (streamErr) => sendServerError(res, streamErr, 'documents'));
+    body.pipe(res);
   } catch (err: unknown) {
-    sendServerError(res, err, 'documents');
+    handleDocError(err, res);
   }
 });
 
@@ -227,18 +262,20 @@ documentsItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Prom
       return;
     }
 
-    // Guard the on-disk unlink against a poisoned file_path — same envelope
-    // as the download handler.
-    const uploadsRoot = path.resolve(__dirname, '../../uploads');
-    const resolvedPath = path.resolve(doc.file_path as string);
-    if ((resolvedPath.startsWith(uploadsRoot + path.sep) || resolvedPath === uploadsRoot) && fs.existsSync(resolvedPath)) {
-      fs.unlinkSync(resolvedPath);
-    }
+    // Storage first, then the row: if the object cannot be removed, the row
+    // must not be hidden, or an admin believes the file is gone while it still
+    // exists and still bills.
+    await removeDocument(doc as DocumentRow);
 
-    await db('client_documents').where({ id: docId }).delete();
+    await logAudit({
+      userId: req.user?.userId ?? null, periodId: null, clientId: doc.client_id as number,
+      entityType: 'client_document', entityId: docId, action: 'delete',
+      description: `Deleted document "${doc.filename}"`,
+    });
+
     res.json({ data: { id: docId }, error: null });
   } catch (err: unknown) {
-    sendServerError(res, err, 'documents');
+    handleDocError(err, res);
   }
 });
 

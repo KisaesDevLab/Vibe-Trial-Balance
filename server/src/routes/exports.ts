@@ -23,6 +23,7 @@ import { PdfTemplateService } from '../pdf/PdfTemplateService';
 import type { Content, TableCell } from 'pdfmake/interfaces';
 import { whereHasActivity } from '../lib/tbActivity';
 import { categoryNet } from '../lib/accounting';
+import { parseUnitParam, unitAccountNumber, withUnitColumn } from '../lib/exportUnit';
 
 export const exportsRouter = Router({ mergeParams: true });
 exportsRouter.use(authMiddleware);
@@ -430,21 +431,24 @@ exportsRouter.get('/ultratax', async (req: AuthRequest, res: Response): Promise<
     const runtimeOverrides = parseOverridesParam(req.query.overrides);
     if (consolidateIds.size > 0) rows = consolidateRows(rows, consolidateIds, runtimeOverrides);
 
+    const unitOpt = parseUnitParam(req.query as Record<string, unknown>);
+
     const data = rows.map((r) => ({
-      acct:    r.account_number,
+      unit:    unitOpt?.unit ?? '',
+      acct:    unitAccountNumber(r.account_number, unitOpt),
       name:    r.account_name,
       code:    r.software_code ?? '',
       bookAmt: centsToAmt(Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)),
       taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
     }));
 
-    const buffer = await buildExcel('UltraTax CS Export', [
+    const buffer = await buildExcel('UltraTax CS Export', withUnitColumn([
       { header: 'AccountNumber',    key: 'acct',    width: 18 },
       { header: 'AccountName',      key: 'name',    width: 40 },
       { header: 'TaxCode',          key: 'code',    width: 18 },
       { header: 'Book Basis Amt',   key: 'bookAmt', width: 18, numFmt: '#,##0.00' },
       { header: 'Tax Basis Amt',    key: 'taxAmt',  width: 18, numFmt: '#,##0.00' },
-    ], data);
+    ], unitOpt), data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="ultratax-export-${periodId}.xlsx"`);
@@ -477,15 +481,17 @@ exportsRouter.get('/cch', async (req: AuthRequest, res: Response): Promise<void>
     wb.creator = 'Trial Balance App';
     wb.created = new Date();
 
+    const unitOpt = parseUnitParam(req.query as Record<string, unknown>);
+
     const ws = wb.addWorksheet('CCH Axcess Export');
-    ws.columns = [
+    ws.columns = withUnitColumn([
       { header: 'AccountNumber',  key: 'acct',    width: 18 },
       { header: 'AccountName',    key: 'name',    width: 40 },
       { header: 'CCHCode',        key: 'code',    width: 18 },
       { header: 'Description',    key: 'desc',    width: 40 },
       { header: 'Book Basis Amt', key: 'bookAmt', width: 18 },
       { header: 'Tax Basis Amt',  key: 'taxAmt',  width: 18 },
-    ];
+    ], unitOpt);
 
     // Bold header
     ws.getRow(1).font = { bold: true };
@@ -494,7 +500,8 @@ exportsRouter.get('/cch', async (req: AuthRequest, res: Response): Promise<void>
 
     for (const r of rows) {
       const row = ws.addRow({
-        acct:    sanitizeCell(r.account_number),
+        unit:    unitOpt?.unit ?? '',
+        acct:    sanitizeCell(unitAccountNumber(r.account_number, unitOpt)),
         name:    sanitizeCell(r.account_name),
         code:    sanitizeCell(r.software_code ?? ''),
         desc:    sanitizeCell(r.software_description ?? ''),
@@ -536,19 +543,25 @@ exportsRouter.get('/lacerte', async (req: AuthRequest, res: Response): Promise<v
     const runtimeOverrides = parseOverridesParam(req.query.overrides);
     if (consolidateIds.size > 0) rows = consolidateRows(rows, consolidateIds, runtimeOverrides);
 
+    // This layout carries no account number, so prefix/suffix has nothing to
+    // rewrite — the LineCode is a tax line and mangling it would break the
+    // import. The unit rides in its own column here regardless of mode.
+    const unitOpt = parseUnitParam(req.query as Record<string, unknown>);
+
     const data = rows.map((r) => ({
+      unit:    unitOpt?.unit ?? '',
       code:    r.software_code ?? '',
       name:    r.account_name,
       bookAmt: centsToAmt(Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)),
       taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
     }));
 
-    const buffer = await buildExcel('Lacerte Export', [
+    const buffer = await buildExcel('Lacerte Export', withUnitColumn([
       { header: 'LineCode',         key: 'code',    width: 18 },
       { header: 'Description',      key: 'name',    width: 40 },
       { header: 'Book Basis Amt',   key: 'bookAmt', width: 18, numFmt: '#,##0.00' },
       { header: 'Tax Basis Amt',    key: 'taxAmt',  width: 18, numFmt: '#,##0.00' },
-    ], data);
+    ], unitOpt), data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="lacerte-export-${periodId}.xlsx"`);
@@ -577,19 +590,25 @@ exportsRouter.get('/gosystem', async (req: AuthRequest, res: Response): Promise<
     const runtimeOverrides = parseOverridesParam(req.query.overrides);
     if (consolidateIds.size > 0) rows = consolidateRows(rows, consolidateIds, runtimeOverrides);
 
+    // This layout carries no account number, so prefix/suffix has nothing to
+    // rewrite — the LineCode is a tax line and mangling it would break the
+    // import. The unit rides in its own column here regardless of mode.
+    const unitOpt = parseUnitParam(req.query as Record<string, unknown>);
+
     const data = rows.map((r) => ({
+      unit:    unitOpt?.unit ?? '',
       code:    r.software_code ?? '',
       name:    r.account_name,
       bookAmt: centsToAmt(Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0)),
       taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
     }));
 
-    const buffer = await buildExcel('GoSystem Tax RS Export', [
+    const buffer = await buildExcel('GoSystem Tax RS Export', withUnitColumn([
       { header: 'LineCode',         key: 'code',    width: 18 },
       { header: 'Description',      key: 'name',    width: 40 },
       { header: 'Book Basis Amt',   key: 'bookAmt', width: 18, numFmt: '#,##0.00' },
       { header: 'Tax Basis Amt',    key: 'taxAmt',  width: 18, numFmt: '#,##0.00' },
-    ], data);
+    ], unitOpt), data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="gosystem-export-${periodId}.xlsx"`);
@@ -618,8 +637,11 @@ exportsRouter.get('/generic', async (req: AuthRequest, res: Response): Promise<v
     const runtimeOverrides = parseOverridesParam(req.query.overrides);
     if (consolidateIds.size > 0) rows = consolidateRows(rows, consolidateIds, runtimeOverrides);
 
+    const unitOpt = parseUnitParam(req.query as Record<string, unknown>);
+
     const data = rows.map((r) => ({
-      acct:    r.account_number,
+      unit:    unitOpt?.unit ?? '',
+      acct:    unitAccountNumber(r.account_number, unitOpt),
       name:    r.account_name,
       code:    r.tax_code ?? '',
       desc:    r.tax_description ?? '',
@@ -627,14 +649,14 @@ exportsRouter.get('/generic', async (req: AuthRequest, res: Response): Promise<v
       taxAmt:  centsToAmt(Number(r.tax_adjusted_debit ?? 0) - Number(r.tax_adjusted_credit ?? 0)),
     }));
 
-    const buffer = await buildExcel('Generic Export', [
+    const buffer = await buildExcel('Generic Export', withUnitColumn([
       { header: 'AccountNumber',  key: 'acct',    width: 18 },
       { header: 'AccountName',    key: 'name',    width: 40 },
       { header: 'TaxCode',        key: 'code',    width: 18 },
       { header: 'TaxDescription', key: 'desc',    width: 40 },
       { header: 'Book Basis Amt', key: 'bookAmt', width: 18, numFmt: '#,##0.00' },
       { header: 'Tax Basis Amt',  key: 'taxAmt',  width: 18, numFmt: '#,##0.00' },
-    ], data);
+    ], unitOpt), data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="generic-export-${periodId}.xlsx"`);

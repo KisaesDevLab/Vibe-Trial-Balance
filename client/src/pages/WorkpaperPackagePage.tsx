@@ -4,9 +4,9 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useUIStore, useAuthStore } from '../store/uiStore';
+import { useUIStore, useAuthStore, pushToast } from '../store/uiStore';
 import { getTrialBalance, TBRow } from '../api/trialBalance';
-import { downloadPdf, pdfReports } from '../api/pdfReports';
+import { downloadPdf, pdfReports, saveWorkpaperPackage } from '../api/pdfReports';
 import { getCashFlow } from '../api/cashFlow';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
@@ -303,6 +303,7 @@ interface PdfReportSection {
 // the merged PDF's table of contents prints the server-side labels.
 const PDF_REPORT_SECTIONS: PdfReportSection[] = [
   { id: 'pdf-wp-index',     label: 'Workpaper Index (PDF)',       url: (id) => pdfReports.workpaperIndex(id),  filename: (id) => `workpaper-index-${id}.pdf` },
+  { id: 'pdf-lead-sheets',  label: 'Lead Sheets (PDF)',           url: (id) => pdfReports.leadSheets(id),      filename: (id) => `lead-sheets-${id}.pdf` },
   { id: 'pdf-tb',           label: 'Trial Balance (PDF)',         url: (id) => pdfReports.trialBalance(id),    filename: (id) => `trial-balance-${id}.pdf` },
   { id: 'pdf-is',           label: 'Income Statement (PDF)',      url: (id) => pdfReports.incomeStatement(id), filename: (id) => `income-statement-${id}.pdf` },
   { id: 'pdf-bs',           label: 'Balance Sheet (PDF)',         url: (id) => pdfReports.balanceSheet(id),    filename: (id) => `balance-sheet-${id}.pdf` },
@@ -329,6 +330,10 @@ export function WorkpaperPackagePage() {
   const [showPreview, setShowPreview] = useState(false);
   const [pdfDownloading, setPdfDownloading] = useState(false);
   const [pdfErrors, setPdfErrors] = useState<string[]>([]);
+  // Off by default: the everyday binder stays small, and the self-contained
+  // archive version is a deliberate choice.
+  const [includeAttachments, setIncludeAttachments] = useState(false);
+  const [savingToDocs, setSavingToDocs] = useState(false);
 
   const { data: clientsData } = useQuery({ queryKey: ['clients'], queryFn: async () => { const r = await listClients(); return r.data ?? []; }, enabled: !!selectedClientId });
   const { data: periodsData  } = useQuery({
@@ -492,7 +497,7 @@ export function WorkpaperPackagePage() {
             try {
               const reportIds = includedPdfSections.map(s => s.id);
               await downloadPdf(
-                pdfReports.workpaperMerged(selectedPeriodId, reportIds),
+                pdfReports.workpaperMerged(selectedPeriodId, reportIds, includeAttachments),
                 `workpaper-package-${selectedPeriodId}.pdf`,
                 token,
               );
@@ -506,9 +511,45 @@ export function WorkpaperPackagePage() {
         >
           {pdfDownloading ? 'Merging…' : 'Merge into Single PDF'}
         </button>
+        <button
+          onClick={async () => {
+            if (!selectedPeriodId || includedPdfSections.length === 0) return;
+            setSavingToDocs(true);
+            setPdfErrors([]);
+            const res = await saveWorkpaperPackage(
+              selectedPeriodId,
+              includedPdfSections.map((s) => s.id),
+              includeAttachments,
+            );
+            setSavingToDocs(false);
+            if (res.error) { setPdfErrors([res.error.message]); return; }
+            const skipped = res.data?.skippedAttachments ?? [];
+            pushToast(
+              skipped.length > 0
+                ? `Saved "${res.data!.filename}" — ${skipped.length} attachment(s) skipped as unreadable.`
+                : `Saved "${res.data!.filename}" to Documents.`,
+              skipped.length > 0 ? 'info' : 'success',
+            );
+          }}
+          disabled={savingToDocs || pdfDownloading || includedPdfSections.length === 0}
+          className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
+        >
+          {savingToDocs ? 'Saving…' : 'Save to Documents'}
+        </button>
+        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input
+            type="checkbox"
+            checked={includeAttachments}
+            onChange={(e) => setIncludeAttachments(e.target.checked)}
+            className="rounded border-gray-300 dark:border-gray-600"
+          />
+          Include supporting documents
+        </label>
         <p className="basis-full text-xs text-gray-500 dark:text-gray-400">
           The merged PDF opens with a table of contents listing each selected report and the page it
-          starts on, in the order shown above.
+          starts on, in the order shown above. With supporting documents included, each lead sheet's
+          attachments follow it, listed by reference code. “Save to Documents” files the same PDF in
+          the client's workpaper folder instead of downloading it.
         </p>
         {pdfErrors.length > 0 && (
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 text-xs px-3 py-2 rounded space-y-1">
