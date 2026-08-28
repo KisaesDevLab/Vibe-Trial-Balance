@@ -12,8 +12,12 @@ import {
   taxSoftwareExportUrl,
   getConsolSettings,
   saveConsolSettings,
+  previewUnitAccountNumber,
+  SOFTWARE_HAS_ACCOUNT_NUMBER,
   type TaxSoftware,
   type TaxCodeInUse,
+  type UnitMode,
+  type UnitOption,
 } from '../api/exports';
 
 const SOFTWARE_OPTIONS: { value: TaxSoftware; label: string }[] = [
@@ -50,6 +54,20 @@ export function ExportsPage() {
   const { selectedPeriodId } = useUIStore();
 
   const [software, setSoftware] = useState<TaxSoftware>('ultratax');
+
+  // A single unit number applied to the whole export. Empty = no Unit column
+  // and no change to any account number.
+  const [unit, setUnit] = useState('');
+  const [unitMode, setUnitMode] = useState<UnitMode>('column');
+  const unitOption: UnitOption | null = /^\d{1,9}$/.test(unit) ? { unit, mode: unitMode } : null;
+  const unitCombines = SOFTWARE_HAS_ACCOUNT_NUMBER[software];
+
+  // Lacerte/GoSystem carry no account number, so a prepend/append selection
+  // left over from another package would sit checked but inert. Snap it back.
+  useEffect(() => {
+    if (!unitCombines && unitMode !== 'column') setUnitMode('column');
+  }, [unitCombines, unitMode]);
+
   const [downloading, setDownloading] = useState<string | null>(null);
   const [showConsolidation, setShowConsolidation] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -423,12 +441,73 @@ export function ExportsPage() {
             Exports book and tax adjusted balances with software-specific line codes.
             {consolidateIds.size > 0 && <span className="text-blue-600 dark:text-blue-400 font-medium"> {consolidateIds.size} tax code{consolidateIds.size !== 1 ? 's' : ''} will be consolidated.</span>}
           </p>
+
+          {/* ── Unit number ─────────────────────────────────────────────── */}
+          <div className="border border-gray-200 dark:border-gray-700 rounded-md px-4 py-3 space-y-3">
+            <div className="flex items-center gap-3">
+              <label htmlFor="export-unit" className="text-sm text-gray-600 dark:text-gray-400 font-medium w-28 shrink-0">
+                Unit number
+              </label>
+              <input
+                id="export-unit"
+                type="text"
+                inputMode="numeric"
+                value={unit}
+                onChange={(e) => setUnit(e.target.value.replace(/[^0-9]/g, '').slice(0, 9))}
+                placeholder="none"
+                className="border border-gray-300 dark:border-gray-600 rounded px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+              />
+              <span className="text-xs text-gray-400 dark:text-gray-500">
+                Numeric. Applied as one unit to every row; leave blank to omit the column.
+              </span>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <span className="text-sm text-gray-600 dark:text-gray-400 font-medium w-28 shrink-0 pt-1">Account number</span>
+              <div className="space-y-1">
+                {([
+                  { value: 'column', label: 'Leave unchanged', hint: 'Unit column only' },
+                  { value: 'prefix', label: 'Prepend the unit', hint: 'unit#-coa#' },
+                  { value: 'suffix', label: 'Append the unit',  hint: 'coa#-unit#' },
+                ] as { value: UnitMode; label: string; hint: string }[]).map((o) => (
+                  <label
+                    key={o.value}
+                    className={`flex items-center gap-2 text-sm ${!unit || (!unitCombines && o.value !== 'column') ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed' : 'text-gray-700 dark:text-gray-300 cursor-pointer'}`}
+                  >
+                    <input
+                      type="radio"
+                      name="unit-mode"
+                      value={o.value}
+                      checked={unitMode === o.value}
+                      disabled={!unit || (!unitCombines && o.value !== 'column')}
+                      onChange={() => setUnitMode(o.value)}
+                    />
+                    {o.label}
+                    <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{o.hint}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {unitOption && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 pl-[7.75rem]">
+                A <span className="font-mono">Unit</span> column of{' '}
+                <span className="font-mono text-gray-700 dark:text-gray-300">{unitOption.unit}</span> is added to the export
+                {unitCombines
+                  ? unitOption.mode === 'column'
+                    ? '; account numbers are unchanged.'
+                    : <>; account <span className="font-mono">1000</span> exports as <span className="font-mono text-gray-700 dark:text-gray-300">{previewUnitAccountNumber('1000', unitOption)}</span>.</>
+                  : '. This layout has no account number column, so prepend/append does not apply.'}
+              </p>
+            )}
+          </div>
+
           <div className="flex items-center gap-3">
             <button
               disabled={!!downloading}
               onClick={() =>
                 handleDownload(
-                  taxSoftwareExportUrl(selectedPeriodId, software, consolidateIds.size > 0 ? Array.from(consolidateIds) : undefined, consolidateMap.size > 0 ? consolidateMap : undefined),
+                  taxSoftwareExportUrl(selectedPeriodId, software, consolidateIds.size > 0 ? Array.from(consolidateIds) : undefined, consolidateMap.size > 0 ? consolidateMap : undefined, unitOption),
                   `${software}-export-${selectedPeriodId}.${SOFTWARE_EXT[software]}`,
                   SOFTWARE_OPTIONS.find((o) => o.value === software)?.label ?? software,
                 )
