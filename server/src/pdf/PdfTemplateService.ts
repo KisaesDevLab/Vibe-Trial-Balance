@@ -14,10 +14,17 @@ const PdfPrinter = require('pdfmake/src/printer') as any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const vfsData: Record<string, string> = require('pdfmake/build/vfs_fonts') as any;
 
+/**
+ * Exported so the lead sheet stamper can embed a real TTF via fontkit without
+ * decoding a second ~170 KB copy into the Pi's heap. pdf-lib's StandardFonts
+ * are WinAnsi-encoded and throw on the seeded '✓' (U+2713) tickmark.
+ */
+export const ROBOTO_MEDIUM: Buffer = Buffer.from(vfsData['Roboto-Medium.ttf'], 'base64');
+
 const FONTS = {
   Roboto: {
     normal:      Buffer.from(vfsData['Roboto-Regular.ttf'],       'base64'),
-    bold:        Buffer.from(vfsData['Roboto-Medium.ttf'],        'base64'),
+    bold:        ROBOTO_MEDIUM,
     italics:     Buffer.from(vfsData['Roboto-Italic.ttf'],        'base64'),
     bolditalics: Buffer.from(vfsData['Roboto-MediumItalic.ttf'],  'base64'),
   },

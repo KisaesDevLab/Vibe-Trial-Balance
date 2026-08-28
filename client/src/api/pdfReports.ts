@@ -3,6 +3,7 @@
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
 import { API_BASE_URL } from '../lib/baseConfig';
+import { apiFetch } from './client';
 
 // Helper to open/download a PDF from an authenticated endpoint
 // Since fetch with auth headers can't directly trigger download, use this approach:
@@ -77,11 +78,32 @@ export const pdfReports = {
   balanceSheet: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/balance-sheet`,
   taxCodeReport: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-code-report`,
   workpaperIndex: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/workpaper-index`,
+  leadSheets: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/lead-sheets`,
   taxBasisPl: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-basis-pl`,
   taxReturnOrder: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-return-order`,
   cashFlow: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/cash-flow`,
   m1: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/m1`,
   taxBasisSchedule: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-basis-schedule`,
-  workpaperMerged: (periodId: number, reportIds: string[]) =>
-    `${API_BASE_URL}/reports/periods/${periodId}/workpaper-merged?reports=${reportIds.join(',')}`,
+  workpaperMerged: (periodId: number, reportIds: string[], includeAttachments = false) =>
+    `${API_BASE_URL}/reports/periods/${periodId}/workpaper-merged?reports=${reportIds.join(',')}${includeAttachments ? '&includeAttachments=1' : ''}`,
 };
+
+export interface SaveWorkpaperPackageResult {
+  documentId: number;
+  filename: string;
+  objectKey: string | null;
+  sizeBytes: number;
+  /** Attachments that could not be read — reported, never fatal. */
+  skippedAttachments: Array<{ refCode: string; reason: string }>;
+}
+
+/** Writes the binder into the client's workpaper folder instead of downloading it. */
+export const saveWorkpaperPackage = (
+  periodId: number,
+  reports: string[],
+  includeAttachments = false,
+) =>
+  apiFetch<SaveWorkpaperPackageResult>(`/reports/periods/${periodId}/workpaper-merged/save`, {
+    method: 'POST',
+    body: JSON.stringify({ reports, includeAttachments }),
+  });

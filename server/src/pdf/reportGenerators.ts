@@ -11,6 +11,7 @@ import type { Content, TableCell } from 'pdfmake/interfaces';
 import { PdfTemplateService, DocOptions } from './PdfTemplateService';
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
 import { whereHasActivity } from '../lib/tbActivity';
+import { currentStampsForClient } from '../lib/leadSheetStamp';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared DB helpers
@@ -251,8 +252,8 @@ export async function generateJournalEntryListingPdf(
     linesByEntry.get(eid)!.push(l);
   }
 
-  const cols = ['#', 'Type', 'Date', 'Description', 'Acct #', 'Account Name', 'Debit', 'Credit'];
-  const widths = [25, 35, 60, '*', 45, '*', 60, 60];
+  const cols = ['#', 'Type', 'Date', 'W/P Ref', 'Description', 'Acct #', 'Account Name', 'Debit', 'Credit'];
+  const widths = [25, 35, 60, 45, '*', 45, '*', 60, 60];
 
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
   let totalDr = 0;
@@ -273,6 +274,7 @@ export async function generateJournalEntryListingPdf(
         firstLine ? String(entry.entry_number ?? '') : '',
         firstLine ? String(entry.entry_type   ?? '') : '',
         firstLine ? fmtDate(entry.entry_date as string) : '',
+        firstLine ? (entry.workpaper_ref as string ?? '') : '',
         firstLine ? (entry.description as string ?? '') : '',
         line.account_number as string,
         line.account_name   as string,
@@ -287,7 +289,7 @@ export async function generateJournalEntryListingPdf(
 
   // Grand total
   tableBody.push(svc.dataRow(
-    ['', '', '', '', '', 'TOTALS', totalDr, totalCr],
+    ['', '', '', '', '', '', 'TOTALS', totalDr, totalCr],
     { bold: true, shade: true },
   ));
 
@@ -350,8 +352,8 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
     linesByEntry.get(eid)!.push(l);
   }
 
-  const cols = ['AJE #', 'Date', 'Description', 'Acct #', 'Account Name', 'Debit', 'Credit'];
-  const widths = [35, 60, '*', 45, '*', 60, 60];
+  const cols = ['AJE #', 'Date', 'W/P Ref', 'Description', 'Acct #', 'Account Name', 'Debit', 'Credit'];
+  const widths = [35, 60, 45, '*', 45, '*', 60, 60];
 
   const buildSection = (type: string): Content => {
     const sectionEntries = (entries as Record<string, unknown>[]).filter(
@@ -377,6 +379,7 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
         tableBody.push(svc.dataRow([
           firstLine ? String(entry.entry_number ?? '') : '',
           firstLine ? fmtDate(entry.entry_date as string) : '',
+          firstLine ? (entry.workpaper_ref as string ?? '') : '',
           firstLine ? (entry.description as string ?? '') : '',
           line.account_number as string,
           line.account_name   as string,
@@ -390,7 +393,7 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
     }
 
     tableBody.push(svc.dataRow(
-      ['', '', '', '', totalDr === totalCr ? 'SECTION TOTAL' : 'SECTION TOTAL — OUT OF BALANCE', totalDr, totalCr],
+      ['', '', '', '', '', totalDr === totalCr ? 'SECTION TOTAL' : 'SECTION TOTAL — OUT OF BALANCE', totalDr, totalCr],
       { bold: true, shade: true },
     ));
 
@@ -1014,6 +1017,220 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number, page
 
   return svc.generateBuffer(svc.buildDocument({
     title:      'Workpaper Index',
+    clientName: info.client_name,
+    ein:        info.ein ?? undefined,
+    periodName: info.name,
+    startDate:  fmtDate(info.start_date),
+    endDate:    fmtDate(info.end_date),
+    content,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lead Sheets PDF — one page per lead sheet with subtotals and a sign-off
+// block, then a tickmark legend and a recap page that proves the lead sheets
+// tie back to the trial balance.
+//
+// Structurally a sibling of generateWorkpaperIndexPdf (page break per group,
+// section header, member rows, group subtotal, legend of symbols actually
+// used); it groups by lead sheet instead of workpaper_ref and adds sign-off.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateLeadSheetsPdf(db: Knex, periodId: number): Promise<Buffer> {
+  const svc  = await PdfTemplateService.fromDb(db);
+  const info = await getPeriodInfo(db, periodId);
+
+  const rows = await db('v_adjusted_trial_balance as vtb')
+    .where('vtb.period_id', periodId)
+    .where('vtb.is_active', true)
+    .modify(whereHasActivity, 'vtb')
+    .select(
+      'vtb.account_id', 'vtb.account_number', 'vtb.account_name', 'vtb.category',
+      'vtb.lead_sheet_id', 'vtb.lead_sheet_code', 'vtb.lead_sheet_name', 'vtb.lead_sheet_sort',
+      'vtb.workpaper_ref',
+      'vtb.prior_year_debit', 'vtb.prior_year_credit',
+      'vtb.unadjusted_debit', 'vtb.unadjusted_credit',
+      'vtb.book_adj_debit', 'vtb.book_adj_credit',
+      'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
+      'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
+    )
+    .orderBy([
+      { column: 'vtb.lead_sheet_sort', order: 'asc' },
+      { column: 'vtb.lead_sheet_code', order: 'asc' },
+      { column: 'vtb.account_number', order: 'asc' },
+    ]) as Array<Record<string, unknown>>;
+
+  const tickmarkRows = await db('tb_tickmarks as tt')
+    .join('tickmark_library as tl', 'tl.id', 'tt.tickmark_id')
+    .where('tt.period_id', periodId)
+    .select('tt.account_id', 'tl.id as tm_id', 'tl.symbol', 'tl.description as tm_description');
+  const tickMap = new Map<number, Array<{ id: number; symbol: string; description: string }>>();
+  for (const t of tickmarkRows) {
+    const aid = t.account_id as number;
+    if (!tickMap.has(aid)) tickMap.set(aid, []);
+    tickMap.get(aid)!.push({ id: t.tm_id as number, symbol: t.symbol as string, description: t.tm_description as string });
+  }
+
+  // Sign-offs. Staleness uses the SHARED stamp helper — never recomputed
+  // inline, or the PDF could read STALE while the screen reads SIGNED.
+  const signoffRows = await db('lead_sheet_signoffs')
+    .where({ period_id: periodId })
+    .whereNull('invalidated_at')
+    .select('lead_sheet_id', 'role', 'user_name', 'signed_at', 'balance_stamp');
+  const signoffMap = new Map<number, Record<string, { user_name: string | null; signed_at: string; balance_stamp: string }>>();
+  for (const r of signoffRows as Array<Record<string, unknown>>) {
+    const lsId = r.lead_sheet_id as number;
+    if (!signoffMap.has(lsId)) signoffMap.set(lsId, {});
+    signoffMap.get(lsId)![r.role as string] = {
+      user_name: (r.user_name as string | null) ?? null,
+      signed_at: r.signed_at as string,
+      balance_stamp: r.balance_stamp as string,
+    };
+  }
+  const stamps = await currentStampsForClient(db, periodId, info.client_id);
+
+  // Attachment ref codes are LISTED here, never merged — the binder has its own
+  // opt-in for embedding the files themselves.
+  const refsByAccount = new Map<number, string[]>();
+  if (await db.schema.hasTable('lead_sheet_attachments')) {
+    const atts = await db('lead_sheet_attachments')
+      .where({ period_id: periodId })
+      .orderBy('ref_code', 'asc')
+      .select('account_id', 'ref_code');
+    for (const a of atts as Array<Record<string, unknown>>) {
+      const aid = a.account_id as number | null;
+      if (aid === null) continue;
+      if (!refsByAccount.has(aid)) refsByAccount.set(aid, []);
+      refsByAccount.get(aid)!.push(a.ref_code as string);
+    }
+  }
+
+  const net = (r: Record<string, unknown>, d: string, c: string): number =>
+    categoryNet(String(r.category), Number(r[d] ?? 0), Number(r[c] ?? 0));
+
+  // Group, with unassigned accounts collected into a trailing bucket.
+  const groups = new Map<string, { id: number | null; code: string; name: string; rows: Array<Record<string, unknown>> }>();
+  for (const r of rows) {
+    const id = (r.lead_sheet_id as number | null) ?? null;
+    const key = id === null ? '~unassigned' : String(id);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        id,
+        code: (r.lead_sheet_code as string | null) ?? '',
+        name: (r.lead_sheet_name as string | null) ?? 'Unassigned',
+        rows: [],
+      });
+    }
+    groups.get(key)!.rows.push(r);
+  }
+  // The query already ordered by sort_order; this only floats unassigned last.
+  const ordered = [...groups.values()].sort((a, b) => {
+    if (a.id === null) return 1;
+    if (b.id === null) return -1;
+    return 0;
+  });
+
+  const cols   = ['Acct #', 'Account Name', 'Prior Year', 'Unadjusted', 'Book AJE', 'Book Bal', 'Tax Bal', 'Marks', 'Files'];
+  const widths = [45, '*', 62, 62, 62, 62, 62, 40, 45];
+  const tableLayout = { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' };
+
+  const content: Content[] = [];
+  const usedTickmarks = new Set<number>();
+  const recap: Array<{ label: string; book: number; tax: number }> = [];
+  let checkTotal = 0;
+
+  for (let gi = 0; gi < ordered.length; gi++) {
+    const g = ordered[gi];
+    if (gi > 0) content.push({ text: '', pageBreak: 'before' } as Content);
+
+    const label = g.id === null ? 'Unassigned — no lead sheet' : `${g.code} — ${g.name}`;
+    const tableBody: TableCell[][] = [svc.headerRow(cols)];
+    tableBody.push(svc.sectionHeaderRow(label, cols.length));
+
+    let py = 0, un = 0, aje = 0, book = 0, tax = 0;
+    for (let ri = 0; ri < g.rows.length; ri++) {
+      const r = g.rows[ri];
+      const vPy   = net(r, 'prior_year_debit', 'prior_year_credit');
+      const vUn   = net(r, 'unadjusted_debit', 'unadjusted_credit');
+      const vAje  = net(r, 'book_adj_debit', 'book_adj_credit');
+      const vBook = net(r, 'book_adjusted_debit', 'book_adjusted_credit');
+      const vTax  = net(r, 'tax_adjusted_debit', 'tax_adjusted_credit');
+      py += vPy; un += vUn; aje += vAje; book += vBook; tax += vTax;
+      // Raw debit-minus-credit, so the recap's balance check foots to zero.
+      checkTotal += Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0);
+
+      const marks = tickMap.get(r.account_id as number) ?? [];
+      for (const m of marks) usedTickmarks.add(m.id);
+
+      tableBody.push(svc.dataRow([
+        r.account_number as string,
+        r.account_name as string,
+        vPy, vUn, vAje, vBook, vTax,
+        marks.map((m) => m.symbol).join(' '),
+        (refsByAccount.get(r.account_id as number) ?? []).join(' '),
+      ], { isAlt: ri % 2 === 1 }));
+    }
+
+    tableBody.push(svc.dataRow(
+      ['', `Total ${label}`, py, un, aje, book, tax, '', ''],
+      { bold: true, shade: true },
+    ));
+    recap.push({ label, book, tax });
+
+    content.push({ table: { headerRows: 1, widths, body: tableBody }, layout: tableLayout } as Content);
+
+    // Sign-off block. Printed signature rules when unsigned, so a paper page is
+    // still signable by hand.
+    const so = g.id !== null ? signoffMap.get(g.id) : undefined;
+    const current = g.id !== null ? (stamps.get(g.id) ?? '') : '';
+    const line = (role: 'preparer' | 'reviewer'): string => {
+      const heading = role === 'preparer' ? 'Prepared' : 'Reviewed';
+      const rec = so?.[role];
+      if (!rec) return `${heading}: ______________________   Date: ____________`;
+      const stale = current && rec.balance_stamp !== current ? '  (STALE)' : '';
+      return `${heading}: ${rec.user_name ?? 'Unknown'}   ${fmtDate(rec.signed_at)}${stale}`;
+    };
+    content.push({
+      text: `${line('preparer')}          ${line('reviewer')}`,
+      fontSize: 7, italics: true, margin: [0, 10, 0, 0], color: '#555555',
+    } as Content);
+  }
+
+  // Tickmark legend — only symbols actually used on the printed sheets.
+  if (usedTickmarks.size > 0) {
+    content.push({ text: '', pageBreak: 'before' } as Content);
+    content.push({ text: 'Tickmark Legend', fontSize: 12, bold: true, margin: [0, 0, 0, 8] } as Content);
+    const legendBody: TableCell[][] = [svc.headerRow(['Symbol', 'Description'])];
+    const uniqueMarks = new Map<number, { symbol: string; description: string }>();
+    for (const m of [...tickMap.values()].flat()) {
+      if (usedTickmarks.has(m.id)) uniqueMarks.set(m.id, m);
+    }
+    for (const m of uniqueMarks.values()) legendBody.push(svc.dataRow([m.symbol, m.description], {}));
+    content.push({ table: { headerRows: 1, widths: [40, '*'], body: legendBody }, layout: tableLayout } as Content);
+  }
+
+  // Recap — this is what proves the lead sheets tie to the trial balance.
+  if (recap.length > 0) {
+    content.push({ text: '', pageBreak: 'before' } as Content);
+    content.push({ text: 'Lead Sheet Recap', fontSize: 12, bold: true, margin: [0, 0, 0, 8] } as Content);
+    const recapBody: TableCell[][] = [svc.headerRow(['Lead Sheet', 'Book Balance', 'Tax Balance'])];
+    let bookTotal = 0, taxTotal = 0;
+    for (let i = 0; i < recap.length; i++) {
+      recapBody.push(svc.dataRow([recap[i].label, recap[i].book, recap[i].tax], { isAlt: i % 2 === 1 }));
+      bookTotal += recap[i].book;
+      taxTotal += recap[i].tax;
+    }
+    recapBody.push(svc.dataRow(['Total', bookTotal, taxTotal], { bold: true, shade: true }));
+    recapBody.push(svc.dataRow(['Balance Check (should be 0.00)', checkTotal, ''], { bold: true, shade: true }));
+    content.push({ table: { headerRows: 1, widths: ['*', 90, 90], body: recapBody }, layout: tableLayout } as Content);
+  }
+
+  if (content.length === 0) {
+    content.push({ text: 'No accounts with activity in this period.', fontSize: 10, italics: true } as Content);
+  }
+
+  return svc.generateBuffer(svc.buildDocument({
+    title:      'Lead Sheets',
     clientName: info.client_name,
     ein:        info.ein ?? undefined,
     periodName: info.name,

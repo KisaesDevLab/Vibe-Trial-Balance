@@ -24,6 +24,7 @@ import {
 } from '../api/chartOfAccounts';
 import { listClients, type Client } from '../api/clients';
 import { getAvailableTaxCodes, type TaxCode } from '../api/taxCodes';
+import { listLeadSheets } from '../api/leadSheets';
 import { useUIStore } from '../store/uiStore';
 import { checkFileSize } from '../utils/fileLimits';
 import { confirmAction } from '../components/ConfirmDialog';
@@ -153,6 +154,7 @@ function AccountForm({ clientId, initial, onSave, onCancel, saving, error }: Acc
     taxLine: initial?.taxLine ?? '',
     workpaperRef: initial?.workpaperRef ?? '',
     unit: initial?.unit ?? '',
+    leadSheetId: initial?.leadSheetId ?? null,
   });
   const [aliases, setAliases] = useState<string[]>(initial?.importAliases ?? []);
   const [aliasInput, setAliasInput] = useState('');
@@ -162,6 +164,18 @@ function AccountForm({ clientId, initial, onSave, onCancel, saving, error }: Acc
     queryFn: () => getAvailableTaxCodes(clientId),
   });
   const taxCodes = tcData?.data ?? [];
+
+  // Same queryKey as the page-level lead sheet query below, so it MUST return
+  // the same unwrapped shape — a differing queryFn on a shared key resolves to
+  // whichever observer registered last.
+  const { data: formLeadSheets = [] } = useQuery({
+    queryKey: ['lead-sheets', clientId],
+    queryFn: async () => {
+      const res = await listLeadSheets(clientId);
+      if (res.error) throw new Error(res.error.message);
+      return res.data ?? [];
+    },
+  });
 
   const set = (field: keyof AccountInput, value: string | number) =>
     setForm((prev) => ({
@@ -187,6 +201,7 @@ function AccountForm({ clientId, initial, onSave, onCancel, saving, error }: Acc
       taxCodeId: form.taxCodeId ?? null,
       taxLine: form.taxLine || undefined,
       workpaperRef: form.workpaperRef || undefined,
+      leadSheetId: form.leadSheetId ?? null,
       importAliases: aliases,
     });
   };
@@ -262,6 +277,21 @@ function AccountForm({ clientId, initial, onSave, onCancel, saving, error }: Acc
             taxCodes={taxCodes}
             onSelect={(codeId, taxLine) => setForm((prev) => ({ ...prev, taxCodeId: codeId, taxLine: taxLine ?? '' }))}
           />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Lead Sheet</label>
+          <select
+            value={form.leadSheetId ?? ''}
+            onChange={(e) => setForm((prev) => ({ ...prev, leadSheetId: e.target.value === '' ? null : Number(e.target.value) }))}
+            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">— none —</option>
+            {formLeadSheets.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.code ? `${l.code} — ` : ''}{l.name}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Workpaper Ref</label>
@@ -402,6 +432,7 @@ interface CoaMapping {
   subcategoryCol: string;
   taxLineCol: string;
   workpaperRefCol: string;
+  leadSheetCol: string;
   unitCol: string;
 }
 
@@ -413,6 +444,7 @@ interface MappedRow {
   subcategory?: string;
   taxLine?: string;
   workpaperRef?: string;
+  leadSheetCode?: string;
   unit?: string;
   _errors: string[];
 }
@@ -430,6 +462,7 @@ function autoDetectMapping(headers: string[]): CoaMapping {
     subcategoryCol:   bestMatch(headers, ['subcategory', 'sub_category', 'sub category', 'sub']),
     taxLineCol:       bestMatch(headers, ['tax_line', 'tax line', 'tax_code', 'tax code', 'tax']),
     workpaperRefCol:  bestMatch(headers, ['workpaper_ref', 'workpaper ref', 'wp_ref', 'wp ref', 'workpaper']),
+    leadSheetCol:     bestMatch(headers, ['lead_sheet', 'lead sheet', 'leadsheet', 'lead_sheet_code', 'ls', 'ls_code']),
     unitCol:          bestMatch(headers, ['unit', 'property', 'entity', 'division']),
   };
 }
@@ -453,6 +486,7 @@ function applyMapping(dataRows: string[][], headers: string[], mapping: CoaMappi
       subcategory:  get(mapping.subcategoryCol)  || undefined,
       taxLine:      get(mapping.taxLineCol)       || undefined,
       workpaperRef: get(mapping.workpaperRefCol)  || undefined,
+      leadSheetCode: get(mapping.leadSheetCol)    || undefined,
       unit:         get(mapping.unitCol)          || undefined,
       _errors: errors,
     };
@@ -491,7 +525,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
   const [headers, setHeaders] = useState<string[]>([]);
   const [mapping, setMapping] = useState<CoaMapping>({
     accountNumberCol: '', accountNameCol: '', categoryCol: '', normalBalanceCol: '',
-    subcategoryCol: '', taxLineCol: '', workpaperRefCol: '', unitCol: '',
+    subcategoryCol: '', taxLineCol: '', workpaperRefCol: '', leadSheetCol: '', unitCol: '',
   });
   const [fileName, setFileName] = useState('');
   // Rows the user has unticked in the preview, by position in mappedRows.
@@ -557,6 +591,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
       subcategory:   r.subcategory,
       taxLine:       r.taxLine,
       workpaperRef:  r.workpaperRef,
+      leadSheetCode: r.leadSheetCode,
       unit:          r.unit,
     })));
   };
@@ -654,6 +689,7 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
               <ColMapRow label="Subcategory"    headers={headers} value={mapping.subcategoryCol}   onChange={(v) => set('subcategoryCol', v)}  optional />
               <ColMapRow label="Tax Line"       headers={headers} value={mapping.taxLineCol}        onChange={(v) => set('taxLineCol', v)}       optional />
               <ColMapRow label="Workpaper Ref"  headers={headers} value={mapping.workpaperRefCol}   onChange={(v) => set('workpaperRefCol', v)}  optional />
+              <ColMapRow label="Lead Sheet"     headers={headers} value={mapping.leadSheetCol}      onChange={(v) => set('leadSheetCol', v)}     optional />
               <ColMapRow label="Unit"           headers={headers} value={mapping.unitCol}           onChange={(v) => set('unitCol', v)}          optional />
             </div>
 
@@ -927,6 +963,22 @@ export function ChartOfAccountsPage() {
     [data, filterCategory, filterUnit, filterText],
   );
 
+  // Lead sheet codes for the column and the add/edit form's dropdown. Kept in
+  // its own query so it stays fresh when the Lead Sheets page edits them.
+  const { data: leadSheets = [] } = useQuery({
+    queryKey: ['lead-sheets', selectedClientId],
+    enabled: !!selectedClientId,
+    queryFn: async () => {
+      const res = await listLeadSheets(selectedClientId!);
+      if (res.error) throw new Error(res.error.message);
+      return res.data ?? [];
+    },
+  });
+  const leadSheetById = useMemo(
+    () => new Map(leadSheets.map((l) => [l.id, l])),
+    [leadSheets],
+  );
+
   const columns = [
     columnHelper.accessor('account_number', {
       header: 'Account #',
@@ -958,6 +1010,22 @@ export function ChartOfAccountsPage() {
         const acct = info.row.original;
         if (!acct.tax_code_id) return <span className="text-gray-300">—</span>;
         return <span className="font-mono text-xs">{acct.tax_line ?? `#${acct.tax_code_id}`}</span>;
+      },
+    }),
+    columnHelper.accessor('lead_sheet_id', {
+      header: 'Lead Sheet',
+      cell: (info) => {
+        const ls = info.getValue() !== null ? leadSheetById.get(info.getValue()!) : undefined;
+        if (!ls) return <span className="text-gray-300 dark:text-gray-600">—</span>;
+        return (
+          <span
+            title={ls.name}
+            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+          >
+            <span className="font-mono mr-1">{ls.code ?? '—'}</span>
+            {ls.name}
+          </span>
+        );
       },
     }),
     columnHelper.accessor('workpaper_ref', {
@@ -1176,6 +1244,7 @@ export function ChartOfAccountsPage() {
               taxLine: editAccount.tax_line ?? undefined,
               workpaperRef: editAccount.workpaper_ref ?? undefined,
               unit: editAccount.unit ?? undefined,
+              leadSheetId: editAccount.lead_sheet_id,
               importAliases: editAccount.import_aliases ?? [],
             }}
             onSave={(input) => updateMutation.mutate({ id: editAccount.id, input })}

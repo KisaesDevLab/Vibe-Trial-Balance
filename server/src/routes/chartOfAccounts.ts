@@ -3,6 +3,7 @@
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
 import { Router, Response } from 'express';
+import type { Knex } from 'knex';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
@@ -31,9 +32,24 @@ const accountSchema = z.object({
   preparerNotes: z.string().optional(),
   reviewerNotes: z.string().optional(),
   unit: z.string().max(100).optional().nullable(),
+  leadSheetId: z.number().int().positive().nullable().optional(),
   cashFlowCategory: z.enum(['operating', 'investing', 'financing', 'non_cash', 'cash']).optional().nullable(),
   importAliases: z.array(z.string().max(255)).max(50).optional(),
 });
+
+/**
+ * A plain FK can't stop client 1's account pointing at client 2's lead sheet,
+ * so every write that takes a leadSheetId out of a request body checks it here
+ * first. Same guard rollForward.ts applies to retainedEarningsAccountId.
+ */
+async function leadSheetBelongsToClient(
+  clientId: number,
+  leadSheetId: number,
+  q: Knex | Knex.Transaction = db,
+): Promise<boolean> {
+  const row = await q('lead_sheets').where({ id: leadSheetId, client_id: clientId }).first('id');
+  return !!row;
+}
 
 function parseAliases(val: unknown): string[] {
   if (Array.isArray(val)) return val as string[];
@@ -94,10 +110,16 @@ coaCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<v
     preparerNotes,
     reviewerNotes,
     unit,
+    leadSheetId,
     cashFlowCategory,
   } = result.data;
 
   try {
+    if (leadSheetId != null && !(await leadSheetBelongsToClient(clientId, leadSheetId))) {
+      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'That lead sheet belongs to a different client.' } });
+      return;
+    }
+
     // Dual-write: if taxCodeId supplied, look up tax_code string for backward compat
     let resolvedTaxLine = taxLine ?? null;
     if (taxCodeId != null) {
@@ -121,6 +143,8 @@ coaCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promise<v
         preparer_notes: preparerNotes ?? null,
         reviewer_notes: reviewerNotes ?? null,
         unit: unit ?? null,
+        lead_sheet_id: leadSheetId ?? null,
+        lead_sheet_source: leadSheetId != null ? 'manual' : null,
         cash_flow_category: cashFlowCategory ?? null,
         is_active: true,
       })
@@ -148,7 +172,11 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
     return;
   }
 
-  const rowSchema = accountSchema;
+  // Imports carry the lead sheet as a letter code — that is what a CSV column
+  // holds and what survives moving between clients — resolved per client below.
+  const rowSchema = accountSchema.extend({
+    leadSheetCode: z.string().max(10).nullable().optional(),
+  });
   const bodySchema = z.object({ rows: z.array(rowSchema).min(1).max(2000) });
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
@@ -165,11 +193,23 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
     const allTaxCodes = await db('tax_codes').select('id', 'tax_code');
     const taxCodeLookup = new Map<string, number>(allTaxCodes.map((tc: { id: number; tax_code: string }) => [tc.tax_code, tc.id]));
 
+    // Case-insensitive code -> id for this client only. An unknown code imports
+    // as "no lead sheet" rather than failing the row.
+    const clientLeadSheets = await db('lead_sheets').where({ client_id: clientId }).select('id', 'code');
+    const leadSheetLookup = new Map<string, number>(
+      (clientLeadSheets as { id: number; code: string | null }[])
+        .filter((l) => !!l.code)
+        .map((l) => [l.code!.trim().toUpperCase(), l.id]),
+    );
+    const resolveLeadSheet = (code: string | null | undefined): number | null =>
+      code ? (leadSheetLookup.get(code.trim().toUpperCase()) ?? null) : null;
+
     await db.transaction(async (trx) => {
       for (const r of rows) {
         // Resolve tax_line string to tax_code_id if possible
         const resolvedTaxCodeId = r.taxLine ? (taxCodeLookup.get(r.taxLine) ?? null) : null;
         const resolvedTaxLine = r.taxLine ?? null;
+        const resolvedLeadSheetId = resolveLeadSheet(r.leadSheetCode);
 
         const existing = await trx('chart_of_accounts')
           .where({ client_id: clientId, account_number: r.accountNumber })
@@ -185,6 +225,11 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
             tax_code_id: resolvedTaxCodeId,
             workpaper_ref: r.workpaperRef ?? null,
             unit: r.unit ?? null,
+            // Only overwrite the lead sheet when the import actually supplied
+            // one — a file with no such column must not unassign every account.
+            ...(r.leadSheetCode !== undefined
+              ? { lead_sheet_id: resolvedLeadSheetId, lead_sheet_source: 'manual' }
+              : {}),
             is_active: true,
             updated_at: trx.fn.now(),
           });
@@ -201,6 +246,8 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
             tax_code_id: resolvedTaxCodeId,
             workpaper_ref: r.workpaperRef ?? null,
             unit: r.unit ?? null,
+            lead_sheet_id: resolvedLeadSheetId,
+            lead_sheet_source: resolvedLeadSheetId != null ? 'manual' : null,
             is_active: true,
           });
           inserted++;
@@ -241,6 +288,30 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
       return;
     }
 
+    // Lead sheets must be remapped by CODE, never copied by id: the source
+    // client's lead_sheet_id values are meaningless in the target and would
+    // point across clients. An account whose code has no counterpart in the
+    // target simply arrives unassigned.
+    const [sourceSheets, targetSheets] = await Promise.all([
+      db('lead_sheets').where({ client_id: sourceClientId }).select('id', 'code'),
+      db('lead_sheets').where({ client_id: clientId }).select('id', 'code'),
+    ]);
+    const codeById = new Map<number, string>(
+      (sourceSheets as { id: number; code: string | null }[])
+        .filter((l) => !!l.code)
+        .map((l) => [l.id, l.code!.trim().toUpperCase()]),
+    );
+    const idByCode = new Map<string, number>(
+      (targetSheets as { id: number; code: string | null }[])
+        .filter((l) => !!l.code)
+        .map((l) => [l.code!.trim().toUpperCase(), l.id]),
+    );
+    const remapLeadSheet = (sourceId: number | null): number | null => {
+      if (sourceId == null) return null;
+      const code = codeById.get(sourceId);
+      return code ? (idByCode.get(code) ?? null) : null;
+    };
+
     await db.transaction(async (trx) => {
       for (const acct of sourceAccounts) {
         const existing = await trx('chart_of_accounts')
@@ -258,6 +329,7 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
               tax_code_id: acct.tax_code_id,
               workpaper_ref: acct.workpaper_ref,
               unit: acct.unit ?? null,
+              lead_sheet_id: remapLeadSheet(acct.lead_sheet_id ?? null),
               is_active: true,
               updated_at: trx.fn.now(),
             });
@@ -277,6 +349,8 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
             tax_code_id: acct.tax_code_id,
             workpaper_ref: acct.workpaper_ref,
             unit: acct.unit ?? null,
+            lead_sheet_id: remapLeadSheet(acct.lead_sheet_id ?? null),
+            lead_sheet_source: acct.lead_sheet_source ?? null,
             is_active: true,
           });
           inserted++;
@@ -358,6 +432,24 @@ coaItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<voi
   if (d.reviewerNotes !== undefined) updates.reviewer_notes = d.reviewerNotes;
   if (d.unit               !== undefined) updates.unit               = d.unit;
   if (d.cashFlowCategory   !== undefined) updates.cash_flow_category = d.cashFlowCategory;
+  if (d.leadSheetId !== undefined) {
+    if (d.leadSheetId !== null) {
+      // The account's own client is the authority — read it rather than
+      // trusting anything in the body.
+      const owner = await db('chart_of_accounts').where({ id }).first('client_id');
+      if (!owner) {
+        res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Account not found' } });
+        return;
+      }
+      if (!(await leadSheetBelongsToClient(owner.client_id as number, d.leadSheetId))) {
+        res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'That lead sheet belongs to a different client.' } });
+        return;
+      }
+    }
+    updates.lead_sheet_id = d.leadSheetId;
+    // A hand-set assignment is manual, and clearing it clears the provenance.
+    updates.lead_sheet_source = d.leadSheetId === null ? null : 'manual';
+  }
 
   // Handle import_aliases: auto-save old name when renaming, merge with explicit list
   if (d.accountName !== undefined || d.importAliases !== undefined) {

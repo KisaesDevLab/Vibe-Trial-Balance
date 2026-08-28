@@ -5,6 +5,10 @@
 import { Router, Response } from 'express';
 import { PDFDocument } from 'pdf-lib';
 import { db } from '../db';
+import { z } from 'zod';
+import { buildWorkpaperPackage } from '../lib/workpaperPackage';
+import { storeDocument, workpaperSection } from '../lib/documentStore';
+import { logAudit } from '../lib/periodGuard';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { engagementFilename, pdfDisposition } from '../lib/reportFilename';
 import {
@@ -16,14 +20,13 @@ import {
   generateBalanceSheetPdf,
   generateTaxCodeReportPdf,
   generateWorkpaperIndexPdf,
+  generateLeadSheetsPdf,
   generateTaxBasisPlPdf,
   generateTaxReturnOrderPdf,
   generateFluxAnalysisPdf,
   generateCashFlowPdf,
   generateM1Pdf,
   generateTaxBasisSchedulePdf,
-  generateWorkpaperTocPdf,
-  type TocEntry,
 } from '../pdf/reportGenerators';
 
 export const pdfReportsRouter = Router({ mergeParams: true });
@@ -326,6 +329,23 @@ pdfReportsRouter.get('/periods/:periodId/m1', async (req: AuthRequest, res: Resp
   }
 });
 
+// GET /api/v1/reports/periods/:periodId/lead-sheets
+// One page per lead sheet, ahead of the trial balance in the binder.
+pdfReportsRouter.get('/periods/:periodId/lead-sheets', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = getPeriodId(req);
+  if (periodId === null) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  try {
+    const buffer = await generateLeadSheetsPdf(db, periodId);
+    sendPdf(res, buffer, await reportFilename(periodId, `lead-sheets-${periodId}.pdf`), isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/reports/periods/:periodId/tax-return-order
 // ─────────────────────────────────────────────────────────────────────────────
@@ -353,6 +373,7 @@ pdfReportsRouter.get('/periods/:periodId/tax-return-order', async (req: AuthRequ
 // tabs — keep them in step with PDF_REPORT_SECTIONS in WorkpaperPackagePage.
 const REPORT_GENERATORS: Record<string, { label: string; generate: (periodId: number) => Promise<Buffer> }> = {
   'pdf-wp-index':   { label: 'Workpaper Index',   generate: (id) => generateWorkpaperIndexPdf(db, id) },
+  'pdf-lead-sheets': { label: 'Lead Sheets',      generate: (id) => generateLeadSheetsPdf(db, id) },
   'pdf-tb':         { label: 'Trial Balance',     generate: (id) => generateTrialBalancePdf(db, id) },
   'pdf-is':         { label: 'Income Statement',  generate: (id) => generateIncomeStatementPdf(db, id) },
   'pdf-bs':         { label: 'Balance Sheet',     generate: (id) => generateBalanceSheetPdf(db, id) },
@@ -365,9 +386,6 @@ const REPORT_GENERATORS: Record<string, { label: string; generate: (periodId: nu
   'pdf-m1':         { label: 'M-1 Worksheet',     generate: (id) => generateM1Pdf(db, id) },
 };
 
-/** Max rebuilds of the TOC while its own length settles. Two is already more
- *  than the page count can need; the third is pure belt and braces. */
-const TOC_REBUILD_LIMIT = 3;
 
 pdfReportsRouter.get('/periods/:periodId/workpaper-merged', async (req: AuthRequest, res: Response): Promise<void> => {
   const periodId = getPeriodId(req);
@@ -381,61 +399,89 @@ pdfReportsRouter.get('/periods/:periodId/workpaper-merged', async (req: AuthRequ
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'No reports specified. Pass ?reports=pdf-tb,pdf-is,...' } });
     return;
   }
+  const includeAttachments = req.query.includeAttachments === '1' || req.query.includeAttachments === 'true';
 
   try {
-    // Build every selected report first: the table of contents can't be
-    // written until each one's page count is known.
-    const built: Array<{ label: string; doc: PDFDocument; pageCount: number }> = [];
-    for (const reportId of reportIds) {
-      const report = REPORT_GENERATORS[reportId];
-      if (!report) continue;
-
-      const srcDoc = await PDFDocument.load(await report.generate(periodId));
-      built.push({ label: report.label, doc: srcDoc, pageCount: srcDoc.getPageCount() });
+    const { buffer, skippedAttachments } = await buildWorkpaperPackage(
+      db, periodId, reportIds, REPORT_GENERATORS, { includeAttachments },
+    );
+    // A corrupt attachment is skipped, not fatal — surface it in a header so
+    // the UI can mention it without failing the download.
+    if (skippedAttachments.length > 0) {
+      res.setHeader('X-Skipped-Attachments', skippedAttachments.map((s) => s.refCode).join(','));
     }
+    sendPdf(res, buffer, await reportFilename(periodId, `workpaper-package-${periodId}.pdf`), isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
 
-    if (built.length === 0) {
-      res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'None of the requested reports exist' } });
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/reports/periods/:periodId/workpaper-merged/save
+// Same binder, written into the client's workpaper folder instead of returned.
+// Allowed on a LOCKED period: locking is exactly when you archive the binder.
+// ─────────────────────────────────────────────────────────────────────────────
+
+pdfReportsRouter.post('/periods/:periodId/workpaper-merged/save', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = getPeriodId(req);
+  if (periodId === null) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+    return;
+  }
+  const parsed = z.object({
+    reports: z.array(z.string()).min(1),
+    includeAttachments: z.boolean().optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    return;
+  }
+
+  try {
+    const period = await db('periods').where({ id: periodId }).first('id', 'client_id', 'period_name');
+    if (!period) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
       return;
     }
 
-    // The contents page numbers itself, so its own length shifts every number
-    // on it. Assume one page, and rebuild if that assumption was wrong — the
-    // entries don't change size with the numbers, so this settles at once.
-    const buildToc = (tocPageCount: number): Promise<Buffer> => {
-      const entries: TocEntry[] = [];
-      let cursor = tocPageCount + 1;
-      for (const b of built) {
-        entries.push({ label: b.label, startPage: cursor, pageCount: b.pageCount });
-        cursor += b.pageCount;
-      }
-      return generateWorkpaperTocPdf(db, periodId, entries);
-    };
+    const { buffer, skippedAttachments } = await buildWorkpaperPackage(
+      db, periodId, parsed.data.reports, REPORT_GENERATORS,
+      { includeAttachments: parsed.data.includeAttachments ?? false },
+    );
 
-    let tocPageCount = 1;
-    let tocBuffer = await buildToc(tocPageCount);
-    for (let attempt = 0; attempt < TOC_REBUILD_LIMIT; attempt++) {
-      const actual = (await PDFDocument.load(tocBuffer)).getPageCount();
-      if (actual === tocPageCount) break;
-      tocPageCount = actual;
-      tocBuffer = await buildToc(tocPageCount);
-    }
+    // Same helper and base name the download path uses, so a preparer who
+    // downloads and one who saves end up with an identical filename.
+    const filename = await reportFilename(periodId, `workpaper-package-${periodId}.pdf`);
 
-    const mergedPdf = await PDFDocument.create();
-    const tocDoc = await PDFDocument.load(tocBuffer);
-    for (const page of await mergedPdf.copyPages(tocDoc, tocDoc.getPageIndices())) {
-      mergedPdf.addPage(page);
-    }
-    for (const b of built) {
-      for (const page of await mergedPdf.copyPages(b.doc, b.doc.getPageIndices())) {
-        mergedPdf.addPage(page);
-      }
-    }
+    const doc = await storeDocument({
+      clientId: period.client_id as number,
+      periodId,
+      section: await workpaperSection(),
+      filename,
+      mimeType: 'application/pdf',
+      buffer,
+      uploadedBy: req.user?.userId ?? null,
+    });
 
-    const mergedBuffer = await mergedPdf.save();
-    sendPdf(res, Buffer.from(mergedBuffer), await reportFilename(periodId, `workpaper-package-${periodId}.pdf`), isPreview(req));
+    await logAudit({
+      userId: req.user?.userId ?? null, periodId, clientId: period.client_id as number,
+      entityType: 'client_document', entityId: doc.id as number, action: 'create',
+      description: `Saved workpaper package to documents (${parsed.data.reports.length} reports)`,
+    });
+
+    res.status(201).json({
+      data: {
+        documentId: doc.id,
+        filename,
+        objectKey: doc.object_key,
+        sizeBytes: buffer.length,
+        skippedAttachments,
+      },
+      error: null,
+    });
   } catch (err: unknown) {
-    const e = err as { code?: string; status?: number; message?: string };
+    const e = err as { name?: string; code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
   }
 });

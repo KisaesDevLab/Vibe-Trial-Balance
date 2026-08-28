@@ -17,6 +17,8 @@ export interface Account {
   preparer_notes: string | null;
   reviewer_notes: string | null;
   unit: string | null;
+  lead_sheet_id: number | null;
+  lead_sheet_source: 'manual' | 'auto' | null;
   tax_code_id: number | null;
   tax_line_source: 'manual' | 'ai' | 'import' | 'rule' | null;
   tax_line_confidence: number | null;
@@ -39,6 +41,9 @@ export interface AccountInput {
   preparerNotes?: string;
   reviewerNotes?: string;
   unit?: string | null;
+  leadSheetId?: number | null;
+  /** Import only — a letter code the server resolves per client. */
+  leadSheetCode?: string | null;
   cashFlowCategory?: 'operating' | 'investing' | 'financing' | 'non_cash' | 'cash' | null;
   importAliases?: string[];
 }

@@ -207,6 +207,22 @@ async function createBackup(
         if (await trx.schema.hasTable('tickmark_library')) {
           await dump('tickmark_library', await trx('tickmark_library').where('client_id', clientId).select('*'));
         }
+        if (await trx.schema.hasTable('lead_sheets')) {
+          await dump('lead_sheets', await trx('lead_sheets').where('client_id', clientId).select('*'));
+        }
+        // client_documents was previously missing from backups altogether —
+        // it appeared only in deleteClientData, so every document row was
+        // silently dropped from a client archive.
+        await dump('client_documents', await trx('client_documents').where('client_id', clientId).select('*'));
+        if (await trx.schema.hasTable('client_folder_links')) {
+          await dump('client_folder_links', await trx('client_folder_links').where('client_id', clientId).select('*'));
+        }
+        if (await trx.schema.hasTable('lead_sheet_attachments')) {
+          await dump('lead_sheet_attachments', await trx('lead_sheet_attachments').where('client_id', clientId).select('*'));
+        }
+        if (await trx.schema.hasTable('lead_sheet_signoffs') && periodIds.length > 0) {
+          await dump('lead_sheet_signoffs', await trx('lead_sheet_signoffs').whereIn('period_id', periodIds).select('*'));
+        }
         if (await trx.schema.hasTable('tb_tickmarks') && periodIds.length > 0) {
           await dump('tb_tickmarks', await trx('tb_tickmarks').whereIn('period_id', periodIds).select('*'));
         }
@@ -243,6 +259,16 @@ async function createBackup(
         await dump('bank_transactions', cId ? await trx('bank_transactions').where('client_id', cId).where('period_id', periodId).select('*') : []);
         await dump('variance_notes', coaIds.length > 0 ? await trx('variance_notes').where('period_id', periodId).whereIn('account_id', coaIds).select('*') : []);
         await dump('document_imports', await trx('document_imports').where('period_id', periodId).select('*'));
+        if (await trx.schema.hasTable('lead_sheets')) {
+          await dump('lead_sheets', cId ? await trx('lead_sheets').where('client_id', cId).select('*') : []);
+        }
+        if (await trx.schema.hasTable('lead_sheet_signoffs')) {
+          await dump('lead_sheet_signoffs', await trx('lead_sheet_signoffs').where('period_id', periodId).select('*'));
+        }
+        await dump('client_documents', await trx('client_documents').where('period_id', periodId).select('*'));
+        if (await trx.schema.hasTable('lead_sheet_attachments')) {
+          await dump('lead_sheet_attachments', await trx('lead_sheet_attachments').where('period_id', periodId).select('*'));
+        }
         if (await trx.schema.hasTable('tb_tickmarks')) {
           await dump('tb_tickmarks', await trx('tb_tickmarks').where('period_id', periodId).select('*'));
         }
@@ -511,6 +537,11 @@ const USER_FK_COLUMNS: Record<string, string[]> = {
   bank_transactions: ['classified_by'],
   variance_notes: ['created_by'],
   document_imports: ['imported_by', 'verified_by'],
+  lead_sheets: ['created_by'],
+  lead_sheet_signoffs: ['user_id', 'invalidated_by'],
+  lead_sheet_attachments: ['created_by', 'deleted_by'],
+  client_documents: ['uploaded_by', 'deleted_by'],
+  client_folder_links: ['created_by'],
 };
 
 type UserFkSanitizer = (table: string, row: Record<string, unknown>) => Record<string, unknown>;
@@ -689,6 +720,26 @@ async function restoreAsNew(
     }
   }
 
+  // 2.5 lead_sheets — must precede chart_of_accounts, which carries the
+  // lead_sheet_id FK that gets remapped below.
+  const leadSheetData = tables['lead_sheets'] as Array<Record<string, unknown>> | undefined;
+  if (leadSheetData && leadSheetData.length > 0 && (await trx.schema.hasTable('lead_sheets'))) {
+    const lsMap = registerMap('lead_sheets');
+    const prepared = leadSheetData.map((row) => ({
+      ...row,
+      id: undefined,
+      client_id: getNewId('clients', row.client_id as number),
+    }));
+    for (const batch of chunk(prepared, BATCH_SIZE)) {
+      const indexInWhole = prepared.indexOf(batch[0]);
+      const inserted = await trx('lead_sheets').insert(batch.map((r) => sanitizeUserFks('lead_sheets', r))).returning('id');
+      inserted.forEach((r, i) => {
+        const oldId = leadSheetData[indexInWhole + i].id as number;
+        lsMap.set(oldId, (r as { id: number }).id);
+      });
+    }
+  }
+
   // 3. chart_of_accounts — bulk insert
   const coaData = tables['chart_of_accounts'] as Array<Record<string, unknown>> | undefined;
   if (coaData && coaData.length > 0) {
@@ -699,6 +750,7 @@ async function restoreAsNew(
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
       tax_code_id: resolveTaxCode(row.tax_code_id),
+      lead_sheet_id: mapOptional('lead_sheets', row.lead_sheet_id),
     }));
     const encoded = await encodeJsonColumns(trx, 'chart_of_accounts', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
@@ -827,6 +879,96 @@ async function restoreAsNew(
     await insertBatched(trx, 'document_imports', rows);
   }
 
+  // 10.5 client_documents — must precede lead_sheet_attachments, which carries
+  // the document_id FK. Registers an id map for that remap.
+  //
+  // The bytes are NOT in the archive, only the rows: a restored instance will
+  // have documents whose object is absent until the files are moved across.
+  // The download handler's FILE_MISSING message says so.
+  const docData = tables['client_documents'] as Array<Record<string, unknown>> | undefined;
+  if (docData && docData.length > 0) {
+    const docMap = registerMap('client_documents');
+    const prepared = docData.map((row) => {
+      const newClientId = getNewId('clients', row.client_id as number);
+      // An object key encodes the ORIGINAL client's folder. Restoring into a
+      // different client must not point the copies at that client's objects:
+      // the two rows would share one file, and deleting either would destroy
+      // the other's bytes. Drop the storage pointers instead — the row keeps
+      // its metadata, and the download handler already explains that the file
+      // was not part of the backup.
+      const sameClient = newClientId === (row.client_id as number);
+      return sanitizeUserFks('client_documents', {
+        ...row,
+        id: undefined,
+        client_id: newClientId,
+        period_id: mapOptional('periods', row.period_id),
+        linked_account_id: mapOptional('chart_of_accounts', row.linked_account_id),
+        linked_journal_entry_id: mapOptional('journal_entries', row.linked_journal_entry_id),
+        ...(sameClient ? {} : { object_key: null, bucket: null, file_path: null, etag: null }),
+      });
+    });
+    for (const batch of chunk(prepared, BATCH_SIZE)) {
+      const indexInWhole = prepared.indexOf(batch[0]);
+      const inserted = await trx('client_documents').insert(batch).returning('id');
+      inserted.forEach((r, i) => {
+        docMap.set(docData[indexInWhole + i].id as number, (r as { id: number }).id);
+      });
+    }
+  }
+
+  // 10.6 client_folder_links — one row per client, and storage_path is unique,
+  // so a restore into an instance that already has that path must not collide.
+  const linkData = tables['client_folder_links'] as Array<Record<string, unknown>> | undefined;
+  if (linkData && linkData.length > 0 && (await trx.schema.hasTable('client_folder_links'))) {
+    for (const row of linkData) {
+      const newClientId = getNewId('clients', row.client_id as number);
+      // A restored-as-new client must NOT claim the original's folder: the path
+      // is unique, and two clients pointing at one folder would interleave
+      // their documents. It arrives unlinked instead, which the Storage page
+      // surfaces and which matches linking being an explicit act.
+      if (newClientId !== (row.client_id as number)) continue;
+      await trx('client_folder_links')
+        .insert(sanitizeUserFks('client_folder_links', { ...row, id: undefined, client_id: newClientId }))
+        // Restoring into an instance that already knows this folder is fine.
+        .onConflict('client_id').ignore();
+    }
+  }
+
+  // 11. lead_sheet_signoffs — balance_stamp is content-derived, so it needs no
+  // remapping: a restored engagement stays "signed" when the amounts came back
+  // identical and goes STALE when they didn't, which is exactly right.
+  const lsSignoffData = tables['lead_sheet_signoffs'] as Array<Record<string, unknown>> | undefined;
+  if (lsSignoffData && lsSignoffData.length > 0 && (await trx.schema.hasTable('lead_sheet_signoffs'))) {
+    const rows = lsSignoffData
+      .map((row) => sanitizeUserFks('lead_sheet_signoffs', {
+        ...row,
+        id: undefined,
+        period_id: getNewId('periods', row.period_id as number),
+        lead_sheet_id: mapOptional('lead_sheets', row.lead_sheet_id),
+      }))
+      // A signature whose lead sheet didn't come along has nothing to attach to.
+      .filter((row) => row.lead_sheet_id !== null);
+    await insertBatched(trx, 'lead_sheet_signoffs', rows);
+  }
+
+  // 12. lead_sheet_attachments — after client_documents (document_id FK) and
+  // lead_sheets. Tombstone rows come across too: they are what reserves a
+  // retired ref code so it is never reissued.
+  const attData = tables['lead_sheet_attachments'] as Array<Record<string, unknown>> | undefined;
+  if (attData && attData.length > 0 && (await trx.schema.hasTable('lead_sheet_attachments'))) {
+    const rows = attData
+      .map((row) => sanitizeUserFks('lead_sheet_attachments', {
+        ...row,
+        id: undefined,
+        client_id: getNewId('clients', row.client_id as number),
+        period_id: getNewId('periods', row.period_id as number),
+        lead_sheet_id: mapOptional('lead_sheets', row.lead_sheet_id),
+        account_id: mapOptional('chart_of_accounts', row.account_id),
+        document_id: mapOptional('client_documents', row.document_id),
+      }));
+    await insertBatched(trx, 'lead_sheet_attachments', rows);
+  }
+
   // Build serializable id_mappings
   const idMappings: Record<string, Record<number, number>> = {};
   for (const [table, map] of idMap.entries()) {
@@ -873,7 +1015,7 @@ async function deleteClientData(trx: Knex.Transaction, clientId: number): Promis
 
   // Rows keyed by period.
   if (periodIds.length) {
-    for (const table of ['tb_tickmarks', 'engagement_tasks', 'm1_adjustments', 'py_comparison_data']) {
+    for (const table of ['lead_sheet_attachments', 'lead_sheet_signoffs', 'tb_tickmarks', 'engagement_tasks', 'm1_adjustments', 'py_comparison_data']) {
       if (await has(table)) await trx(table).whereIn('period_id', periodIds).delete();
     }
     await trx('variance_notes').whereIn('period_id', periodIds).orWhereIn('compare_period_id', periodIds).delete();
@@ -895,7 +1037,7 @@ async function deleteClientData(trx: Knex.Transaction, clientId: number): Promis
 
   // Direct children of clients that also point into chart_of_accounts.
   await trx('classification_rules').where('client_id', clientId).delete();
-  for (const table of ['client_documents', 'tickmark_library', 'saved_reports', 'export_consolidation_settings']) {
+  for (const table of ['client_documents', 'client_folder_links', 'tickmark_library', 'lead_sheets', 'saved_reports', 'export_consolidation_settings']) {
     if (await has(table)) await trx(table).where('client_id', clientId).delete();
   }
 
@@ -981,8 +1123,10 @@ async function restoreReplace(
   const coaData = tables['chart_of_accounts'] as Array<Record<string, unknown>> | undefined;
   if (coaData && coaData.length > 0) {
     const resolveTaxCode = await makeTaxCodeResolver(trx, tables);
+    // lead_sheet_id is nulled on insert and applied below: the FK fires at
+    // insert time, and lead_sheets are restored after this block.
     const prepared = coaData.map((row) =>
-      remapClientId({ ...row, id: undefined, tax_code_id: resolveTaxCode(row.tax_code_id) }),
+      remapClientId({ ...row, id: undefined, tax_code_id: resolveTaxCode(row.tax_code_id), lead_sheet_id: null }),
     );
     const encoded = await encodeJsonColumns(trx, 'chart_of_accounts', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
@@ -1093,6 +1237,94 @@ async function restoreReplace(
       period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
     })));
     await insertBatched(trx, 'document_imports', rows);
+  }
+
+  // lead_sheets — deleteClientData removes these, so without re-inserting them
+  // a replace-mode restore would silently wipe the client's lead sheets, and
+  // with them every account's assignment.
+  const lsMap = new Map<number, number>();
+  const lsData = tables['lead_sheets'] as Array<Record<string, unknown>> | undefined;
+  if (lsData && lsData.length > 0 && (await trx.schema.hasTable('lead_sheets'))) {
+    for (const row of lsData) {
+      const [ins] = await trx('lead_sheets')
+        .insert(sanitizeUserFks('lead_sheets', remapClientId({ ...row, id: undefined })))
+        .returning('id');
+      lsMap.set(row.id as number, (ins as { id: number }).id);
+    }
+  }
+
+  // Apply the assignments now that the new lead sheet ids exist. Driven by the
+  // ARCHIVED value on each account row, since the insert above nulled it.
+  if (coaData && coaData.length > 0) {
+    for (const row of coaData) {
+      const archived = row.lead_sheet_id as number | null;
+      const newAccountId = coaIdMap.get(row.id as number);
+      if (!archived || !newAccountId) continue;
+      const newLeadSheetId = lsMap.get(archived);
+      if (!newLeadSheetId) continue; // archived sheet absent — stays unassigned
+      await trx('chart_of_accounts')
+        .where({ id: newAccountId })
+        .update({ lead_sheet_id: newLeadSheetId, lead_sheet_source: row.lead_sheet_source ?? null });
+    }
+  }
+
+  // lead_sheet_signoffs
+  const soData = tables['lead_sheet_signoffs'] as Array<Record<string, unknown>> | undefined;
+  if (soData && soData.length > 0 && (await trx.schema.hasTable('lead_sheet_signoffs'))) {
+    const rows = soData
+      .map((row) => sanitizeUserFks('lead_sheet_signoffs', {
+        ...row,
+        id: undefined,
+        period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
+        lead_sheet_id: lsMap.get(row.lead_sheet_id as number) ?? null,
+      }))
+      .filter((row) => row.lead_sheet_id !== null);
+    await insertBatched(trx, 'lead_sheet_signoffs', rows);
+  }
+
+  // client_documents. Replace mode restores into the SAME client, so the object
+  // keys still point at that client's own folder and stay valid.
+  const docMap = new Map<number, number>();
+  const cdData = tables['client_documents'] as Array<Record<string, unknown>> | undefined;
+  if (cdData && cdData.length > 0) {
+    for (const row of cdData) {
+      const [ins] = await trx('client_documents')
+        .insert(sanitizeUserFks('client_documents', remapClientId({
+          ...row,
+          id: undefined,
+          period_id: row.period_id ? (periodIdMap.get(row.period_id as number) ?? null) : null,
+          linked_account_id: null,
+          linked_journal_entry_id: null,
+        })))
+        .returning('id');
+      docMap.set(row.id as number, (ins as { id: number }).id);
+    }
+  }
+
+  // client_folder_links — one row per client, so re-insert only if the delete
+  // above removed it.
+  const cflData = tables['client_folder_links'] as Array<Record<string, unknown>> | undefined;
+  if (cflData && cflData.length > 0 && (await trx.schema.hasTable('client_folder_links'))) {
+    for (const row of cflData) {
+      await trx('client_folder_links')
+        .insert(sanitizeUserFks('client_folder_links', remapClientId({ ...row, id: undefined })))
+        .onConflict('client_id').ignore();
+    }
+  }
+
+  // lead_sheet_attachments — after documents (FK) and lead sheets. Tombstones
+  // come across too: they are what keeps a retired ref code reserved.
+  const laData = tables['lead_sheet_attachments'] as Array<Record<string, unknown>> | undefined;
+  if (laData && laData.length > 0 && (await trx.schema.hasTable('lead_sheet_attachments'))) {
+    const rows = laData.map((row) => sanitizeUserFks('lead_sheet_attachments', remapClientId({
+      ...row,
+      id: undefined,
+      period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
+      lead_sheet_id: lsMap.get(row.lead_sheet_id as number) ?? null,
+      account_id: null,
+      document_id: docMap.get(row.document_id as number) ?? null,
+    })));
+    await insertBatched(trx, 'lead_sheet_attachments', rows);
   }
 }
 
@@ -1557,6 +1789,14 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
     const trustSourceUserIds = !!backupRecord;
 
     await db.transaction(async (trx) => {
+      // audit_log.period_id cascades on delete, and the append-only trigger
+      // blocks that cascade — so replace mode, which deletes the client's
+      // periods, fails outright for any client that has audit history (i.e.
+      // every real one). This is the escape hatch migration
+      // 20260418000002_audit_log_append_only documents: SET LOCAL, so it is
+      // scoped to this transaction and cannot leak into normal operation.
+      await trx.raw("SET LOCAL app.audit_log_mutation_allowed = 'true'");
+
       if (mode === 'as_new') {
         const result = await restoreAsNew(tables, trx, trustSourceUserIds);
         newClientId = result.newClientId;

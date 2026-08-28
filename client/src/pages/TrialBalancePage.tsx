@@ -804,6 +804,20 @@ export function TrialBalancePage() {
       header: 'Cat.',
       cell: (i) => renderCell(i.row.index, 'category', i.row.original),
     }),
+    columnHelper.accessor('lead_sheet_code', {
+      header: 'LS',
+      cell: (i) => {
+        const v = i.getValue();
+        return (
+          <span
+            title={i.row.original.lead_sheet_name ?? undefined}
+            className="block text-center text-xs font-mono text-gray-500 dark:text-gray-400"
+          >
+            {v ?? '—'}
+          </span>
+        );
+      },
+    }),
     columnHelper.accessor('prior_year_debit', {
       header: 'PY Dr',
       cell: (i) => { const v = i.getValue(); return <span className={`text-right block text-sm font-mono tabular-nums ${v === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-gray-500 dark:text-gray-400'}`}>{v === 0 ? '—' : fmt(v)}</span>; },
@@ -967,6 +981,20 @@ export function TrialBalancePage() {
     columnHelper.accessor('category', {
       header: 'Cat.',
       cell: (i) => renderCell(i.row.index, 'category', i.row.original),
+    }),
+    columnHelper.accessor('lead_sheet_code', {
+      header: 'LS',
+      cell: (i) => {
+        const v = i.getValue();
+        return (
+          <span
+            title={i.row.original.lead_sheet_name ?? undefined}
+            className="block text-center text-xs font-mono text-gray-500 dark:text-gray-400"
+          >
+            {v ?? '—'}
+          </span>
+        );
+      },
     }),
     columnHelper.display({
       id: 'py_balance',
