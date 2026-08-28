@@ -40,6 +40,14 @@ function EntryCard({ entry }: { entry: JournalEntry }) {
           {badge.label} #{entry.entry_number}
         </span>
         <span className="text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{fmtDate(entry.entry_date)}</span>
+        {entry.workpaper_ref && (
+          <span
+            title="Supporting workpaper"
+            className="inline-flex px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 whitespace-nowrap"
+          >
+            W/P {entry.workpaper_ref}
+          </span>
+        )}
         <span className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1 truncate">{entry.description ?? <span className="italic text-gray-400 dark:text-gray-500">No description</span>}</span>
         <span className="text-sm font-mono text-gray-600 dark:text-gray-400 whitespace-nowrap">{fmt(totalDebit)}</span>
       </div>

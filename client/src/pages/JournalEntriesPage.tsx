@@ -537,6 +537,14 @@ export function JournalEntriesPage() {
                   }`}>
                     {entry.entry_type === 'book' ? 'BOOK' : entry.entry_type === 'tax' ? 'TAX' : 'TRANS'} #{entry.entry_number}
                   </span>
+                  {entry.workpaper_ref && (
+                    <span
+                      title="Supporting workpaper"
+                      className="inline-flex px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 mr-3 whitespace-nowrap"
+                    >
+                      W/P {entry.workpaper_ref}
+                    </span>
+                  )}
                   <span className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1">{entry.description ?? '(no description)'}</span>
                   <span className="text-sm text-gray-400 dark:text-gray-500 mr-4">{fmtDate(entry.entry_date)}</span>
                   <button

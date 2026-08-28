@@ -56,6 +56,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
   };
   const [entryDate, setEntryDate] = useState(periodEndDate ?? localToday());
   const [description, setDescription] = useState('');
+  const [workpaperRef, setWorkpaperRef] = useState('');
   const [lines, setLines] = useState<FormLine[]>([
     { _key: newLineKey(), accountId: '', debit: '', credit: '' },
     { _key: newLineKey(), accountId: '', debit: '', credit: '' },
@@ -81,6 +82,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
   // Treat the form as dirty once any field deviates from the initial state.
   const dirty =
     description !== '' ||
+    workpaperRef !== '' ||
     lines.some((l) => l.accountId !== '' || l.debit !== '' || l.credit !== '');
   useUnsavedGuard(dirty);
   const handleClose = async () => { if (await confirmDiscard(dirty)) onClose(); };
@@ -111,6 +113,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
       entryType,
       entryDate,
       description: description || undefined,
+      workpaperRef: workpaperRef.trim() || undefined,
       lines: lineStatus.lines,
     });
   };
@@ -126,7 +129,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-sm">{error}</div>}
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-4 gap-4">
               <div>
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
                 <select
@@ -145,6 +148,17 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
                   onChange={(e) => setEntryDate(e.target.value)}
                   required
                   className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">W/P Ref</label>
+                <input
+                  value={workpaperRef}
+                  onChange={(e) => setWorkpaperRef(e.target.value)}
+                  maxLength={20}
+                  placeholder="e.g. B-2"
+                  title="Workpaper supporting this entry — printed on the AJE listing"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                 />
               </div>
               <div>
