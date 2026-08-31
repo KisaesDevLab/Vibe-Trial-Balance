@@ -11,13 +11,39 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { inflateSync } from 'node:zlib';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import { burnAnnotation, imageToPdf, isConvertibleImage, pdfPageCount } from '../leadSheetPdf';
+import { ROBOTO_MEDIUM } from '../../pdf/PdfTemplateService';
 
 /** The first tickmark this app seeds. */
 const CHECK = '✓';
 /** WinAnsi 0x86 — encodable by the standard fonts. */
 const DAGGER = '†';
+
+/**
+ * Which fonts a saved PDF actually references.
+ *
+ * pdf-lib saves with object streams on, so the font dictionaries are inside
+ * FlateDecode streams and a plain byte search finds nothing — which is exactly
+ * the mistake that makes a font assertion look like it passes.
+ */
+function fontsUsed(pdf: Buffer): string[] {
+  const text: string[] = [];
+  for (const m of pdf.toString('latin1').matchAll(/stream\r?\n/g)) {
+    const start = (m.index as number) + m[0].length;
+    const end = pdf.indexOf('endstream', start);
+    const raw = pdf.subarray(start, end);
+    try {
+      text.push(inflateSync(raw).toString('latin1'));
+    } catch {
+      text.push(raw.toString('latin1'));
+    }
+  }
+  const joined = text.join('\n');
+  return ['ZapfDingbats', 'Roboto'].filter((name) => joined.includes(name));
+}
 
 async function blankPdf(pages = 1): Promise<Buffer> {
   const doc = await PDFDocument.create();
@@ -51,6 +77,61 @@ test('burnAnnotation renders the check tickmark without throwing', async () => {
   const out = await burnAnnotation(await blankPdf(), annotation());
   assert.ok(out.length > 0);
   assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
+});
+
+// ── The check tickmark has to be VISIBLE, not merely not-throw ───────────────
+
+test('the embedded TTF has no check glyph — which is why not throwing proves nothing', async () => {
+  // pdfmake's Roboto stops at Latin/Greek/Cyrillic; U+2713 lives in Dingbats.
+  // fontkit does NOT complain about that: it maps the code point to .notdef,
+  // reports .notdef's width, and draws a hollow box. Every "does not throw"
+  // test above passed while the stamp came out as an empty rectangle.
+  const doc = await PDFDocument.create();
+  doc.registerFontkit(fontkit);
+  const roboto = await doc.embedFont(ROBOTO_MEDIUM, { subset: true });
+  const covered = new Set(roboto.getCharacterSet());
+  assert.equal(covered.has(CHECK.codePointAt(0) as number), false);
+  assert.equal(covered.has(0x41), true, 'sanity: it does have "A"');
+  assert.doesNotThrow(() => roboto.widthOfTextAtSize(CHECK, 16), 'the trap: a width comes back anyway');
+});
+
+test('a check tickmark is drawn with a font that actually has the glyph', async () => {
+  const out = await burnAnnotation(await blankPdf(), annotation({ symbol: CHECK }));
+  assert.ok(fontsUsed(out).includes('ZapfDingbats'), 'check must fall back to ZapfDingbats');
+});
+
+test('so is a cross', async () => {
+  const out = await burnAnnotation(await blankPdf(), annotation({ symbol: '✗' }));
+  assert.ok(fontsUsed(out).includes('ZapfDingbats'));
+});
+
+test('a tickmark Roboto can draw does not pull in a second font', async () => {
+  // Most tickmarks are letters (A, B, F, G, ...); they must not each drag an
+  // extra font dictionary into the stored workpaper.
+  for (const symbol of ['A', DAGGER, '√']) {
+    const out = await burnAnnotation(await blankPdf(), annotation({ symbol }));
+    assert.deepEqual(fontsUsed(out), ['Roboto'], `${symbol} should stay in Roboto`);
+  }
+});
+
+test('a symbol neither font can draw degrades to a visible mark', async () => {
+  // '?' in Roboto, not silence: a stamp the audit log says exists must leave
+  // something on the page.
+  const out = await burnAnnotation(await blankPdf(), annotation({ symbol: '\u{1F600}' }));
+  assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
+  assert.deepEqual(fontsUsed(out), ['Roboto']);
+});
+
+test('a note keeps the characters Roboto has and only swaps the ones it lacks', async () => {
+  // The old code replaced the WHOLE note with '?' if any character was
+  // unsupported, losing the preparer's words over one stray glyph.
+  const out = await burnAnnotation(
+    await blankPdf(),
+    annotation({ symbol: 'A', note: `tied to bank ${CHECK} 3/31` }),
+  );
+  assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
+  // The note stays in Roboto; only the symbol is allowed to change font.
+  assert.deepEqual(fontsUsed(out), ['Roboto']);
 });
 
 test('burnAnnotation renders the dagger too', async () => {

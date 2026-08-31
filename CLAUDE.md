@@ -244,6 +244,14 @@ All planned phases complete. App is feature-complete.
   StandardFonts cannot encode the seeded `✓` (U+2713) and throw**, so a real TTF is embedded via
   `@pdf-lib/fontkit`, reusing the `ROBOTO_MEDIUM` buffer exported from `PdfTemplateService` — there is
   a test pinning that StandardFonts genuinely throws on `✓` but not on `†`.
+  **But pdfmake's Roboto has no `✓` glyph either, and THAT failure is silent** — fontkit maps an
+  unsupported code point to `.notdef`, which has a width and draws a hollow box, so `drawText` and
+  `widthOfTextAtSize` both succeed while the stamp comes out as an empty rectangle. Coverage is
+  therefore checked against `font.getCharacterSet()`, never by "it didn't throw", and anything Roboto
+  lacks falls back to **ZapfDingbats** (a standard PDF font: `✓ ✔ ✗ ✘`, nothing embedded), then to
+  `?`. The ZapfDingbats encodability probe runs against a module-level scratch document, because
+  `embedFont` writes the font out at save whether or not anything drew with it. Notes stay in Roboto
+  with per-character substitution — one stray glyph must not cost the preparer's whole note.
   An attachment carries an optional `account_id`, so it hangs off **one row of the schedule** — the
   paperclip in each member row's Files cell — or off the schedule as a whole when it is null. The
   sheet-level Supporting files panel lists both, labelling the per-account ones with their account

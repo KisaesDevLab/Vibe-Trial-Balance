@@ -14,13 +14,21 @@
  * The accepted consequence: a stamp cannot be removed. There is no pristine
  * copy to re-render from, so the UI must treat placing a mark as permanent.
  *
- * Font note: pdf-lib's StandardFonts are WinAnsi-encoded, and this app's FIRST
- * seeded system tickmark is '✓' (U+2713), which is not in WinAnsi — drawText
- * throws on it. So a real TTF is embedded via fontkit, reusing the Roboto
- * buffer PdfTemplateService already decodes rather than loading a second copy.
+ * Font note, and it takes two fonts to cover the tickmarks:
+ *   - pdf-lib's StandardFonts are WinAnsi-encoded and drawText THROWS on '✓'
+ *     (U+2713), this app's first seeded system tickmark. So a real TTF is
+ *     embedded via fontkit, reusing the Roboto buffer PdfTemplateService
+ *     already decodes rather than loading a second copy.
+ *   - But pdfmake's Roboto has no '✓' glyph either, and that failure is
+ *     SILENT: fontkit maps an unsupported code point to .notdef, which has a
+ *     width and draws nothing. The mark went in, the audit trail said it was
+ *     stamped, and the page came out blank. So coverage is checked against the
+ *     font's character set — a width that doesn't throw proves nothing — and
+ *     anything Roboto lacks falls back to ZapfDingbats, which carries ✓ ✔ ✗ ✘
+ *     and is one of the 14 standard PDF fonts, so nothing extra is embedded.
  */
 
-import { PDFDocument, rgb, type PDFFont, type PDFImage } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { ROBOTO_MEDIUM } from '../pdf/PdfTemplateService';
 
@@ -52,6 +60,26 @@ const STAMP_COLORS: Record<string, [number, number, number]> = {
 const clamp01 = (n: number): number => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
 
 /**
+ * Can ZapfDingbats encode this symbol?
+ *
+ * Asked of a throwaway document, because embedFont registers the font on the
+ * document it is called with and pdf-lib writes it out at save whether or not
+ * anything drew with it — so asking the real file would leave a dead font
+ * dictionary in every workpaper whose symbol turned out to be unsupported too.
+ * The scratch document holds only standard-font metrics; nothing is embedded.
+ */
+let scratchDingbats: Promise<PDFFont> | null = null;
+async function dingbatsCanEncode(text: string): Promise<boolean> {
+  scratchDingbats ??= PDFDocument.create().then((d) => d.embedFont(StandardFonts.ZapfDingbats));
+  try {
+    (await scratchDingbats).widthOfTextAtSize(text, 16);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Draw one annotation onto an already-loaded document.
  *
  * Only the NEW mark is drawn — existing ones are already part of the page
@@ -81,20 +109,34 @@ export async function burnAnnotation(pdfBytes: Buffer, ann: StampAnnotation): Pr
   const [r, g, b] = STAMP_COLORS[ann.color ?? 'gray'] ?? STAMP_COLORS.gray;
   const colour = rgb(r, g, b);
 
-  // A glyph the embedded font can't map would otherwise throw and fail the
-  // whole upload; degrade to '?' instead.
-  const safe = (text: string): string => {
-    try {
-      font.widthOfTextAtSize(text, 16);
-      return text;
-    } catch {
-      return '?';
-    }
-  };
+  // What the embedded font can actually draw. NOT widthOfTextAtSize: fontkit
+  // answers that for an unsupported code point too, using .notdef's width, so
+  // it reports every character as fine and the glyph silently draws blank.
+  const covered = new Set(font.getCharacterSet());
+  const canDraw = (text: string): boolean =>
+    [...text].every((ch) => covered.has(ch.codePointAt(0) as number));
 
-  page.drawText(safe(ann.symbol), { x, y: y - 16, size: 16, font, color: colour });
+  // The symbol is one mark, so it gets a font that can render it rather than a
+  // per-character substitution: Roboto, else ZapfDingbats (embedded only when
+  // it is needed, so an ordinary letter tickmark doesn't drag it into the
+  // file), else '?' so a stamp is at least visible as one.
+  let symbolFont: PDFFont = font;
+  let symbol = ann.symbol;
+  if (!canDraw(symbol)) {
+    // Standard fonts DO throw on a character they cannot encode, which is what
+    // makes this a real check — unlike the embedded TTF's silent .notdef.
+    if (await dingbatsCanEncode(symbol)) symbolFont = await doc.embedFont(StandardFonts.ZapfDingbats);
+    else symbol = '?';
+  }
+
+  page.drawText(symbol, { x, y: y - 16, size: 16, font: symbolFont, color: colour });
   if (ann.note) {
-    page.drawText(safe(ann.note.slice(0, 80)), { x, y: y - 26, size: 8, font, color: colour });
+    // A note is prose, so keep it in Roboto and replace only the characters it
+    // lacks — one odd character shouldn't cost the whole note.
+    const note = [...ann.note.slice(0, 80)]
+      .map((ch) => (canDraw(ch) ? ch : '?'))
+      .join('');
+    page.drawText(note, { x, y: y - 26, size: 8, font, color: colour });
   }
 
   // Re-saving a vector PDF through pdf-lib is lossless — it is not a raster
