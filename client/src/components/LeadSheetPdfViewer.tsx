@@ -14,9 +14,14 @@
  * pdfjs is imported lazily inside the effect, and this whole component is
  * lazy-loaded by its caller: a top-level import would add ~1 MB to the initial
  * bundle for a feature most page loads never touch.
+ *
+ * The document is opened once per attachment (and once more after a stamp, to
+ * pick up the rewritten bytes); paging and resizing only re-render an already
+ * parsed page rather than re-downloading the file.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
   fetchAttachmentBytes,
   addAnnotation,
@@ -33,9 +38,57 @@ interface Props {
   onStamped: () => void;
 }
 
+/**
+ * The pdf.js worker, fetched once and handed to pdfjs as a blob: URL.
+ *
+ * Loading it by its own https URL is what kept breaking in production with
+ * "Setting up fake worker failed: Failed to fetch dynamically imported
+ * module". The asset is a `.mjs`, a browser refuses to execute a module script
+ * unless the Content-Type says JavaScript, and any browser that fetched it
+ * while the server still answered `application/octet-stream` keeps that stored
+ * Content-Type indefinitely: the entry revalidates with If-Modified-Since, and
+ * a 304 carries no Content-Type to replace it with. Fixing the server (nginx
+ * `location ~ \.mjs$`) therefore does NOT repair a browser that already cached
+ * the bad response — the file has to be fetched under a different cache key,
+ * or its type has to stop mattering.
+ *
+ * Re-wrapping the bytes in a Blob does the latter: what the server labelled the
+ * response is irrelevant, only the bytes are used, and the worker is created
+ * from an origin-local blob: URL, which pdf.js treats as same-origin and uses
+ * verbatim.
+ */
+let workerSrcPromise: Promise<string> | null = null;
+
+function loadWorkerSrc(): Promise<string> {
+  workerSrcPromise ??= (async () => {
+    // Vite rewrites this to the emitted asset URL at build time.
+    const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
+    try {
+      const res = await fetch(workerUrl);
+      if (!res.ok) throw new Error(`worker asset responded ${res.status}`);
+      const bytes = await res.arrayBuffer();
+      return URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
+    } catch {
+      // Blob workers are blocked by a `worker-src` CSP without `blob:`; fall
+      // back to letting pdfjs load the asset by URL the ordinary way.
+      return workerUrl;
+    }
+  })();
+  return workerSrcPromise;
+}
+
+// Padding of the scroll container, so a fitted page doesn't touch the edges.
+const PAGE_GUTTER = 32;
+
+function fitScale(pageWidth: number, containerWidth: number): number {
+  if (!containerWidth || !pageWidth) return 1.4;
+  return Math.min(3, Math.max(0.5, (containerWidth - PAGE_GUTTER) / pageWidth));
+}
+
 export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [pageNum, setPageNum] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -43,86 +96,139 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
   const [selectedMark, setSelectedMark] = useState<number | null>(null);
   const [note, setNote] = useState('');
   const [placing, setPlacing] = useState(false);
-  // Bumped after a stamp so the page re-renders from the updated bytes.
+  const [containerWidth, setContainerWidth] = useState(0);
+  // Bumped after a stamp so the document reloads from the updated bytes.
   const [version, setVersion] = useState(0);
   // pdfjs throws "Cannot use the same canvas during multiple render()
   // operations" if a second render starts while one is live — which happens on
-  // a fast double Next, or when stamping bumps `version` mid-render.
+  // a fast double Next, or when a resize lands mid-render.
   const renderTaskRef = useRef<{ cancel: () => void } | null>(null);
 
-  const render = useCallback(async () => {
+  // Fit the page to the width of the viewer. A vertical scrollbar appearing or
+  // disappearing moves this by ~15px, so ignore small deltas: reacting to them
+  // would let the scale oscillate between two values forever.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      setContainerWidth((prev) => (Math.abs(w - prev) > 24 ? w : prev));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Open the document. Re-runs only for a different attachment or after a
+  // stamp — not for paging or resizing.
+  useEffect(() => {
+    let cancelled = false;
+    let task: { promise: Promise<PDFDocumentProxy>; destroy: () => Promise<void> } | null = null;
     setLoading(true);
     setError(null);
-    try {
-      // Lazy so pdfjs stays out of the initial bundle.
-      const pdfjs = await import('pdfjs-dist');
-      // The worker ships as a separate asset; Vite rewrites this URL at build.
-      const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
-      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+    (async () => {
+      try {
+        // Lazy so pdfjs stays out of the initial bundle.
+        const pdfjs = await import('pdfjs-dist');
+        pdfjs.GlobalWorkerOptions.workerSrc = await loadWorkerSrc();
+        const bytes = await fetchAttachmentBytes(attachment.id);
+        if (cancelled) return;
+        task = pdfjs.getDocument({ data: bytes });
+        const loaded = await task.promise;
+        if (cancelled) {
+          void task.destroy();
+          return;
+        }
+        setDoc(loaded);
+        setPageCount(loaded.numPages);
+        setPageNum((p) => Math.min(p, loaded.numPages));
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Could not open this PDF.');
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      // Destroys the document AND terminates its worker; without this every
+      // reload would leak a worker thread.
+      void task?.destroy();
+      setDoc(null);
+    };
+  }, [attachment.id, version]);
 
-      const bytes = await fetchAttachmentBytes(attachment.id);
-      const doc = await pdfjs.getDocument({ data: bytes }).promise;
-      setPageCount(doc.numPages);
-      const page = await doc.getPage(Math.min(pageNum, doc.numPages));
-      const viewport = page.getViewport({ scale: 1.4 });
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-
-      renderTaskRef.current?.cancel();
-      const task = page.render({ canvas, canvasContext: ctx, viewport });
-      renderTaskRef.current = task;
-      await task.promise;
-      renderTaskRef.current = null;
-    } catch (err) {
-      // A cancelled render is expected, not a failure to surface.
-      if ((err as { name?: string })?.name === 'RenderingCancelledException') return;
-      setError(err instanceof Error ? err.message : 'Could not render this PDF.');
-    } finally {
-      setLoading(false);
-    }
-  }, [attachment.id, pageNum, version]);
-
+  // Render the current page at the current width.
   useEffect(() => {
-    void render();
-    return () => { renderTaskRef.current?.cancel(); renderTaskRef.current = null; };
-  }, [render]);
+    if (!doc) return;
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const page = await doc.getPage(Math.min(pageNum, doc.numPages));
+        if (cancelled) return;
+        const canvas = canvasRef.current;
+        const ctx = canvas?.getContext('2d');
+        if (!canvas || !ctx) return;
+        const viewport = page.getViewport({
+          scale: fitScale(page.getViewport({ scale: 1 }).width, containerWidth),
+        });
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
 
-  const handleClick = async (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (selectedMark === null || placing) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const xPct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const yPct = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-    const mark = tickmarks.find((t) => t.id === selectedMark);
+        renderTaskRef.current?.cancel();
+        const task = page.render({ canvas, canvasContext: ctx, viewport });
+        renderTaskRef.current = task;
+        await task.promise;
+        renderTaskRef.current = null;
+      } catch (err) {
+        // A cancelled render is expected, not a failure to surface.
+        if ((err as { name?: string })?.name === 'RenderingCancelledException') return;
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not render this PDF.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      renderTaskRef.current?.cancel();
+      renderTaskRef.current = null;
+    };
+  }, [doc, pageNum, containerWidth]);
 
-    const ok = await confirmAction({
-      message: `Stamp "${mark?.symbol ?? ''}" here? Tickmarks are written into the stored PDF and cannot be removed.`,
-      confirmLabel: 'Stamp',
-    });
-    if (!ok) return;
+  const handleClick = useCallback(
+    async (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (selectedMark === null || placing) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const xPct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      const yPct = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+      const mark = tickmarks.find((t) => t.id === selectedMark);
 
-    setPlacing(true);
-    const res = await addAnnotation(attachment.id, {
-      page: pageNum,
-      xPct,
-      yPct,
-      tickmarkId: selectedMark,
-      note: note.trim() || undefined,
-    });
-    setPlacing(false);
-    if (res.error) { pushToast(res.error.message, 'error'); return; }
-    pushToast('Tickmark stamped.', 'success');
-    setNote('');
-    setVersion((v) => v + 1);
-    onStamped();
-  };
+      const ok = await confirmAction({
+        message: `Stamp "${mark?.symbol ?? ''}" here? Tickmarks are written into the stored PDF and cannot be removed.`,
+        confirmLabel: 'Stamp',
+      });
+      if (!ok) return;
+
+      setPlacing(true);
+      const res = await addAnnotation(attachment.id, {
+        page: pageNum,
+        xPct,
+        yPct,
+        tickmarkId: selectedMark,
+        note: note.trim() || undefined,
+      });
+      setPlacing(false);
+      if (res.error) { pushToast(res.error.message, 'error'); return; }
+      pushToast('Tickmark stamped.', 'success');
+      setNote('');
+      setVersion((v) => v + 1);
+      onStamped();
+    },
+    [attachment.id, note, onStamped, pageNum, placing, selectedMark, tickmarks],
+  );
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-6xl max-h-[92vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/50 z-50 flex">
+      <div className="bg-white dark:bg-gray-800 shadow-xl w-full h-full flex flex-col">
         <div className="flex items-center justify-between px-5 py-3 border-b dark:border-gray-700">
           <div>
             <h2 className="text-base font-semibold dark:text-white">
@@ -135,7 +241,7 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
 
         <div className="flex-1 min-h-0 flex">
           {/* Canvas */}
-          <div ref={wrapRef} className="flex-1 overflow-auto bg-gray-100 dark:bg-gray-900 p-4 flex justify-center">
+          <div ref={wrapRef} className="relative flex-1 overflow-auto bg-gray-100 dark:bg-gray-900 p-4 flex justify-center">
             {error ? (
               <p className="text-sm text-red-600 dark:text-red-400 self-center">{error}</p>
             ) : (
@@ -145,11 +251,13 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
                 className={`shadow-md bg-white max-w-full h-auto ${selectedMark !== null ? 'cursor-crosshair' : ''}`}
               />
             )}
-            {loading && <p className="text-sm text-gray-400 self-center absolute">Rendering…</p>}
+            {loading && !error && (
+              <p className="absolute inset-x-0 top-1/2 text-center text-sm text-gray-400">Rendering…</p>
+            )}
           </div>
 
           {/* Palette */}
-          <div className="w-60 border-l border-gray-200 dark:border-gray-700 p-4 space-y-4 overflow-y-auto">
+          <div className="w-60 shrink-0 border-l border-gray-200 dark:border-gray-700 p-4 space-y-4 overflow-y-auto">
             <div>
               <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase mb-2">Place a tickmark</h3>
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">

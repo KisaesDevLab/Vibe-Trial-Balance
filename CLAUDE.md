@@ -259,6 +259,17 @@ All planned phases complete. App is feature-complete.
   module ("Failed to fetch dynamically imported module"). Both nginx configs therefore carry a
   `location ~ \.mjs$ { default_type application/javascript; }` — as a LOCATION, because a
   `types { ... }` block at server level replaces the whole inherited table instead of adding to it.
+  Fixing the server was **not enough**, because a browser that cached the bad response keeps its
+  stored Content-Type forever: the entry revalidates with `If-Modified-Since` and a 304 carries no
+  Content-Type to replace it with. So `LeadSheetPdfViewer` no longer hands pdfjs that URL at all —
+  it fetches the worker, re-wraps the bytes in a `Blob` and sets `workerSrc` to the blob: URL, which
+  makes the server's label irrelevant. Keep both: the nginx block is what a fresh browser needs, the
+  blob is what an already-poisoned one needs. Note also that pdf.js memoizes its fake-worker
+  fallback per page load (`PDFWorker._setupFakeWorkerGlobal`), so ONE failure disables the real
+  worker for the whole session — a reload is required, and any test of this needs a fresh page.
+  `location = /index.html { add_header Cache-Control "no-store" always; }` in both configs is the
+  matching rule for the entry point: with no header at all a browser invents a lifetime from
+  Last-Modified and can run a previous deploy's bundle for days.
 - **Lead schedule notes** (`lead_sheet_notes`) — the review conversation on a lead sheet. **Per
   period**, unlike membership: a query about the 2024 cash reconciliation says nothing about 2025.
   `account_id` NULL means the note is about the schedule as a whole; set, it is the query on that one
