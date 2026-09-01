@@ -296,7 +296,9 @@ All planned phases complete. App is feature-complete.
   **Three annotation kinds share one endpoint and one burner** (`POST .../annotations`,
   `burnAnnotation`): `tickmark` (library symbol + optional caption), `note` (free text ≤ 500 chars,
   drawn in a bordered box whose top-left is the click point, wrapped by `wrapText` and slid back
-  onto the page near an edge) and `line` (start/end as page fractions, `strokeWidth` in points,
+  onto the page near an edge; optional `widthPct` — a fraction of page width set by drag-drawing a
+  box in the viewer — overrides the 220pt default that could lie across page text, and old records
+  without it keep that default) and `line` (start/end as page fractions, `strokeWidth` in points,
   drag-to-draw in the viewer with an SVG preview overlay). The `annotations` jsonb is a
   discriminated union on `kind`; a record **without `kind` is a tickmark** (rows written before
   notes/lines existed), and the route's `z.preprocess` defaults a missing `kind` for the same

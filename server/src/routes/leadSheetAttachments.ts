@@ -291,6 +291,8 @@ const annotationSchema = z.preprocess(
     kind: z.literal('note'),
     text: z.string().trim().min(1).max(MAX_NOTE_TEXT),
     color: annotationColor.default('red'),
+    /** Box width as a fraction of the page width (drag-drawn); omitted = default width. */
+    widthPct: z.number().min(0.03).max(1).optional(),
   }),
   z.object({
     ...annotationBase,
@@ -349,7 +351,7 @@ leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res:
       };
       description = `Stamped "${tm.symbol}" on ${att.row.ref_code} p${input.page}`;
     } else if (input.kind === 'note') {
-      annotation = { ...base, kind: 'note', text: input.text, color: input.color };
+      annotation = { ...base, kind: 'note', text: input.text, color: input.color, ...(input.widthPct !== undefined ? { widthPct: input.widthPct } : {}) };
       const preview = input.text.length > 40 ? `${input.text.slice(0, 40)}…` : input.text;
       description = `Noted "${preview}" on ${att.row.ref_code} p${input.page}`;
     } else {

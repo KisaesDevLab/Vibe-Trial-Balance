@@ -59,6 +59,13 @@ export interface TickmarkAnnotation extends AnnotationBase {
 export interface NoteAnnotation extends AnnotationBase {
   kind: 'note';
   text: string;
+  /**
+   * Box width as a fraction of the page width, set by dragging in the viewer.
+   * Absent (click placement, and every note burned before this existed) means
+   * the fixed NOTE_MAX_WIDTH — which is exactly the problem this solves: a
+   * preset width can lie across page text the user needed to keep readable.
+   */
+  widthPct?: number;
 }
 
 /** A straight line from (xPct, yPct) to (x2Pct, y2Pct). */
@@ -78,6 +85,7 @@ export const MIN_STROKE_WIDTH = 0.5;
 export const MAX_STROKE_WIDTH = 8;
 
 /** Note box typography, in PDF points. */
+const NOTE_MIN_WIDTH = 48;
 const NOTE_FONT_SIZE = 9;
 const NOTE_LINE_HEIGHT = 11;
 const NOTE_PADDING = 4;
@@ -202,9 +210,13 @@ export async function burnAnnotation(pdfBytes: Buffer, ann: StampAnnotation): Pr
     const note = ann as NoteAnnotation;
     const text = substitute(note.text.slice(0, MAX_NOTE_TEXT));
     const measure = (s: string): number => font.widthOfTextAtSize(s, NOTE_FONT_SIZE);
-    // The box wants NOTE_MAX_WIDTH but must stay on the page: shrink it on a
+    // The user's dragged width wins; a click (or an old record) gets the
+    // default. Either way the box must stay on the page: shrink it on a
     // narrow page, and slide the whole box left near the right edge.
-    const boxW = Math.min(NOTE_MAX_WIDTH, width - NOTE_PADDING * 2);
+    const wantedW = typeof note.widthPct === 'number' && Number.isFinite(note.widthPct) && note.widthPct > 0
+      ? Math.max(NOTE_MIN_WIDTH, note.widthPct * width)
+      : NOTE_MAX_WIDTH;
+    const boxW = Math.min(wantedW, width - NOTE_PADDING * 2);
     const left = Math.max(0, Math.min(x, width - boxW));
     const lines = wrapText(text, measure, boxW - NOTE_PADDING * 2);
     const boxH = lines.length * NOTE_LINE_HEIGHT + NOTE_PADDING * 2;

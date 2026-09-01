@@ -25,6 +25,8 @@ export interface TickmarkAnnotation extends AnnotationBase {
 export interface NoteAnnotation extends AnnotationBase {
   kind: 'note';
   text: string;
+  /** Box width as a fraction of the page width (drag-drawn); absent = default width. */
+  widthPct?: number;
 }
 
 export interface LineAnnotation extends AnnotationBase {
@@ -42,7 +44,7 @@ export const MAX_NOTE_TEXT = 500;
 
 export type AddAnnotationInput =
   | { kind: 'tickmark'; page: number; xPct: number; yPct: number; tickmarkId: number; note?: string }
-  | { kind: 'note'; page: number; xPct: number; yPct: number; text: string; color: AnnotationColor }
+  | { kind: 'note'; page: number; xPct: number; yPct: number; text: string; color: AnnotationColor; widthPct?: number }
   | { kind: 'line'; page: number; xPct: number; yPct: number; x2Pct: number; y2Pct: number; strokeWidth: number; color: AnnotationColor };
 
 export interface LeadSheetAttachment {

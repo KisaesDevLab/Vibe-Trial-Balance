@@ -115,6 +115,8 @@ const STROKES: Array<{ label: string; width: number }> = [
 
 /** Drags shorter than this (fraction of the page) are treated as accidental clicks. */
 const MIN_LINE_LENGTH = 0.01;
+/** A note drag narrower than this falls back to click placement at the default width. */
+const MIN_NOTE_DRAG_WIDTH = 0.02;
 
 interface Pt { x: number; y: number }
 interface Drag { start: Pt; end: Pt }
@@ -285,16 +287,17 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
     if (done) setNote('');
   };
 
-  const placeNote = async (p: Pt) => {
+  /** `widthPct` set = the user dragged a box; absent = click, default width. */
+  const placeNote = async (p: Pt, widthPct?: number) => {
     const text = noteText.trim();
-    if (!text) { pushToast('Type the note first, then click where it goes.', 'error'); return; }
+    if (!text) { pushToast('Type the note first, then click or drag where it goes.', 'error'); return; }
     const ok = await confirmAction({
       message: `Add this note here? Notes are written into the stored PDF and cannot be removed.\n\n“${text.length > 120 ? `${text.slice(0, 120)}…` : text}”`,
       confirmLabel: 'Add note',
     });
     if (!ok) return;
     const done = await burn(
-      { kind: 'note', page: pageNum, xPct: p.x, yPct: p.y, text, color },
+      { kind: 'note', page: pageNum, xPct: p.x, yPct: p.y, text, color, ...(widthPct !== undefined ? { widthPct } : {}) },
       'Note added.',
     );
     if (done) setNoteText('');
@@ -315,12 +318,13 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (placing || loading) return;
     if (tool === 'tickmark') void placeTickmark(toPct(e));
-    else if (tool === 'note') void placeNote(toPct(e));
-    // Lines are placed on pointer up, not click.
+    // Notes and lines are placed on pointer up, not click — a note click is
+    // just a drag of zero width, and handling it here too would place twice.
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (tool !== 'line' || placing || loading || e.button !== 0) return;
+    const dragTool = tool === 'line' || (tool === 'note' && noteText.trim().length > 0);
+    if (!dragTool || placing || loading || e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const p = toPct(e);
     setDrag({ start: p, end: p });
@@ -336,6 +340,17 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
     e.currentTarget.releasePointerCapture(e.pointerId);
     const finished = { start: drag.start, end: toPct(e) };
     setDrag(null);
+    if (tool === 'note') {
+      // The dragged box defines the note's placement and width (its height
+      // follows the wrapped text). A bare click still works: it reads as a
+      // zero-width drag and gets the default width at the click point.
+      const left = Math.min(finished.start.x, finished.end.x);
+      const top = Math.min(finished.start.y, finished.end.y);
+      const widthPct = Math.abs(finished.end.x - finished.start.x);
+      if (widthPct < MIN_NOTE_DRAG_WIDTH) void placeNote(finished.start);
+      else void placeNote({ x: left, y: top }, widthPct);
+      return;
+    }
     const len = Math.hypot(finished.end.x - finished.start.x, finished.end.y - finished.start.y);
     if (len < MIN_LINE_LENGTH) return;
     void placeLine(finished);
@@ -390,14 +405,29 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
                     viewBox="0 0 100 100"
                     preserveAspectRatio="none"
                   >
-                    <line
-                      x1={drag.start.x * 100} y1={drag.start.y * 100}
-                      x2={drag.end.x * 100} y2={drag.end.y * 100}
-                      stroke={SVG_STROKE[color]}
-                      strokeWidth={strokeWidth * 1.4}
-                      strokeLinecap="round"
-                      vectorEffect="non-scaling-stroke"
-                    />
+                    {tool === 'note' ? (
+                      <rect
+                        x={Math.min(drag.start.x, drag.end.x) * 100}
+                        y={Math.min(drag.start.y, drag.end.y) * 100}
+                        width={Math.abs(drag.end.x - drag.start.x) * 100}
+                        height={Math.abs(drag.end.y - drag.start.y) * 100}
+                        fill={SVG_STROKE[color]}
+                        fillOpacity={0.08}
+                        stroke={SVG_STROKE[color]}
+                        strokeWidth={1.2}
+                        strokeDasharray="4 3"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ) : (
+                      <line
+                        x1={drag.start.x * 100} y1={drag.start.y * 100}
+                        x2={drag.end.x * 100} y2={drag.end.y * 100}
+                        stroke={SVG_STROKE[color]}
+                        strokeWidth={strokeWidth * 1.4}
+                        strokeLinecap="round"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    )}
                   </svg>
                 )}
               </div>
@@ -428,7 +458,7 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                 {tool === 'tickmark' && 'Pick a mark, then click the page.'}
-                {tool === 'note' && 'Type the note, then click where its top-left corner goes.'}
+                {tool === 'note' && 'Type the note, then drag a box on the page to set its width and position (a plain click uses the default width).'}
                 {tool === 'line' && 'Press and drag on the page to draw a straight line.'}
                 {' '}Annotations are written into the stored PDF and <strong>cannot be removed</strong>.
               </p>
