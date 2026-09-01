@@ -127,6 +127,25 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
   const setLine = (idx: number, field: keyof FormLine, value: string | number) =>
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, [field]: value } : l)));
 
+  // Focusing an EMPTY amount cell on an out-of-balance entry drops the
+  // difference into whichever column balances it, selected so typing over it
+  // still works. Either cell of the line does this — which column the user
+  // happened to click is not a vote on the sign — so focus moves to the
+  // column that took the amount.
+  const autoBalance = (idx: number, e: React.FocusEvent<HTMLInputElement>) => {
+    const line = lines[idx];
+    if (!line || line.debit.trim() !== '' || line.credit.trim() !== '') return;
+    const diff = totalDebit - totalCredit;
+    if (diff === 0) return;
+    const field: 'debit' | 'credit' = diff > 0 ? 'credit' : 'debit';
+    setLine(idx, field, (Math.abs(diff) / 100).toFixed(2));
+    const target = e.target.dataset.field === field
+      ? e.target
+      : e.target.closest('tr')?.querySelector<HTMLInputElement>(`input[data-field="${field}"]`) ?? null;
+    // After React has committed the value, so the selection covers it.
+    requestAnimationFrame(() => { target?.focus(); target?.select(); });
+  };
+
   const addLine = () => setLines((prev) => [...prev, { _key: newEditLineKey(), accountId: '', debit: '', credit: '' }]);
   const removeLine = (idx: number) => setLines((prev) => prev.filter((_, i) => i !== idx));
 
@@ -275,6 +294,8 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
                             onChange={(e) => setLine(idx, 'debit', e.target.value)}
                             onBlur={(e) => setLine(idx, 'debit', evalAndFormatAmount(e.target.value))}
                             onKeyDown={(e) => { if (e.key === 'Enter') setLine(idx, 'debit', evalAndFormatAmount((e.target as HTMLInputElement).value)); }}
+                            onFocus={(e) => autoBalance(idx, e)}
+                            data-field="debit"
                             placeholder="0.00"
                             className="w-full text-right border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                           />
@@ -285,6 +306,8 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
                             onChange={(e) => setLine(idx, 'credit', e.target.value)}
                             onBlur={(e) => setLine(idx, 'credit', evalAndFormatAmount(e.target.value))}
                             onKeyDown={(e) => { if (e.key === 'Enter') setLine(idx, 'credit', evalAndFormatAmount((e.target as HTMLInputElement).value)); }}
+                            onFocus={(e) => autoBalance(idx, e)}
+                            data-field="credit"
                             placeholder="0.00"
                             className="w-full text-right border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                           />

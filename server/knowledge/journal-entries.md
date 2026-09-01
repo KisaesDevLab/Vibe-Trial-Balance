@@ -40,3 +40,6 @@ You can create journal entries from multiple places:
 ## M-1 Worksheet
 - Tax AJEs automatically populate the **M-1 Worksheet** under **Tax > Tax Worksheets**
 - The M-1 shows book-to-tax differences with line-item detail
+
+## Balancing the last line
+When an entry is out of balance, click into either amount cell of an empty line and the difference is filled into the column that balances the entry (a credit if debits are higher, a debit if credits are higher). The amount is selected, so you can type over it if that isn't what you want. Lines that already carry an amount are never changed.

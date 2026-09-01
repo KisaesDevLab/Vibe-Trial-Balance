@@ -2,8 +2,36 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { Account } from '../api/chartOfAccounts';
+
+/** Popup width in px (was Tailwind w-80). */
+const POPUP_WIDTH = 320;
+/** Room the popup needs below the trigger before it flips above instead. */
+const POPUP_ESTIMATED_HEIGHT = 300;
+
+interface PopupPosition {
+  left: number;
+  /** Set when the list opens downward. */
+  top?: number;
+  /** Set when the list opens upward (distance from the viewport bottom). */
+  bottom?: number;
+}
+
+/**
+ * Where to put the popup for a trigger at `rect`. Fixed positioning in a
+ * portal, so no ancestor's overflow can clip it — the list used to disappear
+ * under the scroll edge of every modal body and grid it lived in.
+ */
+function positionFor(rect: DOMRect): PopupPosition {
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - POPUP_WIDTH - 8));
+  const roomBelow = window.innerHeight - rect.bottom;
+  if (roomBelow < POPUP_ESTIMATED_HEIGHT && rect.top > roomBelow) {
+    return { left, bottom: window.innerHeight - rect.top + 4 };
+  }
+  return { left, top: rect.bottom + 4 };
+}
 
 interface AccountSearchDropdownProps {
   accounts: Account[];
@@ -46,6 +74,26 @@ export function AccountSearchDropdown({
   const searchRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [popupPos, setPopupPos] = useState<PopupPosition | null>(null);
+
+  // Place the popup from the trigger's live rect, and follow it through any
+  // scroll or resize while open (capture phase catches scrolls inside modal
+  // bodies and grids, which don't bubble).
+  useLayoutEffect(() => {
+    if (!open) { setPopupPos(null); return; }
+    const update = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) setPopupPos(positionFor(rect));
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [open]);
 
   const current = value !== '' ? accounts.find((a) => a.id === value) : null;
 
@@ -90,7 +138,10 @@ export function AccountSearchDropdown({
   useEffect(() => {
     if (!open) return;
     function handleMouseDown(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const insideTrigger = containerRef.current?.contains(target) ?? false;
+      const insidePopup = popupRef.current?.contains(target) ?? false;
+      if (!insideTrigger && !insidePopup) {
         setOpen(false);
         setSearch('');
         onClose?.();
@@ -202,9 +253,13 @@ export function AccountSearchDropdown({
           : placeholder}
       </button>
 
-      {open && (
-        <div className="absolute z-30 mt-1 w-80 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
-          <div className="p-2 border-b">
+      {open && popupPos && createPortal(
+        <div
+          ref={popupRef}
+          style={{ position: 'fixed', width: POPUP_WIDTH, left: popupPos.left, top: popupPos.top, bottom: popupPos.bottom }}
+          className="z-[70] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg"
+        >
+          <div className="p-2 border-b dark:border-gray-700">
             <input
               ref={searchRef}
               value={search}
@@ -251,7 +306,8 @@ export function AccountSearchDropdown({
               + New Account
             </button>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
