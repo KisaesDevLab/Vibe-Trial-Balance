@@ -64,6 +64,17 @@ export interface ScannedSheetRow {
   matchedPayee: string | null;
   confidence: number;
   uncertain: UncertainField[];
+  /**
+   * 'journal' when the page was a printed journal report (Account / Debit /
+   * Credit columns) and this row is one ENTRY of it rather than a handwritten
+   * line. Such rows carry the accounts as printed; the dialog resolves them
+   * against the COA so the AI categorize pass is not needed for them.
+   */
+  layout: 'sheet' | 'journal';
+  /** Journal pages only: the non-bank account of the entry, exactly as printed. */
+  accountRef: string | null;
+  /** Journal pages only: the bank/cash account line of the entry, exactly as printed. */
+  sourceAccountRef: string | null;
 }
 
 export interface ScannedSheetPage {
@@ -152,10 +163,13 @@ const JSON_EXAMPLE = (page: number) => `{
       "date": null,
       "ref": "1042",
       "matchedPayee": "Lowe's",
+      "accountRef": null,
+      "sourceAccountRef": null,
       "confidence": 0.85,
       "uncertain": []
     }
   ],
+  "layout": "sheet",
   "warnings": []
 }`;
 
@@ -169,7 +183,17 @@ const RULES = `Rules:
 - line: 1-based position of the row on this page, top to bottom (left column before right column if there are two columns).
 - Skip page headings, column headers, "total"/"subtotal"/"balance" lines, running balances, blank lines, and lines that only carry a date.
 - confidence: 0-1 for the row as a whole (1 = every field clearly legible and sign certain).
-- warnings: page-level notes only (e.g. "bottom third of page is cut off", "two columns; right column may be deposits").`;
+- warnings: page-level notes only (e.g. "bottom third of page is cut off", "two columns; right column may be deposits").
+- layout: "sheet" for a list of money in / money out (the normal case), "journal" for a JOURNAL REPORT — see below. accountRef and sourceAccountRef are null on a "sheet" page.
+
+JOURNAL REPORTS: if this page is a printed general journal / journal report (columns such as Date, Entry or Ref, Account, Debit, Credit, Memo, where each entry spans two or more lines whose debits equal credits), set "layout" to "journal" and treat each ENTRY — not each printed line — as one line item:
+- date: the entry's date, which is printed, so fill it.
+- ref: the entry / journal number if printed, else null.
+- description: the entry's memo or description as printed; if it has none, the name of the non-bank account.
+- sourceAccountRef: the bank / cash account line of the entry, exactly as printed (number and name), or null if the entry has no bank line.
+- accountRef: the OTHER account of the entry, exactly as printed. When an entry has several non-bank lines, output one line item per non-bank line, each with its own accountRef and amount and the entry's date, ref and description.
+- amount and direction from the BANK account's point of view: the bank account debited is money in (positive, "in"); the bank account credited is money out (negative, "out"). With no bank line, treat a debit on the non-bank line as money out and a credit as money in.
+- Skip the report's title, column headers, entry totals and grand totals.`;
 
 function contextBlock(sheetDate: string, hints: string[]): string {
   const hintText = hints.length > 0 ? hints.map((h) => `  - ${h}`).join('\n') : '  (none)';
@@ -180,7 +204,7 @@ ${hintText}`;
 }
 
 function buildVisionPrompt(page: number, total: number, sheetDate: string, hints: string[]): string {
-  return `You are a bookkeeper's assistant. This image is page ${page} of ${total} of a HANDWRITTEN (or typed) sheet a small-business client prepared listing money in and money out. Each line normally has a description and an amount. Transcribe EVERY line item on this page.
+  return `You are a bookkeeper's assistant. This image is page ${page} of ${total} of a document a small-business client prepared: usually a HANDWRITTEN (or typed) sheet listing money in and money out, where each line has a description and an amount — but some pages are a printed JOURNAL REPORT instead (see the JOURNAL REPORTS rule). Transcribe EVERY line item on this page.
 
 ${contextBlock(sheetDate, hints)}
 
@@ -194,7 +218,7 @@ function buildTextPrompt(text: string, page: number, total: number, sheetDate: s
   const source = viaOcr
     ? 'The text below was produced by OCR from a scanned page — spacing and column alignment may be irregular, and some characters may be misread.'
     : 'The text below was extracted from the PDF text layer.';
-  return `You are a bookkeeper's assistant. This is page ${page} of ${total} of a sheet a small-business client prepared listing money in and money out. Each line normally has a description and an amount. Transcribe EVERY line item on this page. ${source}
+  return `You are a bookkeeper's assistant. This is page ${page} of ${total} of a document a small-business client prepared: usually a sheet listing money in and money out, where each line has a description and an amount — but some pages are a printed JOURNAL REPORT instead (see the JOURNAL REPORTS rule). Transcribe EVERY line item on this page. ${source}
 
 ${contextBlock(sheetDate, hints)}
 
@@ -211,7 +235,7 @@ ${RULES}`;
 
 // ── Sanitizer (trust boundary for model output) ──────────────────────────────
 
-function sanitizeRows(raw: unknown, page: number, hintSet: Set<string>): ScannedSheetRow[] {
+function sanitizeRows(raw: unknown, page: number, hintSet: Set<string>, layout: ScannedSheetRow['layout']): ScannedSheetRow[] {
   if (!Array.isArray(raw)) return [];
   const out: ScannedSheetRow[] = [];
   raw.forEach((item, idx) => {
@@ -263,6 +287,9 @@ function sanitizeRows(raw: unknown, page: number, hintSet: Set<string>): Scanned
       matchedPayee: matched && hintSet.has(matched) ? matched : null,
       confidence,
       uncertain: [...uncertain],
+      layout,
+      accountRef: layout === 'journal' ? str(r.accountRef, 120) || null : null,
+      sourceAccountRef: layout === 'journal' ? str(r.sourceAccountRef, 120) || null : null,
     });
   });
   return out;
@@ -456,7 +483,7 @@ scannedSheetRouter.post(
             { model: aiModel, taskClass: TB_TASK_CLASSES.SCANNED_SHEET_EXTRACT, maxTokens: tokensFor(input), messages: [{ role: 'user', content }] },
             { endpoint: 'scanned-sheet/analyze', userId: req.user?.userId, userRole: req.user?.role, clientId },
           );
-          const parsed = extractJsonObject<{ rows?: unknown; warnings?: unknown }>(result.text);
+          const parsed = extractJsonObject<{ rows?: unknown; warnings?: unknown; layout?: unknown }>(result.text);
           if (!parsed) {
             const detail = `finish=${result.stopReason ?? 'unknown'}, text[0..300]=${JSON.stringify(result.text.slice(0, 300))}`;
             console.error(`[scanned-sheet] page ${input.page}: unparseable AI response: ${detail}`);
@@ -468,7 +495,14 @@ scannedSheetRouter.post(
           if (result.stopReason === 'max_tokens' || result.stopReason === 'length') {
             warnings.push(`${label(input.page)}output was truncated — some rows near the bottom may be missing.`);
           }
-          rows.push(...sanitizeRows(parsed.rows, input.page, hintSet));
+          const layout: ScannedSheetRow['layout'] = parsed.layout === 'journal' ? 'journal' : 'sheet';
+          const pageRows = sanitizeRows(parsed.rows, input.page, hintSet, layout);
+          rows.push(...pageRows);
+          if (layout === 'journal') {
+            // Say so: a journal page reads very differently from a sheet, and
+            // the accounts come from the report rather than the payee/AI pass.
+            warnings.push(`${label(input.page)}this is a journal report — each entry was read as one transaction, with its account taken from the report (${pageRows.length} entr${pageRows.length === 1 ? 'y' : 'ies'}).`);
+          }
           if (Array.isArray(parsed.warnings)) {
             for (const w of parsed.warnings) if (typeof w === 'string' && w.trim()) warnings.push(`${label(input.page)}${w.trim().slice(0, 300)}`);
           }

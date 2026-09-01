@@ -20,6 +20,7 @@ import { getOcrStatus } from '../api/settings';
 import { checkFileSize } from '../utils/fileLimits';
 import { evalAmountExpr } from '../utils/evalAmountExpr';
 import { matchPayee, resolvePayeeAccount, type PayeeMatch } from '../utils/matchPayee';
+import { matchAccountRef } from '../utils/matchAccountRef';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { AiConsentDialog, AI_PII } from './AiConsentDialog';
 import { DateInput } from './DateInput';
@@ -68,8 +69,13 @@ interface PreviewRow extends ScannedSheetRow {
   /** True once the user set/cleared the category by hand — payee changes stop touching it. */
   categoryOverridden: boolean;
   accountId: number | null;
+  /**
+   * Journal-report rows only: the bank account printed on the entry, resolved
+   * against the COA. Overrides the dialog's one "bank account" for that row.
+   */
+  sourceAccountId: number | null;
   /** Where the current category came from (drives the badge next to the dropdown). */
-  categorySource: 'payee' | 'ai' | 'manual' | null;
+  categorySource: 'payee' | 'ai' | 'manual' | 'journal' | null;
   categoryConfidence: number | null;
   categoryReasoning: string | null;
 }
@@ -298,6 +304,13 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
     data.rows.map((r, i) => {
       const match = matchPayee(r.description, payees, r.matchedPayee);
       const written = r.ref?.trim();
+      // A journal-report entry names its accounts; when one resolves against
+      // the COA it is the category (and the bank line the source), and the
+      // payee/AI passes leave it alone. An unresolved one falls through to
+      // the ordinary flow like any handwritten line.
+      const journalAccount = r.layout === 'journal' ? matchAccountRef(r.accountRef, accounts) : null;
+      const journalSource = r.layout === 'journal' ? matchAccountRef(r.sourceAccountRef, accounts) : null;
+      const payeeAccount = resolvePayeeAccount(match?.payee);
       return {
         ...r,
         ref: written || seqRef(refSeed + i),
@@ -309,8 +322,9 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
         payeeText: derivePayeeText(r.description, match),
         payeeEdited: false,
         categoryOverridden: false,
-        accountId: resolvePayeeAccount(match?.payee),
-        categorySource: resolvePayeeAccount(match?.payee) !== null ? 'payee' : null,
+        sourceAccountId: journalSource?.id ?? null,
+        accountId: journalAccount?.id ?? payeeAccount,
+        categorySource: journalAccount ? 'journal' : payeeAccount !== null ? 'payee' : null,
         categoryConfidence: null,
         categoryReasoning: null,
       };
@@ -346,7 +360,8 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
    * never overwrites a category the user set by hand.
    */
   const runAiCategorize = async (targets: PreviewRow[], signal?: AbortSignal, force = false) => {
-    const batch = targets.filter((r) => force ? !r.categoryOverridden : (r.accountId === null && !r.categoryOverridden));
+    // A category printed on a journal report is authoritative — never re-guessed.
+    const batch = targets.filter((r) => r.categorySource !== 'journal' && (force ? !r.categoryOverridden : (r.accountId === null && !r.categoryOverridden)));
     if (batch.length === 0) { setCategorizeNote(force ? 'Every row already has a category you set by hand.' : null); return; }
     setCategorizing(true);
     setCategorizeNote(null);
@@ -363,7 +378,7 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
       if (signal?.aborted) return;
       if (res.error || !res.data) { failed = true; continue; }
       const byKey = new Map(res.data.suggestions.map((sg) => [sg.key, sg]));
-      const eligible = (r: PreviewRow) => byKey.has(r._key) && !r.categoryOverridden && (force || r.accountId === null || r.categorySource === 'ai');
+      const eligible = (r: PreviewRow) => byKey.has(r._key) && !r.categoryOverridden && r.categorySource !== 'journal' && (force || r.accountId === null || r.categorySource === 'ai');
       applied += rowsRef.current.filter(eligible).length;
       setRows((prev) => prev.map((r) => {
         if (!eligible(r)) return r;
@@ -489,7 +504,7 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
   const handleInsert = () => {
     if (included.length === 0) return;
     onInsert(included.map((r) => ({
-      sourceAccountId: sourceAccountId === '' ? null : sourceAccountId,
+      sourceAccountId: r.sourceAccountId ?? (sourceAccountId === '' ? null : sourceAccountId),
       date: r.effectiveDate,
       ref: r.ref ?? '',
       payee: registerPayee(r),
@@ -901,6 +916,9 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
                                 )}
                                 {r.accountId !== null && r.categorySource === 'payee' && (
                                   <span className="shrink-0 px-1 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300" title="From this payee's rule / most-used category">payee</span>
+                                )}
+                                {r.accountId !== null && r.categorySource === 'journal' && (
+                                  <span className="shrink-0 px-1 rounded text-[10px] font-medium bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300" title={`Account printed on the journal report: ${r.accountRef ?? ''}`}>journal</span>
                                 )}
                               </div>
                             </td>

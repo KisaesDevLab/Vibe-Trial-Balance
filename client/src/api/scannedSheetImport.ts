@@ -24,6 +24,12 @@ export interface ScannedSheetRow {
   /** 0..1 for the row as a whole. */
   confidence: number;
   uncertain: UncertainField[];
+  /** 'journal' when the page was a printed journal report and this row is one entry of it. */
+  layout: 'sheet' | 'journal';
+  /** Journal pages only: the non-bank account of the entry, exactly as printed. */
+  accountRef: string | null;
+  /** Journal pages only: the bank/cash account line of the entry, exactly as printed. */
+  sourceAccountRef: string | null;
 }
 
 export interface ScannedSheetPage {

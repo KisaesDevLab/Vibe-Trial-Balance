@@ -5,10 +5,11 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { evalAmountExpr, evalAndFormatAmount } from '../utils/evalAmountExpr';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { listPayees, listBankTransactions, createManualTransactions, updateBankTransaction, deleteBankTransaction, type Payee, type ManualTransaction } from '../api/bankTransactions';
+import { listPayees, listBankTransactions, createManualTransactions, updateBankTransaction, deleteBankTransaction, type Payee, type ManualTransaction, type BankTransaction } from '../api/bankTransactions';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { listClients, updateClient } from '../api/clients';
 import { useUIStore } from '../store/uiStore';
+import { useRegisterDraftStore, draftKey } from '../store/registerDraftStore';
 import { DateInput } from '../components/DateInput';
 import { ScannedSheetImportDialog, type ImportedDraftRow } from '../components/ScannedSheetImportDialog';
 import { resolvePayeeAccount } from '../utils/matchPayee';
@@ -549,10 +550,25 @@ export function TransactionEntryPage() {
   // Load existing manual transactions so they reappear when navigating back
   const { data: savedTxData, isFetched: savedTxFetched } = useQuery({
     queryKey: ['bank-transactions', selectedClientId, 'manual-register', selectedPeriodId],
-    queryFn: () => listBankTransactions(selectedClientId!, {
-      status: 'manual',
-      periodId: selectedPeriodId ?? undefined,
-    }),
+    queryFn: async () => {
+      // EVERY saved manual transaction, not the API's first page. The API hands
+      // rows back newest-first, so leaving it at the default page of 100 made
+      // the OLDEST rows silently vanish from the register once a period had
+      // more than that.
+      const all: BankTransaction[] = [];
+      for (let page = 1; page <= 40; page++) {
+        const r = await listBankTransactions(selectedClientId!, {
+          status: 'manual',
+          periodId: selectedPeriodId ?? undefined,
+          page,
+          pageSize: 500,
+        });
+        if (r.error || !r.data) return r;
+        all.push(...r.data);
+        if (page >= (r.meta?.pages ?? 1)) break;
+      }
+      return { data: all, error: null };
+    },
     enabled: !!selectedClientId,
     // Date, then the Ref### sequence, then entry order — the API hands rows back
     // newest-id-first, which would reverse an imported sheet within its date.
@@ -583,8 +599,51 @@ export function TransactionEntryPage() {
       saved: true,
     }));
     const lastSrcId = savedRows[savedRows.length - 1]?.sourceAccountId ?? defaultRef.current;
-    setRows([...savedRows, makeRow(lastSrcId)]);
+    // Unsaved rows from the last visit (typed or imported, never saved) come
+    // back after the saved ones, exactly where they were.
+    const stored = selectedClientId !== null
+      ? useRegisterDraftStore.getState().drafts[draftKey(selectedClientId, selectedPeriodId)] ?? []
+      : [];
+    const restoredRows: RegisterRow[] = stored.map((d) => ({
+      ...makeRow(d.sourceAccountId),
+      date: d.date,
+      ref: d.ref,
+      payee: d.payee,
+      accountId: d.accountId,
+      amountStr: d.amountStr,
+    }));
+    const tailSrc = restoredRows[restoredRows.length - 1]?.sourceAccountId ?? lastSrcId;
+    setRows([...savedRows, ...restoredRows, makeRow(tailSrc)]);
+    if (restoredRows.length > 0) {
+      showToast(`${restoredRows.length} unsaved row${restoredRows.length !== 1 ? 's' : ''} restored from your last visit — review, then Save.`, 'success');
+    }
   }, [savedTxData]);
+
+  // Unsaved rows survive leaving the page: mirrored into browser storage on
+  // every change. Only after seeding — before that the list is empty and would
+  // wipe the very draft the seed effect is about to restore. Saving empties
+  // it, because saved rows are no longer unsaved.
+  const currentDraftKey = selectedClientId !== null ? draftKey(selectedClientId, selectedPeriodId) : null;
+  const setDrafts = useRegisterDraftStore((s) => s.setDrafts);
+  useEffect(() => {
+    if (!currentDraftKey || !seededRef.current) return;
+    setDrafts(
+      currentDraftKey,
+      rows
+        .filter((r) => !r.saved && !isBlankRow(r))
+        .map(({ sourceAccountId, date, ref, payee, accountId, amountStr }) => ({ sourceAccountId, date, ref, payee, accountId, amountStr })),
+    );
+  }, [rows, currentDraftKey, setDrafts]);
+
+  // The draft also survives a reload, but closing the tab mid-entry is still
+  // worth a pause — the browser's own "leave site?" prompt.
+  const hasUnsavedWork = rows.some((r) => !r.saved && !isBlankRow(r));
+  useEffect(() => {
+    if (!hasUnsavedWork) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [hasUnsavedWork]);
 
   const payees: Payee[] = payeesData ?? [];
   const accounts: Account[] = accountsData ?? [];

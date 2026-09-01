@@ -39,6 +39,11 @@ Clients often hand in a handwritten sheet listing what they spent and deposited.
 - Untick rows you don't want; use "Apply to all rows" to reset dates to the sheet date
 - **Add N rows to register** places them in the register as **unsaved** rows — nothing is posted until you press **Save**, so you get the normal validation, rule learning, and journal entries
 
+**Journal report pages.** If a page of the PDF is a printed general journal / journal report (Date, Account, Debit, Credit, Memo columns) rather than a handwritten list, the AI reads each *entry* as one transaction: the entry date, its memo as the payee, the bank line as the source account and the other line as the category, with the amount signed from the bank account's point of view. The accounts are matched to your chart of accounts by number, then by name; a matched category shows a **journal** badge and is left alone by the AI category pass, while one that can't be matched is treated like any other line (payee rule, then AI suggestion). A warning in the yellow box tells you which pages were read this way.
+
+## Unsaved Rows Are Kept
+Rows you have typed or imported but not yet saved are kept in your browser for this client and period. Leave the page — or reload, or close the tab — and they are back the next time you open Transaction Entry, after the saved rows, with a note saying how many were restored. They are still unsaved: press **Save** to post them. Closing the tab with unsaved rows also asks for confirmation.
+
 Requirements: a vision-capable AI provider (Claude, OpenAI, an Ollama vision model, or the Vibe AI Router) and, for scanned PDFs, poppler-utils on the server (included in the Docker image). If OCR pre-processing is configured under Settings, it can be ticked as an alternative for scans the vision model struggles with.
 
 ## Adding and Managing Rows
