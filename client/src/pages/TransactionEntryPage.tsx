@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listPayees, listBankTransactions, createManualTransactions, updateBankTransaction, deleteBankTransaction, type Payee, type ManualTransaction, type BankTransaction } from '../api/bankTransactions';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { listClients, updateClient } from '../api/clients';
+import { listPeriods } from '../api/periods';
 import { useUIStore } from '../store/uiStore';
 import { useRegisterDraftStore, draftKey } from '../store/registerDraftStore';
 import { DateInput } from '../components/DateInput';
@@ -548,6 +549,18 @@ export function TransactionEntryPage() {
   const currentClient = clientsData?.find((c) => c.id === selectedClientId) ?? null;
 
   // Load existing manual transactions so they reappear when navigating back
+  // Selected period's end date — the scanned-sheet dialog defaults its sheet
+  // date to it (a client's sheet is the period being closed, not scan day).
+  const { data: periodsData } = useQuery({
+    queryKey: ['periods', selectedClientId],
+    queryFn: () => listPeriods(selectedClientId!),
+    enabled: !!selectedClientId,
+  });
+  const periodEndDate = useMemo(() => {
+    const p = (periodsData?.data ?? []).find((x) => x.id === selectedPeriodId);
+    return p?.end_date ? p.end_date.slice(0, 10) : null;
+  }, [periodsData, selectedPeriodId]);
+
   const { data: savedTxData, isFetched: savedTxFetched } = useQuery({
     queryKey: ['bank-transactions', selectedClientId, 'manual-register', selectedPeriodId],
     queryFn: async () => {
@@ -1167,10 +1180,11 @@ export function TransactionEntryPage() {
 
       {showScanImport && (
         <ScannedSheetImportDialog
-          key={selectedClientId}
+          key={`${selectedClientId}:${selectedPeriodId ?? 'none'}`}
           clientId={selectedClientId}
           accounts={accounts}
           payees={payees}
+          defaultSheetDate={periodEndDate}
           defaultSourceAccountId={defaultSourceAccountId}
           existingRowKeys={existingRowKeys}
           refSeed={nextRefSeed}

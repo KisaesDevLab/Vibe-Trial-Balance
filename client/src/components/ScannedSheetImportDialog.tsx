@@ -48,6 +48,13 @@ interface Props {
   existingRowKeys?: Set<string>;
   /** First sequence number for generated Ref### references (register continues its own run). */
   refSeed?: number;
+  /**
+   * Initial sheet date — the selected period's end date when the caller knows
+   * it. A client's handwritten sheet is almost always the period being closed,
+   * not the day the bookkeeper happens to scan it, so "today" is the fallback,
+   * not the default. Still user-editable in the dialog.
+   */
+  defaultSheetDate?: string | null;
   onClose: () => void;
   onInsert: (drafts: ImportedDraftRow[]) => void;
 }
@@ -201,11 +208,11 @@ function EditableCell({
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSourceAccountId, existingRowKeys, refSeed = 1, onClose, onInsert }: Props) {
+export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSourceAccountId, existingRowKeys, refSeed = 1, defaultSheetDate, onClose, onInsert }: Props) {
   const [stage, setStage] = useState<Stage>('upload');
   const [showConsent, setShowConsent] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [sheetDate, setSheetDate] = useState<string>(todayIso());
+  const [sheetDate, setSheetDate] = useState<string>(defaultSheetDate || todayIso());
   const [sourceAccountId, setSourceAccountId] = useState<number | ''>(defaultSourceAccountId ?? '');
   const [useOcr, setUseOcr] = useState(false);
   const [dragOver, setDragOver] = useState(false);

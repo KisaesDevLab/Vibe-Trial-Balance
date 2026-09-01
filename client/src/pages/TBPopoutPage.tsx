@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
+import { hasReportableActivity } from '../utils/tbActivity';
 import { withBase } from '../lib/baseConfig';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -166,6 +167,11 @@ export function TBPopoutPage() {
   const [showPY, setShowPY] = useState(false);
   const [showTax, setShowTax] = useState(true);
   const [single, setSingle] = useState(false);
+  // Hide all-zero rows — same dormant-account predicate the reports use, so
+  // the popout ticked matches what a printed TB shows. Totals, net income and
+  // the balance badge are computed over the filtered rows, which is safe:
+  // dropping rows whose every amount is zero cannot change any sum.
+  const [nonZeroOnly, setNonZeroOnly] = useState(false);
   const [fontSize, setFontSize] = useState(getInitialFontSize);
 
   // Apply font size to document root so all rem-based sizes scale
@@ -212,11 +218,12 @@ export function TBPopoutPage() {
   const sorted = useMemo(() =>
     [...(data ?? [])]
       .filter(r => r.is_active)
+      .filter(r => !nonZeroOnly || hasReportableActivity(r))
       .sort((a, b) => {
         const c = (CATEGORY_ORDER[a.category] ?? 9) - (CATEGORY_ORDER[b.category] ?? 9);
         return c !== 0 ? c : a.account_number.localeCompare(b.account_number, undefined, { numeric: true });
       }),
-    [data],
+    [data, nonZeroOnly],
   );
 
   if (!periodId) return <div className="p-4 text-red-600">Missing periodId parameter.</div>;
@@ -275,6 +282,10 @@ export function TBPopoutPage() {
           <label className="flex items-center gap-0.5 cursor-pointer">
             <input type="checkbox" checked={showTax} onChange={e => setShowTax(e.target.checked)} className="rounded border-gray-300 text-purple-600 w-3 h-3" />
             <span className="text-gray-600">Tax</span>
+          </label>
+          <label className="flex items-center gap-0.5 cursor-pointer" title="Hide accounts whose every amount is zero">
+            <input type="checkbox" checked={nonZeroOnly} onChange={e => setNonZeroOnly(e.target.checked)} className="rounded border-gray-300 text-blue-600 w-3 h-3" />
+            <span className="text-gray-600">Nonzero</span>
           </label>
           <span className="text-gray-300">|</span>
           <span className={`font-medium px-1.5 py-0.5 rounded ${balanced ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
