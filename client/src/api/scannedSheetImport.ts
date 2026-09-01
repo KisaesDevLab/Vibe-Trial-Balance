@@ -30,6 +30,8 @@ export interface ScannedSheetRow {
   accountRef: string | null;
   /** Journal pages only: the bank/cash account line of the entry, exactly as printed. */
   sourceAccountRef: string | null;
+  /** The sheet's own category/type column value ("gas", "supplies"), verbatim, when it has one. */
+  categoryHint: string | null;
 }
 
 export interface ScannedSheetPage {

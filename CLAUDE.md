@@ -142,6 +142,11 @@ All planned phases complete. App is feature-complete.
   `categorySource: 'journal'`, which the AI categorize pass never touches (not even "re-suggest all"),
   and a resolved bank line overrides the dialog's single source account for that row. The route pushes
   a per-page warning so a journal page is never silently different from a sheet page.
+  **Tabular sheets:** the prompt's TABLES rule makes a printed Total Paid / Paid To / Description /
+  Category page read as a normal sheet — the Paid To cell IS the description (an empty Description
+  column once made every row blank and thus unpostable), and the sheet's own category column comes
+  back verbatim as `categoryHint`, resolved via `matchAccountRef` (`categorySource: 'sheet'`, weaker
+  than payee/journal — force re-suggest may replace it) or fed to the categorize pass as context.
 - **Register drafts survive navigation** (`store/registerDraftStore.ts`, persisted as `register-drafts`,
   keyed `clientId:periodId`). `TransactionEntryPage` mirrors every unsaved non-blank row into it on
   change — but only after the seed effect has run, or the empty initial list would wipe the draft it

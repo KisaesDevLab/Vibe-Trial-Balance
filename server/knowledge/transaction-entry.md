@@ -39,6 +39,8 @@ Clients often hand in a handwritten sheet listing what they spent and deposited.
 - Untick rows you don't want; use "Apply to all rows" to reset dates to the sheet date
 - **Add N rows to register** places them in the register as **unsaved** rows — nothing is posted until you press **Save**, so you get the normal validation, rule learning, and journal entries
 
+**Printed tables.** A sheet laid out as a table — printed or hand-ruled, with columns like Total Paid / Paid To / Description / Category — reads the same as a handwritten list: each row is one transaction, the Paid To cell becomes the payee even when the Description column is empty, and a "Total Paid" column is money out. If the sheet has its own category column ("gas", "supplies"), it seeds the row's category when it names one of your accounts (badge "sheet") and is passed to the AI as context otherwise.
+
 **Journal report pages.** If a page of the PDF is a printed general journal / journal report (Date, Account, Debit, Credit, Memo columns) rather than a handwritten list, the AI reads each *entry* as one transaction: the entry date, its memo as the payee, the bank line as the source account and the other line as the category, with the amount signed from the bank account's point of view. The accounts are matched to your chart of accounts by number, then by name; a matched category shows a **journal** badge and is left alone by the AI category pass, while one that can't be matched is treated like any other line (payee rule, then AI suggestion). A warning in the yellow box tells you which pages were read this way.
 
 ## Unsaved Rows Are Kept

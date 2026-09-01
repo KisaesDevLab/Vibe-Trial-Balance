@@ -82,7 +82,7 @@ interface PreviewRow extends ScannedSheetRow {
    */
   sourceAccountId: number | null;
   /** Where the current category came from (drives the badge next to the dropdown). */
-  categorySource: 'payee' | 'ai' | 'manual' | 'journal' | null;
+  categorySource: 'payee' | 'ai' | 'manual' | 'journal' | 'sheet' | null;
   categoryConfidence: number | null;
   categoryReasoning: string | null;
 }
@@ -318,6 +318,11 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
       const journalAccount = r.layout === 'journal' ? matchAccountRef(r.accountRef, accounts) : null;
       const journalSource = r.layout === 'journal' ? matchAccountRef(r.sourceAccountRef, accounts) : null;
       const payeeAccount = resolvePayeeAccount(match?.payee);
+      // The sheet's own category column ("utilities") often names a COA
+      // account outright; when it resolves uniquely it seeds the category.
+      // Weaker than a payee rule, so it only fills what payee left empty,
+      // and unlike a journal account the AI's "re-suggest all" may replace it.
+      const sheetAccount = !journalAccount && payeeAccount === null ? matchAccountRef(r.categoryHint, accounts) : null;
       return {
         ...r,
         ref: written || seqRef(refSeed + i),
@@ -330,8 +335,8 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
         payeeEdited: false,
         categoryOverridden: false,
         sourceAccountId: journalSource?.id ?? null,
-        accountId: journalAccount?.id ?? payeeAccount,
-        categorySource: journalAccount ? 'journal' : payeeAccount !== null ? 'payee' : null,
+        accountId: journalAccount?.id ?? payeeAccount ?? sheetAccount?.id ?? null,
+        categorySource: journalAccount ? 'journal' : payeeAccount !== null ? 'payee' : sheetAccount ? 'sheet' : null,
         categoryConfidence: null,
         categoryReasoning: null,
       };
@@ -379,7 +384,14 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
       const chunk = batch.slice(i, i + 60);
       const res = await categorizeScannedRows(
         clientId,
-        chunk.map((r) => ({ key: r._key, payee: registerPayee(r), description: r.description.trim(), amount: r.amount, date: r.effectiveDate })),
+        chunk.map((r) => ({
+          key: r._key,
+          payee: registerPayee(r),
+          // The sheet's own category column rides along as context for the model.
+          description: [r.description.trim(), r.categoryHint ? `sheet category: ${r.categoryHint}` : ''].filter(Boolean).join(' | ').slice(0, 300),
+          amount: r.amount,
+          date: r.effectiveDate,
+        })),
         signal,
       );
       if (signal?.aborted) return;
@@ -923,6 +935,9 @@ export function ScannedSheetImportDialog({ clientId, accounts, payees, defaultSo
                                 )}
                                 {r.accountId !== null && r.categorySource === 'payee' && (
                                   <span className="shrink-0 px-1 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300" title="From this payee's rule / most-used category">payee</span>
+                                )}
+                                {r.accountId !== null && r.categorySource === 'sheet' && (
+                                  <span className="shrink-0 px-1 rounded text-[10px] font-medium bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300" title={`From the sheet's own category column: ${r.categoryHint ?? ''}`}>sheet</span>
                                 )}
                                 {r.accountId !== null && r.categorySource === 'journal' && (
                                   <span className="shrink-0 px-1 rounded text-[10px] font-medium bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300" title={`Account printed on the journal report: ${r.accountRef ?? ''}`}>journal</span>

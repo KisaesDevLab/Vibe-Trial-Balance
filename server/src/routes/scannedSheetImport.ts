@@ -75,6 +75,8 @@ export interface ScannedSheetRow {
   accountRef: string | null;
   /** Journal pages only: the bank/cash account line of the entry, exactly as printed. */
   sourceAccountRef: string | null;
+  /** The sheet's own category/type column value ("gas", "supplies"), verbatim, when it has one. */
+  categoryHint: string | null;
 }
 
 export interface ScannedSheetPage {
@@ -165,6 +167,7 @@ const JSON_EXAMPLE = (page: number) => `{
       "matchedPayee": "Lowe's",
       "accountRef": null,
       "sourceAccountRef": null,
+      "categoryHint": null,
       "confidence": 0.85,
       "uncertain": []
     }
@@ -177,7 +180,8 @@ const RULES = `Rules:
 - amount: integer CENTS, signed. Money IN (deposits, sales, income, refunds received) is POSITIVE; money OUT (payments, purchases, checks, expenses) is NEGATIVE.
 - direction: "in" or "out". Decide from the sheet's own cues in this priority: separate columns (e.g. Deposits / Payments, Debit / Credit, In / Out), section headings, words like "dep", "deposit", "sale", "income", "refund" (in) or "paid", "ck", "check", "bill", "purchase" (out), a leading "+" or "-", or parentheses. If there is truly no cue, assume "out" (payment), set direction to "unknown", add "sign" to uncertain, and cap confidence at 0.6.
 - Never guess digits: if any part of the amount is illegible, give your best reading, add "amount" to uncertain and set confidence below 0.5. If a description is illegible, transcribe what you can and add "description" to uncertain.
-- description: transcribe EXACTLY what is written for that line, minus the amount — same wording, spelling, abbreviations and capitalization (only collapse stray spaces). Do not correct spelling, expand abbreviations, or replace it with a payee name; the bookkeeper wants the client's own words.
+- description: transcribe EXACTLY what is written for that line, minus the amount — same wording, spelling, abbreviations and capitalization (only collapse stray spaces). Do not correct spelling, expand abbreviations, or replace it with a payee name; the bookkeeper wants the client's own words. On a page laid out as a TABLE, the description is the line's TEXT CELLS joined in order — the payee / "Paid To" cell first, then any description or memo cell. An empty "Description" column does NOT make the line blank: "Walmart" in the Paid To cell plus 96.86 is a complete line item. Never return an empty description when any text cell on the row has content.
+- categoryHint: if the sheet has its own category / type column (e.g. "gas", "supplies", "utilities"), copy that cell verbatim; else null. Keep it OUT of the description.
 - matchedPayee: the single best match from the known-payee list above, copied EXACTLY, or null if none clearly matches.
 - ref: check number or reference if written (e.g. "ck 1042" -> "1042"), else null.
 - line: 1-based position of the row on this page, top to bottom (left column before right column if there are two columns).
@@ -185,6 +189,8 @@ const RULES = `Rules:
 - confidence: 0-1 for the row as a whole (1 = every field clearly legible and sign certain).
 - warnings: page-level notes only (e.g. "bottom third of page is cut off", "two columns; right column may be deposits").
 - layout: "sheet" for a list of money in / money out (the normal case), "journal" for a JOURNAL REPORT — see below. accountRef and sourceAccountRef are null on a "sheet" page.
+
+TABLES: many sheets — printed or hand-ruled — are TABLES with columns such as Total Paid / Paid To / Description / Category. These are still layout "sheet": read each ROW as one line item using the column meanings. An amount column named "Total Paid", "Paid", or "Amount Paid" is money out unless the sheet says otherwise; a "Received" or "Deposits" column is money in.
 
 JOURNAL REPORTS: if this page is a printed general journal / journal report (columns such as Date, Entry or Ref, Account, Debit, Credit, Memo, where each entry spans two or more lines whose debits equal credits), set "layout" to "journal" and treat each ENTRY — not each printed line — as one line item:
 - date: the entry's date, which is printed, so fill it.
@@ -290,6 +296,7 @@ function sanitizeRows(raw: unknown, page: number, hintSet: Set<string>, layout: 
       layout,
       accountRef: layout === 'journal' ? str(r.accountRef, 120) || null : null,
       sourceAccountRef: layout === 'journal' ? str(r.sourceAccountRef, 120) || null : null,
+      categoryHint: str(r.categoryHint, 80) || null,
     });
   });
   return out;
