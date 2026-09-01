@@ -619,6 +619,8 @@ const ajeSchema = z.object({
   description: z.string().optional(),
   offsetAccountId: z.number().int().positive(),
   accountIds: z.array(z.number().int().positive()).min(1),
+  /** Swap debit and credit on every line, offset included. */
+  reverse: z.boolean().optional().default(false),
 });
 
 pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -633,7 +635,7 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
     return;
   }
 
-  const { entryType, description, offsetAccountId, accountIds } = parsed.data;
+  const { entryType, description, offsetAccountId, accountIds, reverse } = parsed.data;
 
   try {
     const entry = await db.transaction(async (trx) => {
@@ -666,8 +668,13 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
 
       for (const py of pyRows) {
         const rolled = tbMap.get(py.account_id) ?? { pyDr: 0, pyCr: 0 };
-        // Net variance: positive means the account needs more debit
-        const netVariance = (Number(py.py_debit) - rolled.pyDr) - (Number(py.py_credit) - rolled.pyCr);
+        // Direction: the rolled PY (this app's final prior year, AJEs
+        // included) is the truth and the upload is the bookkeeper's opening
+        // balance. The entry brings the bookkeeper's balance TO the rolled
+        // one, so a positive value here (rolled more debit than uploaded) is
+        // a DEBIT. This is rolled − uploaded — the opposite sign of the
+        // variance column, which reads uploaded − rolled. Mirrors AjePanel.
+        const netVariance = (rolled.pyDr - Number(py.py_debit)) - (rolled.pyCr - Number(py.py_credit));
 
         if (netVariance === 0) continue;
 
@@ -691,6 +698,13 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
       totalDebit += offsetDebit;
       totalCredit += offsetCredit;
 
+      // Reversal is applied to the finished, balanced entry — offset included —
+      // so the swap can never unbalance it. Mirrors AjePanel's preview.
+      if (reverse) {
+        for (const l of lines) { const d = l.debit; l.debit = l.credit; l.credit = d; }
+        [totalDebit, totalCredit] = [totalCredit, totalDebit];
+      }
+
       if (totalDebit !== totalCredit) {
         throw Object.assign(new Error('Internal error: AJE does not balance'), { code: 'VALIDATION_ERROR', status: 400 });
       }
@@ -710,7 +724,7 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
           entry_number: entryNumber,
           entry_type: entryType,
           entry_date: entryDate,
-          description: description ?? 'PY true-up — adjust opening balances to bookkeeper final',
+          description: description ?? 'PY true-up — bring opening balances to prior-year final',
           is_recurring: false,
           created_by: req.user!.userId,
         })

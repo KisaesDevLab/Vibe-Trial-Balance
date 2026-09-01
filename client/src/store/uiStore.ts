@@ -47,6 +47,15 @@ interface UIStore {
   decreaseFontSize: () => void;
   isDarkMode: boolean;
   toggleDarkMode: () => void;
+  /** Trial Balance grid view toggles (Single / PY / Tax). */
+  tbView: TbView;
+  setTbView: (patch: Partial<TbView>) => void;
+}
+
+export interface TbView {
+  singleColumn: boolean;
+  showPY: boolean;
+  showTax: boolean;
 }
 
 export const useUIStore = create<UIStore>()(
@@ -67,8 +76,18 @@ export const useUIStore = create<UIStore>()(
       }),
       isDarkMode: false,
       toggleDarkMode: () => set((s) => ({ isDarkMode: !s.isDarkMode })),
+      tbView: { singleColumn: false, showPY: false, showTax: true },
+      setTbView: (patch) => set((s) => ({ tbView: { ...s.tbView, ...patch } })),
     }),
-    { name: 'ui-prefs', partialize: (s) => ({ fontSize: s.fontSize, selectedClientId: s.selectedClientId, selectedPeriodId: s.selectedPeriodId, isDarkMode: s.isDarkMode }) },
+    {
+      name: 'ui-prefs',
+      partialize: (s) => ({ fontSize: s.fontSize, selectedClientId: s.selectedClientId, selectedPeriodId: s.selectedPeriodId, isDarkMode: s.isDarkMode, tbView: s.tbView }),
+      // A stored copy written before tbView existed has no such key; keep the defaults for it.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<UIStore>;
+        return { ...current, ...p, tbView: { ...current.tbView, ...(p.tbView ?? {}) } };
+      },
+    },
   ),
 );
 

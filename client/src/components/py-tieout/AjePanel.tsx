@@ -22,8 +22,12 @@ interface Props {
 
 export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }: Props) {
   const [entryType, setEntryType] = useState<'book' | 'tax'>('book');
-  const [description, setDescription] = useState('PY true-up — adjust opening balances to bookkeeper final');
+  const [description, setDescription] = useState('PY true-up — bring opening balances to prior-year final');
   const [offsetAccountId, setOffsetAccountId] = useState<number | ''>('');
+  // Swap every line's debit and credit (offset included). The use case is
+  // backing out a true-up that was posted the wrong way — or posting the
+  // mirror of this one on purpose — without editing the lines by hand.
+  const [reverse, setReverse] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { data: accountsData } = useQuery({
@@ -52,7 +56,12 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
     let totalCredit = 0;
 
     for (const a of selectedAccounts) {
-      const netVariance = (a.varianceDebit - a.varianceCredit);
+      // The rolled PY (this app's final prior year, AJEs included) is the
+      // truth; the uploaded file is the bookkeeper's opening. The entry moves
+      // the bookkeeper's balance TO the rolled one, so its sign is
+      // rolled − uploaded — the opposite of the variance column, which reads
+      // uploaded − rolled. Mirrors the server's create-aje.
+      const netVariance = -(a.varianceDebit - a.varianceCredit);
       if (netVariance === 0) continue;
       const debit = netVariance > 0 ? netVariance : 0;
       const credit = netVariance < 0 ? Math.abs(netVariance) : 0;
@@ -77,8 +86,12 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
       totalCredit += offsetCredit;
     }
 
-    return { lines, totalDebit, totalCredit, balanced: totalDebit === totalCredit && totalDebit > 0 };
-  }, [selectedAccounts, offsetAccountId, accounts]);
+    // Reversal is applied last, to the finished entry, so the offset flips
+    // with everything else and the totals simply trade places.
+    const finalLines = reverse ? lines.map((l) => ({ ...l, debit: l.credit, credit: l.debit })) : lines;
+    const [finalDebit, finalCredit] = reverse ? [totalCredit, totalDebit] : [totalDebit, totalCredit];
+    return { lines: finalLines, totalDebit: finalDebit, totalCredit: finalCredit, balanced: finalDebit === finalCredit && finalDebit > 0 };
+  }, [selectedAccounts, offsetAccountId, accounts, reverse]);
 
   const mutation = useMutation({
     mutationFn: () => createPyAje(periodId, {
@@ -86,6 +99,7 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
       description: description || undefined,
       offsetAccountId: offsetAccountId as number,
       accountIds: selectedAccounts.map((a) => a.accountId),
+      reverse,
     }),
     onSuccess: (res) => {
       if (res.error) { setError(res.error.message); return; }
@@ -101,6 +115,17 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
           Create AJE from {selectedAccounts.length} variance{selectedAccounts.length !== 1 ? 's' : ''}
         </h3>
         <div className="flex items-center gap-3">
+          <label
+            className={`flex items-center gap-1.5 text-xs cursor-pointer select-none px-2 py-1 rounded border ${
+              reverse
+                ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300'
+                : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300'
+            }`}
+            title="Swap debit and credit on every line, offset included — use this to back out a true-up that was posted the wrong way"
+          >
+            <input type="checkbox" checked={reverse} onChange={(e) => setReverse(e.target.checked)} className="rounded border-gray-300 dark:border-gray-600" />
+            Reverse debits/credits
+          </label>
           <select
             value={entryType}
             onChange={(e) => setEntryType(e.target.value as 'book' | 'tax')}

@@ -51,6 +51,10 @@ After importing, the comparison view shows:
 5. Review the preview table showing the debit/credit lines and offset
 6. Click **Create AJE** — the entry is saved and appears in Journal Entries
 
+**Which way the entry goes.** The rolled prior year (this app's final PY, with your adjustments) is treated as correct, and the uploaded file as the bookkeeper's opening balances. The AJE moves the bookkeeper's balance *to* the rolled one — if the rolled PY shows more in an asset than the upload, the entry **debits** that asset for the difference. That is the opposite sign of the Variance column, which reads uploaded minus rolled.
+
+**Reverse debits/credits.** The checkbox next to the Book/Tax selector swaps debit and credit on every line of the entry, offset included, and the preview updates to show it. Use it to back out a true-up that was posted the wrong way round, or to post the mirror of this entry on purpose. The entry still balances — the totals simply trade places.
+
 ## Replace and Clear
 - Use **Replace (File)** or **Replace (PDF)** to import new PY data (replaces previous)
 - **Clear** removes all PY comparison data but does NOT delete any AJEs previously created

@@ -134,6 +134,21 @@ All planned phases complete. App is feature-complete.
 - Plan Phase 24: COA Template Management — coa_templates + coa_template_accounts + coa_template_tax_codes tables, 7 system templates seeded (General Business/Retail/Restaurant/Professional Services/Real Estate/Construction/Farm), full CRUD API (from-client, apply merge/replace, CSV import/export), CoaTemplatesPage with System/Custom tabs and apply modal
 - Plan Phase 25: Manual Transaction Entry Register — bank_transactions.entry_source column (migration Batch 26), GET /clients/:id/payees + /search + /:payee/categories endpoints, POST /bank-transactions/manual (batch with rule upsert + JE sync), TransactionEntryPage with spreadsheet-style register, smart payee combo dropdown, smart category select (previously-used section), stat cards (debits/credits/net), unsaved row tint, duplicate/delete row actions, "Transaction Entry" added to Bookkeeping sidebar group
 - Scanned-sheet import (Transaction Entry) — `POST /import/scanned-sheet/analyze` (`server/src/routes/scannedSheetImport.ts`): renders each PDF page (poppler), one `aiComplete` per page with `TB_TASK_CLASSES.DOC_EXTRACT` (vision), returns rows with per-row confidence + `uncertain` fields plus 100-dpi JPEG page previews; falls back to OCR text / PDF text layer / 422 `SCANNED_PDF` like the bank-statement route. `POST /import/scanned-sheet/categorize` = second pass with `TB_TASK_CLASSES.CLASSIFICATION` (same COA + rules prompt shape as bank ai-classify; returns per-row account suggestions, nothing written). Client: `ScannedSheetImportDialog` (side-by-side page image + editable rows; free-text payee = the transcription verbatim (known payees only suggested, never substituted); `utils/matchPayee.ts` for payee→category, AI fills the rest and never overwrites hand-set categories), `insertImportedRows` in `TransactionEntryPage` drops accepted rows in as unsaved rows — nothing is written until the register's Save.
+  **Journal-report pages:** the extractor prompt has a `JOURNAL REPORTS` rule and a page-level `layout`
+  (`'sheet' | 'journal'`); on a journal page each ENTRY becomes one row carrying `accountRef` /
+  `sourceAccountRef` *as printed*, signed from the bank account's point of view. Resolution against the
+  COA happens in the dialog (`utils/matchAccountRef.ts`: number, then exact name, then a containment
+  match only when unique — a wrong account is worse than an empty one); a resolved category is
+  `categorySource: 'journal'`, which the AI categorize pass never touches (not even "re-suggest all"),
+  and a resolved bank line overrides the dialog's single source account for that row. The route pushes
+  a per-page warning so a journal page is never silently different from a sheet page.
+- **Register drafts survive navigation** (`store/registerDraftStore.ts`, persisted as `register-drafts`,
+  keyed `clientId:periodId`). `TransactionEntryPage` mirrors every unsaved non-blank row into it on
+  change — but only after the seed effect has run, or the empty initial list would wipe the draft it
+  is about to restore — and the seed effect appends the stored rows after the saved ones with a toast.
+  Still nothing is written until Save; a `beforeunload` guard covers tab close. The register's saved-row
+  query pages through the API (`pageSize: 500`, up to 40 pages) because the API is newest-first and the
+  default single page of 100 silently dropped the OLDEST rows of a busy period.
 - MCP Integration — @modelcontextprotocol/sdk; HTTP/SSE transport at /mcp/sse + /mcp/messages (mcpAuthMiddleware, Bearer MCP token); stdio transport at server/src/mcp-stdio.ts for Claude Desktop; mcp_agent system user (migration 20260320000001); 8 Resources, 18 Tools (list/get/update across clients/periods/TB/JE/COA/tax/diagnostics/engagement/comparison/reports), 5 Prompts; rate limiting 100 req/min; audit_log for all tool calls; Settings page MCP card (admin) with token generate/rotate/revoke + stdio/HTTP snippet tabs; "MCP Integration" link in sidebar
 
 ## Completed — App-Only Features (built before plan adoption, kept and maintained)
@@ -152,6 +167,14 @@ All planned phases complete. App is feature-complete.
   already existed on BankStatementPdfImportDialog, ScannedSheetImportDialog and the PY tie-out
   dialogs. Preview tables must render every row — you can't untick what isn't drawn.
 - TB Import (current + prior year), PY comparison columns
+- **PY Tie-Out AJE direction:** the rolled PY (this app's final prior year, AJEs included) is the
+  truth and the upload is the bookkeeper's opening balance, so the entry's sign is **rolled − uploaded**
+  — the OPPOSITE of the Variance column (uploaded − rolled). `AjePanel` preview and
+  `POST .../py-comparison/create-aje` both do this and must stay mirrored. It shipped reversed once.
+- **TB grid has FOUR fixed leading columns** (Acct #, Name, Cat., LS) — `FIXED_COLS` in
+  `TrialBalancePage.tsx` drives every leading `colSpan` (group header row + subtotal/total rows, both
+  view modes). Adding a leading column means bumping that constant, not hunting literals. The
+  Single / PY / Tax toggles are `tbView` in the persisted `ui-prefs` store, not component state.
 - **Import preview shows the type the confirm writes.** Every match row leaves `/import/{csv,pdf}/analyze`
   (and the chat's `revisedAnalysis`) with `newCategory`/`newNormalBalance` filled by
   `fillNewAccountType()` in `server/src/lib/accountTypeInference.ts`; the confirm falls back to the

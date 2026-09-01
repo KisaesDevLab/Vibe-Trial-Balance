@@ -158,6 +158,14 @@ function getCellDisplayValue(rowData: TBRow, col: EditableColKey): string {
 
 const columnHelper = createColumnHelper<TBRow>();
 
+/**
+ * Fixed leading columns in BOTH view modes: Acct #, Account Name, Cat., LS.
+ * The group header and the subtotal/total rows span this many cells before
+ * the amount columns start — hard-coding 3 is what shifted the "Prior Year /
+ * Unadjusted / AJE" group row one column to the left when LS was added.
+ */
+const FIXED_COLS = 4;
+
 // ─── Page component ───────────────────────────────────────────────────────────
 
 export function TrialBalancePage() {
@@ -166,9 +174,14 @@ export function TrialBalancePage() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [lastSyncMsg, setLastSyncMsg] = useState<string | null>(null);
   const [syncedUpToDate, setSyncedUpToDate] = useState(false);
-  const [showTax, setShowTax] = useState(true);
-  const [showPY, setShowPY] = useState(false);
-  const [singleColumn, setSingleColumn] = useState(false);
+  // View toggles live in the persisted UI store so they survive navigation
+  // and reloads — a preparer who works single-column with PY on should not
+  // have to re-tick both every time they open the grid.
+  const { tbView, setTbView } = useUIStore();
+  const { showTax, showPY, singleColumn } = tbView;
+  const setShowTax = (v: boolean) => setTbView({ showTax: v });
+  const setShowPY = (v: boolean) => setTbView({ showPY: v });
+  const setSingleColumn = (v: boolean) => setTbView({ singleColumn: v });
   const [zoomAccount, setZoomAccount] = useState<{ accountId: number; accountName: string; accountNumber: string; entryType: 'trans' | 'book' | 'tax' } | null>(null);
   const [notesRow, setNotesRow] = useState<TBRow | null>(null);
   const [tickmarkRow, setTickmarkRow] = useState<TBRow | null>(null);
@@ -1420,7 +1433,7 @@ export function TrialBalancePage() {
               {/* Group header */}
               {singleColumn ? (
                 <tr className="bg-gray-100 dark:bg-gray-700 border-b border-gray-300 dark:border-gray-600">
-                  <th colSpan={3} className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600"></th>
+                  <th colSpan={FIXED_COLS} className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600"></th>
                   {showPY && <th className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold bg-gray-100 dark:bg-gray-600/20 border-r border-gray-300 dark:border-gray-600">Prior Year</th>}
                   <th className="px-2 py-1 text-xs text-center text-gray-600 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Unadjusted</th>
                   {hasTrans && <th className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold border-r border-gray-300 dark:border-gray-600">Trans JEs</th>}
@@ -1436,7 +1449,7 @@ export function TrialBalancePage() {
                 </tr>
               ) : (
                 <tr className="bg-gray-100 dark:bg-gray-700 border-b border-gray-300 dark:border-gray-600">
-                  <th colSpan={3} className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600"></th>
+                  <th colSpan={FIXED_COLS} className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600"></th>
                   {showPY && <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold bg-gray-100 dark:bg-gray-600/20 border-r border-gray-300 dark:border-gray-600">Prior Year</th>}
                   <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-600 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Unadjusted</th>
                   {hasTrans && <th colSpan={2} className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold bg-teal-50 dark:bg-teal-900/20 border-r border-gray-300 dark:border-gray-600">Trans JEs</th>}
@@ -1506,7 +1519,7 @@ export function TrialBalancePage() {
                   <>
                     {/* Single-column totals */}
                     <tr className="border-t-2 border-gray-400 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 font-semibold">
-                      <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
+                      <td colSpan={FIXED_COLS} className="px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
                         Totals
                       </td>
                       {showPY && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-gray-500 dark:text-gray-400 bg-gray-100/60 dark:bg-gray-600/20 border-r border-gray-200 dark:border-gray-700">
@@ -1537,7 +1550,7 @@ export function TrialBalancePage() {
                     </tr>
                     {/* Net income in single-column mode */}
                     <tr className="border-t border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">
-                      <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
+                      <td colSpan={FIXED_COLS} className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
                         Net Income/(Loss)
                       </td>
                       {showPY && <td className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums text-gray-500 dark:text-gray-400 bg-gray-100/60 dark:bg-gray-600/20 border-r border-gray-200 dark:border-gray-700">
@@ -1565,7 +1578,7 @@ export function TrialBalancePage() {
                   <>
                     {/* Dr/Cr column totals */}
                     <tr className="border-t-2 border-gray-400 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 font-semibold">
-                      <td colSpan={3} className="px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
+                      <td colSpan={FIXED_COLS} className="px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
                         Totals
                       </td>
                       {showPY && <td className="px-2 py-1.5 text-right text-sm font-mono tabular-nums text-gray-500 dark:text-gray-400 bg-gray-100/60 dark:bg-gray-600/20">{fmtTotal(colSum('prior_year_debit'))}</td>}
@@ -1586,7 +1599,7 @@ export function TrialBalancePage() {
                     </tr>
                     {/* Net income / (loss) */}
                     <tr className="border-t border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">
-                      <td colSpan={3} className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
+                      <td colSpan={FIXED_COLS} className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-gray-300 dark:border-gray-600">
                         Net Income/(Loss)
                       </td>
                       {showPY && <td colSpan={2} className="px-2 py-1 text-right text-sm font-mono font-semibold tabular-nums text-gray-500 dark:text-gray-400 bg-gray-100/60 dark:bg-gray-600/20 border-r border-gray-200 dark:border-gray-700">

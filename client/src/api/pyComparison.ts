@@ -40,6 +40,8 @@ export interface PyAjeRequest {
   description?: string;
   offsetAccountId: number;
   accountIds: number[];
+  /** Swap debit and credit on every line, offset included — e.g. to back out a previous true-up. */
+  reverse?: boolean;
 }
 
 // ─── API Functions ─────────────────────────────────────────────────────────
