@@ -786,11 +786,11 @@ export function LeadSheetsPage() {
                             </span>
                             {a.annotations?.length > 0 && (
                               <span className="text-xs text-gray-400 dark:text-gray-500">
-                                {a.annotations.length} mark{a.annotations.length === 1 ? '' : 's'}
+                                {a.annotations.length} annotation{a.annotations.length === 1 ? '' : 's'}
                               </span>
                             )}
                             <button onClick={() => setViewing(a)} className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">
-                              View &amp; stamp
+                              View &amp; annotate
                             </button>
                             <button onClick={() => void removeAttachment(a)} className="text-xs text-red-500 hover:text-red-700 dark:text-red-400">
                               Remove

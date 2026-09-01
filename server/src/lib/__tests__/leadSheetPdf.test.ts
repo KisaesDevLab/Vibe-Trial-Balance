@@ -3,7 +3,7 @@
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
 /**
- * Tickmark stamping and image conversion.
+ * Tickmark stamping, note and line burning, and image conversion.
  * Run: npx tsx --test src/lib/__tests__/leadSheetPdf.test.ts
  *
  * No DB and no network — pure pdf-lib work.
@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { inflateSync } from 'node:zlib';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
-import { burnAnnotation, imageToPdf, isConvertibleImage, pdfPageCount } from '../leadSheetPdf';
+import { burnAnnotation, imageToPdf, isConvertibleImage, pdfPageCount, wrapText, MAX_NOTE_TEXT } from '../leadSheetPdf';
 import { ROBOTO_MEDIUM } from '../../pdf/PdfTemplateService';
 
 /** The first tickmark this app seeds. */
@@ -204,4 +204,88 @@ test('a converted image can then be stamped like any other attachment', async ()
   const pdf = await imageToPdf(PNG_2X2, 'image/png');
   const stamped = await burnAnnotation(pdf, annotation());
   assert.equal(stamped.subarray(0, 5).toString('latin1'), '%PDF-');
+});
+
+// ── Notes and lines ──────────────────────────────────────────────────────────
+
+test('a note annotation is burned in and keeps the page count', async () => {
+  const original = await blankPdf(2);
+  const out = await burnAnnotation(original, {
+    id: 'n1', kind: 'note', page: 2, xPct: 0.5, yPct: 0.5, color: 'red',
+    text: 'Agreed to bank statement; difference is outstanding check #1042.',
+  });
+  assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
+  assert.notEqual(out.toString('base64'), original.toString('base64'));
+  assert.equal(await pdfPageCount(out), 2);
+});
+
+test('a note at the far corner still renders inside the page', async () => {
+  // Boxes near the right/bottom edge are slid back onto the page rather than
+  // clipped; the assertion is only that nothing throws.
+  const out = await burnAnnotation(await blankPdf(), {
+    id: 'n2', kind: 'note', page: 1, xPct: 0.99, yPct: 0.99, color: 'blue',
+    text: 'x'.repeat(MAX_NOTE_TEXT + 100),
+  });
+  assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
+});
+
+test('a note containing the check glyph and newlines renders', async () => {
+  const out = await burnAnnotation(await blankPdf(), {
+    id: 'n3', kind: 'note', page: 1, xPct: 0.1, yPct: 0.1, color: 'green',
+    text: `${CHECK} Traced\r\nto GL\n\nOK`,
+  });
+  assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
+});
+
+test('a line annotation is burned in', async () => {
+  const original = await blankPdf();
+  const out = await burnAnnotation(original, {
+    id: 'l1', kind: 'line', page: 1, xPct: 0.1, yPct: 0.2, x2Pct: 0.9, y2Pct: 0.2,
+    strokeWidth: 2, color: 'red',
+  });
+  assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
+  assert.notEqual(out.toString('base64'), original.toString('base64'));
+});
+
+test('a line with an absurd stroke width or off-page end is clamped', async () => {
+  const out = await burnAnnotation(await blankPdf(), {
+    id: 'l2', kind: 'line', page: 1, xPct: -1, yPct: 0.2, x2Pct: 7, y2Pct: 0.2,
+    strokeWidth: 400, color: 'purple',
+  });
+  assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
+});
+
+test('a record without `kind` is still treated as a tickmark', async () => {
+  // Rows written before notes and lines existed have no kind field.
+  const out = await burnAnnotation(await blankPdf(), annotation());
+  assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
+});
+
+test('all three kinds can accumulate on one page', async () => {
+  let pdf = await blankPdf();
+  pdf = await burnAnnotation(pdf, annotation());
+  pdf = await burnAnnotation(pdf, { id: 'n', kind: 'note', page: 1, xPct: 0.3, yPct: 0.3, color: 'red', text: 'See A002' });
+  pdf = await burnAnnotation(pdf, { id: 'l', kind: 'line', page: 1, xPct: 0.3, yPct: 0.6, x2Pct: 0.7, y2Pct: 0.6, strokeWidth: 1, color: 'blue' });
+  assert.equal(await pdfPageCount(pdf), 1);
+});
+
+// ── wrapText ─────────────────────────────────────────────────────────────────
+
+/** Every character is 1 unit wide, so widths are just lengths. */
+const byLength = (s: string): number => s.length;
+
+test('wrapText breaks on spaces and never exceeds the width', () => {
+  const lines = wrapText('the quick brown fox jumps over the lazy dog', byLength, 10);
+  assert.deepEqual(lines, ['the quick', 'brown fox', 'jumps over', 'the lazy', 'dog']);
+  for (const l of lines) assert.ok(l.length <= 10);
+});
+
+test('wrapText hard-breaks a word wider than the box', () => {
+  const lines = wrapText('abcdefghijklmnop', byLength, 5);
+  assert.deepEqual(lines, ['abcde', 'fghij', 'klmno', 'p']);
+});
+
+test('wrapText keeps explicit newlines, including blank lines', () => {
+  assert.deepEqual(wrapText('a\n\nb', byLength, 10), ['a', '', 'b']);
+  assert.deepEqual(wrapText('a\r\nb', byLength, 10), ['a', 'b']);
 });

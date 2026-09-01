@@ -5,17 +5,45 @@
 import { apiFetch } from './client';
 import { API_BASE_URL } from '../lib/baseConfig';
 
-export interface AttachmentAnnotation {
+interface AnnotationBase {
   id: string;
   page: number;
   xPct: number;
   yPct: number;
-  symbol: string;
   color: string | null;
-  note: string | null;
   createdBy?: number | null;
   createdAt?: string;
 }
+
+/** `kind` is absent on annotations recorded before notes and lines existed. */
+export interface TickmarkAnnotation extends AnnotationBase {
+  kind?: 'tickmark';
+  symbol: string;
+  note: string | null;
+}
+
+export interface NoteAnnotation extends AnnotationBase {
+  kind: 'note';
+  text: string;
+}
+
+export interface LineAnnotation extends AnnotationBase {
+  kind: 'line';
+  x2Pct: number;
+  y2Pct: number;
+  strokeWidth: number;
+}
+
+export type AttachmentAnnotation = TickmarkAnnotation | NoteAnnotation | LineAnnotation;
+
+/** Colours the server burns; mirrors the tickmark palette. */
+export type AnnotationColor = 'gray' | 'blue' | 'green' | 'red' | 'purple' | 'amber';
+export const MAX_NOTE_TEXT = 500;
+
+export type AddAnnotationInput =
+  | { kind: 'tickmark'; page: number; xPct: number; yPct: number; tickmarkId: number; note?: string }
+  | { kind: 'note'; page: number; xPct: number; yPct: number; text: string; color: AnnotationColor }
+  | { kind: 'line'; page: number; xPct: number; yPct: number; x2Pct: number; y2Pct: number; strokeWidth: number; color: AnnotationColor };
 
 export interface LeadSheetAttachment {
   id: number;
@@ -98,10 +126,8 @@ export async function fetchAttachmentBytes(id: number): Promise<ArrayBuffer> {
   return res.arrayBuffer();
 }
 
-export const addAnnotation = (
-  attachmentId: number,
-  input: { page: number; xPct: number; yPct: number; tickmarkId: number; note?: string },
-) =>
+/** Burns the annotation into the stored PDF — there is no undo. */
+export const addAnnotation = (attachmentId: number, input: AddAnnotationInput) =>
   apiFetch<{ annotation: AttachmentAnnotation; permanent: true }>(
     `/lead-sheet-attachments/${attachmentId}/annotations`,
     { method: 'POST', body: JSON.stringify(input) },

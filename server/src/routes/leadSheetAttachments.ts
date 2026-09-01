@@ -10,9 +10,10 @@
  * 1. Allocation trusts the UNIQUE INDEX, not the SELECT. Two concurrent uploads
  *    can compute the same next code; the loser gets a 23505, deletes the object
  *    it just wrote, and retries.
- * 2. Tickmark stamps are burned into the stored PDF, so they cannot be removed.
- *    There is no un-stamp endpoint by design: one that appeared to remove a
- *    mark while the ink stayed would be worse than none.
+ * 2. Annotations (tickmark stamps, notes, drawn lines) are burned into the
+ *    stored PDF, so they cannot be removed. There is no un-stamp endpoint by
+ *    design: one that appeared to remove a mark while the ink stayed would be
+ *    worse than none.
  */
 
 import { Router, Response, NextFunction } from 'express';
@@ -23,7 +24,10 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { nextRefCode, refPrefix } from '../lib/leadSheetRef';
-import { burnAnnotation, imageToPdf, isConvertibleImage, pdfPageCount, type StampAnnotation } from '../lib/leadSheetPdf';
+import {
+  burnAnnotation, imageToPdf, isConvertibleImage, pdfPageCount,
+  MAX_NOTE_TEXT, MIN_STROKE_WIDTH, MAX_STROKE_WIDTH, type StampAnnotation,
+} from '../lib/leadSheetPdf';
 import {
   storeDocument,
   openDocument,
@@ -261,13 +265,43 @@ leadSheetAttachmentItemRouter.get('/file', async (req: AuthRequest, res: Respons
 
 // ─── POST /lead-sheet-attachments/:id/annotations ────────────────────────────
 
-const annotationSchema = z.object({
+const annotationBase = {
   page: z.number().int().min(1).max(2000),
   xPct: z.number().min(0).max(1),
   yPct: z.number().min(0).max(1),
-  tickmarkId: z.number().int().positive(),
-  note: z.string().max(200).optional(),
-});
+};
+
+/** The same vocabulary the burner maps to RGB; unknown values fall back to gray there. */
+const annotationColor = z.enum(['gray', 'blue', 'green', 'red', 'purple', 'amber']);
+
+// A payload without `kind` is a tickmark, so the pre-notes client shape still
+// validates. (A .default() on the literal would not do it: discriminatedUnion
+// dispatches on the raw input value before defaults apply.)
+const annotationSchema = z.preprocess(
+  (v) => (v && typeof v === 'object' && !('kind' in v) ? { ...v, kind: 'tickmark' } : v),
+  z.discriminatedUnion('kind', [
+  z.object({
+    ...annotationBase,
+    kind: z.literal('tickmark'),
+    tickmarkId: z.number().int().positive(),
+    note: z.string().max(200).optional(),
+  }),
+  z.object({
+    ...annotationBase,
+    kind: z.literal('note'),
+    text: z.string().trim().min(1).max(MAX_NOTE_TEXT),
+    color: annotationColor.default('red'),
+  }),
+  z.object({
+    ...annotationBase,
+    kind: z.literal('line'),
+    x2Pct: z.number().min(0).max(1),
+    y2Pct: z.number().min(0).max(1),
+    strokeWidth: z.number().min(MIN_STROKE_WIDTH).max(MAX_STROKE_WIDTH).default(1.5),
+    color: annotationColor.default('red'),
+  }),
+  ]),
+);
 
 leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res: Response): Promise<void> => {
   const id = Number(req.params.id);
@@ -281,31 +315,51 @@ leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res:
     if (!att) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Attachment not found' } }); return; }
     await assertPeriodUnlocked(att.row.period_id as number);
 
-    // Resolve from the client's own library, not system_tickmarks — the
-    // library is what a client's workpapers actually use.
-    const tm = await db('tickmark_library')
-      .where({ id: parsed.data.tickmarkId, client_id: att.row.client_id })
-      .first('id', 'symbol', 'color', 'description');
-    if (!tm) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tickmark not found for this client.' } }); return; }
-
-    // Serialise stamping per attachment. Burning is read-modify-write on the
-    // stored bytes, so two concurrent stamps would each read the pre-stamp file
-    // and the second put would erase the first mark — while the annotations
-    // jsonb recorded both, leaving the archive claiming a tickmark that is not
-    // in the PDF. Permanent stamps cannot be re-applied, so this must not race.
-    // Symbol and colour are SNAPSHOT into the record so deleting the library
-    // tickmark later never orphans what was actually stamped.
-    const annotation: StampAnnotation = {
+    const input = parsed.data;
+    const base = {
       id: crypto.randomUUID(),
-      page: parsed.data.page,
-      xPct: parsed.data.xPct,
-      yPct: parsed.data.yPct,
-      symbol: tm.symbol as string,
-      color: (tm.color as string) ?? 'gray',
-      note: parsed.data.note ?? null,
+      page: input.page,
+      xPct: input.xPct,
+      yPct: input.yPct,
       createdBy: req.user?.userId ?? null,
       createdAt: new Date().toISOString(),
     };
+
+    // Serialise burning per attachment. It is read-modify-write on the stored
+    // bytes, so two concurrent requests would each read the pre-burn file and
+    // the second put would erase the first mark — while the annotations jsonb
+    // recorded both, leaving the archive claiming a mark that is not in the
+    // PDF. Permanent marks cannot be re-applied, so this must not race.
+    let annotation: StampAnnotation;
+    let description: string;
+    if (input.kind === 'tickmark') {
+      // Resolve from the client's own library, not system_tickmarks — the
+      // library is what a client's workpapers actually use. Symbol and colour
+      // are SNAPSHOT into the record so deleting the library tickmark later
+      // never orphans what was actually stamped.
+      const tm = await db('tickmark_library')
+        .where({ id: input.tickmarkId, client_id: att.row.client_id })
+        .first('id', 'symbol', 'color', 'description');
+      if (!tm) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tickmark not found for this client.' } }); return; }
+      annotation = {
+        ...base, kind: 'tickmark',
+        symbol: tm.symbol as string,
+        color: (tm.color as string) ?? 'gray',
+        note: input.note ?? null,
+      };
+      description = `Stamped "${tm.symbol}" on ${att.row.ref_code} p${input.page}`;
+    } else if (input.kind === 'note') {
+      annotation = { ...base, kind: 'note', text: input.text, color: input.color };
+      const preview = input.text.length > 40 ? `${input.text.slice(0, 40)}…` : input.text;
+      description = `Noted "${preview}" on ${att.row.ref_code} p${input.page}`;
+    } else {
+      annotation = {
+        ...base, kind: 'line',
+        x2Pct: input.x2Pct, y2Pct: input.y2Pct,
+        strokeWidth: input.strokeWidth, color: input.color,
+      };
+      description = `Drew a line on ${att.row.ref_code} p${input.page}`;
+    }
 
     await db.transaction(async (trx) => {
       await trx('lead_sheet_attachments').where({ id }).forUpdate().first('id');
@@ -317,7 +371,7 @@ leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res:
 
       const bytes = await readDocumentBuffer(doc);
       const pages = await pdfPageCount(bytes);
-      if (parsed.data.page > pages) {
+      if (input.page > pages) {
         throw Object.assign(new Error(`This PDF has ${pages} page(s).`), {
           status: 400, code: 'VALIDATION_ERROR',
         });
@@ -334,7 +388,7 @@ leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res:
       await logAudit({
         userId: req.user?.userId ?? null, periodId: att.row.period_id as number, clientId: att.row.client_id as number,
         entityType: 'lead_sheet_attachment', entityId: id, action: 'update',
-        description: `Stamped "${tm.symbol}" on ${att.row.ref_code} p${parsed.data.page}`,
+        description,
       }, trx);
     });
 

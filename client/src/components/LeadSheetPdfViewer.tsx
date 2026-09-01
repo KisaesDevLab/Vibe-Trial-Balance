@@ -3,13 +3,16 @@
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
 /**
- * Attachment viewer with click-to-place tickmark stamping.
+ * Attachment viewer with three annotation tools: click-to-place tickmark
+ * stamps, click-to-place text notes, and drag-to-draw lines.
  *
- * Two consequences of stamps being burned into the stored file:
+ * Two consequences of annotations being burned into the stored file:
  *   - Existing marks arrive as page CONTENT, already drawn. There is no overlay
- *     of previous stamps to render or remove — only the pending placement.
- *   - Placing a mark is permanent, so it takes a confirmation and there is no
- *     per-chip delete control.
+ *     of previous annotations to render or remove — only the pending one (the
+ *     line being dragged) is drawn on the SVG overlay, and it disappears the
+ *     moment the re-rendered page carries the real ink.
+ *   - Placing anything is permanent, so it takes a confirmation and there is no
+ *     per-item delete control.
  *
  * pdfjs is imported lazily inside the effect, and this whole component is
  * lazy-loaded by its caller: a top-level import would add ~1 MB to the initial
@@ -20,11 +23,15 @@
  * parsed page rather than re-downloading the file.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
   fetchAttachmentBytes,
   addAnnotation,
+  MAX_NOTE_TEXT,
+  type AddAnnotationInput,
+  type AnnotationColor,
+  type AttachmentAnnotation,
   type LeadSheetAttachment,
 } from '../api/leadSheetAttachments';
 import { TICKMARK_COLOR_CLASSES, type Tickmark, type TickmarkColor } from '../api/tickmarks';
@@ -85,19 +92,67 @@ function fitScale(pageWidth: number, containerWidth: number): number {
   return Math.min(3, Math.max(0.5, (containerWidth - PAGE_GUTTER) / pageWidth));
 }
 
+type Tool = 'tickmark' | 'note' | 'line';
+
+const TOOLS: Array<{ id: Tool; label: string }> = [
+  { id: 'tickmark', label: 'Tickmark' },
+  { id: 'note', label: 'Note' },
+  { id: 'line', label: 'Line' },
+];
+
+const COLORS: AnnotationColor[] = ['red', 'blue', 'green', 'purple', 'amber', 'gray'];
+
+/** Preview stroke colours for the SVG overlay — the PDF uses its own RGB table. */
+const SVG_STROKE: Record<AnnotationColor, string> = {
+  gray: '#595959', blue: '#1f61d9', green: '#178c45', red: '#db2626', purple: '#7d3bd4', amber: '#c9800d',
+};
+
+const STROKES: Array<{ label: string; width: number }> = [
+  { label: 'Thin', width: 1 },
+  { label: 'Medium', width: 2 },
+  { label: 'Thick', width: 3.5 },
+];
+
+/** Drags shorter than this (fraction of the page) are treated as accidental clicks. */
+const MIN_LINE_LENGTH = 0.01;
+
+interface Pt { x: number; y: number }
+interface Drag { start: Pt; end: Pt }
+
+function describe(a: AttachmentAnnotation): { label: string; detail: string | null } {
+  switch (a.kind ?? 'tickmark') {
+    case 'note': {
+      const text = (a as { text: string }).text;
+      return { label: 'Note', detail: text };
+    }
+    case 'line':
+      return { label: 'Line', detail: null };
+    default: {
+      const t = a as { symbol: string; note: string | null };
+      return { label: t.symbol, detail: t.note };
+    }
+  }
+}
+
 export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [pageNum, setPageNum] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tool, setTool] = useState<Tool>('tickmark');
   const [selectedMark, setSelectedMark] = useState<number | null>(null);
   const [note, setNote] = useState('');
+  const [noteText, setNoteText] = useState('');
+  const [color, setColor] = useState<AnnotationColor>('red');
+  const [strokeWidth, setStrokeWidth] = useState(STROKES[1].width);
+  const [drag, setDrag] = useState<Drag | null>(null);
   const [placing, setPlacing] = useState(false);
   const [containerWidth, setContainerWidth] = useState(0);
-  // Bumped after a stamp so the document reloads from the updated bytes.
+  // Bumped after a burn so the document reloads from the updated bytes.
   const [version, setVersion] = useState(0);
   // pdfjs throws "Cannot use the same canvas during multiple render()
   // operations" if a second render starts while one is live — which happens on
@@ -194,37 +249,104 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
     };
   }, [doc, pageNum, containerWidth]);
 
-  const handleClick = useCallback(
-    async (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (selectedMark === null || placing) return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      const xPct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-      const yPct = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-      const mark = tickmarks.find((t) => t.id === selectedMark);
+  /** Pointer position as a 0..1 fraction of the displayed page. */
+  const toPct = (e: { clientX: number; clientY: number }): Pt => {
+    const rect = pageRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
+    return {
+      x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)),
+    };
+  };
 
-      const ok = await confirmAction({
-        message: `Stamp "${mark?.symbol ?? ''}" here? Tickmarks are written into the stored PDF and cannot be removed.`,
-        confirmLabel: 'Stamp',
-      });
-      if (!ok) return;
+  const burn = async (input: AddAnnotationInput, successMessage: string): Promise<boolean> => {
+    setPlacing(true);
+    const res = await addAnnotation(attachment.id, input);
+    setPlacing(false);
+    if (res.error) { pushToast(res.error.message, 'error'); return false; }
+    pushToast(successMessage, 'success');
+    setVersion((v) => v + 1);
+    onStamped();
+    return true;
+  };
 
-      setPlacing(true);
-      const res = await addAnnotation(attachment.id, {
-        page: pageNum,
-        xPct,
-        yPct,
-        tickmarkId: selectedMark,
-        note: note.trim() || undefined,
-      });
-      setPlacing(false);
-      if (res.error) { pushToast(res.error.message, 'error'); return; }
-      pushToast('Tickmark stamped.', 'success');
-      setNote('');
-      setVersion((v) => v + 1);
-      onStamped();
-    },
-    [attachment.id, note, onStamped, pageNum, placing, selectedMark, tickmarks],
-  );
+  const placeTickmark = async (p: Pt) => {
+    if (selectedMark === null) return;
+    const mark = tickmarks.find((t) => t.id === selectedMark);
+    const ok = await confirmAction({
+      message: `Stamp "${mark?.symbol ?? ''}" here? Tickmarks are written into the stored PDF and cannot be removed.`,
+      confirmLabel: 'Stamp',
+    });
+    if (!ok) return;
+    const done = await burn(
+      { kind: 'tickmark', page: pageNum, xPct: p.x, yPct: p.y, tickmarkId: selectedMark, note: note.trim() || undefined },
+      'Tickmark stamped.',
+    );
+    if (done) setNote('');
+  };
+
+  const placeNote = async (p: Pt) => {
+    const text = noteText.trim();
+    if (!text) { pushToast('Type the note first, then click where it goes.', 'error'); return; }
+    const ok = await confirmAction({
+      message: `Add this note here? Notes are written into the stored PDF and cannot be removed.\n\n“${text.length > 120 ? `${text.slice(0, 120)}…` : text}”`,
+      confirmLabel: 'Add note',
+    });
+    if (!ok) return;
+    const done = await burn(
+      { kind: 'note', page: pageNum, xPct: p.x, yPct: p.y, text, color },
+      'Note added.',
+    );
+    if (done) setNoteText('');
+  };
+
+  const placeLine = async (d: Drag) => {
+    const ok = await confirmAction({
+      message: 'Draw this line? Lines are written into the stored PDF and cannot be removed.',
+      confirmLabel: 'Draw',
+    });
+    if (!ok) return;
+    await burn(
+      { kind: 'line', page: pageNum, xPct: d.start.x, yPct: d.start.y, x2Pct: d.end.x, y2Pct: d.end.y, strokeWidth, color },
+      'Line drawn.',
+    );
+  };
+
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (placing || loading) return;
+    if (tool === 'tickmark') void placeTickmark(toPct(e));
+    else if (tool === 'note') void placeNote(toPct(e));
+    // Lines are placed on pointer up, not click.
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (tool !== 'line' || placing || loading || e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const p = toPct(e);
+    setDrag({ start: p, end: p });
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag) return;
+    setDrag({ start: drag.start, end: toPct(e) });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag) return;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    const finished = { start: drag.start, end: toPct(e) };
+    setDrag(null);
+    const len = Math.hypot(finished.end.x - finished.start.x, finished.end.y - finished.start.y);
+    if (len < MIN_LINE_LENGTH) return;
+    void placeLine(finished);
+  };
+
+  const armed =
+    (tool === 'tickmark' && selectedMark !== null) ||
+    (tool === 'note' && noteText.trim().length > 0) ||
+    tool === 'line';
+
+  const annotationCount = attachment.annotations?.length ?? 0;
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex">
@@ -240,16 +362,45 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
         </div>
 
         <div className="flex-1 min-h-0 flex">
-          {/* Canvas */}
+          {/* Page */}
           <div ref={wrapRef} className="relative flex-1 overflow-auto bg-gray-100 dark:bg-gray-900 p-4 flex justify-center">
             {error ? (
               <p className="text-sm text-red-600 dark:text-red-400 self-center">{error}</p>
             ) : (
-              <canvas
-                ref={canvasRef}
-                onClick={(e) => void handleClick(e)}
-                className={`shadow-md bg-white max-w-full h-auto ${selectedMark !== null ? 'cursor-crosshair' : ''}`}
-              />
+              // self-start: with the default `stretch` the wrapper would grow to
+              // the container's height and the overlay would sit taller than the
+              // page it is meant to cover.
+              <div
+                ref={pageRef}
+                onClick={handleClick}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={() => setDrag(null)}
+                className={`relative self-start max-w-full shadow-md bg-white select-none ${armed ? 'cursor-crosshair' : ''} ${
+                  drag ? 'touch-none' : ''
+                }`}
+              >
+                <canvas ref={canvasRef} className="block max-w-full h-auto" />
+                {/* Pending-line preview. Percent viewBox so the drag maps 1:1
+                    onto the page whatever size the canvas is displayed at. */}
+                {drag && (
+                  <svg
+                    className="absolute inset-0 w-full h-full pointer-events-none"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                  >
+                    <line
+                      x1={drag.start.x * 100} y1={drag.start.y * 100}
+                      x2={drag.end.x * 100} y2={drag.end.y * 100}
+                      stroke={SVG_STROKE[color]}
+                      strokeWidth={strokeWidth * 1.4}
+                      strokeLinecap="round"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </svg>
+                )}
+              </div>
             )}
             {loading && !error && (
               <p className="absolute inset-x-0 top-1/2 text-center text-sm text-gray-400">Rendering…</p>
@@ -257,58 +408,143 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
           </div>
 
           {/* Palette */}
-          <div className="w-60 shrink-0 border-l border-gray-200 dark:border-gray-700 p-4 space-y-4 overflow-y-auto">
+          <div className="w-64 shrink-0 border-l border-gray-200 dark:border-gray-700 p-4 space-y-4 overflow-y-auto">
             <div>
-              <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase mb-2">Place a tickmark</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                Pick a mark, then click the page. Stamps are written into the stored PDF and
-                <strong> cannot be removed</strong>.
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {tickmarks.map((t) => (
+              <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase mb-2">Annotate</h3>
+              <div className="flex rounded border border-gray-300 dark:border-gray-600 overflow-hidden text-xs">
+                {TOOLS.map((t) => (
                   <button
                     key={t.id}
-                    onClick={() => setSelectedMark(selectedMark === t.id ? null : t.id)}
-                    title={t.description}
-                    className={`w-8 h-8 rounded text-sm font-bold ${TICKMARK_COLOR_CLASSES[t.color as TickmarkColor] ?? TICKMARK_COLOR_CLASSES.gray} ${
-                      selectedMark === t.id ? 'ring-2 ring-blue-500' : ''
+                    onClick={() => { setTool(t.id); setDrag(null); }}
+                    className={`flex-1 py-1.5 ${
+                      tool === t.id
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
                     }`}
                   >
-                    {t.symbol}
+                    {t.label}
                   </button>
                 ))}
-                {tickmarks.length === 0 && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500">No tickmarks defined for this client.</p>
-                )}
               </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                {tool === 'tickmark' && 'Pick a mark, then click the page.'}
+                {tool === 'note' && 'Type the note, then click where its top-left corner goes.'}
+                {tool === 'line' && 'Press and drag on the page to draw a straight line.'}
+                {' '}Annotations are written into the stored PDF and <strong>cannot be removed</strong>.
+              </p>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Note (optional)</label>
-              <input
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                maxLength={200}
-                placeholder="Printed beside the mark"
-                className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs dark:bg-gray-700 dark:text-white"
-              />
-            </div>
+            {tool === 'tickmark' && (
+              <>
+                <div className="flex flex-wrap gap-1.5">
+                  {tickmarks.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setSelectedMark(selectedMark === t.id ? null : t.id)}
+                      title={t.description}
+                      className={`w-8 h-8 rounded text-sm font-bold ${TICKMARK_COLOR_CLASSES[t.color as TickmarkColor] ?? TICKMARK_COLOR_CLASSES.gray} ${
+                        selectedMark === t.id ? 'ring-2 ring-blue-500' : ''
+                      }`}
+                    >
+                      {t.symbol}
+                    </button>
+                  ))}
+                  {tickmarks.length === 0 && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500">No tickmarks defined for this client.</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Caption (optional)</label>
+                  <input
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    maxLength={200}
+                    placeholder="Printed beside the mark"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+              </>
+            )}
 
-            {attachment.annotations?.length > 0 && (
+            {tool === 'note' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Note text</label>
+                <textarea
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.target.value.slice(0, MAX_NOTE_TEXT))}
+                  rows={5}
+                  placeholder="e.g. Agreed to bank statement; see A002."
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs dark:bg-gray-700 dark:text-white resize-y"
+                />
+                <p className="text-[10px] text-gray-400 dark:text-gray-500 text-right">{noteText.length}/{MAX_NOTE_TEXT}</p>
+              </div>
+            )}
+
+            {tool === 'line' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Thickness</label>
+                <div className="flex rounded border border-gray-300 dark:border-gray-600 overflow-hidden text-xs">
+                  {STROKES.map((s) => (
+                    <button
+                      key={s.width}
+                      onClick={() => setStrokeWidth(s.width)}
+                      className={`flex-1 py-1.5 ${
+                        strokeWidth === s.width
+                          ? 'bg-gray-700 text-white dark:bg-gray-200 dark:text-gray-900'
+                          : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {tool !== 'tickmark' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Colour</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setColor(c)}
+                      title={c}
+                      aria-label={c}
+                      aria-pressed={color === c}
+                      className={`w-7 h-7 rounded-full border-2 ${
+                        color === c ? 'border-blue-500 ring-2 ring-blue-300' : 'border-transparent'
+                      }`}
+                      style={{ backgroundColor: SVG_STROKE[c] }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {annotationCount > 0 && (
               <div>
                 <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase mb-2">
-                  Already stamped ({attachment.annotations.length})
+                  Already on this file ({annotationCount})
                 </h3>
                 <ul className="space-y-1">
-                  {attachment.annotations.map((a) => (
-                    <li key={a.id} className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-1.5">
-                      <span className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold ${TICKMARK_COLOR_CLASSES[(a.color ?? 'gray') as TickmarkColor] ?? TICKMARK_COLOR_CLASSES.gray}`}>
-                        {a.symbol}
-                      </span>
-                      p{a.page}
-                      {a.note && <span className="truncate">— {a.note}</span>}
-                    </li>
-                  ))}
+                  {attachment.annotations.map((a) => {
+                    const { label, detail } = describe(a);
+                    const isTick = (a.kind ?? 'tickmark') === 'tickmark';
+                    return (
+                      <li key={a.id} className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-1.5 min-w-0">
+                        <span
+                          className={`inline-flex items-center justify-center shrink-0 h-5 rounded text-[10px] font-bold ${
+                            isTick ? 'w-5' : 'px-1.5'
+                          } ${TICKMARK_COLOR_CLASSES[(a.color ?? 'gray') as TickmarkColor] ?? TICKMARK_COLOR_CLASSES.gray}`}
+                        >
+                          {label}
+                        </span>
+                        <span className="shrink-0">p{a.page}</span>
+                        {detail && <span className="truncate" title={detail}>— {detail}</span>}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}
@@ -333,7 +569,7 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
           >
             Next →
           </button>
-          {placing && <span className="text-xs text-gray-500 dark:text-gray-400">Stamping…</span>}
+          {placing && <span className="text-xs text-gray-500 dark:text-gray-400">Saving…</span>}
         </div>
       </div>
     </div>

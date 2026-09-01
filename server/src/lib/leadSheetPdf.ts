@@ -4,15 +4,17 @@
 
 /**
  * PDF work for lead sheet attachments: converting an uploaded image into a PDF,
- * and burning tickmark stamps into the stored file.
+ * and burning annotations — tickmark stamps, free-text notes and drawn lines —
+ * into the stored file.
  *
- * Stamps are BURNED IN, not applied at download. The bucket is browsable, and a
- * workpaper archive whose tickmarks exist only inside the app is not an archive
- * — open A001.pdf from the B2 console or a mounted drive and the review marks
- * must be there.
+ * Annotations are BURNED IN, not applied at download. The bucket is browsable,
+ * and a workpaper archive whose review marks exist only inside the app is not
+ * an archive — open A001.pdf from the B2 console or a mounted drive and the
+ * tickmarks, notes and lines must be there.
  *
- * The accepted consequence: a stamp cannot be removed. There is no pristine
- * copy to re-render from, so the UI must treat placing a mark as permanent.
+ * The accepted consequence: an annotation cannot be removed. There is no
+ * pristine copy to re-render from, so the UI must treat placing one as
+ * permanent.
  *
  * Font note, and it takes two fonts to cover the tickmarks:
  *   - pdf-lib's StandardFonts are WinAnsi-encoded and drawText THROWS on '✓'
@@ -32,7 +34,7 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage } from 'pd
 import fontkit from '@pdf-lib/fontkit';
 import { ROBOTO_MEDIUM } from '../pdf/PdfTemplateService';
 
-export interface StampAnnotation {
+interface AnnotationBase {
   id: string;
   /** 1-based. */
   page: number;
@@ -40,12 +42,46 @@ export interface StampAnnotation {
   xPct: number;
   /** 0..1 from the TOP edge — converted to pdf-lib's bottom origin at render. */
   yPct: number;
-  symbol: string;
   color: string | null;
-  note: string | null;
   createdBy?: number | null;
   createdAt?: string;
 }
+
+/** A tickmark from the client's library, with an optional caption. `kind` is
+ *  absent on rows written before notes and lines existed. */
+export interface TickmarkAnnotation extends AnnotationBase {
+  kind?: 'tickmark';
+  symbol: string;
+  note: string | null;
+}
+
+/** Free text, drawn in a bordered box whose top-left corner is the click point. */
+export interface NoteAnnotation extends AnnotationBase {
+  kind: 'note';
+  text: string;
+}
+
+/** A straight line from (xPct, yPct) to (x2Pct, y2Pct). */
+export interface LineAnnotation extends AnnotationBase {
+  kind: 'line';
+  x2Pct: number;
+  y2Pct: number;
+  /** Stroke width in PDF points. */
+  strokeWidth: number;
+}
+
+export type StampAnnotation = TickmarkAnnotation | NoteAnnotation | LineAnnotation;
+
+/** Longest note the burner will draw; the route enforces the same cap. */
+export const MAX_NOTE_TEXT = 500;
+export const MIN_STROKE_WIDTH = 0.5;
+export const MAX_STROKE_WIDTH = 8;
+
+/** Note box typography, in PDF points. */
+const NOTE_FONT_SIZE = 9;
+const NOTE_LINE_HEIGHT = 11;
+const NOTE_PADDING = 4;
+const NOTE_MAX_WIDTH = 220;
 
 /** This app's tickmark colour vocabulary (note: amber, not the reference's yellow). */
 const STAMP_COLORS: Record<string, [number, number, number]> = {
@@ -80,10 +116,42 @@ async function dingbatsCanEncode(text: string): Promise<boolean> {
 }
 
 /**
+ * Break `text` into lines no wider than `maxWidth`. Words wider than the box
+ * are split by character so nothing is ever drawn past the border. Explicit
+ * newlines are honoured.
+ */
+export function wrapText(
+  text: string,
+  measure: (s: string) => number,
+  maxWidth: number,
+): string[] {
+  const lines: string[] = [];
+  for (const para of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const words = para.split(/\s+/).filter(Boolean);
+    if (words.length === 0) { lines.push(''); continue; }
+    let current = '';
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (measure(candidate) <= maxWidth) { current = candidate; continue; }
+      if (current) lines.push(current);
+      // The word alone overflows: hard-break it.
+      let chunk = '';
+      for (const ch of word) {
+        if (chunk && measure(chunk + ch) > maxWidth) { lines.push(chunk); chunk = ''; }
+        chunk += ch;
+      }
+      current = chunk;
+    }
+    if (current) lines.push(current);
+  }
+  return lines;
+}
+
+/**
  * Draw one annotation onto an already-loaded document.
  *
- * Only the NEW mark is drawn — existing ones are already part of the page
- * content, and re-drawing them would double-ink the file.
+ * Only the NEW annotation is drawn — existing ones are already part of the
+ * page content, and re-drawing them would double-ink the file.
  */
 export async function burnAnnotation(pdfBytes: Buffer, ann: StampAnnotation): Promise<Buffer> {
   const doc = await PDFDocument.load(pdfBytes);
@@ -115,28 +183,63 @@ export async function burnAnnotation(pdfBytes: Buffer, ann: StampAnnotation): Pr
   const covered = new Set(font.getCharacterSet());
   const canDraw = (text: string): boolean =>
     [...text].every((ch) => covered.has(ch.codePointAt(0) as number));
+  // Prose stays in Roboto and only the characters it lacks are replaced —
+  // one odd character shouldn't cost the preparer the whole note.
+  const substitute = (text: string): string =>
+    [...text].map((ch) => (canDraw(ch) ? ch : '?')).join('');
 
-  // The symbol is one mark, so it gets a font that can render it rather than a
-  // per-character substitution: Roboto, else ZapfDingbats (embedded only when
-  // it is needed, so an ordinary letter tickmark doesn't drag it into the
-  // file), else '?' so a stamp is at least visible as one.
-  let symbolFont: PDFFont = font;
-  let symbol = ann.symbol;
-  if (!canDraw(symbol)) {
-    // Standard fonts DO throw on a character they cannot encode, which is what
-    // makes this a real check — unlike the embedded TTF's silent .notdef.
-    if (await dingbatsCanEncode(symbol)) symbolFont = await doc.embedFont(StandardFonts.ZapfDingbats);
-    else symbol = '?';
-  }
+  const kind = ann.kind ?? 'tickmark';
 
-  page.drawText(symbol, { x, y: y - 16, size: 16, font: symbolFont, color: colour });
-  if (ann.note) {
-    // A note is prose, so keep it in Roboto and replace only the characters it
-    // lacks — one odd character shouldn't cost the whole note.
-    const note = [...ann.note.slice(0, 80)]
-      .map((ch) => (canDraw(ch) ? ch : '?'))
-      .join('');
-    page.drawText(note, { x, y: y - 26, size: 8, font, color: colour });
+  if (kind === 'line') {
+    const line = ann as LineAnnotation;
+    const x2 = clamp01(line.x2Pct) * width;
+    const y2 = height - clamp01(line.y2Pct) * height;
+    const thickness = Number.isFinite(line.strokeWidth)
+      ? Math.min(MAX_STROKE_WIDTH, Math.max(MIN_STROKE_WIDTH, line.strokeWidth))
+      : 1.5;
+    page.drawLine({ start: { x, y }, end: { x: x2, y: y2 }, thickness, color: colour });
+  } else if (kind === 'note') {
+    const note = ann as NoteAnnotation;
+    const text = substitute(note.text.slice(0, MAX_NOTE_TEXT));
+    const measure = (s: string): number => font.widthOfTextAtSize(s, NOTE_FONT_SIZE);
+    // The box wants NOTE_MAX_WIDTH but must stay on the page: shrink it on a
+    // narrow page, and slide the whole box left near the right edge.
+    const boxW = Math.min(NOTE_MAX_WIDTH, width - NOTE_PADDING * 2);
+    const left = Math.max(0, Math.min(x, width - boxW));
+    const lines = wrapText(text, measure, boxW - NOTE_PADDING * 2);
+    const boxH = lines.length * NOTE_LINE_HEIGHT + NOTE_PADDING * 2;
+    // Same for the bottom edge: the box's top slides up so it stays on the page.
+    const top = Math.max(Math.min(boxH, height), Math.min(y, height));
+    page.drawRectangle({
+      x: left, y: top - boxH, width: boxW, height: boxH,
+      color: rgb(1, 0.98, 0.8), opacity: 0.92,
+      borderColor: colour, borderWidth: 0.75,
+    });
+    lines.forEach((ln, i) => {
+      page.drawText(ln, {
+        x: left + NOTE_PADDING,
+        y: top - NOTE_PADDING - NOTE_LINE_HEIGHT * (i + 1) + 3,
+        size: NOTE_FONT_SIZE, font, color: colour,
+      });
+    });
+  } else {
+    const tm = ann as TickmarkAnnotation;
+    // The symbol is one mark, so it gets a font that can render it rather than
+    // a per-character substitution: Roboto, else ZapfDingbats (embedded only
+    // when it is needed, so an ordinary letter tickmark doesn't drag it into
+    // the file), else '?' so a stamp is at least visible as one.
+    let symbolFont: PDFFont = font;
+    let symbol = tm.symbol;
+    if (!canDraw(symbol)) {
+      // Standard fonts DO throw on a character they cannot encode, which is
+      // what makes this a real check — unlike the embedded TTF's silent .notdef.
+      if (await dingbatsCanEncode(symbol)) symbolFont = await doc.embedFont(StandardFonts.ZapfDingbats);
+      else symbol = '?';
+    }
+    page.drawText(symbol, { x, y: y - 16, size: 16, font: symbolFont, color: colour });
+    if (tm.note) {
+      page.drawText(substitute(tm.note.slice(0, 80)), { x, y: y - 26, size: 8, font, color: colour });
+    }
   }
 
   // Re-saving a vector PDF through pdf-lib is lossless — it is not a raster
