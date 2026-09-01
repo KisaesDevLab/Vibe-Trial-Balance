@@ -261,6 +261,134 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
   }
 });
 
+// POST /api/v1/clients/:clientId/chart-of-accounts/bulk-update
+// One change applied to many accounts at once — re-typing a block of accounts
+// as expenses, dropping them onto a lead sheet, tagging a unit. Only the keys
+// present in `updates` are touched; a key set to null clears that field.
+// Account number and name are deliberately absent: they are per-account by
+// nature and a bulk write would just collide on the unique number.
+const bulkUpdateSchema = z.object({
+  accountIds: z.array(z.number().int().positive()).min(1).max(2000),
+  updates: z.object({
+    category: z.enum(['assets', 'liabilities', 'equity', 'revenue', 'expenses']),
+    normalBalance: z.enum(['debit', 'credit']),
+    subcategory: z.string().max(100).nullable(),
+    taxCodeId: z.number().int().nullable(),
+    leadSheetId: z.number().int().positive().nullable(),
+    unit: z.string().max(100).nullable(),
+    workpaperRef: z.string().max(50).nullable(),
+    cashFlowCategory: z.enum(['operating', 'investing', 'financing', 'non_cash', 'cash']).nullable(),
+  }).partial().refine((u) => Object.keys(u).length > 0, { message: 'No fields to update' }),
+});
+export type BulkAccountUpdates = z.infer<typeof bulkUpdateSchema>['updates'];
+
+/**
+ * Map a bulk-update body onto chart_of_accounts columns. Pure so the traps
+ * are testable: an empty string clears a text field (a bulk edit has no
+ * "leave blank" meaning), a tax code dual-writes `tax_line`, and a lead
+ * sheet write records its provenance the way the single PATCH does.
+ * `taxCode` is the resolved `tax_codes.tax_code` string when `u.taxCodeId`
+ * is a number; the route looks it up before calling.
+ */
+export function bulkUpdateColumns(u: BulkAccountUpdates, taxCode: string | null): Record<string, unknown> {
+  const updates: Record<string, unknown> = {};
+  if (u.category !== undefined) updates.category = u.category;
+  if (u.normalBalance !== undefined) updates.normal_balance = u.normalBalance;
+  if (u.subcategory !== undefined) updates.subcategory = u.subcategory || null;
+  if (u.unit !== undefined) updates.unit = u.unit || null;
+  if (u.workpaperRef !== undefined) updates.workpaper_ref = u.workpaperRef || null;
+  if (u.cashFlowCategory !== undefined) updates.cash_flow_category = u.cashFlowCategory;
+  if (u.taxCodeId !== undefined) {
+    if (u.taxCodeId === null) {
+      updates.tax_code_id = null;
+      updates.tax_line = null;
+    } else {
+      updates.tax_code_id = u.taxCodeId;
+      updates.tax_line = taxCode;
+      updates.tax_line_source = 'manual';
+    }
+  }
+  if (u.leadSheetId !== undefined) {
+    updates.lead_sheet_id = u.leadSheetId;
+    updates.lead_sheet_source = u.leadSheetId === null ? null : 'manual';
+  }
+  return updates;
+}
+
+coaCollectionRouter.post('/bulk-update', async (req: AuthRequest, res: Response): Promise<void> => {
+  const clientId = Number(req.params.clientId);
+  if (isNaN(clientId)) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } });
+    return;
+  }
+
+  const parsed = bulkUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    return;
+  }
+  const { updates: u } = parsed.data;
+  const accountIds = [...new Set(parsed.data.accountIds)];
+
+  try {
+    // Every id must be one of THIS client's accounts — the ids come from the
+    // body, and the collection route's clientId is the only authority.
+    const owned = await db('chart_of_accounts')
+      .where({ client_id: clientId })
+      .whereIn('id', accountIds)
+      .select('id', 'account_number');
+    if (owned.length !== accountIds.length) {
+      res.status(404).json({
+        data: null,
+        error: { code: 'NOT_FOUND', message: `${accountIds.length - owned.length} of the selected accounts do not belong to this client.` },
+      });
+      return;
+    }
+
+    if (u.leadSheetId != null && !(await leadSheetBelongsToClient(clientId, u.leadSheetId))) {
+      res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'That lead sheet belongs to a different client.' } });
+      return;
+    }
+
+    // Dual-write, same as the single PATCH: tax_line carries the code string
+    // for anything still reading the legacy column.
+    let taxCode: string | null = null;
+    if (typeof u.taxCodeId === 'number') {
+      const tc = await db('tax_codes').where({ id: u.taxCodeId }).first('tax_code');
+      if (!tc) {
+        res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'Unknown tax code' } });
+        return;
+      }
+      taxCode = tc.tax_code as string;
+    }
+
+    const columns = bulkUpdateColumns(u, taxCode);
+    const changed = Object.keys(columns);
+    const updates = { ...columns, updated_at: db.fn.now() };
+    const updatedCount = await db.transaction(async (trx) => {
+      const n = await trx('chart_of_accounts').whereIn('id', accountIds).update(updates);
+      // One audit row per account, like the single PATCH, so the audit viewer's
+      // per-entity filter still finds the change on each account.
+      for (const row of owned as { id: number; account_number: string }[]) {
+        await logAudit({
+          userId: req.user!.userId,
+          periodId: null,
+          clientId,
+          entityType: 'chart_of_accounts',
+          entityId: row.id,
+          action: 'update',
+          description: `Bulk-updated account ${row.account_number} (${accountIds.length} accounts) — ${changed.join(', ')}`,
+        }, trx);
+      }
+      return n;
+    });
+
+    res.json({ data: { updated: updatedCount }, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'coa');
+  }
+});
+
 // POST /api/v1/clients/:clientId/chart-of-accounts/copy-from/:sourceClientId
 coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, res: Response): Promise<void> => {
   const clientId = Number(req.params.clientId);

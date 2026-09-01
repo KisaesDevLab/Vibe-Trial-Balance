@@ -152,6 +152,19 @@ All planned phases complete. App is feature-complete.
   already existed on BankStatementPdfImportDialog, ScannedSheetImportDialog and the PY tie-out
   dialogs. Preview tables must render every row — you can't untick what isn't drawn.
 - TB Import (current + prior year), PY comparison columns
+- **Import preview shows the type the confirm writes.** Every match row leaves `/import/{csv,pdf}/analyze`
+  (and the chat's `revisedAnalysis`) with `newCategory`/`newNormalBalance` filled by
+  `fillNewAccountType()` in `server/src/lib/accountTypeInference.ts`; the confirm falls back to the
+  SAME `inferAccountType()`. Before this, the preview displayed a `'expenses'` placeholder while the
+  confirm inferred from the account number, so a row read Expense on screen and landed as an Asset.
+  Inference is by **leading digit** (1/2/3/4 → assets/liabilities/equity/revenue, 5–9 expenses),
+  never a numeric range — `10100` is not `< 2000`. Name keywords only when there is no digit.
+- **COA bulk edit** — `POST /clients/:id/chart-of-accounts/bulk-update` (`bulkUpdateColumns()` in
+  `routes/chartOfAccounts.ts`, tested). Checkbox column + shift-click range on ChartOfAccountsPage,
+  `BulkEditModal` with an opt-in tick per field (category, normal balance, subcategory, unit, tax
+  code, lead sheet); unticked fields are never sent, an empty ticked text field clears. Selection
+  persists across filter changes and the bar reports how many selected rows are hidden. One audit
+  row per account. Number/name are deliberately not bulk-editable.
 - AI Diagnostics page (Claude Haiku) with Spinner loading state
 - Bank Reconciliation (full workspace, admin reopen)
 - Tax Workpapers: M-1 Worksheet (with input validation), Tax Basis Schedule (SheetJS Excel)
@@ -252,6 +265,16 @@ All planned phases complete. App is feature-complete.
   `?`. The ZapfDingbats encodability probe runs against a module-level scratch document, because
   `embedFont` writes the font out at save whether or not anything drew with it. Notes stay in Roboto
   with per-character substitution — one stray glyph must not cost the preparer's whole note.
+  **Three annotation kinds share one endpoint and one burner** (`POST .../annotations`,
+  `burnAnnotation`): `tickmark` (library symbol + optional caption), `note` (free text ≤ 500 chars,
+  drawn in a bordered box whose top-left is the click point, wrapped by `wrapText` and slid back
+  onto the page near an edge) and `line` (start/end as page fractions, `strokeWidth` in points,
+  drag-to-draw in the viewer with an SVG preview overlay). The `annotations` jsonb is a
+  discriminated union on `kind`; a record **without `kind` is a tickmark** (rows written before
+  notes/lines existed), and the route's `z.preprocess` defaults a missing `kind` for the same
+  reason — a `.default()` on the literal would not, because `discriminatedUnion` dispatches on the
+  raw input before defaults apply. Notes and lines carry their own `color` from the tickmark
+  palette; a tickmark's colour is snapshotted from the library row. All three are permanent.
   An attachment carries an optional `account_id`, so it hangs off **one row of the schedule** — the
   paperclip in each member row's Files cell — or off the schedule as a whole when it is null. The
   sheet-level Supporting files panel lists both, labelling the per-account ones with their account

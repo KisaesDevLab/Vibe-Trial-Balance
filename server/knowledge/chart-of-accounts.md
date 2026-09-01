@@ -21,6 +21,11 @@ Each account has:
 ## Editing Accounts
 Click the edit icon on any account row. You can change the name, category, normal balance, and active status. Account numbers cannot be changed if the account has any TB balances or journal entries.
 
+## Bulk Editing
+Tick the checkbox on two or more rows (shift-click selects a range; the header checkbox selects every row shown by the current filter), then click **Bulk Edit…** in the blue selection bar. In the dialog, tick each field you want to change — Category, Normal Balance, Subcategory, Unit, Tax Code, Lead Sheet — and set its value. Unticked fields are left exactly as they are on every account, so re-typing a block of accounts as Expenses does not disturb their tax codes or units. Choosing a category proposes the matching normal balance; untick it if the selection mixes contra and ordinary accounts. A ticked text field left empty clears that field.
+
+The selection survives filter changes so you can gather accounts from several categories; the bar tells you how many selected accounts are hidden by the current filter, and the edit applies to all of them. Each account gets its own audit-log entry.
+
 ## Deactivating vs. Deleting Accounts
 - **Deactivate** (uncheck Active): Hides the account from the TB grid but preserves all historical data. Use this for accounts that are no longer needed but have prior-period history.
 - **Delete**: Only allowed if the account has no TB balances, no journal entries, and no bank transactions. Permanently removes the account.

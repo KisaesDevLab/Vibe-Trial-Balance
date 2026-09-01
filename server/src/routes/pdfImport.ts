@@ -16,6 +16,7 @@ import { renderPdfToImages, PdftoppmNotFoundError } from '../lib/pdfVision';
 import type { LLMContentPart } from '../lib/llmProvider';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
+import { fillNewAccountType, inferAccountType, isCategory } from '../lib/accountTypeInference';
 import { looksLikeTotalRow } from '../lib/importSkipRules';
 import { loadOcrSettings, isOcrConfigured, ocrPages } from '../lib/ocrProvider';
 
@@ -292,6 +293,9 @@ item and say so in "warnings" — never drop or invent a row to make a total agr
       for (const m of analysisResult.matches ?? []) {
         const isTotal = looksLikeTotalRow(m.pdfAccountName) || looksLikeTotalRow(m.pdfAccountNumber);
         if (m.action !== 'skip' && isTotal) m.action = 'skip';
+        // The type the preview shows is the type the confirm writes: the
+        // model's detected `category` when it gave one, else inferred here.
+        fillNewAccountType(m, m.pdfAccountNumber, m.pdfAccountName);
       }
 
       // Merge any OCR/fallback warnings into the analysis result
@@ -410,7 +414,10 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
             accountId = existingByNumber.get(accountNum)!;
             accountsMatched++;
           } else {
-            const category = match.newCategory ?? match.category ?? 'expenses';
+            // Same inference the analyze step used, so a body without the
+            // fields cannot land a different type than the preview showed.
+            const inferred = inferAccountType(accountNum, match.pdfAccountName);
+            const category = match.newCategory ?? (isCategory(match.category ?? '') ? match.category! : inferred.category);
             const normalBalance = match.newNormalBalance ??
               (category === 'assets' || category === 'expenses' ? 'debit' : 'credit');
 
@@ -723,6 +730,10 @@ If the user requests corrections to the account matching, categories, or actions
       markAiUsageParseError(chatLogId, `Chat reply not valid JSON; passed through raw text (finish=${aiResult2.stopReason ?? 'unknown'}).`);
       res.json({ data: { reply: aiResult2.text.trim(), revisedAnalysis: null }, error: null });
       return;
+    }
+    // Same refill as the analyze step: the client swaps its matches for these.
+    for (const m of parsed.revisedAnalysis?.matches ?? []) {
+      fillNewAccountType(m, m.pdfAccountNumber, m.pdfAccountName);
     }
     res.json({ data: parsed, error: null });
   } catch (err: unknown) {

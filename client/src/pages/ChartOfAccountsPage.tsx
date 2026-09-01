@@ -19,13 +19,15 @@ import {
   deleteAccount,
   importAccounts,
   copyAccountsFromClient,
+  bulkUpdateAccounts,
   type Account,
   type AccountInput,
+  type BulkAccountUpdates,
 } from '../api/chartOfAccounts';
 import { listClients, type Client } from '../api/clients';
 import { getAvailableTaxCodes, type TaxCode } from '../api/taxCodes';
 import { listLeadSheets } from '../api/leadSheets';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, pushToast } from '../store/uiStore';
 import { checkFileSize } from '../utils/fileLimits';
 import { confirmAction } from '../components/ConfirmDialog';
 
@@ -890,6 +892,219 @@ function CopyFromClientModal({ clientId, onClose, onSuccess }: CopyModalProps) {
 }
 
 // --- Main page ---
+// --- Bulk Edit Modal ---
+interface LeadSheetOption { id: number; code: string | null; name: string }
+
+interface BulkEditModalProps {
+  clientId: number;
+  accounts: Account[];
+  leadSheets: LeadSheetOption[];
+  onClose: () => void;
+  onSuccess: (updated: number) => void;
+}
+
+type BulkField = 'category' | 'normalBalance' | 'subcategory' | 'taxCodeId' | 'leadSheetId' | 'unit';
+
+const bulkInputCls = 'w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400 disabled:opacity-50';
+
+function BulkFieldLabel({ field, enabled, onToggle, children }: {
+  field: BulkField;
+  enabled: boolean;
+  onToggle: (field: BulkField, on: boolean) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300 mb-1 cursor-pointer select-none">
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={(e) => onToggle(field, e.target.checked)}
+        className="rounded border-gray-300 dark:border-gray-600"
+      />
+      {children}
+    </label>
+  );
+}
+
+function BulkEditModal({ clientId, accounts, leadSheets, onClose, onSuccess }: BulkEditModalProps) {
+  // Every field is opt-in: an unticked field is left exactly as it is on each
+  // account, so re-typing thirty accounts as expenses does not also blank
+  // their units or tax codes.
+  const [enabled, setEnabled] = useState<Record<BulkField, boolean>>({
+    category: false, normalBalance: false, subcategory: false, taxCodeId: false, leadSheetId: false, unit: false,
+  });
+  const [values, setValues] = useState({
+    category: 'expenses' as Account['category'],
+    normalBalance: 'debit' as 'debit' | 'credit',
+    subcategory: '',
+    taxCodeId: null as number | null,
+    leadSheetId: null as number | null,
+    unit: '',
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const { data: tcData } = useQuery({
+    queryKey: ['tax-codes-available', clientId],
+    queryFn: () => getAvailableTaxCodes(clientId),
+  });
+  const taxCodes = tcData?.data ?? [];
+
+  const toggle = (field: BulkField, on: boolean) => setEnabled((prev) => ({ ...prev, [field]: on }));
+
+  // Picking a category also proposes the matching normal balance, the same
+  // auto-derive the single-account form does; the user can still untick it
+  // when the selection is a mix of contra and ordinary accounts.
+  const setCategory = (category: Account['category']) => {
+    setValues((prev) => ({ ...prev, category, normalBalance: defaultNormalBalance(category) }));
+    setEnabled((prev) => ({ ...prev, category: true, normalBalance: true }));
+  };
+
+  const mutation = useMutation({
+    mutationFn: (updates: BulkAccountUpdates) =>
+      bulkUpdateAccounts(clientId, accounts.map((a) => a.id), updates),
+    onSuccess: (r) => {
+      if (r.error) { setError(r.error.message); return; }
+      onSuccess(r.data.updated);
+    },
+  });
+
+  const anyEnabled = Object.values(enabled).some(Boolean);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const updates: BulkAccountUpdates = {};
+    if (enabled.category) updates.category = values.category;
+    if (enabled.normalBalance) updates.normalBalance = values.normalBalance;
+    if (enabled.subcategory) updates.subcategory = values.subcategory.trim() || null;
+    if (enabled.taxCodeId) updates.taxCodeId = values.taxCodeId;
+    if (enabled.leadSheetId) updates.leadSheetId = values.leadSheetId;
+    if (enabled.unit) updates.unit = values.unit.trim() || null;
+    setError(null);
+    mutation.mutate(updates);
+  };
+
+  const shown = accounts.slice(0, 12);
+  const plural = accounts.length !== 1 ? 's' : '';
+
+  return (
+    <Modal title={`Bulk Edit — ${accounts.length} account${plural}`} onClose={onClose}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && (
+          <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-sm">
+            {error}
+          </div>
+        )}
+
+        <div className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="mb-1.5">Tick a field to change it on every selected account. Unticked fields are left as they are.</p>
+          <div className="flex flex-wrap gap-1">
+            {shown.map((a) => (
+              <span key={a.id} title={a.account_name} className="font-mono px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                {a.account_number}
+              </span>
+            ))}
+            {accounts.length > shown.length && (
+              <span className="px-1.5 py-0.5 italic">+{accounts.length - shown.length} more</span>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <BulkFieldLabel field="category" enabled={enabled.category} onToggle={toggle}>Category</BulkFieldLabel>
+            <select
+              value={values.category}
+              onChange={(e) => setCategory(e.target.value as Account['category'])}
+              disabled={!enabled.category}
+              className={bulkInputCls}
+            >
+              {CATEGORIES.map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
+            </select>
+          </div>
+          <div>
+            <BulkFieldLabel field="normalBalance" enabled={enabled.normalBalance} onToggle={toggle}>
+              Normal Balance
+              <span className="font-normal text-gray-400 dark:text-gray-500">(auto from category)</span>
+            </BulkFieldLabel>
+            <select
+              value={values.normalBalance}
+              onChange={(e) => setValues((prev) => ({ ...prev, normalBalance: e.target.value as 'debit' | 'credit' }))}
+              disabled={!enabled.normalBalance}
+              className={bulkInputCls}
+            >
+              <option value="debit">Debit</option>
+              <option value="credit">Credit</option>
+            </select>
+          </div>
+          <div>
+            <BulkFieldLabel field="subcategory" enabled={enabled.subcategory} onToggle={toggle}>Subcategory</BulkFieldLabel>
+            <input
+              value={values.subcategory}
+              onChange={(e) => setValues((prev) => ({ ...prev, subcategory: e.target.value }))}
+              disabled={!enabled.subcategory}
+              placeholder="Leave empty to clear"
+              className={bulkInputCls}
+            />
+          </div>
+          <div>
+            <BulkFieldLabel field="unit" enabled={enabled.unit} onToggle={toggle}>Unit</BulkFieldLabel>
+            <input
+              value={values.unit}
+              onChange={(e) => setValues((prev) => ({ ...prev, unit: e.target.value }))}
+              disabled={!enabled.unit}
+              placeholder="Leave empty to clear"
+              className={bulkInputCls}
+            />
+          </div>
+          <div className="col-span-2">
+            <BulkFieldLabel field="taxCodeId" enabled={enabled.taxCodeId} onToggle={toggle}>Tax Code</BulkFieldLabel>
+            <div className={enabled.taxCodeId ? '' : 'opacity-50 pointer-events-none'}>
+              <TaxCodeDropdown
+                currentCodeId={values.taxCodeId}
+                taxCodes={taxCodes}
+                onSelect={(codeId) => setValues((prev) => ({ ...prev, taxCodeId: codeId }))}
+              />
+            </div>
+          </div>
+          <div className="col-span-2">
+            <BulkFieldLabel field="leadSheetId" enabled={enabled.leadSheetId} onToggle={toggle}>Lead Sheet</BulkFieldLabel>
+            <select
+              value={values.leadSheetId ?? ''}
+              onChange={(e) => setValues((prev) => ({ ...prev, leadSheetId: e.target.value === '' ? null : Number(e.target.value) }))}
+              disabled={!enabled.leadSheetId}
+              className={bulkInputCls}
+            >
+              <option value="">— none —</option>
+              {leadSheets.map((l) => (
+                <option key={l.id} value={l.id}>{l.code ? `${l.code} — ` : ''}{l.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!anyEnabled || mutation.isPending}
+            title={anyEnabled ? undefined : 'Tick at least one field to change'}
+            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {mutation.isPending ? 'Applying…' : `Apply to ${accounts.length} account${plural}`}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// --- Main Page ---
 export function ChartOfAccountsPage() {
   const { selectedClientId } = useUIStore();
   const qc = useQueryClient();
@@ -902,6 +1117,13 @@ export function ChartOfAccountsPage() {
   const [filterText, setFilterText] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterUnit, setFilterUnit] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  // Anchor for shift-click range selection — an id, not a row index, so a
+  // re-sort between clicks still ranges over the rows the user can see.
+  const selectAnchorRef = useRef<number | null>(null);
+
+  useEffect(() => { setSelectedIds(new Set()); selectAnchorRef.current = null; }, [selectedClientId]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['chart-of-accounts', selectedClientId],
@@ -963,6 +1185,54 @@ export function ChartOfAccountsPage() {
     [data, filterCategory, filterUnit, filterText],
   );
 
+  // The selection survives filter changes on purpose (tick a few in one
+  // category, switch category, tick more), so the toolbar says how many of
+  // the selected rows are currently hidden — a bulk edit hits all of them.
+  const selectedAccounts = useMemo(
+    () => (data ?? []).filter((a) => selectedIds.has(a.id)),
+    [data, selectedIds],
+  );
+  const visibleIds = useMemo(() => filteredData.map((a) => a.id), [filteredData]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id));
+  const hiddenSelectedCount = useMemo(() => {
+    const visible = new Set(visibleIds);
+    return selectedAccounts.filter((a) => !visible.has(a.id)).length;
+  }, [visibleIds, selectedAccounts]);
+
+  const toggleAllVisible = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+    selectAnchorRef.current = null;
+  };
+
+  /** `orderedIds` is the table's current sorted order, so shift-click ranges over what is on screen. */
+  const toggleRow = (id: number, orderedIds: number[], shift: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const anchor = selectAnchorRef.current;
+      const from = anchor === null ? -1 : orderedIds.indexOf(anchor);
+      const to = orderedIds.indexOf(id);
+      if (shift && from >= 0 && to >= 0 && from !== to) {
+        const turnOn = !prev.has(id);
+        const [lo, hi] = from < to ? [from, to] : [to, from];
+        for (let i = lo; i <= hi; i++) {
+          if (turnOn) next.add(orderedIds[i]); else next.delete(orderedIds[i]);
+        }
+      } else if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+    selectAnchorRef.current = id;
+  };
+
   // Lead sheet codes for the column and the add/edit form's dropdown. Kept in
   // its own query so it stays fresh when the Lead Sheets page edits them.
   const { data: leadSheets = [] } = useQuery({
@@ -980,6 +1250,35 @@ export function ChartOfAccountsPage() {
   );
 
   const columns = [
+    columnHelper.display({
+      id: 'select',
+      enableSorting: false,
+      header: () => (
+        <input
+          type="checkbox"
+          aria-label={allVisibleSelected ? 'Deselect all shown accounts' : 'Select all shown accounts'}
+          checked={allVisibleSelected}
+          ref={(el) => { if (el) el.indeterminate = !allVisibleSelected && someVisibleSelected; }}
+          onChange={toggleAllVisible}
+          disabled={visibleIds.length === 0}
+          className="rounded border-gray-300 dark:border-gray-600 cursor-pointer"
+        />
+      ),
+      cell: ({ row, table }) => (
+        <input
+          type="checkbox"
+          aria-label={`Select ${row.original.account_number}`}
+          checked={selectedIds.has(row.original.id)}
+          onChange={() => { /* handled in onClick so the shift key is visible */ }}
+          onClick={(e) => toggleRow(
+            row.original.id,
+            table.getRowModel().rows.map((r) => r.original.id),
+            e.shiftKey,
+          )}
+          className="rounded border-gray-300 dark:border-gray-600 cursor-pointer"
+        />
+      ),
+    }),
     columnHelper.accessor('account_number', {
       header: 'Account #',
       cell: (info) => <span className="font-mono text-sm">{info.getValue()}</span>,
@@ -1039,6 +1338,7 @@ export function ChartOfAccountsPage() {
     columnHelper.display({
       id: 'actions',
       header: '',
+      enableSorting: false,
       cell: ({ row }) => (
         <div className="flex items-center gap-2 justify-end">
           <button
@@ -1165,6 +1465,32 @@ export function ChartOfAccountsPage() {
         )}
       </div>
 
+      {selectedAccounts.length > 0 && (
+        <div className="flex items-center gap-3 mb-3 px-3 py-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 text-sm flex-wrap">
+          <span className="font-medium text-blue-800 dark:text-blue-300">
+            {selectedAccounts.length} account{selectedAccounts.length !== 1 ? 's' : ''} selected
+          </span>
+          {hiddenSelectedCount > 0 && (
+            <span className="text-xs text-blue-700/80 dark:text-blue-300/80">
+              ({hiddenSelectedCount} hidden by the current filter — still included)
+            </span>
+          )}
+          <button
+            onClick={() => setShowBulkEdit(true)}
+            className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
+          >
+            Bulk Edit…
+          </button>
+          <button
+            onClick={() => { setSelectedIds(new Set()); selectAnchorRef.current = null; }}
+            className="text-xs text-blue-700 dark:text-blue-300 hover:underline"
+          >
+            Clear selection
+          </button>
+          <span className="ml-auto text-xs text-blue-700/70 dark:text-blue-300/70">Shift-click to select a range</span>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="flex items-center justify-center py-12 text-gray-400 dark:text-gray-500">Loading...</div>
       ) : (
@@ -1177,8 +1503,8 @@ export function ChartOfAccountsPage() {
                     {hg.headers.map((header) => (
                       <th
                         key={header.id}
-                        className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap cursor-pointer select-none"
-                        onClick={header.column.getToggleSortingHandler()}
+                        className={`px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap select-none ${header.column.getCanSort() ? 'cursor-pointer' : ''}`}
+                        onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                       >
                         <span className="flex items-center gap-1">
                           {flexRender(header.column.columnDef.header, header.getContext())}
@@ -1201,7 +1527,12 @@ export function ChartOfAccountsPage() {
                   </tr>
                 ) : (
                   table.getRowModel().rows.map((row) => (
-                    <tr key={row.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                    <tr
+                      key={row.id}
+                      className={`transition-colors ${selectedIds.has(row.original.id)
+                        ? 'bg-blue-50 dark:bg-blue-900/20'
+                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}
+                    >
                       {row.getVisibleCells().map((cell) => (
                         <td key={cell.id} className="px-3 py-2.5 text-gray-700 dark:text-gray-300">
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -1253,6 +1584,22 @@ export function ChartOfAccountsPage() {
             error={formError}
           />
         </Modal>
+      )}
+
+      {showBulkEdit && selectedAccounts.length > 0 && (
+        <BulkEditModal
+          clientId={selectedClientId}
+          accounts={selectedAccounts}
+          leadSheets={leadSheets}
+          onClose={() => setShowBulkEdit(false)}
+          onSuccess={(updated) => {
+            qc.invalidateQueries({ queryKey: ['chart-of-accounts', selectedClientId] });
+            pushToast(`Updated ${updated} account${updated !== 1 ? 's' : ''}.`, 'success');
+            setShowBulkEdit(false);
+            setSelectedIds(new Set());
+            selectAnchorRef.current = null;
+          }}
+        />
       )}
 
       {showImport && (

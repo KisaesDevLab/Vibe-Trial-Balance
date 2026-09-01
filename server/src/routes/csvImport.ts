@@ -13,6 +13,7 @@ import { getLLMProvider } from '../lib/aiClient';
 import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
+import { fillNewAccountType, inferAccountType } from '../lib/accountTypeInference';
 import { looksLikeTotalRow } from '../lib/importSkipRules';
 
 // ── Excel → CSV conversion ──────────────────────────────────────────────────
@@ -569,6 +570,14 @@ Only give indexes for lines shown above — the file may be longer, and you must
         }
       }
 
+      // ── Step 4: Decide the type of every would-be new account NOW ────────
+      // The preview shows these values and the confirm writes them. Leaving
+      // them blank made the dropdown show a placeholder while the confirm
+      // inferred something else from the account number.
+      for (const match of allMatches) {
+        fillNewAccountType(match, match.csvAccountNumber, match.csvAccountName);
+      }
+
       const analysisResult: AiAnalysisResult = { ...columnMapping, matches: allMatches };
 
       res.json({
@@ -823,6 +832,12 @@ If the user requests corrections to the column mapping, account matching, or row
       res.json({ data: { reply: aiResult3.text.trim(), revisedAnalysis: null }, error: null });
       return;
     }
+    // The client replaces its matches with these wholesale, and the model
+    // rarely echoes newCategory/newNormalBalance back — refill them so the
+    // preview keeps showing the type the confirm will write.
+    for (const m of parsed.revisedAnalysis?.matches ?? []) {
+      fillNewAccountType(m, m.csvAccountNumber, m.csvAccountName);
+    }
     res.json({ data: parsed, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'csv-import');
@@ -926,32 +941,13 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
             accountId = existingByNumber.get(accountNum)!;
             accountsMatched++;
           } else {
-            // Determine category and normal_balance
-            let category: string = match.newCategory ?? 'expenses';
-            let normalBalance: string = match.newNormalBalance ?? 'debit';
-
-            if (!match.newCategory) {
-              const name = (match.csvAccountName || '').toLowerCase();
-              const num = accountNum ?? '';
-              const numericPart = parseInt(num.replace(/\D/g, ''), 10);
-              if (!isNaN(numericPart)) {
-                if (numericPart < 2000) { category = 'assets'; normalBalance = 'debit'; }
-                else if (numericPart < 3000) { category = 'liabilities'; normalBalance = 'credit'; }
-                else if (numericPart < 4000) { category = 'equity'; normalBalance = 'credit'; }
-                else if (numericPart < 5000) { category = 'revenue'; normalBalance = 'credit'; }
-                else { category = 'expenses'; normalBalance = 'debit'; }
-              } else {
-                if (name.includes('cash') || name.includes('receivable') || name.includes('asset') || name.includes('equipment') || name.includes('inventory')) {
-                  category = 'assets'; normalBalance = 'debit';
-                } else if (name.includes('payable') || name.includes('liability') || name.includes('loan') || name.includes('debt')) {
-                  category = 'liabilities'; normalBalance = 'credit';
-                } else if (name.includes('equity') || name.includes('capital') || name.includes('retained')) {
-                  category = 'equity'; normalBalance = 'credit';
-                } else if (name.includes('revenue') || name.includes('income') || name.includes('sales')) {
-                  category = 'revenue'; normalBalance = 'credit';
-                }
-              }
-            }
+            // The analyze step already decided these and the preview showed
+            // them; the fallback only covers a body assembled without it
+            // (an older client, or the chat's revisedAnalysis) and MUST use
+            // the same inference so it cannot disagree with the preview.
+            const inferred = inferAccountType(accountNum, match.csvAccountName);
+            const category: string = match.newCategory ?? inferred.category;
+            const normalBalance: string = match.newNormalBalance ?? inferred.normalBalance;
 
             const finalNum = accountNum || `IMP${Date.now().toString(36).slice(-6).toUpperCase()}`;
             const [newAccount] = await trx('chart_of_accounts')

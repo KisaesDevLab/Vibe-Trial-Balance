@@ -8,13 +8,15 @@
     "start": "node dist/app.js",
     "test:router": "tsx --test src/lib/__tests__/routerProvider.test.ts",
     "test:import": "tsx --test src/routes/__tests__/csvImport.test.ts",
+    "test:coabulk": "tsx --test src/routes/__tests__/coaBulkUpdate.test.ts",
+    "test:accounttype": "tsx --test src/lib/__tests__/accountTypeInference.test.ts",
     "test:filenames": "tsx --test src/lib/__tests__/reportFilename.test.ts",
     "test:exportunit": "tsx --test src/lib/__tests__/exportUnit.test.ts",
     "test:leadsheets": "tsx --test src/lib/__tests__/leadSheets.test.ts",
     "test:storage": "tsx --test src/lib/__tests__/storageKeys.test.ts",
     "test:leadsheetref": "tsx --test src/lib/__tests__/leadSheetRef.test.ts",
     "test:leadsheetpdf": "tsx --test src/lib/__tests__/leadSheetPdf.test.ts",
-    "test": "tsx --test src/lib/__tests__/routerProvider.test.ts src/lib/__tests__/reportFilename.test.ts src/lib/__tests__/exportUnit.test.ts src/lib/__tests__/leadSheets.test.ts src/lib/__tests__/storageKeys.test.ts src/lib/__tests__/leadSheetRef.test.ts src/lib/__tests__/leadSheetPdf.test.ts src/routes/__tests__/csvImport.test.ts"
+    "test": "tsx --test src/lib/__tests__/routerProvider.test.ts src/lib/__tests__/reportFilename.test.ts src/lib/__tests__/exportUnit.test.ts src/lib/__tests__/leadSheets.test.ts src/lib/__tests__/storageKeys.test.ts src/lib/__tests__/leadSheetRef.test.ts src/lib/__tests__/leadSheetPdf.test.ts src/routes/__tests__/csvImport.test.ts src/routes/__tests__/coaBulkUpdate.test.ts src/lib/__tests__/accountTypeInference.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

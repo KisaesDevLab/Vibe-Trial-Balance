@@ -77,3 +77,21 @@ export const copyAccountsFromClient = (clientId: number, sourceClientId: number,
     `/clients/${clientId}/chart-of-accounts/copy-from/${sourceClientId}?overwrite=${overwrite}`,
     { method: 'POST' },
   );
+
+/** Fields a bulk edit can set. A key present with `null` clears that field on every account. */
+export interface BulkAccountUpdates {
+  category?: Account['category'];
+  normalBalance?: 'debit' | 'credit';
+  subcategory?: string | null;
+  taxCodeId?: number | null;
+  leadSheetId?: number | null;
+  unit?: string | null;
+  workpaperRef?: string | null;
+  cashFlowCategory?: Account['cash_flow_category'];
+}
+
+export const bulkUpdateAccounts = (clientId: number, accountIds: number[], updates: BulkAccountUpdates) =>
+  apiFetch<{ updated: number }>(`/clients/${clientId}/chart-of-accounts/bulk-update`, {
+    method: 'POST',
+    body: JSON.stringify({ accountIds, updates }),
+  });

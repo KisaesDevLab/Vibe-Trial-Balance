@@ -117,3 +117,6 @@ After a PDF import, a **verification panel** appears on the Trial Balance page s
 - Simple two-column layouts (account / amount) work best
 - Multi-column layouts with Dr/Cr columns are also supported
 - Ensure the PDF is not password-protected
+
+## Account type of new accounts
+When a row will create a new account, the Category and DR/CR shown in the preview are exactly what will be written. The app fills them in during analysis — from the PDF extractor's detected category when there is one, otherwise from the account number's leading digit (1 = Assets, 2 = Liabilities, 3 = Equity, 4 = Revenue, 5–9 = Expenses, for 4- and 5-digit numbering alike), and from the account name when there is no number. Change the dropdown in the preview if the guess is wrong; what you see is what gets created.
