@@ -18,6 +18,10 @@ import {
   generateGeneralLedgerPdf,
   generateIncomeStatementPdf,
   generateBalanceSheetPdf,
+  generateEquityStatementPdf,
+  parseFsBasis,
+  parseFsPriorYear,
+  type FsPdfOptions,
   generateTaxCodeReportPdf,
   generateWorkpaperIndexPdf,
   generateLeadSheetsPdf,
@@ -182,41 +186,39 @@ pdfReportsRouter.get('/periods/:periodId/general-ledger', async (req: AuthReques
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/v1/reports/periods/:periodId/income-statement?priorYear=true
-// ─────────────────────────────────────────────────────────────────────────────
-pdfReportsRouter.get('/periods/:periodId/income-statement', async (req: AuthRequest, res: Response): Promise<void> => {
-  const periodId = getPeriodId(req);
-  if (periodId === null) {
-    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
-    return;
-  }
-  const includePY = req.query.priorYear === 'true' || req.query.priorYear === '1';
-  try {
-    const buffer = await generateIncomeStatementPdf(db, periodId, includePY);
-    sendPdf(res, buffer, await reportFilename(periodId, `income-statement-${periodId}.pdf`), isPreview(req));
-  } catch (err: unknown) {
-    const e = err as { code?: string; status?: number; message?: string };
-    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
+// Financial statements — the three tabs of the Financial Statements page.
+// GET /api/v1/reports/periods/:periodId/income-statement
 // GET /api/v1/reports/periods/:periodId/balance-sheet
+// GET /api/v1/reports/periods/:periodId/equity-statement
+//   ?basis=unadjusted|book|tax   (default book — the page's View select)
+//   ?priorYear=true|false        (default automatic: on when the period has PY balances)
 // ─────────────────────────────────────────────────────────────────────────────
-pdfReportsRouter.get('/periods/:periodId/balance-sheet', async (req: AuthRequest, res: Response): Promise<void> => {
-  const periodId = getPeriodId(req);
-  if (periodId === null) {
-    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
-    return;
-  }
-  try {
-    const buffer = await generateBalanceSheetPdf(db, periodId);
-    sendPdf(res, buffer, await reportFilename(periodId, `balance-sheet-${periodId}.pdf`), isPreview(req));
-  } catch (err: unknown) {
-    const e = err as { code?: string; status?: number; message?: string };
-    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
-  }
-});
+function fsOptions(req: AuthRequest): FsPdfOptions {
+  return { basis: parseFsBasis(req.query.basis), priorYear: parseFsPriorYear(req.query.priorYear) };
+}
+
+const FS_STATEMENTS: Array<{ path: string; file: string; generate: (id: number, o: FsPdfOptions) => Promise<Buffer> }> = [
+  { path: 'income-statement', file: 'income-statement', generate: (id, o) => generateIncomeStatementPdf(db, id, o) },
+  { path: 'balance-sheet',    file: 'balance-sheet',    generate: (id, o) => generateBalanceSheetPdf(db, id, o) },
+  { path: 'equity-statement', file: 'equity-statement', generate: (id, o) => generateEquityStatementPdf(db, id, o) },
+];
+
+for (const stmt of FS_STATEMENTS) {
+  pdfReportsRouter.get(`/periods/:periodId/${stmt.path}`, async (req: AuthRequest, res: Response): Promise<void> => {
+    const periodId = getPeriodId(req);
+    if (periodId === null) {
+      res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period ID' } });
+      return;
+    }
+    try {
+      const buffer = await stmt.generate(periodId, fsOptions(req));
+      sendPdf(res, buffer, await reportFilename(periodId, `${stmt.file}-${periodId}.pdf`), isPreview(req));
+    } catch (err: unknown) {
+      const e = err as { code?: string; status?: number; message?: string };
+      res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+    }
+  });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/reports/periods/:periodId/tax-code-report
@@ -377,6 +379,7 @@ const REPORT_GENERATORS: Record<string, { label: string; generate: (periodId: nu
   'pdf-tb':         { label: 'Trial Balance',     generate: (id) => generateTrialBalancePdf(db, id) },
   'pdf-is':         { label: 'Income Statement',  generate: (id) => generateIncomeStatementPdf(db, id) },
   'pdf-bs':         { label: 'Balance Sheet',     generate: (id) => generateBalanceSheetPdf(db, id) },
+  'pdf-equity':     { label: 'Statement of Equity', generate: (id) => generateEquityStatementPdf(db, id) },
   'pdf-je':         { label: 'Journal Entries',   generate: (id) => generateJournalEntryListingPdf(db, id) },
   'pdf-aje':        { label: 'AJE Listing',       generate: (id) => generateAjeListingPdf(db, id) },
   'pdf-gl':         { label: 'General Ledger',    generate: (id) => generateGeneralLedgerPdf(db, id) },

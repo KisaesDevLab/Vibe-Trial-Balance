@@ -25,6 +25,7 @@ Three statements on tabbed pages: **Income Statement**, **Balance Sheet**, and *
 - **Statement of Equity**: Opening equity, net income activity, and closing equity with comparative columns.
 - All statements show Current Year, Prior Year, $ Change, and % Variance columns
 - Select the balance basis: Unadjusted, Book Adjusted, or Tax Adjusted
+- **The PDF is the screen on paper.** Preview / Download PDF on any of the three tabs prints that statement with the same basis and the same Current Year / Prior Year / Change / % columns. The prior-year columns are left off automatically when the period has no prior-year balances at all (a first-year client), and the basis is printed above the table. The Statement of Equity is also available in the Workpaper Package binder.
 - Subtotal and total rows have **double underlines** on all value columns
 - Access: **Reports > Financial Statements**
 

@@ -567,104 +567,186 @@ export async function generateGeneralLedgerPdf(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// (e) Income Statement PDF
+// (e) Financial statements — shared comparative layout
+//
+// The Financial Statements page shows Current / Prior Year / Change / % on
+// every statement and lets the user pick the balance basis; these PDFs are
+// that screen on paper, so they take the same two knobs. `fsChangePct` and
+// the sign convention (categoryNet) mirror FinancialStatementsPage.tsx —
+// keep the two in step or the PDF will disagree with what the reviewer
+// signed off on screen.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type FsBasis = 'unadjusted' | 'book' | 'tax';
+
+export interface FsPdfOptions {
+  /** Which column set the current-year figures come from (the page's View select). */
+  basis?: FsBasis;
+  /**
+   * Prior-year and change columns. Omitted = automatic: shown when any row
+   * carries a prior-year balance, dropped for a first-year client, who would
+   * otherwise print two dead columns.
+   */
+  priorYear?: boolean;
+}
+
+const FS_BASIS_LABEL: Record<FsBasis, string> = {
+  unadjusted: 'Unadjusted',
+  book:       'Book Adjusted',
+  tax:        'Tax Adjusted',
+};
+
+const FS_BASIS_COLUMN: Record<FsBasis, string> = {
+  unadjusted: 'unadjusted',
+  book:       'book_adjusted',
+  tax:        'tax_adjusted',
+};
+
+export function parseFsBasis(v: unknown): FsBasis {
+  return v === 'unadjusted' || v === 'tax' ? v : 'book';
+}
+
+/** `?priorYear=true|1` forces the columns on, `false|0` off, anything else = automatic. */
+export function parseFsPriorYear(v: unknown): boolean | undefined {
+  if (v === 'true' || v === '1') return true;
+  if (v === 'false' || v === '0') return false;
+  return undefined;
+}
+
+type FsRow = Record<string, unknown>;
+
+function fsCurrent(r: FsRow, basis: FsBasis): number {
+  const col = FS_BASIS_COLUMN[basis];
+  return categoryNet(r.category as string, Number(r[`${col}_debit`] ?? 0), Number(r[`${col}_credit`] ?? 0));
+}
+
+function fsPrior(r: FsRow): number {
+  return categoryNet(r.category as string, Number(r.prior_year_debit ?? 0), Number(r.prior_year_credit ?? 0));
+}
+
+function fsHasPriorYear(rows: FsRow[]): boolean {
+  return rows.some((r) => Number(r.prior_year_debit ?? 0) !== 0 || Number(r.prior_year_credit ?? 0) !== 0);
+}
+
+/** Same rules as fmtPct on the Financial Statements page. */
+export function fsChangePct(current: number, prior: number): string {
+  if (prior === 0 && current === 0) return '—';
+  if (prior === 0) return 'N/A';
+  const pct = ((current - prior) / Math.abs(prior)) * 100;
+  const str = Math.abs(pct).toFixed(1);
+  return pct < 0 ? `(${str}%)` : `${str}%`;
+}
+
+interface FsLayout {
+  svc: PdfTemplateService;
+  basis: FsBasis;
+  comparative: boolean;
+  cols: string[];
+  widths: (string | number)[];
+}
+
+async function fsLayout(db: Knex, rows: FsRow[], options: FsPdfOptions): Promise<FsLayout> {
+  const svc = await PdfTemplateService.fromDb(db);
+  const basis = options.basis ?? 'book';
+  const comparative = options.priorYear ?? fsHasPriorYear(rows);
+  return comparative
+    ? { svc, basis, comparative, cols: ['Acct #', 'Account Name', 'Current Year', 'Prior Year', 'Change', '%'], widths: [45, '*', 72, 72, 72, 44] }
+    : { svc, basis, comparative, cols: ['Acct #', 'Account Name', 'Amount'], widths: [45, '*', 80] };
+}
+
+/**
+ * One statement line. `prior === undefined` leaves the comparison cells blank
+ * (the equity statement's opening section IS the prior year, so it has no
+ * prior of its own — the screen leaves those cells empty too).
+ */
+function fsRow(
+  L: FsLayout,
+  acct: string,
+  name: string,
+  current: number,
+  prior: number | undefined,
+  opts: { bold?: boolean; shade?: boolean; isAlt?: boolean } = {},
+): TableCell[] {
+  const cells: (string | number | null)[] = [acct, name, current];
+  if (L.comparative) {
+    if (prior === undefined) cells.push('', '', '');
+    else cells.push(prior, current - prior, fsChangePct(current, prior));
+  }
+  const row = L.svc.dataRow(cells, opts);
+  // The % column is text, which dataRow left-aligns; it belongs with the numbers.
+  if (L.comparative) (row[5] as Record<string, unknown>).alignment = 'right';
+  return row;
+}
+
+function fsBasisNote(L: FsLayout): Content {
+  return {
+    text: `${FS_BASIS_LABEL[L.basis]} balances${L.comparative ? ' · prior year from the period\u2019s prior-year balances' : ''}`,
+    fontSize: 7,
+    color: '#666666',
+    margin: [0, 0, 0, 4] as [number, number, number, number],
+  };
+}
+
+const FS_TABLE_LAYOUT = { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' };
+
+async function loadFsRows(db: Knex, periodId: number, categories?: string[]): Promise<FsRow[]> {
+  const q = db('v_adjusted_trial_balance')
+    .where({ period_id: periodId, is_active: true })
+    .modify(whereHasActivity)
+    .orderBy('account_number', 'asc');
+  if (categories) q.whereIn('category', categories);
+  return (await q) as FsRow[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (e1) Income Statement PDF
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function generateIncomeStatementPdf(
   db: Knex,
   periodId: number,
-  includePriorYear = false,
+  options: FsPdfOptions = {},
 ): Promise<Buffer> {
-  const svc  = await PdfTemplateService.fromDb(db);
   const info = await getPeriodInfo(db, periodId);
-
-  const rows = await db('v_adjusted_trial_balance')
-    .where({ period_id: periodId, is_active: true })
-    .whereIn('category', ['revenue', 'expenses'])
-    .modify(whereHasActivity)
-    .orderBy('account_number', 'asc');
-
-  const cols = includePriorYear
-    ? ['Acct #', 'Account Name', 'Current Year', 'Prior Year', 'Change']
-    : ['Acct #', 'Account Name', 'Amount'];
-  const widths = includePriorYear
-    ? [45, '*', 80, 80, 80]
-    : [45, '*', 80];
+  const rows = await loadFsRows(db, periodId, ['revenue', 'expenses']);
+  const L = await fsLayout(db, rows, options);
+  const { svc, basis, cols, widths } = L;
 
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
-  let totalRevenue = 0;
-  let totalExpenses = 0;
-  let totalRevenuePY = 0;
-  let totalExpensesPY = 0;
+  let totalRevenue = 0, totalExpenses = 0, totalRevenuePY = 0, totalExpensesPY = 0;
   let rowIdx = 0;
 
-  // IS traditional: revenue positive (cr-dr), expenses positive (dr-cr)
-  const isBookNet = (r: Record<string, unknown>): number => {
-    const dr = Number(r.book_adjusted_debit  ?? 0);
-    const cr = Number(r.book_adjusted_credit ?? 0);
-    return (r.category as string) === 'revenue' ? cr - dr : dr - cr;
-  };
-  const isPyNet = (r: Record<string, unknown>): number => {
-    const dr = Number(r.prior_year_debit  ?? 0);
-    const cr = Number(r.prior_year_credit ?? 0);
-    return (r.category as string) === 'revenue' ? cr - dr : dr - cr;
-  };
-
+  // Revenue positive (cr-dr), expenses positive (dr-cr): categoryNet does both.
   for (const section of ['revenue', 'expenses'] as const) {
-    const sectionRows = (rows as Record<string, unknown>[]).filter(
-      (r) => r.category === section,
-    );
+    const sectionRows = rows.filter((r) => r.category === section);
     if (sectionRows.length === 0) continue;
 
     tableBody.push(svc.sectionHeaderRow(section, cols.length));
-
-    let sectionTotal = 0;
-    let sectionTotalPY = 0;
+    let sectionTotal = 0, sectionTotalPY = 0;
 
     for (const r of sectionRows) {
-      const amt  = isBookNet(r);
-      const amtPY = isPyNet(r);
-      sectionTotal   += amt;
+      const amt = fsCurrent(r, basis);
+      const amtPY = fsPrior(r);
+      sectionTotal += amt;
       sectionTotalPY += amtPY;
-
-      if (section === 'revenue') {
-        totalRevenue   += amt;
-        totalRevenuePY += amtPY;
-      } else {
-        totalExpenses   += amt;
-        totalExpensesPY += amtPY;
-      }
-
-      const cells: (string | number | null)[] = [
-        r.account_number as string,
-        r.account_name   as string,
-        amt,
-      ];
-      if (includePriorYear) {
-        cells.push(amtPY, amt - amtPY);
-      }
-      tableBody.push(svc.dataRow(cells, { isAlt: rowIdx % 2 === 1 }));
+      tableBody.push(fsRow(L, r.account_number as string, r.account_name as string, amt, amtPY, { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
     }
+    if (section === 'revenue') { totalRevenue = sectionTotal; totalRevenuePY = sectionTotalPY; }
+    else { totalExpenses = sectionTotal; totalExpensesPY = sectionTotalPY; }
 
-    // Section subtotal
-    const subtotalCells: (string | number | null)[] = ['', `Total ${section}`, sectionTotal];
-    if (includePriorYear) subtotalCells.push(sectionTotalPY, sectionTotal - sectionTotalPY);
-    tableBody.push(svc.dataRow(subtotalCells, { bold: true, shade: true }));
+    tableBody.push(fsRow(L, '', `Total ${section}`, sectionTotal, sectionTotalPY, { bold: true, shade: true }));
     rowIdx++;
   }
 
-  // Net Income = revenue - expenses (both positive in traditional presentation)
   const netIncome   = totalRevenue - totalExpenses;
   const netIncomePY = totalRevenuePY - totalExpensesPY;
-  const netIncomeCells: (string | number | null)[] = ['', 'NET INCOME / (LOSS)', netIncome];
-  if (includePriorYear) netIncomeCells.push(netIncomePY, netIncome - netIncomePY);
-  tableBody.push(svc.dataRow(netIncomeCells, { bold: true, shade: true }));
+  tableBody.push(fsRow(L, '', 'NET INCOME / (LOSS)', netIncome, netIncomePY, { bold: true, shade: true }));
 
-  const content: Content[] = [{
-    table: { headerRows: 1, widths, body: tableBody },
-    layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
-  }];
+  const content: Content[] = [
+    fsBasisNote(L),
+    { table: { headerRows: 1, widths, body: tableBody }, layout: FS_TABLE_LAYOUT },
+  ];
 
   return svc.generateBuffer(svc.buildDocument({
     title:      'Income Statement',
@@ -679,82 +761,70 @@ export async function generateIncomeStatementPdf(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// (f) Balance Sheet PDF
+// (e2) Balance Sheet PDF
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promise<Buffer> {
-  const svc  = await PdfTemplateService.fromDb(db);
+export async function generateBalanceSheetPdf(
+  db: Knex,
+  periodId: number,
+  options: FsPdfOptions = {},
+): Promise<Buffer> {
   const info = await getPeriodInfo(db, periodId);
-
-  // Include revenue/expense for net income calculation
-  const rows = await db('v_adjusted_trial_balance')
-    .where({ period_id: periodId, is_active: true })
-    .modify(whereHasActivity)
-    .orderBy('account_number', 'asc');
-
-  const cols   = ['Acct #', 'Account Name', 'Amount'];
-  const widths = [45, '*', 80];
+  // Revenue/expense rows are loaded too: net income closes into equity.
+  const rows = await loadFsRows(db, periodId);
+  const L = await fsLayout(db, rows, options);
+  const { svc, basis, cols, widths } = L;
 
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
-  let totalAssets = 0;
-  let totalLiab = 0;
-  let totalEquity = 0;
+  let totalAssets = 0, totalLiab = 0, totalEquity = 0;
+  let totalAssetsPY = 0, totalLiabPY = 0, totalEquityPY = 0;
   let rowIdx = 0;
 
-  // Category-based sign: assets/expenses dr-cr, liabilities/equity/revenue cr-dr
-  const fsNet = (r: Record<string, unknown>): number => {
-    const dr = Number(r.book_adjusted_debit  ?? 0);
-    const cr = Number(r.book_adjusted_credit ?? 0);
-    const cat = r.category as string;
-    const creditNormal = cat === 'revenue' || cat === 'liabilities' || cat === 'equity';
-    return creditNormal ? cr - dr : dr - cr;
-  };
-  const revenueRows = (rows as Record<string, unknown>[]).filter(r => r.category === 'revenue');
-  const expenseRows = (rows as Record<string, unknown>[]).filter(r => r.category === 'expenses');
-  const totalRevenue = revenueRows.reduce((s, r) => s + fsNet(r), 0);
-  const totalExpenses = expenseRows.reduce((s, r) => s + fsNet(r), 0);
-  const netIncome = totalRevenue - totalExpenses;
+  const sum = (cat: string, f: (r: FsRow) => number) => rows.filter((r) => r.category === cat).reduce((s, r) => s + f(r), 0);
+  const netIncome   = sum('revenue', (r) => fsCurrent(r, basis)) - sum('expenses', (r) => fsCurrent(r, basis));
+  // prior_year_* are PRE-closing balances, so the prior-year equity section
+  // needs prior-year net income added the same way the current year does.
+  const netIncomePY = sum('revenue', fsPrior) - sum('expenses', fsPrior);
 
   for (const section of ['assets', 'liabilities', 'equity'] as const) {
-    const sectionRows = (rows as Record<string, unknown>[]).filter(r => r.category === section);
+    const sectionRows = rows.filter((r) => r.category === section);
     if (sectionRows.length === 0 && section !== 'equity') continue;
 
     tableBody.push(svc.sectionHeaderRow(section, cols.length));
-    let sectionTotal = 0;
+    let sectionTotal = 0, sectionTotalPY = 0;
 
     for (const r of sectionRows) {
-      const amt = fsNet(r);
+      const amt = fsCurrent(r, basis);
+      const amtPY = fsPrior(r);
       sectionTotal += amt;
-      if (section === 'assets') totalAssets += amt;
-      else if (section === 'liabilities') totalLiab += amt;
-      else totalEquity += amt;
-
-      tableBody.push(svc.dataRow([r.account_number as string, r.account_name as string, amt], { isAlt: rowIdx % 2 === 1 }));
+      sectionTotalPY += amtPY;
+      tableBody.push(fsRow(L, r.account_number as string, r.account_name as string, amt, amtPY, { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
     }
 
-    // Add net income line in equity section
     if (section === 'equity') {
-      tableBody.push(svc.dataRow(['', 'Net Income (current period)', netIncome], { isAlt: rowIdx % 2 === 1 }));
+      tableBody.push(fsRow(L, '', 'Net Income (current period)', netIncome, netIncomePY, { isAlt: rowIdx % 2 === 1 }));
       sectionTotal += netIncome;
-      totalEquity += netIncome;
+      sectionTotalPY += netIncomePY;
       rowIdx++;
     }
 
-    tableBody.push(svc.dataRow(['', `Total ${section}`, sectionTotal], { bold: true, shade: true }));
+    if (section === 'assets')           { totalAssets = sectionTotal; totalAssetsPY = sectionTotalPY; }
+    else if (section === 'liabilities') { totalLiab = sectionTotal;   totalLiabPY = sectionTotalPY; }
+    else                                { totalEquity = sectionTotal; totalEquityPY = sectionTotalPY; }
+
+    tableBody.push(fsRow(L, '', `Total ${section}`, sectionTotal, sectionTotalPY, { bold: true, shade: true }));
     rowIdx++;
   }
 
-  const liabPlusEquity = totalLiab + totalEquity;
+  const liabPlusEquity   = totalLiab + totalEquity;
+  const liabPlusEquityPY = totalLiabPY + totalEquityPY;
   // Tolerance: 1 cent. Values are integer cents from the DB but JS Number
   // accumulation of ~hundreds of rows can emit trailing-bit drift.
   const imbalanceCents = totalAssets - liabPlusEquity;
   const balanced = Math.abs(imbalanceCents) < 1;
 
-  tableBody.push(svc.dataRow(
-    ['', 'Total Liabilities + Equity', liabPlusEquity],
-    { bold: true, shade: true },
-  ));
+  tableBody.push(fsRow(L, '', 'Total Liabilities + Equity', liabPlusEquity, liabPlusEquityPY, { bold: true, shade: true }));
 
   const bannerText = balanced
     ? 'Balance sheet is in balance (A = L + E).'
@@ -762,19 +832,9 @@ export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promi
 
   const content: Content[] = [
     // Prominent top-of-report banner when out of balance — impossible to miss.
-    ...(balanced ? [] : [{
-      text: bannerText,
-      bold: true,
-      fontSize: 10,
-      color: '#ffffff',
-      fillColor: '#c0392b',
-      margin: [0, 0, 0, 6] as [number, number, number, number],
-      alignment: 'center' as const,
-    }]),
-    {
-      table: { headerRows: 1, widths, body: tableBody },
-      layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
-    },
+    ...(balanced ? [] : [svc.warningBanner(bannerText)]),
+    fsBasisNote(L),
+    { table: { headerRows: 1, widths, body: tableBody }, layout: FS_TABLE_LAYOUT },
     {
       text: bannerText,
       fontSize: 7,
@@ -785,6 +845,73 @@ export async function generateBalanceSheetPdf(db: Knex, periodId: number): Promi
 
   return svc.generateBuffer(svc.buildDocument({
     title:      'Balance Sheet',
+    clientName: info.client_name,
+    ein:        info.ein ?? undefined,
+    periodName: info.name,
+    startDate:  fmtDate(info.start_date),
+    endDate:    fmtDate(info.end_date),
+    pageOrientation: 'portrait',
+    content,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (e3) Statement of Equity PDF — the page's third tab, which had no PDF at all
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateEquityStatementPdf(
+  db: Knex,
+  periodId: number,
+  options: FsPdfOptions = {},
+): Promise<Buffer> {
+  const info = await getPeriodInfo(db, periodId);
+  const rows = await loadFsRows(db, periodId, ['equity', 'revenue', 'expenses']);
+  const L = await fsLayout(db, rows, options);
+  const { svc, basis, cols, widths } = L;
+
+  const equity = rows.filter((r) => r.category === 'equity');
+  const sum = (cat: string, f: (r: FsRow) => number) => rows.filter((r) => r.category === cat).reduce((s, r) => s + f(r), 0);
+  const netIncome   = sum('revenue', (r) => fsCurrent(r, basis)) - sum('expenses', (r) => fsCurrent(r, basis));
+  const netIncomePY = sum('revenue', fsPrior) - sum('expenses', fsPrior);
+
+  // prior_year_* hold PRE-closing balances, so prior-year ending equity =
+  // PY equity accounts + PY net income (equals the balance sheet's PY Total Equity).
+  const openingEquity = sum('equity', fsPrior) + netIncomePY;
+  const closingEquity = sum('equity', (r) => fsCurrent(r, basis)) + netIncome;
+  // Rollforward identity: opening + net income + other changes = ending.
+  const otherChanges = closingEquity - openingEquity - netIncome;
+
+  const tableBody: TableCell[][] = [svc.headerRow(cols)];
+  let rowIdx = 0;
+  const line = (acct: string, name: string, cur: number, prior: number | undefined, opts: { bold?: boolean; shade?: boolean } = {}) => {
+    tableBody.push(fsRow(L, acct, name, cur, prior, { ...opts, isAlt: !opts.shade && rowIdx % 2 === 1 }));
+    rowIdx++;
+  };
+  const spacer = () => tableBody.push(svc.dataRow(cols.map(() => '')));
+
+  tableBody.push(svc.sectionHeaderRow('Opening Equity Balance (Prior Year Ending)', cols.length));
+  for (const r of equity) line(r.account_number as string, r.account_name as string, fsPrior(r), undefined);
+  line('', 'Prior-Year Net Income (closed to equity)', netIncomePY, undefined);
+  line('', 'Total Opening Equity', openingEquity, undefined, { bold: true, shade: true });
+
+  spacer();
+  tableBody.push(svc.sectionHeaderRow('Current Period Activity', cols.length));
+  line('', 'Net Income / (Loss)', netIncome, netIncomePY);
+  line('', 'Contributions / Distributions & Other Changes', otherChanges, undefined);
+
+  spacer();
+  tableBody.push(svc.sectionHeaderRow('Ending Equity Balance', cols.length));
+  for (const r of equity) line(r.account_number as string, r.account_name as string, fsCurrent(r, basis), fsPrior(r));
+  line('', 'Net Income (current period)', netIncome, netIncomePY);
+  line('', 'Total Equity', closingEquity, openingEquity, { bold: true, shade: true });
+
+  const content: Content[] = [
+    fsBasisNote(L),
+    { table: { headerRows: 1, widths, body: tableBody }, layout: FS_TABLE_LAYOUT },
+  ];
+
+  return svc.generateBuffer(svc.buildDocument({
+    title:      'Statement of Equity',
     clientName: info.client_name,
     ein:        info.ein ?? undefined,
     periodName: info.name,
@@ -1757,15 +1884,10 @@ export async function generateCashFlowPdf(db: Knex, periodId: number): Promise<B
   const reconciled = reconciliationDiff === 0;
 
   const content: Content[] = [
-    ...(reconciled ? [] : [{
-      text: `WARNING — Ending cash does not tie to beginning + net change. Off by ${svc.formatCents(Math.abs(reconciliationDiff))}. Verify cash-flow mappings.`,
-      bold: true,
-      fontSize: 9,
-      color: '#ffffff',
-      fillColor: '#c0392b',
-      margin: [0, 0, 0, 6] as [number, number, number, number],
-      alignment: 'center' as const,
-    }]),
+    ...(reconciled ? [] : [svc.warningBanner(
+      `WARNING — Ending cash does not tie to beginning + net change. Off by ${svc.formatCents(Math.abs(reconciliationDiff))}. Verify cash-flow mappings.`,
+      9,
+    )]),
     {
       table: { headerRows: 1, widths, body: tableBody },
       layout: { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },

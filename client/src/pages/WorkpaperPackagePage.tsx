@@ -307,6 +307,7 @@ const PDF_REPORT_SECTIONS: PdfReportSection[] = [
   { id: 'pdf-tb',           label: 'Trial Balance (PDF)',         url: (id) => pdfReports.trialBalance(id),    filename: (id) => `trial-balance-${id}.pdf` },
   { id: 'pdf-is',           label: 'Income Statement (PDF)',      url: (id) => pdfReports.incomeStatement(id), filename: (id) => `income-statement-${id}.pdf` },
   { id: 'pdf-bs',           label: 'Balance Sheet (PDF)',         url: (id) => pdfReports.balanceSheet(id),    filename: (id) => `balance-sheet-${id}.pdf` },
+  { id: 'pdf-equity',       label: 'Statement of Equity (PDF)',   url: (id) => pdfReports.equityStatement(id), filename: (id) => `equity-statement-${id}.pdf` },
   { id: 'pdf-je',           label: 'Journal Entries (PDF)',       url: (id) => pdfReports.journalEntries(id),  filename: (id) => `journal-entries-${id}.pdf` },
   { id: 'pdf-aje',          label: 'AJE Listing (PDF)',           url: (id) => pdfReports.ajeListing(id),      filename: (id) => `aje-listing-${id}.pdf` },
   { id: 'pdf-gl',           label: 'General Ledger (PDF)',        url: (id) => pdfReports.generalLedger(id),   filename: (id) => `general-ledger-${id}.pdf` },

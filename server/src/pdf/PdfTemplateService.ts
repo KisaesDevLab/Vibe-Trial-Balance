@@ -185,6 +185,30 @@ export class PdfTemplateService {
     return cells;
   }
 
+  /**
+   * Full-width red warning strip for the top of a report. A one-cell table,
+   * because pdfmake only honours fillColor on table cells — as a bare text
+   * node the same styling is white-on-white and prints as blank space.
+   */
+  warningBanner(text: string, fontSize = 10): Content {
+    return {
+      table: {
+        widths: ['*'],
+        body: [[{
+          text,
+          bold: true,
+          fontSize,
+          color: '#ffffff',
+          fillColor: COLORS.negativeText,
+          alignment: 'center',
+          margin: [4, 4, 4, 4] as [number, number, number, number],
+        }]],
+      },
+      layout: 'noBorders',
+      margin: [0, 0, 0, 6] as [number, number, number, number],
+    };
+  }
+
   /** Section header row (category label) */
   sectionHeaderRow(label: string, totalCols: number): TableCell[] {
     const cells: TableCell[] = [{

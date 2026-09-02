@@ -158,7 +158,16 @@ All planned phases complete. App is feature-complete.
 
 ## Completed — App-Only Features (built before plan adoption, kept and maintained)
 - Bank Transactions + AI Classification (OFX/CSV import, AI classify, rules, batch ops, source accounts, import dedup via SHA-256 hash, reclassify audit trail, pagination, sort_order priority)
-- Financial Statements (IS, BS, Statement of Equity — CY+PY comparative columns, Change column, header skeleton)
+- Financial Statements (IS, BS, Statement of Equity — CY+PY comparative columns, Change column, header skeleton).
+  **The three PDFs are the screen on paper**: `generateIncomeStatementPdf` / `generateBalanceSheetPdf` /
+  `generateEquityStatementPdf` share one comparative layout (`fsLayout`/`fsRow` in `pdf/reportGenerators.ts`)
+  and take `FsPdfOptions { basis, priorYear }` — the page passes its View basis as `?basis=`, and
+  `priorYear` left unset is **automatic** (columns on when any row has a PY balance, off for a first-year
+  client so it doesn't print two dead columns). `fsChangePct` must stay identical to `fmtPct` on
+  `FinancialStatementsPage.tsx`. The binder id is `pdf-equity`. Before this the IS route took
+  `?priorYear=` that nothing sent, the BS had no PY code at all and the equity tab had no PDF.
+  **pdfmake ignores `fillColor` on a bare text node** — use `svc.warningBanner()` (a one-cell table) for
+  red top-of-report strips; the BS and cash-flow warnings were white-on-white for that reason.
 - Cash Flow Statement (indirect method, account mapping config)
 - TB Report, General Ledger, Tax Code Report, Workpaper Index, AJE Listing (browser-print — migrating to pdfmake in Plan Phase 6)
 - Period Controls + Audit Trail + Dashboard (locking with TB balance check, admin-only unlock, roll-forward copies tickmarks)

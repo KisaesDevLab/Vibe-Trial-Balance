@@ -329,6 +329,8 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+const PDF_FILE = { income: 'income-statement', balance: 'balance-sheet', equity: 'equity-statement' } as const;
+
 const COL_LABELS: Record<string, string> = {
   unadjusted: 'Unadjusted',
   book: 'Book Adjusted',
@@ -339,9 +341,16 @@ export function FinancialStatementsPage() {
   const { selectedPeriodId, selectedClientId } = useUIStore();
   const token = useAuthStore((s) => s.token);
   const [tab, setTab] = useState<'income' | 'balance' | 'equity'>('income');
-  const [colSet, setColSet] = useState<ColSet>('book');
+  const [colSet, setColSet] = useState<Exclude<ColSet, 'prior-year'>>('book');
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+
+  // The PDF is the screen on paper: same statement, same View basis, and the
+  // server adds the Prior Year / Change / % columns whenever PY balances exist.
+  const pdfUrl = (periodId: number) =>
+    tab === 'income' ? pdfReports.incomeStatement(periodId, colSet)
+    : tab === 'balance' ? pdfReports.balanceSheet(periodId, colSet)
+    : pdfReports.equityStatement(periodId, colSet);
 
   const handlePreview = async (reportUrl: string) => {
     if (!selectedPeriodId || !token) return;
@@ -443,7 +452,7 @@ export function FinancialStatementsPage() {
           <label className="text-sm text-gray-600 dark:text-gray-400 font-medium">View</label>
           <select
             value={colSet}
-            onChange={(e) => setColSet(e.target.value as ColSet)}
+            onChange={(e) => setColSet(e.target.value as Exclude<ColSet, 'prior-year'>)}
             className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
           >
             <option value="unadjusted">Unadjusted</option>
@@ -457,35 +466,17 @@ export function FinancialStatementsPage() {
           >
             Export Excel
           </button>
-          {tab === 'income' && selectedPeriodId && (
+          {selectedPeriodId && (
             <>
               <button
-                onClick={() => handlePreview(pdfReports.incomeStatement(selectedPeriodId))}
+                onClick={() => handlePreview(pdfUrl(selectedPeriodId))}
                 disabled={pdfLoading}
                 className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
               >
                 {pdfLoading ? 'Generating…' : '↗ Preview PDF'}
               </button>
               <button
-                onClick={() => handleDownload(pdfReports.incomeStatement(selectedPeriodId), `income-statement-${selectedPeriodId}.pdf`)}
-                disabled={pdfLoading}
-                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-              >
-                {pdfLoading ? 'Generating…' : '⬇ Download PDF'}
-              </button>
-            </>
-          )}
-          {tab === 'balance' && selectedPeriodId && (
-            <>
-              <button
-                onClick={() => handlePreview(pdfReports.balanceSheet(selectedPeriodId))}
-                disabled={pdfLoading}
-                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
-              >
-                {pdfLoading ? 'Generating…' : '↗ Preview PDF'}
-              </button>
-              <button
-                onClick={() => handleDownload(pdfReports.balanceSheet(selectedPeriodId), `balance-sheet-${selectedPeriodId}.pdf`)}
+                onClick={() => handleDownload(pdfUrl(selectedPeriodId), `${PDF_FILE[tab]}-${selectedPeriodId}.pdf`)}
                 disabled={pdfLoading}
                 className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
               >
