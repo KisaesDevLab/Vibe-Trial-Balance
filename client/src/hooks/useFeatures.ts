@@ -15,7 +15,7 @@ function loadFeatures(): Promise<FeatureFlags> {
   if (cached) return Promise.resolve(cached);
   if (inflight) return inflight;
   inflight = getFeatures().then((res) => {
-    const flags: FeatureFlags = res.data ?? { ai: false, mailEnabled: false };
+    const flags: FeatureFlags = res.data ?? { ai: false, mailEnabled: false, quickbooks: false };
     cached = flags;
     inflight = null;
     subscribers.forEach((fn) => fn(flags));
@@ -40,7 +40,7 @@ export function useFeatures(): FeatureFlags | null {
     let mounted = true;
     const fn = (f: FeatureFlags) => { if (mounted) setFlags(f); };
     subscribers.add(fn);
-    loadFeatures().catch(() => { if (mounted) setFlags({ ai: false, mailEnabled: false }); });
+    loadFeatures().catch(() => { if (mounted) setFlags({ ai: false, mailEnabled: false, quickbooks: false }); });
     return () => { mounted = false; subscribers.delete(fn); };
   }, []);
 

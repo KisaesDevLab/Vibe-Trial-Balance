@@ -8,6 +8,7 @@ import { ClientSelector } from './ClientSelector';
 import { PeriodSelector } from './PeriodSelector';
 import { useAuthStore, useUIStore } from '../store/uiStore';
 import { useFeatures } from '../hooks/useFeatures';
+import type { FeatureFlags } from '../api/features';
 
 interface NavItem {
   to: string;
@@ -15,6 +16,9 @@ interface NavItem {
   // When true, the link is hidden if the server reports no AI provider is
   // configured (GET /api/v1/features → ai: false).
   requiresAi?: boolean;
+  // Hidden unless GET /api/v1/features reports this flag true — except for
+  // admins, who must reach the page to configure the feature in the first place.
+  requiresFeature?: keyof FeatureFlags;
 }
 
 interface NavGroup {
@@ -39,6 +43,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/chart-of-accounts', label: 'Chart of Accounts' },
       { to: '/units',             label: 'Units' },
       { to: '/periods',           label: 'Periods' },
+      { to: '/quickbooks',        label: 'QuickBooks', requiresFeature: 'quickbooks' },
     ],
     defaultOpen: false,
   },
@@ -140,13 +145,17 @@ const navItemClass = (isActive: boolean) =>
       : 'text-gray-400 hover:bg-gray-800 hover:text-gray-100 border-l-2 border-transparent pl-[10px]'
   }`;
 
-function NavSection({ group, isAdmin, aiAvailable }: { group: NavGroup; isAdmin?: boolean; aiAvailable: boolean }) {
+function NavSection({ group, isAdmin, aiAvailable, features }: { group: NavGroup; isAdmin?: boolean; aiAvailable: boolean; features: FeatureFlags | null }) {
   const [open, setOpen] = useState(group.defaultOpen ?? true);
 
   // Admin group hidden for non-admins
   if (isAdmin === false) return null;
 
-  const visibleItems = group.items.filter((item) => !item.requiresAi || aiAvailable);
+  const visibleItems = group.items.filter((item) => {
+    if (item.requiresAi && !aiAvailable) return false;
+    if (item.requiresFeature && !isAdmin && features?.[item.requiresFeature] !== true) return false;
+    return true;
+  });
   if (visibleItems.length === 0) return null;
 
   return (
@@ -206,13 +215,13 @@ export function Sidebar() {
       {/* Nav groups */}
       <nav className="flex-1 px-2 py-2 overflow-y-auto">
         {NAV_GROUPS.map((group) => (
-          <NavSection key={group.title ?? '__top'} group={group} aiAvailable={aiAvailable} />
+          <NavSection key={group.title ?? '__top'} group={group} isAdmin={isAdmin || undefined} aiAvailable={aiAvailable} features={features} />
         ))}
 
         {isAdmin && (
           <>
             <div className="my-2 border-t border-gray-700/60" />
-            <NavSection group={ADMIN_GROUP} isAdmin={isAdmin} aiAvailable={aiAvailable} />
+            <NavSection group={ADMIN_GROUP} isAdmin={isAdmin} aiAvailable={aiAvailable} features={features} />
           </>
         )}
       </nav>

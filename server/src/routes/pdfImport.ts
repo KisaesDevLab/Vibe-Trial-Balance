@@ -751,8 +751,11 @@ pdfImportRouter.get('/imports', async (req: AuthRequest, res: Response): Promise
       return;
     }
 
+    // Only file imports belong in the verification panel; a pending or
+    // confirmed QuickBooks pull has no document to verify against.
     const imports = await db('document_imports')
-      .where({ period_id: periodId })
+      .where({ period_id: periodId, status: 'confirmed' })
+      .whereIn('import_type', ['csv', 'pdf'])
       .select('id', 'import_type', 'document_type', 'status', 'imported_at')
       .orderBy('imported_at', 'desc');
 

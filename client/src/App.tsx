@@ -32,6 +32,7 @@ import { WorkpaperPackagePage } from './pages/WorkpaperPackagePage';
 import { TickmarksPage } from './pages/TickmarksPage';
 import { LeadSheetsPage } from './pages/LeadSheetsPage';
 import { StoragePage } from './pages/StoragePage';
+import { QuickBooksPage } from './pages/QuickBooksPage';
 import { TaxCodesPage } from './pages/TaxCodesPage';
 import { TaxMappingPage } from './pages/TaxMappingPage';
 import { TaxBasisPlPage } from './pages/TaxBasisPlPage';
@@ -103,6 +104,7 @@ export default function App() {
           <Route path="tickmarks" element={<TickmarksPage />} />
           <Route path="lead-sheets" element={<LeadSheetsPage />} />
           <Route path="storage" element={<StoragePage />} />
+          <Route path="quickbooks" element={<QuickBooksPage />} />
           <Route path="tax-mapping" element={<TaxMappingPage />} />
           <Route path="tax-basis-pl" element={<TaxBasisPlPage />} />
           <Route path="tax-return-order" element={<TaxReturnOrderPage />} />

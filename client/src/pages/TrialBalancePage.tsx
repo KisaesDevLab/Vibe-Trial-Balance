@@ -6,6 +6,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { evalAmountExpr } from '../utils/evalAmountExpr';
 import { CsvImportDialog } from '../components/CsvImportDialog';
 import { PdfImportDialog } from '../components/PdfImportDialog';
+import { QboImportDialog } from '../components/QboImportDialog';
 import { JournalEntryDialog } from '../components/JournalEntryDialog';
 import { JournalEntryEditDialog } from '../components/JournalEntryEditDialog';
 import { VerificationPanel } from '../components/VerificationPanel';
@@ -43,6 +44,8 @@ import {
   type TBTickmarkMap,
 } from '../api/tickmarks';
 import { listImports, type DocumentImport } from '../api/pdfImport';
+import { listQboConnections } from '../api/qbo';
+import { useFeatures } from '../hooks/useFeatures';
 import { downloadXlsx } from '../utils/downloadXlsx';
 import { checkFileSize } from '../utils/fileLimits';
 import { openTBPopout } from './TBPopoutPage';
@@ -188,6 +191,7 @@ export function TrialBalancePage() {
   const [showPYImportModal, setShowPYImportModal] = useState(false);
   const [showCsvImportDialog, setShowCsvImportDialog] = useState(false);
   const [showPdfImportDialog, setShowPdfImportDialog] = useState(false);
+  const [showQboImportDialog, setShowQboImportDialog] = useState(false);
   const [showJEDialog, setShowJEDialog] = useState(false);
   const [editJeId, setEditJeId] = useState<number | null>(null);
   const [filterText, setFilterText] = useState('');
@@ -293,6 +297,17 @@ export function TrialBalancePage() {
   });
 
   const firstImport = periodImports?.[0] ?? null;
+
+  // QuickBooks: the button only shows when the connector is configured, and only
+  // works when THIS client has a live connection (set up on the QuickBooks page).
+  const features = useFeatures();
+  const { data: qboConnections } = useQuery({
+    queryKey: ['qbo-connections'],
+    queryFn: async () => { const r = await listQboConnections(); return r.data ?? []; },
+    enabled: features?.quickbooks === true,
+  });
+  const qboConnection = qboConnections?.find((c) => c.clientId === selectedClientId) ?? null;
+  const qboActive = qboConnection?.status === 'active';
 
   const { data: clients } = useQuery({
     queryKey: ['clients'],
@@ -1307,6 +1322,22 @@ export function TrialBalancePage() {
           >
             Import from PDF
           </button>
+          {features?.quickbooks && (
+            <button
+              onClick={() => !isPeriodLocked && qboActive && setShowQboImportDialog(true)}
+              disabled={isPeriodLocked || !qboActive}
+              title={
+                isPeriodLocked ? 'Period is locked — unlock to import'
+                : !qboActive ? (qboConnection?.status === 'needs_reauth'
+                    ? 'QuickBooks connection needs re-authorization — see Setup → QuickBooks'
+                    : 'Connect this client to QuickBooks under Setup → QuickBooks first')
+                : undefined
+              }
+              className="px-3 py-1.5 text-sm border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 rounded hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Import from QuickBooks
+            </button>
+          )}
           <button
             onClick={handleExportCsv}
             disabled={!data?.length}
@@ -1665,6 +1696,21 @@ export function TrialBalancePage() {
           clientId={selectedClientId}
           onClose={() => setShowPdfImportDialog(false)}
           onSuccess={() => { setShowPdfImportDialog(false); qc.invalidateQueries({ queryKey }); }}
+        />
+      )}
+
+      {/* QuickBooks import dialog */}
+      {showQboImportDialog && selectedPeriodId && selectedClientId && (
+        <QboImportDialog
+          periodId={selectedPeriodId}
+          clientId={selectedClientId}
+          onClose={() => setShowQboImportDialog(false)}
+          onSuccess={() => {
+            setShowQboImportDialog(false);
+            qc.invalidateQueries({ queryKey });
+            qc.invalidateQueries({ queryKey: ['accounts', selectedClientId] });
+            qc.invalidateQueries({ queryKey: ['qbo-connections'] });
+          }}
         />
       )}
 

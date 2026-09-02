@@ -51,6 +51,10 @@ import { payeesRouter } from './routes/payees';
 import { unitsRouter } from './routes/units';
 import { pyComparisonRouter } from './routes/pyComparison';
 import { mcpRouter } from './routes/mcpHttp';
+import { qboIntegrationRouter } from './routes/qboIntegration';
+import { qboImportRouter } from './routes/qboImport';
+import { isQboConfigured } from './lib/qbo/settings';
+import { startQboKeepalive } from './lib/qbo/keepalive';
 import { db } from './db';
 import { sendServerError } from './lib/safeError';
 import { isAiConfigured } from './lib/aiClient';
@@ -266,10 +270,12 @@ app.get('/api/v1/features', async (_req, res) => {
   const mailEnabled = passwordResetEnabled;
   try {
     const ai = await isAiConfigured();
-    res.json({ data: { ai, passwordResetEnabled, mailEnabled }, error: null });
+    const quickbooks = await isQboConfigured();
+    res.json({ data: { ai, passwordResetEnabled, mailEnabled, quickbooks }, error: null });
   } catch {
     // If the settings table query fails (e.g., DB down), fall back to env.
-    res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY, passwordResetEnabled, mailEnabled }, error: null });
+    const quickbooks = !!process.env.QBO_CLIENT_ID && !!process.env.QBO_CLIENT_SECRET;
+    res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY, passwordResetEnabled, mailEnabled, quickbooks }, error: null });
   }
 });
 
@@ -322,6 +328,9 @@ app.use('/api/v1/import/csv', csvImportRouter);
 app.use('/api/v1/import/pdf', pdfImportRouter);
 app.use('/api/v1/import/bank-statement-pdf', bankStatementPdfRouter);
 app.use('/api/v1/import/scanned-sheet', scannedSheetRouter);
+// Under /import/ so nginx's long timeout and the upload/ai-step limiters apply.
+app.use('/api/v1/import/qbo', qboImportRouter);
+app.use('/api/v1/integrations/qbo', qboIntegrationRouter);
 app.use('/api/v1/clients/:clientId/documents', documentsCollectionRouter);
 app.use('/api/v1/documents', documentsItemRouter);
 app.use('/api/v1/backup', backupRouter);
@@ -383,6 +392,7 @@ async function start(): Promise<void> {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/api/v1/health`);
     startBackupScheduler();
+    startQboKeepalive();
     // Router mode only; non-blocking with retry — requests made before
     // registration completes fail closed at the router, which is correct.
     registerTbTaskClasses();

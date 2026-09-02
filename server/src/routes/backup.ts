@@ -220,6 +220,11 @@ async function createBackup(
         if (await trx.schema.hasTable('lead_sheet_attachments')) {
           await dump('lead_sheet_attachments', await trx('lead_sheet_attachments').where('client_id', clientId).select('*'));
         }
+        // The QuickBooks binding rides along (tokens are encrypted at rest and
+        // stay encrypted in the archive). Only a same-client replace restores it.
+        if (await trx.schema.hasTable('qbo_connections')) {
+          await dump('qbo_connections', await trx('qbo_connections').where('client_id', clientId).select('*'));
+        }
         if (await trx.schema.hasTable('lead_sheet_notes')) {
           await dump('lead_sheet_notes', await trx('lead_sheet_notes').where('client_id', clientId).select('*'));
         }
@@ -549,6 +554,7 @@ const USER_FK_COLUMNS: Record<string, string[]> = {
   lead_sheet_notes: ['author_id', 'resolved_by'],
   client_documents: ['uploaded_by', 'deleted_by'],
   client_folder_links: ['created_by'],
+  qbo_connections: ['connected_by'],
 };
 
 type UserFkSanitizer = (table: string, row: Record<string, unknown>) => Record<string, unknown>;
@@ -1326,6 +1332,21 @@ async function restoreReplace(
         })))
         .returning('id');
       docMap.set(row.id as number, (ins as { id: number }).id);
+    }
+  }
+
+  // qbo_connections — the live row (if any) is NOT deleted by deleteClientData
+  // and wins: Intuit rotates refresh tokens on every use, so the archived pair
+  // is usually already dead. Re-insert only when the client has no live
+  // binding and the archive came from this same client; a different client
+  // would hit UNIQUE (environment, realm_id) or steal the company outright.
+  const qboData = tables['qbo_connections'] as Array<Record<string, unknown>> | undefined;
+  if (sameClient && qboData && qboData.length > 0 && (await trx.schema.hasTable('qbo_connections'))) {
+    for (const row of qboData) {
+      await trx('qbo_connections')
+        .insert(sanitizeUserFks('qbo_connections', remapClientId({ ...row, id: undefined, access_token_enc: null, access_token_expires_at: null })))
+        // Bare ON CONFLICT: covers UNIQUE(client_id) and UNIQUE(environment, realm_id) alike.
+        .onConflict().ignore();
     }
   }
 

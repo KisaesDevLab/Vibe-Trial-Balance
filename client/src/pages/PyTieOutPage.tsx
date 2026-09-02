@@ -12,6 +12,9 @@ import { AjePanel } from '../components/py-tieout/AjePanel';
 import { ManualEntryGrid } from '../components/py-tieout/ManualEntryGrid';
 import { PyImportDialog } from '../components/py-tieout/PyImportDialog';
 import { PyPdfImportDialog } from '../components/py-tieout/PyPdfImportDialog';
+import { QboImportDialog } from '../components/QboImportDialog';
+import { listQboConnections } from '../api/qbo';
+import { useFeatures } from '../hooks/useFeatures';
 
 function fmt(cents: number): string {
   return (Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -22,6 +25,7 @@ export function PyTieOutPage() {
   const qc = useQueryClient();
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showPdfImportDialog, setShowPdfImportDialog] = useState(false);
+  const [showQboImportDialog, setShowQboImportDialog] = useState(false);
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<number>>(new Set());
   const [viewMode, setViewMode] = useState<'all' | 'variances'>('all');
@@ -29,6 +33,21 @@ export function PyTieOutPage() {
   const [clearing, setClearing] = useState(false);
 
   const queryKey = ['py-comparison', selectedPeriodId];
+
+  // Same gate as the TB page's Import from QuickBooks button.
+  const features = useFeatures();
+  const { data: qboConnections } = useQuery({
+    queryKey: ['qbo-connections'],
+    queryFn: async () => { const r = await listQboConnections(); return r.data ?? []; },
+    enabled: features?.quickbooks === true,
+  });
+  const qboConnection = qboConnections?.find((c) => c.clientId === selectedClientId) ?? null;
+  const qboActive = qboConnection?.status === 'active';
+  const qboTitle = !qboActive
+    ? (qboConnection?.status === 'needs_reauth'
+        ? 'QuickBooks connection needs re-authorization — see Setup → QuickBooks'
+        : 'Connect this client to QuickBooks under Setup → QuickBooks first')
+    : undefined;
 
   const { data: result, isLoading } = useQuery({
     queryKey,
@@ -44,9 +63,13 @@ export function PyTieOutPage() {
   const handleImportSuccess = () => {
     setShowImportDialog(false);
     setShowPdfImportDialog(false);
+    setShowQboImportDialog(false);
     setShowManualEntry(false);
     setSelectedAccountIds(new Set());
     qc.invalidateQueries({ queryKey });
+    // A QuickBooks pull may have created accounts and stamped links.
+    qc.invalidateQueries({ queryKey: ['accounts', selectedClientId] });
+    qc.invalidateQueries({ queryKey: ['qbo-connections'] });
   };
 
   const handleClear = async () => {
@@ -105,6 +128,16 @@ export function PyTieOutPage() {
               >
                 Import from PDF
               </button>
+              {features?.quickbooks && (
+                <button
+                  onClick={() => qboActive && setShowQboImportDialog(true)}
+                  disabled={!qboActive}
+                  title={qboTitle}
+                  className="w-56 px-4 py-2 text-sm border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Import from QuickBooks
+                </button>
+              )}
               <button
                 onClick={() => setShowManualEntry(true)}
                 className="w-56 px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 font-medium"
@@ -120,6 +153,9 @@ export function PyTieOutPage() {
         )}
         {showPdfImportDialog && (
           <PyPdfImportDialog periodId={selectedPeriodId} clientId={selectedClientId} onClose={() => setShowPdfImportDialog(false)} onSuccess={handleImportSuccess} />
+        )}
+        {showQboImportDialog && (
+          <QboImportDialog periodId={selectedPeriodId} clientId={selectedClientId} target="prior" onClose={() => setShowQboImportDialog(false)} onSuccess={handleImportSuccess} />
         )}
         {showManualEntry && (
           <ManualEntryGrid periodId={selectedPeriodId} clientId={selectedClientId} onClose={() => setShowManualEntry(false)} onSuccess={handleImportSuccess} />
@@ -159,6 +195,16 @@ export function PyTieOutPage() {
             >
               Replace (PDF)
             </button>
+            {features?.quickbooks && (
+              <button
+                onClick={() => qboActive && setShowQboImportDialog(true)}
+                disabled={!qboActive}
+                title={qboTitle}
+                className="px-3 py-1.5 text-sm border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 rounded hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Replace (QuickBooks)
+              </button>
+            )}
             <button
               onClick={() => setShowManualEntry(true)}
               className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50"
@@ -255,6 +301,9 @@ export function PyTieOutPage() {
       )}
       {showPdfImportDialog && (
         <PyPdfImportDialog periodId={selectedPeriodId} clientId={selectedClientId} onClose={() => setShowPdfImportDialog(false)} onSuccess={handleImportSuccess} />
+      )}
+      {showQboImportDialog && (
+        <QboImportDialog periodId={selectedPeriodId} clientId={selectedClientId} target="prior" onClose={() => setShowQboImportDialog(false)} onSuccess={handleImportSuccess} />
       )}
       {showManualEntry && (
         <ManualEntryGrid periodId={selectedPeriodId} clientId={selectedClientId} onClose={() => setShowManualEntry(false)} onSuccess={handleImportSuccess} />

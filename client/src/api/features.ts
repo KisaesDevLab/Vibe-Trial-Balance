@@ -8,6 +8,8 @@ export interface FeatureFlags {
   ai: boolean;
   /** A mail transport is configured — gates invites and self-service reset. */
   mailEnabled: boolean;
+  /** Intuit app credentials are present — gates the QuickBooks page and import button. */
+  quickbooks: boolean;
 }
 
 export function getFeatures(): Promise<ApiResult<FeatureFlags>> {
