@@ -10,6 +10,8 @@ import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
+import { buildHistoryBuckets, rankHistoryMatches, type HistoryBuckets, type HistoryRow } from '../lib/taxCodeHistory';
+import { selectCatalogForBatch, shortlistCodes } from '../lib/taxCodeShortlist';
 
 export const taxLineAssignmentRouter = Router();
 taxLineAssignmentRouter.use(authMiddleware);
@@ -53,8 +55,33 @@ interface SuggestionResult {
   suggestedTaxCode: string | null;
   suggestedDescription: string | null;
   confidence: number;
-  source: 'existing' | 'prior_period' | 'cross_client' | 'ai' | 'unmappable';
+  source: 'existing' | 'prior_period' | 'cross_client' | 'firm_history' | 'ai' | 'unmappable';
   reasoning: string;
+}
+
+/**
+ * Every confirmed name → code mapping in the firm for one entity type, grouped
+ * so the history stage can fold spellings together in memory. One query per
+ * auto-assign request, loaded only when an account actually reaches that stage.
+ */
+async function loadFirmHistory(entityType: string): Promise<HistoryBuckets> {
+  const rows: Array<{ account_name: string; tax_code_id: number; count: string | number; client_ids: number[] | null }> =
+    await db('chart_of_accounts as coa')
+      .join('clients as c', 'c.id', 'coa.client_id')
+      .where('c.entity_type', entityType)
+      .where('coa.is_active', true)
+      .whereNotNull('coa.tax_code_id')
+      .groupBy('coa.account_name', 'coa.tax_code_id')
+      .select('coa.account_name', 'coa.tax_code_id')
+      .count('* as count')
+      .select(db.raw('array_agg(DISTINCT coa.client_id) as client_ids'));
+  const history: HistoryRow[] = rows.map((r) => ({
+    account_name: r.account_name,
+    tax_code_id: r.tax_code_id,
+    count: Number(r.count),
+    client_ids: r.client_ids ?? [],
+  }));
+  return buildHistoryBuckets(history);
 }
 
 // ── POST /api/v1/tax-lines/auto-assign ───────────────────────────────────────
@@ -138,6 +165,8 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
 
     const suggestions: SuggestionResult[] = [];
     const needsAi: AccountRow[] = [];
+    const catalogIds = new Set(taxCodes.map((tc) => tc.id));
+    let firmHistory: HistoryBuckets | null = null;
 
     for (const account of accounts) {
       // Step a: existing mapping
@@ -223,6 +252,32 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
         }
       }
 
+      // Step c2: firm history — the same names, spelled the way this firm
+      // spells them ("Advertising", "Advertising Expense", "6100 · Adv. Exp"),
+      // matched by token similarity against every confirmed mapping for this
+      // entity type. Deterministic and local: nothing leaves the box.
+      if (!firmHistory) firmHistory = await loadFirmHistory(entityType);
+      const hist = rankHistoryMatches(account.account_name, firmHistory, { allowedTaxCodeIds: catalogIds });
+      if (hist) {
+        const tc = taxCodeById.get(hist.taxCodeId);
+        if (tc) {
+          const where = hist.clientCount === 1 ? '1 client' : `${hist.clientCount} clients`;
+          suggestions.push({
+            accountId: account.id,
+            accountNumber: account.account_number,
+            accountName: account.account_name,
+            category: account.category,
+            suggestedTaxCodeId: tc.id,
+            suggestedTaxCode: tc.tax_code,
+            suggestedDescription: tc.description,
+            confidence: hist.confidence,
+            source: 'firm_history',
+            reasoning: `Firm history: "${hist.matchedName}" is mapped to ${tc.tax_code} on ${hist.count} account${hist.count === 1 ? '' : 's'} across ${where}${hist.similarity < 1 ? ' (similar name)' : ''}.`,
+          });
+          continue;
+        }
+      }
+
       needsAi.push(account);
     }
 
@@ -247,16 +302,35 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
               reasoning: aiResult?.reasoning ?? 'AI could not determine an appropriate tax code.',
             });
           } else {
-            const tc = taxCodeMap.get(aiResult.suggested_tax_code);
+            const tc = taxCodeMap.get(String(aiResult.suggested_tax_code).trim());
+            if (!tc) {
+              // Sanitize like the QBO match pass: a code the catalog never
+              // offered is not a suggestion, it is a hallucination. Before
+              // this it came back as source 'ai' with no id, and the modal
+              // showed a code the confirm could never write.
+              suggestions.push({
+                accountId: account.id,
+                accountNumber: account.account_number,
+                accountName: account.account_name,
+                category: account.category,
+                suggestedTaxCodeId: null,
+                suggestedTaxCode: null,
+                suggestedDescription: null,
+                confidence: 0,
+                source: 'unmappable',
+                reasoning: `AI proposed "${String(aiResult.suggested_tax_code).slice(0, 40)}", which is not in this client's tax code list.`,
+              });
+              continue;
+            }
             suggestions.push({
               accountId: account.id,
               accountNumber: account.account_number,
               accountName: account.account_name,
               category: account.category,
-              suggestedTaxCodeId: tc?.id ?? null,
-              suggestedTaxCode: tc?.tax_code ?? aiResult.suggested_tax_code,
-              suggestedDescription: tc?.description ?? null,
-              confidence: Math.min(1, Math.max(0, aiResult.confidence ?? 0.5)),
+              suggestedTaxCodeId: tc.id,
+              suggestedTaxCode: tc.tax_code,
+              suggestedDescription: tc.description,
+              confidence: Math.min(1, Math.max(0, Number(aiResult.confidence) || 0.5)),
               source: 'ai',
               reasoning: aiResult.reasoning ?? '',
             });
@@ -289,6 +363,7 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
           existing: suggestions.filter((s) => s.source === 'existing').length,
           prior_period: suggestions.filter((s) => s.source === 'prior_period').length,
           cross_client: suggestions.filter((s) => s.source === 'cross_client').length,
+          firm_history: suggestions.filter((s) => s.source === 'firm_history').length,
           ai: suggestions.filter((s) => s.source === 'ai').length,
           unmappable: suggestions.filter((s) => s.source === 'unmappable').length,
         },
@@ -309,6 +384,21 @@ interface AiAccountInput {
   normal_balance: string;
 }
 
+/** What one account looks like in the prompt: the row plus its lexical hints. */
+interface AiAccountPrompt extends AiAccountInput {
+  /** Up to LIKELY_PER_ACCOUNT tax_codes whose line label shares words with the name. */
+  likely: string[];
+}
+
+/**
+ * A client's catalog is ~100–135 seeded codes and goes into every batch
+ * whole. Only a catalog past this size (custom codes on top of the seed) is
+ * trimmed, and then to each account's shortlist plus the head of the list —
+ * never the blind `slice(0, 200)` that used to sit here.
+ */
+const CATALOG_CAP = 180;
+const LIKELY_PER_ACCOUNT = 5;
+
 interface AiSuggestionOutput {
   account_number: string;
   suggested_tax_code: string | null;
@@ -326,15 +416,6 @@ async function getAiSuggestions(
   const { provider, fastModel } = await getLLMProvider();
   const tokenSettings = await getAiTokenSettings();
 
-  // Limit to top 200 most relevant tax codes to avoid token overload
-  const taxCodeList = taxCodes.slice(0, 200).map((tc) => ({
-    tax_code: tc.tax_code,
-    description: tc.description,
-    return_form: tc.return_form,
-    activity_type: tc.activity_type,
-    sort_order: tc.sort_order,
-  }));
-
   const entityRules = getEntityRules(entityType, activityType);
 
   const systemPrompt = `You are a tax accountant expert specializing in ${entityType} returns.
@@ -349,6 +430,7 @@ ${entityRules}
 IMPORTANT:
 - Return ONLY a JSON array, no prose before or after
 - Use exact tax_code values from the provided list
+- Each account carries a "likely" list: tax codes whose line label shares words with the account name. They are lexical hints, not answers — prefer one when it fits, ignore it when the name is misleading, and choose from the full list otherwise
 - If no appropriate tax code exists, set suggested_tax_code to null
 - Confidence: 0.0-1.0 (1.0 = certain, 0.7 = likely, 0.5 = best guess, 0.0 = unknown)
 - Reasoning should be 1-2 sentences explaining the choice`;
@@ -361,11 +443,23 @@ IMPORTANT:
     const batch = accounts.slice(i, i + BATCH_SIZE);
     const maxTokens = Math.max(tokenSettings.maxTokensDefault, batch.length * 120);
 
+    const batchCatalog = selectCatalogForBatch(batch, taxCodes, CATALOG_CAP);
+    const taxCodeList = batchCatalog.map((tc) => ({
+      tax_code: tc.tax_code,
+      description: tc.description,
+      return_form: tc.return_form,
+      activity_type: tc.activity_type,
+    }));
+    const batchPrompt: AiAccountPrompt[] = batch.map((a) => ({
+      ...a,
+      likely: shortlistCodes(a, batchCatalog, LIKELY_PER_ACCOUNT).map((c) => c.tax_code),
+    }));
+
     const userPrompt = `Available tax codes:
 ${JSON.stringify(taxCodeList, null, 2)}
 
 Accounts to assign:
-${JSON.stringify(batch, null, 2)}
+${JSON.stringify(batchPrompt, null, 2)}
 
 Return a JSON array where each element has:
 - account_number: string (the original account_number)

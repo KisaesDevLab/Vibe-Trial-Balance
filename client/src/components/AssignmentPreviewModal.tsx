@@ -22,6 +22,7 @@ const SOURCE_LABELS: Record<AssignmentSource, string> = {
   existing: 'EXISTING',
   prior_period: 'PRIOR',
   cross_client: 'CROSS-CLIENT',
+  firm_history: 'FIRM HISTORY',
   ai: 'AI',
   unmappable: 'UNMAPPABLE',
 };
@@ -30,6 +31,7 @@ const SOURCE_COLORS: Record<AssignmentSource, string> = {
   existing: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300',
   prior_period: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400',
   cross_client: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400',
+  firm_history: 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-400',
   ai: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400',
   unmappable: 'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400',
 };
@@ -258,6 +260,7 @@ export function AssignmentPreviewModal({
   const aiCount = localSuggestions.filter((s) => s.source === 'ai').length;
   const priorCount = localSuggestions.filter((s) => s.source === 'prior_period').length;
   const crossCount = localSuggestions.filter((s) => s.source === 'cross_client').length;
+  const historyCount = localSuggestions.filter((s) => s.source === 'firm_history').length;
   const unmappableCount = localSuggestions.filter((s) => s.source === 'unmappable').length;
 
   return (
@@ -282,6 +285,11 @@ export function AssignmentPreviewModal({
                 {crossCount > 0 && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400">
                     {crossCount} cross-client
+                  </span>
+                )}
+                {historyCount > 0 && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-400" title="Matched by name against the firm's confirmed mappings — no AI involved">
+                    {historyCount} firm history
                   </span>
                 )}
                 {aiCount > 0 && (

@@ -4,7 +4,7 @@
 
 import { apiFetch } from './client';
 
-export type AssignmentSource = 'existing' | 'prior_period' | 'cross_client' | 'ai' | 'unmappable';
+export type AssignmentSource = 'existing' | 'prior_period' | 'cross_client' | 'firm_history' | 'ai' | 'unmappable';
 
 export interface AssignmentSuggestion {
   accountId: number;
@@ -31,6 +31,7 @@ export interface AutoAssignResult {
     existing: number;
     prior_period: number;
     cross_client: number;
+    firm_history?: number;
     ai: number;
     unmappable: number;
   };

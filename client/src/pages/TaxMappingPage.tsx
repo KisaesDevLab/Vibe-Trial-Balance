@@ -52,6 +52,9 @@ const SOURCE_CLASSES: Record<string, string> = {
   ai: 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400',
   pattern: 'bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400',
   prior_year: 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400',
+  prior_period: 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400',
+  cross_client: 'bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400',
+  firm_history: 'bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400',
 };
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -59,6 +62,9 @@ const SOURCE_LABELS: Record<string, string> = {
   ai: 'AI',
   pattern: 'Pattern',
   prior_year: 'Prior Year',
+  prior_period: 'Prior Period',
+  cross_client: 'Cross-client',
+  firm_history: 'Firm History',
 };
 
 const ENTITY_BADGE: Record<string, string> = {
@@ -671,7 +677,7 @@ export function TaxMappingPage() {
       .map((s) => ({
         accountId: s.accountId,
         taxCodeId: s.overrideTaxCodeId !== undefined ? s.overrideTaxCodeId : s.suggestedTaxCodeId,
-        source: s.source === 'ai' ? 'ai' : s.source === 'prior_period' ? 'prior_period' : s.source === 'cross_client' ? 'cross_client' : 'manual',
+        source: s.source === 'ai' || s.source === 'prior_period' || s.source === 'cross_client' || s.source === 'firm_history' ? s.source : 'manual',
         confidence: s.confidence,
       }));
 

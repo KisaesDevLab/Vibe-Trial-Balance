@@ -30,13 +30,14 @@ The balance sheet check verifies that Assets = Liabilities + Equity. If the bala
 ## Auto-Assign (AI Feature)
 The **Auto-Assign Tax Codes** button triggers AI-powered tax code suggestions. Before processing, a **data disclosure popup** shows what data will be sent to the AI provider (account names/numbers, entity type, available tax codes — client name is NOT sent).
 
-The assignment uses a 5-step waterfall that suggests tax codes for all unmapped accounts:
+The assignment uses a waterfall that suggests tax codes for all unmapped accounts. The first four steps are deterministic and never send anything to an AI provider; only accounts that fall through all of them reach the AI step.
 
 1. **Existing mapping**: If the account already has a tax code, it's confirmed at 100% confidence
 2. **Prior-period mapping**: Looks for the same account number mapped in an earlier period for this client (95% confidence)
-3. **Cross-client mapping**: Looks for the same account number mapped in other clients (80% confidence)
-4. **AI assignment**: Claude AI analyzes the account name, category, and client entity/activity type to suggest the best tax code (confidence varies, typically 60–95%)
-5. **Unmappable**: Accounts the AI cannot classify with confidence are flagged as unmappable
+3. **Cross-client mapping**: Looks for the exact same account name mapped in at least two other clients of the same entity type (up to 90% confidence)
+4. **Firm history** (badge **FIRM HISTORY**, teal): Compares the account name against *every* confirmed mapping in the firm for the same entity type, after folding spelling differences — account numbers, punctuation, plurals and filler words such as "Expense" or "Other" are ignored, so "Advertising", "Advertising Expense" and "6100 · Adv. Exp." all count as one name. A close match (a similar name, not just an identical one) suggests the code the firm uses most. Confidence grows with the number of *clients* behind the match — one client's habit tops out at 50% however many accounts it has; five clients reach about 83%. The reasoning column shows the matched name and how many accounts and clients it was seen on.
+5. **AI assignment**: The AI analyzes the account name, category, and client entity/activity type to suggest the best tax code (confidence varies, typically 60–95%). Each account is sent with a short list of *likely* codes whose line label shares words with the account name — hints only; the model still sees the client's full tax code list and can pick any code in it. A reply naming a code that is not in the client's list is discarded and the account is marked unmappable rather than shown with a code that cannot be saved.
+6. **Unmappable**: Accounts the AI cannot classify with confidence are flagged as unmappable
 
 ### Reviewing Auto-Assign Results
 After clicking **Auto-Assign Tax Codes**, the **Assignment Preview Modal** opens:
@@ -59,4 +60,4 @@ When you roll forward a period, tax code assignments carry forward from the prio
 ## Tips
 - Run **Auto-Assign** first, then manually assign the remaining flagged accounts
 - Check that the client's **Activity Type** is correct before running auto-assign (it affects which codes are suggested for rental, farm, etc.)
-- The cross-client waterfall improves over time as you map more clients — accounts with common names get suggested correctly for new clients
+- The cross-client and firm-history steps improve over time as you map more clients — accounts with common names get suggested correctly for new clients without any AI call, and the firm-history step tolerates the spelling differences between one bookkeeper's chart and another's
