@@ -131,8 +131,9 @@ All planned phases complete. App is feature-complete.
   `max_tokens` on its thinking BEFORE the JSON — a 30-account batch at `n × 120` came back `finish=length`
   mid-array and the whole batch read "AI could not determine" while the router logged every call `ok`.
   A reply that fails strict parsing goes through `salvageJsonArray` (keeps every complete element of an
-  unclosed array); replies are keyed by `String(account_number).trim()` because models return numeric
-  account numbers as numbers; whatever is still missing is retried ONCE in batches of `RETRY_BATCH_SIZE`;
+  unclosed array); replies are joined on a per-call `ref` (`r1`, `r2`, …) — NOT account_number, because the router's scrubber
+  redacts COA account numbers to `[ACCOUNT]` before the model sees them (audit log: `scrubber_redacted
+  {"account":25}` per batch), so 25 of 30 keys came back identical; account_number is only a fallback key; whatever is still missing is retried ONCE in batches of `RETRY_BATCH_SIZE`;
   and rows that never get a reply say so (reason names truncation / non-JSON and points at the AI usage
   log, where the call is marked `parse_error` with `finish=` and the first 500 chars) instead of the
   generic "could not determine".

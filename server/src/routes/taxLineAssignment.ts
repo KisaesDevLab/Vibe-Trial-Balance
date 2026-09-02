@@ -386,6 +386,14 @@ interface AiAccountInput {
 
 /** What one account looks like in the prompt: the row plus its lexical hints. */
 interface AiAccountPrompt extends AiAccountInput {
+  /**
+   * Per-call row handle (`r1`, `r2`, …) the reply is joined on. NOT the
+   * account number: the router's scrubber redacts anything that looks like an
+   * account number to an `[ACCOUNT]` token before the model sees it, so a
+   * reply keyed by account_number came back with 25 of 30 keys identical and
+   * matched nothing. A short letter-prefixed handle trips no detector.
+   */
+  ref: string;
   /** Up to LIKELY_PER_ACCOUNT tax_codes whose line label shares words with the name. */
   likely: string[];
 }
@@ -400,6 +408,7 @@ const CATALOG_CAP = 180;
 const LIKELY_PER_ACCOUNT = 5;
 
 interface AiSuggestionOutput {
+  ref?: string;
   account_number: string;
   suggested_tax_code: string | null;
   confidence: number;
@@ -453,7 +462,7 @@ IMPORTANT:
 - If no appropriate tax code exists, set suggested_tax_code to null
 - Confidence: 0.0-1.0 (1.0 = certain, 0.7 = likely, 0.5 = best guess, 0.0 = unknown)
 - Keep "reasoning" to one short clause, under 15 words
-- account_number must be returned as a string, exactly as given`;
+- Return each account's "ref" exactly as given; it is how the reply is matched to the account`;
 
   const results = new Map<string, AiSuggestionOutput>();
   let truncated = 0;
@@ -469,10 +478,12 @@ IMPORTANT:
       return_form: tc.return_form,
       activity_type: tc.activity_type,
     }));
-    const batchPrompt: AiAccountPrompt[] = batch.map((a) => ({
+    const batchPrompt: AiAccountPrompt[] = batch.map((a, idx) => ({
+      ref: `r${idx + 1}`,
       ...a,
       likely: shortlistCodes(a, batchCatalog, LIKELY_PER_ACCOUNT).map((c) => c.tax_code),
     }));
+    const byRef = new Map(batchPrompt.map((a) => [a.ref, a.account_number.trim()]));
 
     const userPrompt = `Available tax codes:
 ${JSON.stringify(taxCodeList, null, 2)}
@@ -481,7 +492,7 @@ Accounts to assign:
 ${JSON.stringify(batchPrompt, null, 2)}
 
 Return a JSON array where each element has:
-- account_number: string (the original account_number, as a string)
+- ref: string (the account's "ref", exactly as given)
 - suggested_tax_code: string | null (exact tax_code from the list, or null)
 - confidence: number (0.0 to 1.0)
 - reasoning: string (one short clause)`;
@@ -513,7 +524,8 @@ Return a JSON array where each element has:
     let matched = 0;
     for (const r of parsed) {
       if (!r || typeof r !== 'object') continue;
-      const key = String(r.account_number ?? '').trim();
+      // Join on ref; fall back to account_number for a model that echoed that instead.
+      const key = byRef.get(String(r.ref ?? '').trim()) ?? String(r.account_number ?? '').trim();
       if (!key || results.has(key)) continue;
       results.set(key, { ...r, account_number: key });
       matched++;
