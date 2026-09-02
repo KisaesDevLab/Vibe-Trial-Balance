@@ -19,6 +19,29 @@ The import looks for:
 - **Debit** and/or **Credit** (or a single **Balance** column)
 - **Prior Year Debit/Credit** (optional)
 
+### Recognized layout: Balances export
+Some bookkeeping tools export a balances file whose header contains `account_number`,
+`account_name`, `p_n_l`, `adjusted_balance`, `quickbooks_account_description` and
+`qbo_account_id`. The import recognizes that header on its own — **no AI column analysis
+runs** and the preview shows "Recognized layout: Balances export". Then:
+- **`adjusted_balance`** is the amount imported (positive = debit, negative = credit). The
+  beginning, unadjusted, federal, state and budget columns are ignored.
+- **`p_n_l`** (`Y`/`N`) sets whether a **new** account is an income-statement or balance-sheet
+  account. The account number's leading digit still decides the exact type when it agrees with
+  the flag; when it does not, the account's name decides, and failing that a balance-sheet row
+  becomes an asset and a P&L row an expense. Review the Category column before confirming.
+- **`quickbooks_account_description`** and **`qbo_account_id`** are saved on the chart of
+  accounts so the **QuickBooks import** can match those accounts later — by id first, and by the
+  saved QuickBooks name for accounts that have no number in QuickBooks. A QuickBooks column in the
+  preview shows the name, the id and a P&L / BS tag.
+- An id that appears on **two or more rows** of the file is not linked to any of them (a ⚠ marks
+  those rows), and an id that is already linked to a *different* account is left as it is. The
+  import reports both after confirming; fix the link on the chart of accounts if needed.
+- Accounts with a zero balance are still imported (their links are kept); they are hidden on
+  reports until they carry a balance.
+- Accounts whose stored QuickBooks id matches a row are matched even if their number changed
+  (badge **QB id**).
+
 ### AI Data Disclosure
 Before AI analysis begins, a **data disclosure popup** shows exactly what data will be sent to the AI provider:
 - Uploaded file content (first 30 rows for column analysis)

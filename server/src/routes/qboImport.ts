@@ -109,7 +109,7 @@ function respondQboError(res: Response, err: unknown): boolean {
 async function loadCoaForMatch(clientId: number): Promise<CoaRowForMatch[]> {
   return (await db('chart_of_accounts')
     .where({ client_id: clientId, is_active: true })
-    .select('id', 'account_number', 'account_name', 'qbo_account_id', 'category')) as CoaRowForMatch[];
+    .select('id', 'account_number', 'account_name', 'qbo_account_id', 'qbo_account_name', 'category')) as CoaRowForMatch[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -527,7 +527,7 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       const upsertTb = target === 'prior' ? upsertPrior : upsertCurrent;
       if (target === 'prior') await trx('py_comparison_data').where({ period_id: periodId }).del();
 
-      const stampQboId = async (accountId: number, qboId: string | null): Promise<void> => {
+      const stampQboId = async (accountId: number, qboId: string | null, qboName: string | null): Promise<void> => {
         if (!qboId) return;
         // The user may have re-pointed a QBO account at a different COA row; the
         // old holder loses the link so the partial unique index is never tripped.
@@ -537,6 +537,9 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
           .andWhere((q) => q.whereNull('qbo_account_id').orWhereNot('qbo_account_id', qboId))
           .update({ qbo_account_id: qboId });
         if (changed) stats.qboIdsLinked++;
+        // The display name rides along so a later name match sees QBO's
+        // current wording, not what an old CSV recorded.
+        if (qboName) await trx('chart_of_accounts').where({ id: accountId }).update({ qbo_account_name: qboName.slice(0, 255) });
       };
 
       const touched = new Set<number>();
@@ -570,6 +573,7 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
                 normal_balance: normalBalance,
                 is_active: true,
                 qbo_account_id: r.qboAccountId,
+                qbo_account_name: r.qboFullName.slice(0, 255),
                 lead_sheet_id: leadSheetId,
                 lead_sheet_source: leadSheetId ? 'auto' : null,
               })
@@ -581,7 +585,7 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
           }
         }
         if (r.action === 'match' || existingByNumber.get(r.newAccountNumber ?? '')?.id === accountId) {
-          await stampQboId(accountId, r.qboAccountId);
+          await stampQboId(accountId, r.qboAccountId, r.qboFullName);
         }
         await upsertTb(accountId, r.debitCents, r.creditCents);
         touched.add(accountId);

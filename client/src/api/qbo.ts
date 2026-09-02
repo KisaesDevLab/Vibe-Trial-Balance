@@ -152,7 +152,7 @@ export interface QboPreviewRow {
   debitCents: number;
   creditCents: number;
   action: QboMatchAction;
-  matchType: 'qbo_id' | 'acct_num' | 'name' | null;
+  matchType: 'qbo_id' | 'acct_num' | 'qbo_name' | 'name' | null;
   matchedAccountId: number | null;
   matchedAccountNumber: string | null;
   matchedAccountName: string | null;

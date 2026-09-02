@@ -50,6 +50,9 @@ function confidenceBadge(match: CsvMatchRow): React.ReactNode {
   if (match.matchType === 'alias') {
     return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400" title="Matched via import alias">alias</span>;
   }
+  if (match.matchType === 'qbo_id') {
+    return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400" title="The file's QuickBooks id is already linked to this account">QB id</span>;
+  }
   const pct = Math.round(match.confidence * 100);
   if (match.confidence >= 0.9) {
     return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">{pct}%</span>;
@@ -472,9 +475,17 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
     try {
       const result = await confirmCsvImport(periodId, clientId, matches, analysis);
       if (result.error) { setConfirmError(result.error.message); return; }
+      const notes: string[] = [];
       if (result.data && result.data.accountsWithoutTaxCodes > 0) {
-        setTaxCodeNote(`${result.data.accountsWithoutTaxCodes} new account${result.data.accountsWithoutTaxCodes !== 1 ? 's were' : ' was'} created without a tax code. Visit Tax Mapping to assign them.`);
-        setTimeout(() => onSuccess(), 3000);
+        notes.push(`${result.data.accountsWithoutTaxCodes} new account${result.data.accountsWithoutTaxCodes !== 1 ? 's were' : ' was'} created without a tax code. Visit Tax Mapping to assign them.`);
+      }
+      if (result.data?.qboIdsLinked) {
+        notes.push(`${result.data.qboIdsLinked} QuickBooks id${result.data.qboIdsLinked !== 1 ? 's' : ''} linked to the chart of accounts.`);
+      }
+      for (const w of result.data?.qboWarnings ?? []) notes.push(w);
+      if (notes.length > 0) {
+        setTaxCodeNote(notes.join(' '));
+        setTimeout(() => onSuccess(), result.data?.qboWarnings?.length ? 6000 : 3000);
       } else {
         onSuccess();
       }
@@ -495,6 +506,18 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
   const someIncluded = totalActive > 0 && skipCount > 0;
 
   const activeMatches = matches.filter((m) => m.action !== 'skip');
+  // Balances export: the QuickBooks column is drawn, and an id on two rows is
+  // flagged here because the confirm will refuse to link it (see the route).
+  const showQboColumn = analysis?.detectedFormat === 'balances_export';
+  const duplicateQboIds = new Set<string>();
+  if (showQboColumn) {
+    const seen = new Set<string>();
+    for (const m of activeMatches) {
+      if (!m.qboAccountId) continue;
+      if (seen.has(m.qboAccountId)) duplicateQboIds.add(m.qboAccountId);
+      else seen.add(m.qboAccountId);
+    }
+  }
   const totalDebit = activeMatches.reduce((s, m) => s + m.debitCents, 0);
   const totalCredit = activeMatches.reduce((s, m) => s + m.creditCents, 0);
   const isBalanced = totalDebit === totalCredit;
@@ -519,6 +542,11 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
             )}
             {stage === 'preview' && analysis?.fallbackMode && (
               <p className="text-xs text-amber-600 mt-0.5">AI analysis unavailable — using automatic column detection. Please review matches carefully.</p>
+            )}
+            {stage === 'preview' && analysis?.detectedFormat === 'balances_export' && (
+              <p className="text-xs text-green-700 dark:text-green-400 mt-0.5">
+                Recognized layout: <span className="font-medium">Balances export</span> — importing <code>adjusted_balance</code>; the P&amp;L flag sets each new account's type; QuickBooks ids and names are saved to the chart of accounts.
+              </p>
             )}
           </div>
           <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
@@ -718,6 +746,9 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-10">Row</th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-28">Acct #</th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700">CSV Account Name</th>
+                    {showQboColumn && (
+                      <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-48">QuickBooks</th>
+                    )}
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-28">Action</th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700">Matched Account / New Fields</th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase border-b dark:border-gray-700 w-16">Conf.</th>
@@ -757,6 +788,17 @@ export function CsvImportDialog({ periodId, clientId, onClose, onSuccess }: Prop
                         )}
                       </td>
                       <td className="px-3 py-1.5 border-b dark:border-gray-700 max-w-xs truncate dark:text-gray-300">{match.csvAccountName ?? '—'}</td>
+                      {showQboColumn && (
+                        <td className="px-3 py-1.5 border-b dark:border-gray-700 max-w-[12rem] truncate text-xs dark:text-gray-300" title={match.qboAccountName ?? undefined}>
+                          {match.qboAccountName ?? <span className="text-gray-400">—</span>}
+                          {match.qboAccountId && (
+                            <span className={`ml-1 font-mono ${duplicateQboIds.has(match.qboAccountId) ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400 dark:text-gray-500'}`} title={duplicateQboIds.has(match.qboAccountId) ? 'This QuickBooks id is on more than one row — it will not be linked' : 'QuickBooks account id'}>
+                              #{match.qboAccountId}{duplicateQboIds.has(match.qboAccountId) ? ' ⚠' : ''}
+                            </span>
+                          )}
+                          {match.pnl && <span className="ml-1 text-gray-400 dark:text-gray-500" title={match.pnl === 'Y' ? 'Income statement account (p_n_l = Y)' : 'Balance sheet account (p_n_l = N)'}>{match.pnl === 'Y' ? 'P&L' : 'BS'}</span>}
+                        </td>
+                      )}
                       <td className="px-3 py-1.5 border-b dark:border-gray-700">
                         <select
                           value={match.action}

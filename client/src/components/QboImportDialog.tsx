@@ -104,6 +104,7 @@ function rowBorderClass(r: EditableRow): string {
   if (r.aiConfidence) return 'border-l-4 border-l-indigo-400';
   if (r.action === 'exception') return 'border-l-4 border-l-red-400';
   if (r.matchType === 'qbo_id') return 'border-l-4 border-l-green-400';
+  if (r.matchType === 'qbo_name') return 'border-l-4 border-l-yellow-400';
   if (r.matchType === 'name') return 'border-l-4 border-l-orange-400';
   return 'border-l-4 border-l-yellow-400';
 }
@@ -128,6 +129,9 @@ function actionBadge(r: EditableRow): React.ReactNode {
   }
   if (r.action === 'match' && r.matchType === 'acct_num') {
     return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400" title="Matched by account number — the link is saved on confirm">by number</span>;
+  }
+  if (r.action === 'match' && r.matchType === 'qbo_name') {
+    return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400" title="Matched by the QuickBooks account name a trial balance import recorded for this account — the link is saved on confirm">by QB name</span>;
   }
   if (r.aiConfidence) {
     return (

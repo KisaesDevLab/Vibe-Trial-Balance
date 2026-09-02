@@ -172,3 +172,40 @@ test('findAbsentNonzeroAccounts: unmatched rows with a balance only', () => {
   const absent = findAbsentNonzeroAccounts(tb, new Set([1]));
   assert.deepEqual(absent, [{ accountId: 3, accountNumber: '60100', accountName: 'Utilities', debitCents: 0, creditCents: 250 }]);
 });
+
+test('qbo_name: the QuickBooks name a CSV import recorded places the row before the COA-name pass', () => {
+  const rows: CoaRowForMatch[] = [
+    // Numbered like the export writes it; QBO's API name has no numbers and no AcctNum.
+    { id: 10, account_number: '6045', account_name: 'Overdraft Fees', qbo_account_id: null, category: 'expenses', qbo_account_name: '60400 Bank Service Charges:60450 Overdraft Fees' },
+    // A COA row whose OWN name equals the QBO name — the recorded QBO name must win over it.
+    { id: 11, account_number: '6070', account_name: 'Bank Service Charges:Overdraft Fees', qbo_account_id: null, category: 'expenses', qbo_account_name: null },
+  ];
+  const [m] = matchRows(
+    [row('91', 'Overdraft Fees', 350)],
+    rows,
+    [acct('91', 'Overdraft Fees', null, 'Expense', { FullyQualifiedName: 'Bank Service Charges:Overdraft Fees' })],
+  );
+  assert.equal(m.action, 'match');
+  assert.equal(m.matchType, 'qbo_name');
+  assert.equal(m.matchedAccountId, 10);
+  assert.equal(m.writeQboId, true);
+});
+
+test('qbo_name: refused when two COA rows recorded the same QBO name, when the type contradicts, or when the row is bound elsewhere', () => {
+  const twice: CoaRowForMatch[] = [
+    { id: 1, account_number: '2710', account_name: 'Due To/From Tolson', qbo_account_id: null, qbo_account_name: '160000 Due to Tolson Drug' },
+    { id: 2, account_number: '1600', account_name: 'Due to Tolson Drug', qbo_account_id: null, qbo_account_name: '160000 Due to Tolson Drug' },
+  ];
+  const [dup] = matchRows([row('72', 'Due to Tolson Drug', 5)], twice, [acct('72', 'Due to Tolson Drug', null, 'Asset')]);
+  // Falls through to the COA-name pass, which finds exactly one row with that name.
+  assert.equal(dup.matchType, 'name');
+  assert.equal(dup.matchedAccountId, 2);
+
+  const wrongType: CoaRowForMatch[] = [{ id: 3, account_number: '4100', account_name: 'Rent', qbo_account_id: null, category: 'revenue', qbo_account_name: '63300 Insurance Expense' }];
+  const [t] = matchRows([row('43', 'Insurance Expense', 5)], wrongType, [acct('43', 'Insurance Expense', null, 'Expense')]);
+  assert.equal(t.action, 'create_new');
+
+  const bound: CoaRowForMatch[] = [{ id: 4, account_number: '6330', account_name: 'Insurance', qbo_account_id: '999', qbo_account_name: 'Insurance Expense' }];
+  const [b] = matchRows([row('43', 'Insurance Expense', 5)], bound, [acct('43', 'Insurance Expense', null, 'Expense')]);
+  assert.equal(b.action, 'create_new');
+});

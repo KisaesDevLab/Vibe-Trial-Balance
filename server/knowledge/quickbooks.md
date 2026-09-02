@@ -62,6 +62,7 @@ Rules:
 3. Review the preview:
    - **linked** — matched by the stored QuickBooks account id from a previous import.
    - **by number** — matched by QuickBooks account number to the chart of accounts; the link is saved on confirm.
+   - **by QB name** (yellow) — a trial balance CSV import (Balances export) recorded this account's QuickBooks name on the chart of accounts, and it equals the QuickBooks account's full name once the account numbers are stripped. The link is saved on confirm.
    - **by name** (orange) — the QuickBooks account has no number, but exactly one account in the chart carries the identical name (case and spacing aside) and the same type. Check it; the link is saved on confirm.
    - **AI · high / medium / low** (indigo) — a suggestion from **Suggest matches with AI**: for the rows still unplaced, the AI is shown the QuickBooks account names and types and the chart of accounts (numbers, names, categories — no balances, no company name) and asked which existing account each one is. A consent dialog appears first. Suggestions are never imported on their own: each is a pre-filled dropdown the reviewer confirms or changes, and the button is only offered when AI is configured.
    - **New** — no match; a new account is created, typed from QuickBooks' classification (Asset/Liability/Equity/Revenue/Expense), with a lead sheet suggested automatically. Number, name, category and normal balance can be edited.

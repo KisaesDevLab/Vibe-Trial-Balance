@@ -33,6 +33,8 @@ export interface CoaRowForMatch {
   qbo_account_id: string | null;
   /** When present, a name match is refused if it contradicts QBO's Classification. */
   category?: string | null;
+  /** The QBO display name a TB CSV import recorded for this account (may carry QBO numbers). */
+  qbo_account_name?: string | null;
 }
 
 /** The subset of QBO `Account` the matcher and the confirm need; stored with the import. */
@@ -47,7 +49,7 @@ export interface QboAccountLite {
 }
 
 export type MatchAction = 'match' | 'create_new' | 'exception';
-export type MatchType = 'qbo_id' | 'acct_num' | 'name';
+export type MatchType = 'qbo_id' | 'acct_num' | 'qbo_name' | 'name';
 export type ExceptionReason = 'NO_ACCOUNT_ID' | 'ACCT_NUM_BOUND_ELSEWHERE' | 'DUPLICATE_ACCT_NUM';
 
 export interface MatchedRow {
@@ -96,6 +98,23 @@ export function classificationToCategory(
 /** Case- and whitespace-insensitive key for the exact-name pass. */
 export function normalizeName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Key for comparing a QBO display name recorded by another tool against the
+ * API's `FullyQualifiedName`. The Balances export writes the name WITH the
+ * QBO account number on each level ("60400 Bank Service Charges:60450
+ * Overdraft Fees") while the API's fully-qualified name has none ("Bank
+ * Service Charges:Overdraft Fees"), so a leading numeric token is dropped
+ * from every `:` segment before the case/whitespace fold. Only a leading
+ * token that is all digits goes — "2nd Floor Rent" keeps its "2nd".
+ */
+export function normalizeQboDisplayName(name: string): string {
+  return name
+    .split(':')
+    .map((seg) => normalizeName(seg.replace(/^\s*\d+(?:[.\-]\d+)*\s+/, '')))
+    .filter((seg) => seg.length > 0)
+    .join(':');
 }
 
 /** `QB<Id>` — a placeholder number for a QBO account with no AcctNum; the user can retype it in the preview. */
@@ -188,7 +207,55 @@ export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccoun
     };
   });
 
-  // ── Second pass: exact names, for the rows nothing stronger claimed ───────
+  // ── Second pass: the QBO name another tool recorded on the COA row ────────
+  // A TB CSV import (Balances export) stores the QuickBooks description of
+  // each account; it identifies the QBO account as surely as a number does
+  // once the numbers are stripped, so it is tried before the looser match on
+  // the COA's own name — still only when exactly one row carries it.
+  const coaByQboName = new Map<string, CoaRowForMatch[]>();
+  for (const c of coa) {
+    if (!c.qbo_account_name) continue;
+    const key = normalizeQboDisplayName(c.qbo_account_name);
+    if (!key) continue;
+    const list = coaByQboName.get(key);
+    if (list) list.push(c);
+    else coaByQboName.set(key, [c]);
+  }
+  const takeByName = (i: number, c: CoaRowForMatch, matchType: MatchType): void => {
+    claimedCoaIds.add(c.id);
+    results[i] = {
+      ...results[i],
+      action: 'match',
+      matchType,
+      matchedAccountId: c.id,
+      matchedAccountNumber: c.account_number,
+      matchedAccountName: c.account_name,
+      writeQboId: true,
+      newAccountNumber: null,
+      newAccountName: null,
+      newCategory: null,
+      newNormalBalance: null,
+    };
+  };
+  const acceptable = (c: CoaRowForMatch, row: MatchedRow): boolean => {
+    if (claimedCoaIds.has(c.id)) return false;
+    // Already the twin of a different QBO account — leave it alone.
+    if (c.qbo_account_id && c.qbo_account_id !== row.qboAccountId) return false;
+    const typed = classificationToCategory(row.classification);
+    if (typed && c.category && c.category !== typed.category) return false;
+    return true;
+  };
+  if (coaByQboName.size > 0) {
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.action !== 'create_new' || !r.qboAccountId) continue;
+      const list = coaByQboName.get(normalizeQboDisplayName(r.qboFullName));
+      if (!list || list.length !== 1 || !acceptable(list[0], r)) continue;
+      takeByName(i, list[0], 'qbo_name');
+    }
+  }
+
+  // ── Third pass: exact names, for the rows nothing stronger claimed ────────
   const coaByName = new Map<string, CoaRowForMatch[]>();
   for (const c of coa) {
     const key = normalizeName(c.account_name);
@@ -200,13 +267,7 @@ export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccoun
   const uniqueUnclaimed = (name: string, row: MatchedRow): CoaRowForMatch | null => {
     const list = coaByName.get(normalizeName(name));
     if (!list || list.length !== 1) return null;
-    const c = list[0];
-    if (claimedCoaIds.has(c.id)) return null;
-    // Already the twin of a different QBO account — leave it alone.
-    if (c.qbo_account_id && c.qbo_account_id !== row.qboAccountId) return null;
-    const typed = classificationToCategory(row.classification);
-    if (typed && c.category && c.category !== typed.category) return null;
-    return c;
+    return acceptable(list[0], row) ? list[0] : null;
   };
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
@@ -214,20 +275,7 @@ export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccoun
     const leaf = r.qboFullName.includes(':') ? r.qboFullName.slice(r.qboFullName.lastIndexOf(':') + 1) : null;
     const c = uniqueUnclaimed(r.qboFullName, r) ?? (leaf ? uniqueUnclaimed(leaf, r) : null);
     if (!c) continue;
-    claimedCoaIds.add(c.id);
-    results[i] = {
-      ...r,
-      action: 'match',
-      matchType: 'name',
-      matchedAccountId: c.id,
-      matchedAccountNumber: c.account_number,
-      matchedAccountName: c.account_name,
-      writeQboId: true,
-      newAccountNumber: null,
-      newAccountName: null,
-      newCategory: null,
-      newNormalBalance: null,
-    };
+    takeByName(i, c, 'name');
   }
   return results;
 }

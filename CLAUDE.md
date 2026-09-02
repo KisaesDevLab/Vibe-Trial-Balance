@@ -196,6 +196,31 @@ All planned phases complete. App is feature-complete.
   confirm inferred from the account number, so a row read Expense on screen and landed as an Asset.
   Inference is by **leading digit** (1/2/3/4 → assets/liabilities/equity/revenue, 5–9 expenses),
   never a numeric range — `10100` is not `< 2000`. Name keywords only when there is no digit.
+- **Balances-export recognition on the TB CSV import** (`server/src/lib/balancesExport.ts`, pure;
+  wired in `routes/csvImport.ts` as `detectKnownLayout()`). A file whose header carries all of
+  `account_number, account_name, adjusted_balance, p_n_l` (any order, case-insensitive) is mapped
+  **deterministically and the AI column pass is skipped** — `detectedFormat: 'balances_export'`,
+  `adjusted_balance` as `single_signed` (positive = debit), and three carried fields per row: `pnl`,
+  `qboAccountId`, `qboAccountName` (from `quickbooks_account_description`). The chat route re-merges
+  those from the incoming matches by `csvRow`, or a correction would drop them. Zero-balance rows are
+  still imported (they carry links; dormant filtering hides them on reports).
+  `inferAccountType(number, name, hint)` takes a `StatementHint` (`'pnl' | 'bs'`) as a **constraint**:
+  the leading digit stands when it is on that statement, else a name keyword on that statement, else
+  the statement's default (assets / expenses). `3999 P & L Summary,N` therefore stays equity and
+  `1500 Interest Income,Y` becomes revenue. No hint = unchanged behaviour.
+  The confirm stamps `chart_of_accounts.qbo_account_id` + the new `qbo_account_name` column
+  (migration `20260902000001`). Rules, each surfaced as a `qboWarnings[]` sentence in the dialog: an
+  id on **two or more rows** of the file is linked to none of them (the export really does this —
+  `2710` and `1600` both carry `72`); an id **already held by a different account** is left alone —
+  a CSV never re-points a connector link, only the QBO import's `stampQboId` may move one; the name
+  is always refreshed. Analyze also matches by stored QBO id (`matchType 'qbo_id'`, between exact
+  number and alias) so a renumbered account still lands on its row.
+  The QBO connector's matcher gained a **`qbo_name` tier** (`normalizeQboDisplayName`: strip a
+  leading all-digit token from every `:` segment, then case/whitespace fold) between `acct_num` and
+  the COA-name pass — the export prints `60400 Bank Service Charges:60450 Overdraft Fees` where the
+  API says `Bank Service Charges:Overdraft Fees`. Same guards as the name pass (unique, unclaimed,
+  not bound elsewhere, no category contradiction), badged **by QB name** (yellow), `writeQboId`.
+  The QBO import writes `qbo_account_name` too, so a later name match sees QBO's current wording.
 - **COA bulk edit** — `POST /clients/:id/chart-of-accounts/bulk-update` (`bulkUpdateColumns()` in
   `routes/chartOfAccounts.ts`, tested). Checkbox column + shift-click range on ChartOfAccountsPage,
   `BulkEditModal` with an opt-in tick per field (category, normal balance, subcategory, unit, tax

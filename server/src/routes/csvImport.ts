@@ -13,8 +13,18 @@ import { getLLMProvider } from '../lib/aiClient';
 import { TB_TASK_CLASSES } from '../lib/routerProvider';
 import { extractJsonObject, extractJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
-import { fillNewAccountType, inferAccountType } from '../lib/accountTypeInference';
+import { fillNewAccountType, inferAccountType, type StatementHint } from '../lib/accountTypeInference';
 import { looksLikeTotalRow } from '../lib/importSkipRules';
+import {
+  BALANCES_EXPORT_FORMAT,
+  detectBalancesExport,
+  duplicatedQboIds,
+  parsePnlFlag,
+  parseQboAccountId,
+  parseQboAccountName,
+  type DetectedImportFormat,
+  type PnlFlag,
+} from '../lib/balancesExport';
 
 // ── Excel → CSV conversion ──────────────────────────────────────────────────
 
@@ -91,13 +101,31 @@ export interface CsvMatchRow {
   matchedAccountNumber: string | null;
   matchedAccountName: string | null;
   confidence: number;
-  matchType: 'exact' | 'fuzzy' | 'alias' | 'none';
+  matchType: 'exact' | 'qbo_id' | 'fuzzy' | 'alias' | 'none';
   action: 'match' | 'create_new' | 'skip';
   debitCents: number;
   creditCents: number;
   // User-editable fields for create_new rows
   newCategory?: 'assets' | 'liabilities' | 'equity' | 'revenue' | 'expenses';
   newNormalBalance?: 'debit' | 'credit';
+  // Carried from a recognised layout (see lib/balancesExport.ts); absent on
+  // an ordinary file. `pnl` steers the type inference, the two QBO fields are
+  // written onto the chart of accounts on confirm.
+  pnl?: PnlFlag | null;
+  qboAccountId?: string | null;
+  qboAccountName?: string | null;
+}
+
+export interface CsvColumns {
+  accountNumber: number | null;
+  accountName: number | null;
+  debit: number | null;
+  credit: number | null;
+  amount: number | null;
+  // Only a recognised layout sets these; the model is never asked for them.
+  pnl?: number | null;
+  qboAccountName?: number | null;
+  qboAccountId?: number | null;
 }
 
 export interface AiAnalysisResult {
@@ -106,15 +134,16 @@ export interface AiAnalysisResult {
   headerRow: number;
   dataStartRow: number;
   amountFormat: 'separate_dr_cr' | 'single_signed' | 'single_parentheses';
-  columns: {
-    accountNumber: number | null;
-    accountName: number | null;
-    debit: number | null;
-    credit: number | null;
-    amount: number | null;
-  };
+  columns: CsvColumns;
   rowsToSkip: number[];
   matches: CsvMatchRow[];
+  /** Set when the header row named a known layout and the mapping is fixed, not guessed. */
+  detectedFormat?: DetectedImportFormat | null;
+}
+
+/** The statement a row's P&L flag places it on, for the type inference. */
+function statementHint(pnl: PnlFlag | null | undefined): StatementHint | null {
+  return pnl === 'Y' ? 'pnl' : pnl === 'N' ? 'bs' : null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -320,7 +349,7 @@ export function parseAllRows(
       else creditCents = Math.abs(amt);
     }
 
-    matches.push({
+    const row: CsvMatchRow = {
       csvRow: i,
       csvAccountNumber,
       csvAccountName,
@@ -334,10 +363,50 @@ export function parseAllRows(
       action: skipped ? 'skip' : 'create_new',
       debitCents,
       creditCents,
-    });
+    };
+    // Extra columns a recognised layout carries. Left off the row entirely
+    // for an ordinary file so the preview's QuickBooks column stays hidden.
+    if (columns.pnl !== undefined && columns.pnl !== null) row.pnl = parsePnlFlag(cells[columns.pnl]);
+    if (columns.qboAccountId !== undefined && columns.qboAccountId !== null) row.qboAccountId = parseQboAccountId(cells[columns.qboAccountId]);
+    if (columns.qboAccountName !== undefined && columns.qboAccountName !== null) row.qboAccountName = parseQboAccountName(cells[columns.qboAccountName]);
+    matches.push(row);
   }
 
   return matches;
+}
+
+/**
+ * Column mapping for a file whose header row names a known layout, or null.
+ * Today that is the Balances export (lib/balancesExport.ts). The header is
+ * the first non-blank line; the first data row follows it.
+ */
+export function detectKnownLayout(allLines: string[]): (Omit<AiAnalysisResult, 'matches'> & { detectedFormat: DetectedImportFormat }) | null {
+  const headerIdx = allLines.findIndex((l) => l.trim().length > 0);
+  if (headerIdx < 0) return null;
+  const delimiter = detectDelimiter(allLines.slice(headerIdx));
+  const cols = detectBalancesExport(splitCsvRow(allLines[headerIdx], delimiter));
+  if (!cols) return null;
+  return {
+    delimiter,
+    hasHeaders: true,
+    headerRow: headerIdx,
+    dataStartRow: headerIdx + 1,
+    // adjusted_balance is one signed column: debit balances positive, credit
+    // balances negative.
+    amountFormat: 'single_signed',
+    columns: {
+      accountNumber: cols.accountNumber,
+      accountName: cols.accountName,
+      debit: null,
+      credit: null,
+      amount: cols.amount,
+      pnl: cols.pnl,
+      qboAccountName: cols.qboAccountName,
+      qboAccountId: cols.qboAccountId,
+    },
+    rowsToSkip: [],
+    detectedFormat: BALANCES_EXPORT_FORMAT,
+  };
 }
 
 /** How many lines of the file the model is shown. */
@@ -395,10 +464,10 @@ csvImportRouter.post(
       // Load client COA
       const coa = await db('chart_of_accounts')
         .where({ client_id: clientId, is_active: true })
-        .select('id', 'account_number', 'account_name', 'category', 'normal_balance', 'import_aliases')
+        .select('id', 'account_number', 'account_name', 'category', 'normal_balance', 'import_aliases', 'qbo_account_id')
         .orderBy('account_number');
 
-      type CoaRow = { id: number; account_number: string; account_name: string; category: string; normal_balance: string; import_aliases: unknown };
+      type CoaRow = { id: number; account_number: string; account_name: string; category: string; normal_balance: string; import_aliases: unknown; qbo_account_id: string | null };
       const coaSummary = (coa as CoaRow[]).map((a) => {
         const aliases = parseAliases(a.import_aliases);
         const aliasStr = aliases.length > 0 ? aliases.join(',') : '';
@@ -462,7 +531,12 @@ Only give indexes for lines shown above — the file may be longer, and you must
       let columnMapping: Omit<AiAnalysisResult, 'matches'>;
       let fallbackMode = false;
 
-      try {
+      // A layout we know by its header row needs no model: the mapping is
+      // fixed, and a guess would risk importing the wrong balance column.
+      const known = detectKnownLayout(allLines);
+      if (known) {
+        columnMapping = known;
+      } else try {
         const { provider, fastModel } = await getLLMProvider();
         const { result: aiResult, logId } = await aiComplete(
           provider,
@@ -512,7 +586,7 @@ Only give indexes for lines shown above — the file may be longer, and you must
       const skippedRows = allMatches.filter((m) => m.action === 'skip').length;
       console.log(
         `[csv/analyze] Listed ${allMatches.length} of ${nonBlankLines} non-blank lines ` +
-        `(${skippedRows} pre-skipped, dataStartRow=${columnMapping.dataStartRow}, fallback=${fallbackMode})`,
+        `(${skippedRows} pre-skipped, dataStartRow=${columnMapping.dataStartRow}, fallback=${fallbackMode}, format=${columnMapping.detectedFormat ?? 'generic'})`,
       );
       if (allMatches.length !== nonBlankLines) {
         console.warn(`[csv/analyze] ROW SHORTFALL: ${nonBlankLines - allMatches.length} line(s) never reached the preview`);
@@ -521,6 +595,14 @@ Only give indexes for lines shown above — the file may be longer, and you must
       // ── Step 3: Match ALL rows against COA ────────────────────────────────
       // Skipped rows are matched too but keep their action: the match is what
       // the row needs the moment the user ticks it back in.
+      // A QuickBooks id the file carries (Balances export) places a row on
+      // the account the connector already linked, even when the numbers
+      // differ — but only an id that appears ONCE in the file: one on two
+      // rows would land both on the same account and the second upsert would
+      // overwrite the first.
+      const dupQboIds = duplicatedQboIds(allMatches.map((m) => m.qboAccountId));
+      const coaByQboId = new Map<string, CoaRow>();
+      for (const a of coa as CoaRow[]) if (a.qbo_account_id) coaByQboId.set(a.qbo_account_id, a);
       for (const match of allMatches) {
         const keepSkipped = match.action === 'skip';
         // 1. Exact account number match
@@ -537,10 +619,24 @@ Only give indexes for lines shown above — the file may be longer, and you must
           }
         }
 
+        // 2. Stored QuickBooks id (unique in the file)
+        if (match.qboAccountId && !dupQboIds.has(match.qboAccountId)) {
+          const idMatch = coaByQboId.get(match.qboAccountId);
+          if (idMatch) {
+            match.matchedAccountId = idMatch.id;
+            match.matchedAccountNumber = idMatch.account_number;
+            match.matchedAccountName = idMatch.account_name;
+            match.confidence = 0.9;
+            match.matchType = 'qbo_id';
+            if (!keepSkipped) match.action = 'match';
+            continue;
+          }
+        }
+
         if (match.csvAccountName?.trim()) {
           const matchNameLower = match.csvAccountName.trim().toLowerCase();
 
-          // 2. Alias exact match
+          // 3. Alias exact match
           const aliasMatch = (coa as CoaRow[]).find((a) =>
             parseAliases(a.import_aliases).some((alias) => alias.toLowerCase() === matchNameLower)
           );
@@ -554,7 +650,7 @@ Only give indexes for lines shown above — the file may be longer, and you must
             continue;
           }
 
-          // 3. Fuzzy name match
+          // 4. Fuzzy name match
           const nameMatch = (coa as CoaRow[]).find((a) => {
             const coaLower = a.account_name.toLowerCase();
             return coaLower === matchNameLower || coaLower.includes(matchNameLower) || matchNameLower.includes(coaLower);
@@ -575,10 +671,10 @@ Only give indexes for lines shown above — the file may be longer, and you must
       // them blank made the dropdown show a placeholder while the confirm
       // inferred something else from the account number.
       for (const match of allMatches) {
-        fillNewAccountType(match, match.csvAccountNumber, match.csvAccountName);
+        fillNewAccountType(match, match.csvAccountNumber, match.csvAccountName, statementHint(match.pnl));
       }
 
-      const analysisResult: AiAnalysisResult = { ...columnMapping, matches: allMatches };
+      const analysisResult: AiAnalysisResult = { detectedFormat: null, ...columnMapping, matches: allMatches };
 
       res.json({
         data: {
@@ -835,9 +931,20 @@ If the user requests corrections to the column mapping, account matching, or row
     // The client replaces its matches with these wholesale, and the model
     // rarely echoes newCategory/newNormalBalance back — refill them so the
     // preview keeps showing the type the confirm will write.
+    // The carried columns (P&L flag, QuickBooks id/name) are ours, not the
+    // model's: put them back by file row so a chat correction cannot lose
+    // them, then refill the type with the same hint the preview used.
+    const carried = new Map<number, CsvMatchRow>((analysis.matches ?? []).map((m) => [m.csvRow, m]));
     for (const m of parsed.revisedAnalysis?.matches ?? []) {
-      fillNewAccountType(m, m.csvAccountNumber, m.csvAccountName);
+      const src = carried.get(m.csvRow);
+      if (src) {
+        if (src.pnl !== undefined) m.pnl = src.pnl;
+        if (src.qboAccountId !== undefined) m.qboAccountId = src.qboAccountId;
+        if (src.qboAccountName !== undefined) m.qboAccountName = src.qboAccountName;
+      }
+      fillNewAccountType(m, m.csvAccountNumber, m.csvAccountName, statementHint(m.pnl));
     }
+    if (parsed.revisedAnalysis && analysis.detectedFormat !== undefined) parsed.revisedAnalysis.detectedFormat = analysis.detectedFormat;
     res.json({ data: parsed, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'csv-import');
@@ -872,12 +979,24 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
     // TOCTOU race with a concurrent period lock, so we skip it.
 
     // Pre-load existing COA accounts to avoid try/catch inside transaction
-    const existingCoa = await db('chart_of_accounts')
+    const existingCoa = (await db('chart_of_accounts')
       .where({ client_id: clientId, is_active: true })
-      .select('id', 'account_number');
+      .select('id', 'account_number', 'qbo_account_id')) as Array<{ id: number; account_number: string; qbo_account_id: string | null }>;
     const existingByNumber = new Map<string, number>(
-      existingCoa.map((a: { id: number; account_number: string }) => [a.account_number.trim(), a.id])
+      existingCoa.map((a) => [a.account_number.trim(), a.id])
     );
+    // QuickBooks links the file carries (Balances export). An id that is on
+    // two rows of the file, or already held by a different account of this
+    // client, is not written — a CSV is not the place to re-point a link the
+    // connector made — and the reviewer is told which ones were left alone.
+    const qboHolder = new Map<string, number>();
+    for (const a of existingCoa) if (a.qbo_account_id) qboHolder.set(a.qbo_account_id, a.id);
+    const dupQboIds = duplicatedQboIds(matches.filter((m) => m.action !== 'skip').map((m) => m.qboAccountId));
+    const qboWarnings: string[] = [];
+    for (const id of dupQboIds) {
+      const rows = matches.filter((m) => m.action !== 'skip' && m.qboAccountId === id).map((m) => m.csvAccountNumber ?? `row ${m.csvRow + 1}`);
+      qboWarnings.push(`QuickBooks id ${id} is on ${rows.length} rows (${rows.join(', ')}); it was not linked to any of them.`);
+    }
     // Cross-client safety: reject any matchedAccountId that doesn't belong to
     // this client. See pdfImport.ts for the same rationale — chart_of_accounts
     // has a global PK, so an AI-hallucinated id could otherwise write TB rows
@@ -921,6 +1040,30 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       let accountsMatched = 0;
       let rowsImported = 0;
       let rowsSkipped = 0;
+      let qboIdsLinked = 0;
+
+      // Write the file's QuickBooks id/name onto the account the row landed
+      // in. The name is always refreshed (it is descriptive, and the connector
+      // only ever matches it when unique); the id only when nothing stands in
+      // its way.
+      const stampQbo = async (accountId: number, match: CsvMatchRow): Promise<void> => {
+        const patch: Record<string, unknown> = {};
+        if (match.qboAccountName) patch.qbo_account_name = match.qboAccountName;
+        const id = match.qboAccountId ?? null;
+        if (id && !dupQboIds.has(id)) {
+          const holder = qboHolder.get(id);
+          if (holder !== undefined && holder !== accountId) {
+            const other = existingCoa.find((a) => a.id === holder);
+            qboWarnings.push(`QuickBooks id ${id} (${match.csvAccountNumber ?? `row ${match.csvRow + 1}`}) is already linked to account ${other?.account_number ?? holder}; left as is.`);
+          } else if (holder === undefined) {
+            patch.qbo_account_id = id;
+            qboHolder.set(id, accountId);
+            qboIdsLinked++;
+          }
+        }
+        if (Object.keys(patch).length === 0) return;
+        await trx('chart_of_accounts').where({ id: accountId, client_id: clientId }).update({ ...patch, updated_at: trx.fn.now() });
+      };
       // Track which matched accounts need their alias list updated
       const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
 
@@ -945,7 +1088,7 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
             // them; the fallback only covers a body assembled without it
             // (an older client, or the chat's revisedAnalysis) and MUST use
             // the same inference so it cannot disagree with the preview.
-            const inferred = inferAccountType(accountNum, match.csvAccountName);
+            const inferred = inferAccountType(accountNum, match.csvAccountName, statementHint(match.pnl));
             const category: string = match.newCategory ?? inferred.category;
             const normalBalance: string = match.newNormalBalance ?? inferred.normalBalance;
 
@@ -973,6 +1116,8 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
         }
 
         if (!accountId) { rowsSkipped++; continue; }
+
+        if (match.qboAccountId || match.qboAccountName) await stampQbo(accountId, match);
 
         await trx('trial_balance')
           .insert({
@@ -1021,7 +1166,7 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
         imported_at: db.fn.now(),
       });
 
-      return { accountsMatched, accountsCreated, rowsImported, rowsSkipped };
+      return { accountsMatched, accountsCreated, rowsImported, rowsSkipped, qboIdsLinked };
     });
 
     res.json({
@@ -1029,6 +1174,7 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
         ...stats,
         accountsWithoutTaxCodes: stats.accountsCreated,
         total: matches.length,
+        qboWarnings,
       },
       error: null,
     });

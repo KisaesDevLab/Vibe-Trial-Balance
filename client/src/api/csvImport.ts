@@ -14,7 +14,7 @@ export interface CsvMatchRow {
   matchedAccountNumber: string | null;
   matchedAccountName: string | null;
   confidence: number;
-  matchType: 'exact' | 'fuzzy' | 'alias' | 'none';
+  matchType: 'exact' | 'qbo_id' | 'fuzzy' | 'alias' | 'none';
   action: 'match' | 'create_new' | 'skip';
   debitCents: number;
   creditCents: number;
@@ -22,7 +22,16 @@ export interface CsvMatchRow {
   newCategory?: 'assets' | 'liabilities' | 'equity' | 'revenue' | 'expenses';
   newNormalBalance?: 'debit' | 'credit';
   newAccountNumber?: string;
+  // Present only when the file was a recognised layout (Balances export):
+  // the P&L flag that set the type, and the QuickBooks id/name the confirm
+  // writes onto the chart of accounts. Round-tripped untouched.
+  pnl?: 'Y' | 'N' | null;
+  qboAccountId?: string | null;
+  qboAccountName?: string | null;
 }
+
+/** A file layout the server recognised from its header row; null = generic file. */
+export type DetectedImportFormat = 'balances_export';
 
 export interface CsvAnalysisResult {
   delimiter: string;
@@ -36,9 +45,13 @@ export interface CsvAnalysisResult {
     debit: number | null;
     credit: number | null;
     amount: number | null;
+    pnl?: number | null;
+    qboAccountName?: number | null;
+    qboAccountId?: number | null;
   };
   rowsToSkip: number[];
   matches: CsvMatchRow[];
+  detectedFormat?: DetectedImportFormat | null;
   fallbackMode: boolean;
   totalRows: number;
   rawPreview: string[];
@@ -51,6 +64,10 @@ export interface CsvConfirmResult {
   rowsSkipped: number;
   accountsWithoutTaxCodes: number;
   total: number;
+  /** QuickBooks ids written onto the chart of accounts (Balances export). */
+  qboIdsLinked?: number;
+  /** Ids the confirm deliberately left alone, one sentence each. */
+  qboWarnings?: string[];
 }
 
 export async function analyzeCsv(
