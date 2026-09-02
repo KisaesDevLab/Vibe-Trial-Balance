@@ -12,6 +12,9 @@ Access: **Tax > Tax Mapping**
 4. Search for the appropriate code by typing part of the code or description
 5. Select the code — the assignment saves immediately (optimistic update with a green flash confirmation)
 
+## Mapping Several Accounts at Once
+Each row has a checkbox. Tick the accounts you want (shift-click ticks every row between your last click and this one, in the order shown), then a blue bar appears above the table: pick a tax code in its dropdown and press **Apply … to N**. One save covers every ticked account, each row flashes green, and the source shows **Manual**. Leaving the dropdown at "unassigned" and pressing **Unassign N** clears the code from the ticked accounts after a confirmation. The selection survives switching between Show All / Unmapped Only / Mapped Only — the bar says how many ticked rows are hidden by the current filter, and an apply includes them. The header checkbox ticks or unticks every row on screen.
+
 ## Progress Bar
 The progress bar at the top shows what percentage of accounts have been assigned a tax code. Aim for 100% before generating tax exports. The progress bar color changes from red → amber → green as you map more accounts.
 

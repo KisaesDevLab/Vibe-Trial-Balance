@@ -40,7 +40,8 @@ export interface BulkConfirmAssignment {
   accountId: number;
   taxCodeId: number | null;
   source: string;
-  confidence: number;
+  /** null for a hand-picked code — the server stores no confidence for a manual choice. */
+  confidence: number | null;
 }
 
 export interface BulkConfirmResult {
