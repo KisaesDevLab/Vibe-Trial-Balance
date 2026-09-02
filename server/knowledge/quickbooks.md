@@ -62,16 +62,18 @@ Rules:
 3. Review the preview:
    - **linked** — matched by the stored QuickBooks account id from a previous import.
    - **by number** — matched by QuickBooks account number to the chart of accounts; the link is saved on confirm.
+   - **by name** (orange) — the QuickBooks account has no number, but exactly one account in the chart carries the identical name (case and spacing aside) and the same type. Check it; the link is saved on confirm.
+   - **AI · high / medium / low** (indigo) — a suggestion from **Suggest matches with AI**: for the rows still unplaced, the AI is shown the QuickBooks account names and types and the chart of accounts (numbers, names, categories — no balances, no company name) and asked which existing account each one is. A consent dialog appears first. Suggestions are never imported on their own: each is a pre-filled dropdown the reviewer confirms or changes, and the button is only offered when AI is configured.
    - **New** — no match; a new account is created, typed from QuickBooks' classification (Asset/Liability/Equity/Revenue/Expense), with a lead sheet suggested automatically. Number, name, category and normal balance can be edited.
    - **Needs review** (red) — the row could not be placed: no account id on the line, its number is already linked to a different QuickBooks account, or two QuickBooks accounts share a number. Pick an account, create a new one, or leave it skipped.
-   - Untick a row to leave it out.
+   - Untick a row to leave it out. **Skip zero-balance accounts** (on by default) unticks every row whose debit and credit are both zero — QuickBooks lists every account that had activity, and a zero line has nothing to import. Turn it off to bring them back.
 4. **Accounts QuickBooks no longer reports** lists accounts that carry a balance here but are missing from the report. QuickBooks omits zero-balance accounts, so leaving the box ticked zeroes them.
 5. If QuickBooks reported debits that do not equal credits, the import requires an explicit acknowledgement.
 6. Press **Confirm import**. New accounts without a tax code are counted in the result — use **Auto-assign Tax Codes** on Tax Mapping afterwards.
 
 What lands:
 - Balances go into the **unadjusted** columns exactly as QuickBooks states them. Anything already posted in QuickBooks — including adjusting entries made there — is part of that balance; adjustments recorded in Vibe Trial Balance stay separate.
-- Names are **never** used to match accounts.
+- Names match only when they are **identical**; anything looser is an AI suggestion the reviewer must confirm, or a hand pick.
 - Amounts are always taken from the report the server stored at preview time; the browser only sends decisions.
 - The raw report is kept with the import record so every balance traces back to what QuickBooks returned.
 

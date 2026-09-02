@@ -362,9 +362,24 @@ All planned phases complete. App is feature-complete.
   admin who started it confirms the binding — so a re-auth for an already-connected client never collides
   with `UNIQUE(client_id)`, and a wrong company can be discarded (revoked) without touching the client.
   Binding a **different realm** to a client nulls every `qbo_account_id` on its COA; Disconnect keeps them.
-  Matching is deterministic — stored qbo id, then QBO `AcctNum` against `account_number`, else
-  create-new typed from `Classification` — and **never by name**; anything ambiguous is an `exception`
-  the reviewer resolves. `/preview` stores the raw report + sha256 in `document_imports`
+  Matching is deterministic — stored qbo id, then QBO `AcctNum` against `account_number`, then (a
+  SECOND pass, so a name can never take a row an id or number claims) an **exact** name match
+  (`normalizeName`: case + whitespace; full name then leaf; only when exactly one unclaimed COA row
+  has it and its `category` does not contradict QBO's Classification; badged **by name** in the
+  preview, `writeQboId`), else create-new typed from `Classification`. The name pass exists because
+  a company that never turned on QBO account numbers has no `AcctNum` at all and every account came
+  back "Create new" with a `QB<Id>` placeholder. **Still no fuzzy matching in code**: the leftovers
+  go to the opt-in AI pass — `POST /import/qbo/suggest-matches` (`lib/qbo/suggest.ts`,
+  `TB_TASK_CLASSES.QBO_MATCH` = `tb_qbo_match`, consent dialog `AI_PII.qboMatch`) sends QBO
+  names + Classification and COA number/name/category only (no client name, no amounts; COA rows
+  are referred to by per-call ordinal, so the reply can only pick an offered candidate), and
+  `sanitizeSuggestions` drops unoffered ordinals, category contradictions and second claims on one
+  account. Suggestions are badged `AI · high/medium/low` in the dialog and are **never written on
+  their own** — the reviewer confirms; any hand edit clears the badge. Batched 40 rows per AI call
+  server-side and 80 per request from the client (`QBO_SUGGEST_CHUNK_SIZE`) for the proxy timeout.
+  The dialog's **Skip zero-balance accounts** (default on) skips debit=credit=0 rows via the same
+  `preSkipDecision` memory as the include checkbox — QBO lists every account with activity, and a
+  zero line has nothing to import. Anything ambiguous is an `exception` the reviewer resolves. `/preview` stores the raw report + sha256 in `document_imports`
   (`import_type:'qbo'`) and **`/confirm` re-derives every cent from that stored report** — decisions only
   route rows (`applyDecisions`, tested), the browser never supplies amounts. QBO omits zero-balance
   accounts, so the preview lists `absentNonzero` and zeroes them by default. Mounted at `/api/v1/import/qbo`
@@ -372,8 +387,8 @@ All planned phases complete. App is feature-complete.
   `GET /import/pdf/imports` filters to csv/pdf so a QBO row never reaches it. `startQboKeepalive()`
   refreshes every active connection weekly (Intuit refresh tokens lapse from disuse) and prunes expired
   states; token refresh takes `pg_advisory_xact_lock(hashtext(realm_id))` because Intuit rotates the
-  refresh token on every refresh. No AI step and no new `TB_TASK_CLASSES` entry — lead sheets come from
-  `suggestLeadSheet()`, tax codes from the existing auto-assign. **`target: 'prior'`** on
+  refresh token on every refresh. The only AI step is the opt-in match suggestion above — lead sheets
+  come from `suggestLeadSheet()`, tax codes from the existing auto-assign. **`target: 'prior'`** on
   `/preview` reuses the whole flow for the PY Tie-Out: dates from `priorYearRange()`
   (`lib/qbo/priorRange.ts` — the adjacent period's own dates when one exists, else slid back a
   year, leap day → 28th), confirm writes `py_comparison_data` (`source:'qbo'`, replacing the

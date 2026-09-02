@@ -7,10 +7,21 @@
  *
  * Order: the row's stored `qbo_account_id` (a previous import bound it), then
  * the QBO account's own AcctNum against `chart_of_accounts.account_number`,
- * else create-new typed from QBO's `Classification`. There is NO name
- * matching anywhere: "Bank Charges" vs "Bank Service Charges" is exactly the
- * kind of guess that lands a balance in the wrong account, and the preview
- * gives the user a dropdown for the handful of rows this cannot place.
+ * then — in a second pass, so a name can never steal a row an id or number
+ * claims — an EXACT name match, else create-new typed from QBO's
+ * `Classification`.
+ *
+ * The name pass exists because a QuickBooks company that never turned on
+ * account numbers has no AcctNum at all, and without it every one of its
+ * accounts came back as "Create new" with a `QB<Id>` placeholder. It is
+ * equality after `normalizeName()` (case, whitespace), tried on the
+ * fully-qualified name and then the leaf, and only when exactly ONE unclaimed
+ * COA row carries that name whose category does not contradict QBO's
+ * Classification. There is still no fuzzy matching: "Bank Charges" vs "Bank
+ * Service Charges" is exactly the kind of guess that lands a balance in the
+ * wrong account. That is what the opt-in AI suggestion pass and the preview's
+ * dropdown are for, and the preview badges a name match "by name" so the
+ * reviewer looks at it.
  */
 import { CATEGORY_NORMAL_BALANCE, type AccountCategory, type NormalBalance } from '../accountTypeInference';
 import type { QboReportRow } from './reportParser';
@@ -20,6 +31,8 @@ export interface CoaRowForMatch {
   account_number: string;
   account_name: string;
   qbo_account_id: string | null;
+  /** When present, a name match is refused if it contradicts QBO's Classification. */
+  category?: string | null;
 }
 
 /** The subset of QBO `Account` the matcher and the confirm need; stored with the import. */
@@ -34,7 +47,7 @@ export interface QboAccountLite {
 }
 
 export type MatchAction = 'match' | 'create_new' | 'exception';
-export type MatchType = 'qbo_id' | 'acct_num';
+export type MatchType = 'qbo_id' | 'acct_num' | 'name';
 export type ExceptionReason = 'NO_ACCOUNT_ID' | 'ACCT_NUM_BOUND_ELSEWHERE' | 'DUPLICATE_ACCT_NUM';
 
 export interface MatchedRow {
@@ -80,6 +93,11 @@ export function classificationToCategory(
   return { category, normalBalance: CATEGORY_NORMAL_BALANCE[category] };
 }
 
+/** Case- and whitespace-insensitive key for the exact-name pass. */
+export function normalizeName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 /** `QB<Id>` — a placeholder number for a QBO account with no AcctNum; the user can retype it in the preview. */
 export function placeholderAccountNumber(qboId: string): string {
   return `QB${qboId}`.replace(/[^a-zA-Z0-9.\-]/g, '').slice(0, 20);
@@ -98,7 +116,7 @@ export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccoun
   const claimedCoaIds = new Set<number>();
   const claimedNewNumbers = new Set<string>();
 
-  return rows.map((row, index): MatchedRow => {
+  const results = rows.map((row, index): MatchedRow => {
     const acct = row.qboAccountId ? qboById.get(row.qboAccountId) ?? null : null;
     const acctNum = acct?.AcctNum?.trim() || null;
     const base: MatchedRow = {
@@ -169,6 +187,49 @@ export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccoun
       newNormalBalance: typed?.normalBalance ?? null,
     };
   });
+
+  // ── Second pass: exact names, for the rows nothing stronger claimed ───────
+  const coaByName = new Map<string, CoaRowForMatch[]>();
+  for (const c of coa) {
+    const key = normalizeName(c.account_name);
+    if (!key) continue;
+    const list = coaByName.get(key);
+    if (list) list.push(c);
+    else coaByName.set(key, [c]);
+  }
+  const uniqueUnclaimed = (name: string, row: MatchedRow): CoaRowForMatch | null => {
+    const list = coaByName.get(normalizeName(name));
+    if (!list || list.length !== 1) return null;
+    const c = list[0];
+    if (claimedCoaIds.has(c.id)) return null;
+    // Already the twin of a different QBO account — leave it alone.
+    if (c.qbo_account_id && c.qbo_account_id !== row.qboAccountId) return null;
+    const typed = classificationToCategory(row.classification);
+    if (typed && c.category && c.category !== typed.category) return null;
+    return c;
+  };
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.action !== 'create_new' || !r.qboAccountId) continue;
+    const leaf = r.qboFullName.includes(':') ? r.qboFullName.slice(r.qboFullName.lastIndexOf(':') + 1) : null;
+    const c = uniqueUnclaimed(r.qboFullName, r) ?? (leaf ? uniqueUnclaimed(leaf, r) : null);
+    if (!c) continue;
+    claimedCoaIds.add(c.id);
+    results[i] = {
+      ...r,
+      action: 'match',
+      matchType: 'name',
+      matchedAccountId: c.id,
+      matchedAccountNumber: c.account_number,
+      matchedAccountName: c.account_name,
+      writeQboId: true,
+      newAccountNumber: null,
+      newAccountName: null,
+      newCategory: null,
+      newNormalBalance: null,
+    };
+  }
+  return results;
 }
 
 export interface TbRowForAbsence {

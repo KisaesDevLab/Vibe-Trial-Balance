@@ -188,7 +188,7 @@ const aiStepLimiter = rateLimit({
 
 // Anything under /import/ that isn't the upload+analyze pass. Matched on the
 // path tail so it holds for every source (csv, pdf, bank-statement, scanned).
-const IMPORT_FOLLOW_UP = /\/(confirm|suggest-numbers|chat|categorize|imports)$/;
+const IMPORT_FOLLOW_UP = /\/(confirm|suggest-numbers|suggest-matches|chat|categorize|imports)$/;
 
 app.use('/api/v1/import/', (req, res, next) => {
   // GETs are reads (listing imports, cached verification results) — never an

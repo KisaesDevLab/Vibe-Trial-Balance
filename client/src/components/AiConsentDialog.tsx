@@ -79,6 +79,10 @@ export const AI_PII = {
     { label: 'Entity & activity type', detail: 'Business entity type and activity type (e.g., 1120S / rental)' },
     { label: 'Available tax codes', detail: 'The list of tax codes and descriptions for the entity type' },
   ],
+  qboMatch: [
+    { label: 'QuickBooks account names', detail: 'The names and account types (asset, expense…) of the QuickBooks accounts that could not be matched — no balances, no company name' },
+    { label: 'Chart of accounts', detail: 'Account numbers, names and categories of the accounts not yet linked to QuickBooks' },
+  ],
   csvImport: [
     { label: 'Uploaded file content', detail: 'The contents of the CSV/Excel file (first 30 rows sent for column analysis)' },
     { label: 'Chart of accounts', detail: 'Account numbers, names, and import aliases for matching' },

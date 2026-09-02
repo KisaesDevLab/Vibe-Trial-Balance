@@ -312,7 +312,7 @@ test('registerTbTaskClasses(): declares one class per AI step, router mode only'
       [
         'tb_account_numbering', 'tb_bank_classify', 'tb_bank_statement_extract',
         'tb_csv_analyze', 'tb_diagnostics', 'tb_import_chat', 'tb_pdf_extract',
-        'tb_pdf_verify', 'tb_research_summary', 'tb_scanned_sheet_classify',
+        'tb_pdf_verify', 'tb_qbo_match', 'tb_research_summary', 'tb_scanned_sheet_classify',
         'tb_scanned_sheet_extract', 'tb_support_chat', 'tb_tax_code_assign',
       ],
     );

@@ -131,6 +131,8 @@ export const TB_TASK_CLASSES = {
   IMPORT_CHAT: 'tb_import_chat',
   /** Account-number and category suggestion for new accounts, CSV and PDF alike */
   ACCOUNT_NUMBERING: 'tb_account_numbering',
+  /** QuickBooks import — which existing account a QBO account with no number IS (names + categories only) */
+  QBO_MATCH: 'tb_qbo_match',
 
   // ── Bookkeeping ────────────────────────────────────────────────────────────
   /** Bank-statement PDF transaction extraction (full statements) */
@@ -369,6 +371,7 @@ export function registerTbTaskClasses(opts?: { fetch?: typeof fetch; maxAttempts
           { key: TB_TASK_CLASSES.PDF_VERIFY, description: 'Trial-balance PDF import - line-by-line verification against the source', requires: { json_schema: true }, defaultMaxTokens: 4096 },
           { key: TB_TASK_CLASSES.IMPORT_CHAT, description: 'Import review chat (CSV and PDF dialogs)', requires: {}, defaultMaxTokens: 2048 },
           { key: TB_TASK_CLASSES.ACCOUNT_NUMBERING, description: 'Account-number and category suggestion for new accounts', requires: { json_schema: true }, defaultMaxTokens: 8192 },
+          { key: TB_TASK_CLASSES.QBO_MATCH, description: 'QuickBooks import - match un-numbered QBO accounts to the chart of accounts by name', requires: { json_schema: true }, defaultMaxTokens: 4096 },
           { key: TB_TASK_CLASSES.BANK_STATEMENT_EXTRACT, description: 'Bank-statement PDF transaction extraction (full statements)', requires: { json_schema: true, vision: true }, defaultMaxTokens: 32768 },
           { key: TB_TASK_CLASSES.BANK_CLASSIFY, description: 'Bank-transaction categorization against the COA and rules', requires: { json_schema: true }, defaultMaxTokens: 8192 },
           { key: TB_TASK_CLASSES.SCANNED_SHEET_EXTRACT, description: 'Scanned handwritten sheets - per-page transcription', requires: { json_schema: true, vision: true }, defaultMaxTokens: 32768 },

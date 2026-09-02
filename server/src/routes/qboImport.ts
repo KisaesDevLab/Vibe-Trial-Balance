@@ -43,6 +43,11 @@ import {
 } from '../lib/qbo/reportParser';
 import { findAbsentNonzeroAccounts, matchRows, type CoaRowForMatch, type QboAccountLite } from '../lib/qbo/matcher';
 import { applyDecisions, DecisionError } from '../lib/qbo/decisions';
+import { buildSuggestPrompt, sanitizeSuggestions, QBO_SUGGEST_BATCH_SIZE, type MatchSuggestion, type SuggestCandidate } from '../lib/qbo/suggest';
+import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
+import { getLLMProvider } from '../lib/aiClient';
+import { TB_TASK_CLASSES } from '../lib/routerProvider';
+import { extractJsonArray } from '../lib/aiJsonExtract';
 import { priorYearRange, type CandidatePeriod, type PriorRange } from '../lib/qbo/priorRange';
 
 type ImportTarget = 'current' | 'prior';
@@ -104,7 +109,7 @@ function respondQboError(res: Response, err: unknown): boolean {
 async function loadCoaForMatch(clientId: number): Promise<CoaRowForMatch[]> {
   return (await db('chart_of_accounts')
     .where({ client_id: clientId, is_active: true })
-    .select('id', 'account_number', 'account_name', 'qbo_account_id')) as CoaRowForMatch[];
+    .select('id', 'account_number', 'account_name', 'qbo_account_id', 'category')) as CoaRowForMatch[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -307,6 +312,88 @@ const confirmSchema = z.object({
   decisions: z.array(decisionSchema).max(5000),
   zeroAbsent: z.boolean().default(true),
   acknowledgeUnbalanced: z.boolean().optional(),
+});
+
+// ── POST /suggest-matches ─────────────────────────────────────────────────────
+// The opt-in AI pass. Re-derives the unresolved rows from the stored report
+// (never from the browser), asks the model which existing account each one
+// is, and returns SUGGESTIONS — the preview badges them and the reviewer
+// confirms. Nothing is written here. `rowKeys` lets the client page through a
+// long report so no one request runs longer than the router's proxy allows.
+
+const suggestSchema = z.object({
+  importId: z.number().int().positive(),
+  rowKeys: z.array(z.string().min(1).max(20)).max(500).optional(),
+});
+
+qboImportRouter.post('/suggest-matches', async (req: AuthRequest, res: Response): Promise<void> => {
+  const parsed = suggestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    return;
+  }
+  const { importId, rowKeys } = parsed.data;
+  try {
+    const importRow = await db('document_imports').where({ id: importId, import_type: 'qbo' }).first();
+    if (!importRow) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Import not found.' } });
+      return;
+    }
+    if (importRow.status !== 'pending') {
+      res.status(409).json({ data: null, error: { code: 'IMPORT_ALREADY_CONFIRMED', message: 'This import was already confirmed. Run a new preview.' } });
+      return;
+    }
+    const clientId = importRow.client_id as number;
+    const periodId = importRow.period_id as number;
+    const stored = (typeof importRow.ai_extraction === 'string' ? JSON.parse(importRow.ai_extraction) : importRow.ai_extraction) as StoredQboImport;
+
+    const coa = await loadCoaForMatch(clientId);
+    const matched = matchRows(flattenTrialBalanceRows(stored.raw), coa, stored.accounts ?? []);
+    const wanted = rowKeys ? new Set(rowKeys) : null;
+    const unresolved = matched.filter(
+      (r) => (wanted ? wanted.has(r.rowKey) : true) && r.qboAccountId !== null && r.action !== 'match',
+    );
+    // Candidates: accounts nothing on this report already claims and no other QBO account is bound to.
+    const claimed = new Set(matched.filter((r) => r.matchedAccountId !== null).map((r) => r.matchedAccountId!));
+    const candidates: SuggestCandidate[] = coa
+      .filter((c) => !claimed.has(c.id) && !c.qbo_account_id)
+      .map((c) => ({ id: c.id, account_number: c.account_number, account_name: c.account_name, category: c.category ?? null }));
+
+    if (unresolved.length === 0 || candidates.length === 0) {
+      res.json({ data: { suggestions: [] as MatchSuggestion[], rowsConsidered: unresolved.length, candidates: candidates.length }, error: null });
+      return;
+    }
+
+    const { provider, fastModel } = await getLLMProvider();
+    const suggestions: MatchSuggestion[] = [];
+    // A candidate suggested in one batch is not offered to the next, so two
+    // batches cannot hand the same account to two QBO rows.
+    const taken = new Set<number>();
+    for (let i = 0; i < unresolved.length; i += QBO_SUGGEST_BATCH_SIZE) {
+      const batch = unresolved.slice(i, i + QBO_SUGGEST_BATCH_SIZE);
+      const offered = candidates.filter((c) => !taken.has(c.id));
+      if (offered.length === 0) break;
+      const { result, logId } = await aiComplete(
+        provider,
+        { model: fastModel, taskClass: TB_TASK_CLASSES.QBO_MATCH, maxTokens: 4096, messages: [{ role: 'user', content: buildSuggestPrompt(batch, offered) }] },
+        { endpoint: 'qbo/suggest-matches', userId: req.user?.userId, userRole: req.user?.role, clientId, periodId },
+      );
+      const arr = extractJsonArray(result.text);
+      if (!arr) {
+        markAiUsageParseError(logId, `Invalid JSON (finish=${result.stopReason ?? 'unknown'}). text[0..500]=${JSON.stringify(result.text.slice(0, 500))}`);
+        continue;
+      }
+      for (const sug of sanitizeSuggestions(arr, batch, offered)) {
+        taken.add(sug.accountId);
+        suggestions.push(sug);
+      }
+    }
+
+    res.json({ data: { suggestions, rowsConsidered: unresolved.length, candidates: candidates.length }, error: null });
+  } catch (err) {
+    if (respondQboError(res, err)) return;
+    sendServerError(res, err, 'qbo/suggest-matches');
+  }
 });
 
 qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promise<void> => {

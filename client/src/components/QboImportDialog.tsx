@@ -13,14 +13,24 @@
  * `target="prior"` reuses the whole flow for the PY Tie-Out: the server pulls
  * the prior year's report and the confirm lands in the uploaded-PY column
  * instead of the unadjusted one. Only the copy and the zero-absent step differ.
+ *
+ * Rows the server placed by exact name are badged "by name" so the reviewer
+ * looks at them; the opt-in "Suggest matches with AI" button (consent first,
+ * names and categories only) fills the rest as badged SUGGESTIONS the
+ * reviewer can change — nothing is written on the model's say-so. Zero-balance
+ * rows start skipped: QuickBooks lists every account with activity, and a
+ * zero line has nothing to import.
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import {
   previewQboImport,
   confirmQboImport,
+  suggestQboMatches,
+  QBO_SUGGEST_CHUNK_SIZE,
+  type QboSuggestConfidence,
   type QboAccountingMethod,
   type QboPreviewResult,
   type QboPreviewRow,
@@ -30,6 +40,8 @@ import {
   type QboImportTarget,
 } from '../api/qbo';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
+import { AiConsentDialog, AI_PII } from './AiConsentDialog';
+import { useFeatures } from '../hooks/useFeatures';
 import { pushToast } from '../store/uiStore';
 
 interface QboImportDialogProps {
@@ -48,7 +60,11 @@ interface EditableRow extends QboPreviewRow {
   decision: QboDecisionAction;
   /** Remembered when a row is unticked so re-ticking restores it. */
   preSkipDecision: Exclude<QboDecisionAction, 'skip'>;
+  /** Set when the current match came from the AI pass; cleared the moment the reviewer changes it. */
+  aiConfidence: QboSuggestConfidence | null;
 }
+
+const isZero = (r: QboPreviewRow): boolean => r.debitCents === 0 && r.creditCents === 0;
 
 const CATEGORIES: Array<Account['category']> = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'];
 
@@ -75,18 +91,28 @@ function initialDecision(r: QboPreviewRow): Exclude<QboDecisionAction, 'skip'> {
   return r.action === 'create_new' ? 'create_new' : 'match';
 }
 
-function toEditable(r: QboPreviewRow): EditableRow {
+function toEditable(r: QboPreviewRow, skipZero: boolean): EditableRow {
   const pre = initialDecision(r);
   // An exception has nowhere to go until the reviewer says so — it starts skipped.
-  return { ...r, decision: r.action === 'exception' ? 'skip' : pre, preSkipDecision: pre };
+  const skip = r.action === 'exception' || (skipZero && isZero(r));
+  return { ...r, decision: skip ? 'skip' : pre, preSkipDecision: pre, aiConfidence: null };
 }
 
 function rowBorderClass(r: EditableRow): string {
   if (r.decision === 'skip') return r.action === 'exception' ? 'border-l-4 border-l-red-400 opacity-70' : 'border-l-4 border-l-gray-300 opacity-50';
   if (r.decision === 'create_new') return 'border-l-4 border-l-blue-400';
+  if (r.aiConfidence) return 'border-l-4 border-l-indigo-400';
   if (r.action === 'exception') return 'border-l-4 border-l-red-400';
-  return r.matchType === 'qbo_id' ? 'border-l-4 border-l-green-400' : 'border-l-4 border-l-yellow-400';
+  if (r.matchType === 'qbo_id') return 'border-l-4 border-l-green-400';
+  if (r.matchType === 'name') return 'border-l-4 border-l-orange-400';
+  return 'border-l-4 border-l-yellow-400';
 }
+
+const CONFIDENCE_CLS: Record<QboSuggestConfidence, string> = {
+  high: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300',
+  medium: 'bg-indigo-50 dark:bg-indigo-900/25 text-indigo-600 dark:text-indigo-400 border border-indigo-300 dark:border-indigo-700',
+  low: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-dashed border-indigo-300 dark:border-indigo-700',
+};
 
 function actionBadge(r: EditableRow): React.ReactNode {
   if (r.decision === 'skip') {
@@ -103,6 +129,16 @@ function actionBadge(r: EditableRow): React.ReactNode {
   if (r.action === 'match' && r.matchType === 'acct_num') {
     return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400" title="Matched by account number — the link is saved on confirm">by number</span>;
   }
+  if (r.aiConfidence) {
+    return (
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${CONFIDENCE_CLS[r.aiConfidence]}`} title="Suggested by AI from the account names — check it; the link is saved on confirm">
+        AI · {r.aiConfidence}
+      </span>
+    );
+  }
+  if (r.action === 'match' && r.matchType === 'name') {
+    return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-400" title="The account names are identical — check it; the link is saved on confirm">by name</span>;
+  }
   return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400" title="Account chosen by hand">manual</span>;
 }
 
@@ -118,10 +154,17 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
 
   const [preview, setPreview] = useState<QboPreviewResult | null>(null);
   const [rows, setRows] = useState<EditableRow[]>([]);
+  // The AI pass edits rows between awaits; the ref sees the reviewer's edits made meanwhile.
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const [zeroAbsent, setZeroAbsent] = useState(true);
   const [acknowledgeUnbalanced, setAcknowledgeUnbalanced] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [skipZero, setSkipZero] = useState(true);
+  const features = useFeatures();
+  const [showAiConsent, setShowAiConsent] = useState(false);
+  const [suggesting, setSuggesting] = useState<{ done: number; total: number } | null>(null);
 
   const { data: accounts = [] } = useQuery<Account[]>({
     queryKey: ['accounts', clientId],
@@ -145,7 +188,7 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
       });
       if (res.error || !res.data) throw new Error(res.error?.message ?? 'QuickBooks preview failed');
       setPreview(res.data);
-      setRows(res.data.rows.map(toEditable));
+      setRows(res.data.rows.map((r) => toEditable(r, skipZero)));
       setAcknowledgeUnbalanced(false);
       setConfirmError(null);
       setStage('preview');
@@ -197,7 +240,79 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
       matchedAccountId: acct?.id ?? null,
       matchedAccountNumber: acct?.account_number ?? null,
       matchedAccountName: acct?.account_name ?? null,
+      aiConfidence: null,
     });
+  };
+
+  /** Skip (or restore) every zero-balance row; exceptions stay skipped until placed by hand. */
+  const toggleSkipZero = (on: boolean) => {
+    setSkipZero(on);
+    setRows((prev) => prev.map((r) => {
+      if (!isZero(r) || r.action === 'exception') return r;
+      if (on) return withDecision(r, 'skip');
+      if (r.decision !== 'skip') return r;
+      const restored = r.preSkipDecision === 'match' && !r.matchedAccountId ? 'create_new' : r.preSkipDecision;
+      return withDecision(r, restored);
+    }));
+  };
+
+  // ── AI suggestions ─────────────────────────────────────────────────────────
+
+  /** Rows the AI pass may fill: unplaced, carrying a QuickBooks id, and not already sent somewhere by the reviewer. */
+  const aiEligible = (r: EditableRow): boolean =>
+    r.qboAccountId !== null &&
+    r.action !== 'match' &&
+    (r.decision === 'create_new' || (r.decision === 'skip' && r.action === 'exception'));
+
+  const aiEligibleCount = rows.filter(aiEligible).length;
+
+  const runSuggestions = async () => {
+    if (!preview) return;
+    const keys = rows.filter(aiEligible).map((r) => r.rowKey);
+    if (keys.length === 0) return;
+    setSuggesting({ done: 0, total: keys.length });
+    const counts: Record<QboSuggestConfidence, number> = { high: 0, medium: 0, low: 0 };
+    try {
+      for (let i = 0; i < keys.length; i += QBO_SUGGEST_CHUNK_SIZE) {
+        const chunk = keys.slice(i, i + QBO_SUGGEST_CHUNK_SIZE);
+        const res = await suggestQboMatches({ importId: preview.importId, rowKeys: chunk });
+        if (res.error || !res.data) throw new Error(res.error?.message ?? 'AI suggestions failed');
+        const byKey = new Map(res.data.suggestions.map((sg) => [sg.rowKey, sg]));
+        // Applied against the rows as they are NOW: a row the reviewer placed
+        // while the call ran is theirs, and an account taken by hand meanwhile is not reused.
+        const current = rowsRef.current;
+        const used = new Set(current.filter((r) => r.decision === 'match' && r.matchedAccountId).map((r) => r.matchedAccountId!));
+        const next = current.map((r): EditableRow => {
+          const sg = byKey.get(r.rowKey);
+          if (!sg || !aiEligible(r) || used.has(sg.accountId)) return r;
+          used.add(sg.accountId);
+          counts[sg.confidence]++;
+          return {
+            ...r,
+            decision: 'match',
+            preSkipDecision: 'match',
+            matchedAccountId: sg.accountId,
+            matchedAccountNumber: sg.accountNumber,
+            matchedAccountName: sg.accountName,
+            aiConfidence: sg.confidence,
+          };
+        });
+        rowsRef.current = next;
+        setRows(next);
+        setSuggesting({ done: Math.min(i + chunk.length, keys.length), total: keys.length });
+      }
+      const total = counts.high + counts.medium + counts.low;
+      pushToast(
+        total === 0
+          ? 'AI found no existing account for the remaining rows'
+          : `AI suggested ${total} match${total === 1 ? '' : 'es'} (${counts.high} high · ${counts.medium} medium · ${counts.low} low) — review each before importing`,
+        'success',
+      );
+    } catch (e) {
+      pushToast((e as Error).message, 'error');
+    } finally {
+      setSuggesting(null);
+    }
   };
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -222,6 +337,9 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
     }
     return { debit, credit, included, created, unresolved, missingNumber, skipped: rows.length - included };
   }, [rows]);
+
+  const zeroCount = useMemo(() => rows.filter(isZero).length, [rows]);
+  const aiCount = useMemo(() => rows.filter((r) => r.aiConfidence && r.decision === 'match').length, [rows]);
 
   const exceptionCount = rows.filter((r) => r.action === 'exception').length;
   const reportUnbalanced = preview?.warnings.includes('OUT_OF_BALANCE') ?? false;
@@ -371,6 +489,32 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
                   {exceptionCount} row{exceptionCount === 1 ? '' : 's'} could not be placed automatically. They are left out unless you pick an account or create a new one.
                 </div>
               )}
+
+              <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
+                <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300">
+                  <input type="checkbox" checked={skipZero} onChange={(e) => toggleSkipZero(e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600" />
+                  Skip zero-balance accounts{zeroCount > 0 && <span className="text-gray-400">({zeroCount})</span>}
+                </label>
+                <div className="flex items-center gap-3">
+                  {aiCount > 0 && <span className="text-indigo-700 dark:text-indigo-300">{aiCount} AI suggestion{aiCount === 1 ? '' : 's'} to review</span>}
+                  {features?.ai && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAiConsent(true)}
+                      disabled={!!suggesting || aiEligibleCount === 0}
+                      title={aiEligibleCount === 0 ? 'Every included row already has a place' : `Ask the AI which existing account each of the ${aiEligibleCount} unplaced rows is — names and categories only`}
+                      className="px-3 py-1 border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {suggesting ? (
+                        <span className="flex items-center gap-1.5">
+                          <span className="inline-block w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                          Suggesting… {suggesting.done}/{suggesting.total}
+                        </span>
+                      ) : `Suggest matches with AI (${aiEligibleCount})`}
+                    </button>
+                  )}
+                </div>
+              </div>
 
               <div className="border dark:border-gray-700 rounded overflow-auto max-h-[52vh]">
                 <table className="w-full text-sm">
@@ -555,6 +699,15 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
           </>
         )}
       </div>
+
+      {showAiConsent && (
+        <AiConsentDialog
+          feature="QuickBooks account matching"
+          piiItems={AI_PII.qboMatch}
+          onCancel={() => setShowAiConsent(false)}
+          onConfirm={() => { setShowAiConsent(false); void runSuggestions(); }}
+        />
+      )}
     </div>
   );
 }

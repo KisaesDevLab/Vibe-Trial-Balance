@@ -3,7 +3,7 @@
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
 /**
- * QuickBooks → COA matching. Deterministic, never by name.
+ * QuickBooks → COA matching. Deterministic: id, number, then EXACT name only.
  * Run: npx tsx --test src/lib/__tests__/qboMatcher.test.ts
  */
 
@@ -96,10 +96,64 @@ test('an id-less row is an exception even when a COA row has the identical name'
   assert.equal(m.matchedAccountId, null);
 });
 
-test('name equality alone never matches', () => {
+test('exact name matches when nothing stronger does, badged name, id stamped on confirm', () => {
   const [m] = matchRows([row('500', 'Sales', 0, 10)], coa, [acct('500', 'Sales', null, 'Revenue')]);
+  assert.equal(m.action, 'match');
+  assert.equal(m.matchType, 'name');
+  assert.equal(m.matchedAccountId, 4);
+  assert.equal(m.writeQboId, true);
+  assert.equal(m.newAccountNumber, null);
+});
+
+test('name match ignores case and runs of whitespace', () => {
+  const [m] = matchRows([row('500', 'accounts  PAYABLE', 0, 10)], coa, [acct('500', 'accounts  PAYABLE', null, 'Liability')]);
+  assert.equal(m.matchType, 'name');
+  assert.equal(m.matchedAccountId, 2);
+});
+
+test('sub-account leaf name matches when the full Parent:Child name does not', () => {
+  const [m] = matchRows([row('500', 'Sales', 0, 10)], coa, [acct('500', 'Sales', null, 'Revenue', { FullyQualifiedName: 'Income:Sales' })]);
+  assert.equal(m.matchType, 'name');
+  assert.equal(m.matchedAccountId, 4);
+  assert.equal(m.qboFullName, 'Income:Sales');
+});
+
+test('name match refuses a category contradiction', () => {
+  const withCat = coa.map((c) => ({ ...c, category: c.id === 4 ? 'revenue' : 'assets' }));
+  const [m] = matchRows([row('500', 'Sales', 10)], withCat, [acct('500', 'Sales', null, 'Expense')]);
   assert.equal(m.action, 'create_new');
   assert.equal(m.matchedAccountId, null);
+});
+
+test('name match is never ambiguous: two COA rows with one name match neither', () => {
+  const twins = [...coa, { id: 5, account_number: '40200', account_name: 'sales', qbo_account_id: null }];
+  const [m] = matchRows([row('500', 'Sales', 0, 10)], twins, [acct('500', 'Sales', null, 'Revenue')]);
+  assert.equal(m.action, 'create_new');
+});
+
+test('name match skips a COA row bound to a different QBO account', () => {
+  // COA 3 "Utilities" is bound to QBO 99; QBO 77 with the same name gets nothing.
+  const [m] = matchRows([row('77', 'Utilities', 10)], coa, [acct('77', 'Utilities', null, 'Expense')]);
+  assert.equal(m.action, 'create_new');
+  assert.equal(m.matchedAccountId, null);
+});
+
+test('a name never steals a row that an AcctNum claims later in the report', () => {
+  const rows = [row('500', 'Accounts Payable', 0, 10), row('501', 'Trade Payables', 0, 20)];
+  const accts = [acct('500', 'Accounts Payable', null, 'Liability'), acct('501', 'Trade Payables', '20100', 'Liability')];
+  const [byName, byNum] = matchRows(rows, coa, accts);
+  assert.equal(byNum.matchType, 'acct_num');
+  assert.equal(byNum.matchedAccountId, 2);
+  assert.equal(byName.action, 'create_new');
+});
+
+test('two QBO accounts with one name: the first takes the COA row, the second is created', () => {
+  const rows = [row('500', 'Sales', 0, 10), row('501', 'Sales', 0, 20)];
+  const accts = [acct('500', 'Sales', null, 'Revenue', { FullyQualifiedName: 'Retail:Sales' }), acct('501', 'Sales', null, 'Revenue', { FullyQualifiedName: 'Online:Sales' })];
+  const [a, b] = matchRows(rows, coa, accts);
+  assert.equal(a.matchType, 'name');
+  assert.equal(b.action, 'create_new');
+  assert.equal(b.exceptionReason, null);
 });
 
 test('classificationToCategory', () => {

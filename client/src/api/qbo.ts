@@ -152,7 +152,7 @@ export interface QboPreviewRow {
   debitCents: number;
   creditCents: number;
   action: QboMatchAction;
-  matchType: 'qbo_id' | 'acct_num' | null;
+  matchType: 'qbo_id' | 'acct_num' | 'name' | null;
   matchedAccountId: number | null;
   matchedAccountNumber: string | null;
   matchedAccountName: string | null;
@@ -218,6 +218,30 @@ export function previewQboImport(body: {
   target?: QboImportTarget;
 }): Promise<ApiResult<QboPreviewResult>> {
   return apiFetch<QboPreviewResult>('/import/qbo/preview', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export type QboSuggestConfidence = 'high' | 'medium' | 'low';
+
+export interface QboMatchSuggestion {
+  rowKey: string;
+  accountId: number;
+  accountNumber: string;
+  accountName: string;
+  confidence: QboSuggestConfidence;
+}
+
+export interface QboSuggestResult {
+  suggestions: QboMatchSuggestion[];
+  rowsConsidered: number;
+  candidates: number;
+}
+
+/** Rows per request; the server runs one AI call per 40 within it. */
+export const QBO_SUGGEST_CHUNK_SIZE = 80;
+
+/** Opt-in AI pass over unresolved rows. Returns suggestions only — nothing is written. */
+export function suggestQboMatches(body: { importId: number; rowKeys?: string[] }): Promise<ApiResult<QboSuggestResult>> {
+  return apiFetch<QboSuggestResult>('/import/qbo/suggest-matches', { method: 'POST', body: JSON.stringify(body) });
 }
 
 export function confirmQboImport(body: {
