@@ -114,6 +114,7 @@ const ADMIN_GROUP: NavGroup = {
     { to: '/coa-templates',      label: 'COA Templates' },
     { to: '/system-tickmarks',   label: 'Default Tickmarks' },
     { to: '/storage',            label: 'Document Storage' },
+    { to: '/quickbooks-settings', label: 'QuickBooks API' },
     { to: '/backup',             label: 'Backup & Restore' },
     { to: '/audit-log',          label: 'Audit Log' },
     { to: '/ai-usage-log',       label: 'AI Usage Log' },

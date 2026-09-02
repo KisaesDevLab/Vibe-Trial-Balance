@@ -34,6 +34,7 @@ import {
   appBaseUrl,
   invalidateQboCache,
   loadQboConfig,
+  intuitAppUrls,
   publicBaseFromRedirectUri,
   redirectUriProblem,
 } from '../lib/qbo/settings';
@@ -215,6 +216,7 @@ qboIntegrationRouter.get('/setup-guide.pdf', async (_req: AuthRequest, res: Resp
         defaultRedirectUri: cfg.defaultRedirectUri,
         environment: cfg.environment,
         appBaseUrl: appBaseUrl(),
+        intuitUrls: intuitAppUrls(publicBaseFromRedirectUri(cfg.redirectUri)),
         configured: cfg.configured,
         envOverride: cfg.envOverride,
       }),
@@ -244,6 +246,7 @@ async function settingsPayload(): Promise<Record<string, unknown>> {
     redirectUri: cfg.redirectUri,
     defaultRedirectUri: cfg.defaultRedirectUri,
     appBaseUrl: appBaseUrl(),
+    intuitUrls: intuitAppUrls(publicBaseFromRedirectUri(cfg.redirectUri)),
   };
 }
 

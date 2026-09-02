@@ -12,6 +12,15 @@ export const QBO_SECRET_KEEP = '__keep__';
 
 export const QBO_SETUP_GUIDE_URL = `${API_BASE_URL}/integrations/qbo/setup-guide.pdf`;
 
+export interface QboIntuitUrls {
+  hostDomain: string;
+  launchUrl: string;
+  disconnectUrl: string;
+  connectUrl: string;
+  privacyPolicyUrl: string;
+  eulaUrl: string;
+}
+
 export interface QboSettings {
   configured: boolean;
   envOverride: boolean;
@@ -25,6 +34,8 @@ export interface QboSettings {
   redirectUri: string;
   defaultRedirectUri: string;
   appBaseUrl: string;
+  /** Every URL Intuit's production checklist asks for, derived from the effective redirect URI. */
+  intuitUrls: QboIntuitUrls;
 }
 
 export interface QboSettingsPatch {

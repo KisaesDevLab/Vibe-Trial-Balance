@@ -33,6 +33,7 @@ import { TickmarksPage } from './pages/TickmarksPage';
 import { LeadSheetsPage } from './pages/LeadSheetsPage';
 import { StoragePage } from './pages/StoragePage';
 import { QuickBooksPage } from './pages/QuickBooksPage';
+import { QuickBooksSettingsPage } from './pages/QuickBooksSettingsPage';
 import { TaxCodesPage } from './pages/TaxCodesPage';
 import { TaxMappingPage } from './pages/TaxMappingPage';
 import { TaxBasisPlPage } from './pages/TaxBasisPlPage';
@@ -51,6 +52,7 @@ import { UnitsPage } from './pages/UnitsPage';
 import { PyTieOutPage } from './pages/PyTieOutPage';
 import { TBPopoutPage } from './pages/TBPopoutPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { PrivacyPolicyPage, TermsPage } from './pages/LegalPage';
 import { useAuthStore } from './store/uiStore';
 import { ROUTER_BASENAME } from './lib/baseConfig';
 
@@ -70,6 +72,9 @@ export default function App() {
         {/* Invite links land here; the page reads the token's purpose and
             swaps in invite copy. Same verify/confirm endpoints either way. */}
         <Route path="/invite/accept" element={<PasswordResetConfirmPage />} />
+        {/* Public legal pages: Intuit's production checklist wants these reachable without a login. */}
+        <Route path="/privacy" element={<PrivacyPolicyPage />} />
+        <Route path="/terms" element={<TermsPage />} />
         <Route
           path="/"
           element={
@@ -105,6 +110,7 @@ export default function App() {
           <Route path="lead-sheets" element={<LeadSheetsPage />} />
           <Route path="storage" element={<StoragePage />} />
           <Route path="quickbooks" element={<QuickBooksPage />} />
+            <Route path="quickbooks-settings" element={<QuickBooksSettingsPage />} />
           <Route path="tax-mapping" element={<TaxMappingPage />} />
           <Route path="tax-basis-pl" element={<TaxBasisPlPage />} />
           <Route path="tax-return-order" element={<TaxReturnOrderPage />} />

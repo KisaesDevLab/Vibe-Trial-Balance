@@ -1157,3 +1157,60 @@ settingsRouter.post('/mail/test', async (req: AuthRequest, res: Response): Promi
     res.status(500).json({ data: null, error: { code: 'MAIL_TEST_FAILED', message } });
   }
 });
+
+// ── Firm identity ──────────────────────────────────────────────────────────
+// `firm_name` / `firm_address` were read by PdfTemplateService long before
+// there was any way to set them from the UI. They print in every PDF header
+// and — with `firm_email` — identify the operator on the public /privacy and
+// /terms pages Intuit's production checklist points at.
+export const FIRM_SETTING_KEYS = ['firm_name', 'firm_address', 'firm_email'] as const;
+
+export async function loadFirmIdentity(): Promise<{ name: string; address: string; email: string }> {
+  const rows = await db('settings').whereIn('key', [...FIRM_SETTING_KEYS]).select('key', 'value');
+  const map = Object.fromEntries(rows.map((r: { key: string; value: string }) => [r.key, r.value ?? '']));
+  return { name: map.firm_name ?? '', address: map.firm_address ?? '', email: map.firm_email ?? '' };
+}
+
+// GET /api/v1/settings/firm (admin only)
+settingsRouter.get('/firm', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  try {
+    res.json({ data: await loadFirmIdentity(), error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'settings');
+  }
+});
+
+const firmPutSchema = z.object({
+  name: z.string().trim().max(200),
+  address: z.string().trim().max(1000),
+  email: z.string().trim().max(254).refine((v) => v === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), 'Enter a valid email address'),
+});
+
+// PUT /api/v1/settings/firm (admin only)
+settingsRouter.put('/firm', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  const parsed = firmPutSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.issues[0]?.message ?? 'Invalid input' } });
+    return;
+  }
+  try {
+    const d = parsed.data;
+    await Promise.all([
+      upsertSetting('firm_name', d.name),
+      upsertSetting('firm_address', d.address),
+      upsertSetting('firm_email', d.email),
+    ]);
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'setting', entityId: null, action: 'update', description: 'Updated firm identity' });
+    res.json({ data: await loadFirmIdentity(), error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'settings');
+  }
+});

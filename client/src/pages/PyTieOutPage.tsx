@@ -13,7 +13,7 @@ import { ManualEntryGrid } from '../components/py-tieout/ManualEntryGrid';
 import { PyImportDialog } from '../components/py-tieout/PyImportDialog';
 import { PyPdfImportDialog } from '../components/py-tieout/PyPdfImportDialog';
 import { QboImportDialog } from '../components/QboImportDialog';
-import { listQboConnections } from '../api/qbo';
+import { useQboConnections, findQboConnection } from '../hooks/useQboConnections';
 import { useFeatures } from '../hooks/useFeatures';
 
 function fmt(cents: number): string {
@@ -36,12 +36,8 @@ export function PyTieOutPage() {
 
   // Same gate as the TB page's Import from QuickBooks button.
   const features = useFeatures();
-  const { data: qboConnections } = useQuery({
-    queryKey: ['qbo-connections'],
-    queryFn: async () => { const r = await listQboConnections(); return r.data ?? []; },
-    enabled: features?.quickbooks === true,
-  });
-  const qboConnection = qboConnections?.find((c) => c.clientId === selectedClientId) ?? null;
+  const { data: qboConnections } = useQboConnections(features?.quickbooks === true);
+  const qboConnection = findQboConnection(qboConnections, selectedClientId);
   const qboActive = qboConnection?.status === 'active';
   const qboTitle = !qboActive
     ? (qboConnection?.status === 'needs_reauth'

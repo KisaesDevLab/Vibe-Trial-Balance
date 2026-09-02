@@ -339,8 +339,19 @@ All planned phases complete. App is feature-complete.
   Lead Sheets PDF print resolved notes greyed rather than dropping them. The PDF renders them between
   the schedule's total row and the sign-off block, so a reviewer signs with the open queries in view.
 - **QuickBooks Online connector** (`qbo_connections`, `qbo_oauth_states`, `chart_of_accounts.qbo_account_id`;
-  `server/src/lib/qbo/*`, routes `qboIntegration.ts` + `qboImport.ts`, page `QuickBooksPage.tsx` under
-  Setup, `QboImportDialog.tsx` on the TB page). Read-only, **one company per client** (`UNIQUE(client_id)`
+  `server/src/lib/qbo/*`, routes `qboIntegration.ts` + `qboImport.ts`; `QuickBooksPage.tsx` (Setup, per-client connections) +
+  `QuickBooksSettingsPage.tsx` (Admin group, the Intuit credentials — admin-gated in the page AND on every
+  `/settings*` route, so a non-admin never even issues the GET),
+  **`['qbo-connections']` is fetched ONLY through `hooks/useQboConnections.ts`** — the key is shared by the
+  QuickBooks, TB and PY Tie-Out pages and TanStack caches whichever shape the first page stored; when one
+  stored `{rows, meta}` and another a bare array, navigating between them crashed with "x.find is not a
+  function". **Intuit's production checklist** (EULA + privacy URLs, host domain, launch/disconnect/
+  connect URLs, hosting IP) is covered by `intuitAppUrls()` in `lib/qbo/settings.ts` (shown with Copy
+  buttons on the admin page and printed in the setup guide), by the PUBLIC, unauthenticated SPA routes
+  `/privacy` and `/terms` (`pages/LegalPage.tsx`, operator named from `GET /api/v1/public/legal`), and by
+  `?disconnected=1` on `/quickbooks`. `firm_name`/`firm_address`/`firm_email` are set on Settings → Firm
+  identity (`GET/PUT /settings/firm`, `FirmIdentityCard`); the first two had been read by PdfTemplateService
+  for every PDF header with no UI to set them. `QboImportDialog.tsx` on the TB page). Read-only, **one company per client** (`UNIQUE(client_id)`
   and `UNIQUE(environment, realm_id)` — two rows for one realm would race on refresh-token rotation).
   **Configuration is UI-only by design** (settings rows `qbo.client_id` / `qbo.client_secret` (encrypted) /
   `qbo.environment` / `qbo.redirect_uri` beat the `QBO_*` env fallbacks; `loadQboConfig()` memoised like

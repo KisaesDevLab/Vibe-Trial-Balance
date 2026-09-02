@@ -78,6 +78,45 @@ export function defaultRedirectUri(appBase: string): string {
  * lands on `https://host/tb`. A URI without our callback path falls back to
  * its origin.
  */
+/** Public pages Intuit's production checklist asks for, all served by this app. */
+export const QBO_PRIVACY_PATH = '/privacy';
+export const QBO_EULA_PATH = '/terms';
+
+export interface IntuitAppUrls {
+  /** Customer-facing domain, no scheme — what Intuit's "Host domain" field wants. */
+  hostDomain: string;
+  launchUrl: string;
+  disconnectUrl: string;
+  connectUrl: string;
+  privacyPolicyUrl: string;
+  eulaUrl: string;
+}
+
+/**
+ * Every URL the Intuit production checklist asks for, derived from the same
+ * public base the callback redirects to, so they are all reachable at the
+ * address Intuit will actually use. Launch/connect land on the connections
+ * page (login first — that is fine for Intuit); disconnect lands there with
+ * a flag so the page can explain what happened.
+ */
+export function intuitAppUrls(publicBase: string): IntuitAppUrls {
+  const base = publicBase.trim().replace(/\/+$/, '');
+  let hostDomain = base;
+  try {
+    hostDomain = new URL(base).host;
+  } catch {
+    hostDomain = base.replace(/^https?:\/\//, '').split('/')[0];
+  }
+  return {
+    hostDomain,
+    launchUrl: `${base}/quickbooks`,
+    disconnectUrl: `${base}/quickbooks?disconnected=1`,
+    connectUrl: `${base}/quickbooks`,
+    privacyPolicyUrl: `${base}${QBO_PRIVACY_PATH}`,
+    eulaUrl: `${base}${QBO_EULA_PATH}`,
+  };
+}
+
 export function publicBaseFromRedirectUri(uri: string): string {
   const trimmed = uri.trim().replace(/\/+$/, '');
   if (trimmed.endsWith(QBO_CALLBACK_PATH)) return trimmed.slice(0, -QBO_CALLBACK_PATH.length);

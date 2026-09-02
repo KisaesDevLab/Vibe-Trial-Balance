@@ -21,7 +21,7 @@ import { rollForwardRouter } from './routes/rollForward';
 import { usersRouter } from './routes/users';
 import { jeCollectionRouter, jeItemRouter } from './routes/journalEntries';
 import { btCollectionRouter, btRulesRouter } from './routes/bankTransactions';
-import { settingsRouter } from './routes/settings';
+import { settingsRouter, loadFirmIdentity } from './routes/settings';
 import { diagnosticsRouter } from './routes/diagnostics';
 import { reconciliationCollectionRouter, reconciliationItemRouter } from './routes/reconciliations';
 import { m1CollectionRouter, m1ItemRouter } from './routes/taxWorkpapers';
@@ -276,6 +276,18 @@ app.get('/api/v1/features', async (_req, res) => {
     // If the settings table query fails (e.g., DB down), fall back to env.
     const quickbooks = !!process.env.QBO_CLIENT_ID && !!process.env.QBO_CLIENT_SECRET;
     res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY, passwordResetEnabled, mailEnabled, quickbooks }, error: null });
+  }
+});
+
+// Public operator identity for the unauthenticated /privacy and /terms pages
+// (the URLs Intuit's production checklist asks for). Name, postal address and
+// contact email only — the same lines already printed on every PDF header.
+app.get('/api/v1/public/legal', async (_req, res) => {
+  try {
+    const firm = await loadFirmIdentity();
+    res.json({ data: { firmName: firm.name, firmAddress: firm.address, contactEmail: firm.email }, error: null });
+  } catch {
+    res.json({ data: { firmName: '', firmAddress: '', contactEmail: '' }, error: null });
   }
 });
 

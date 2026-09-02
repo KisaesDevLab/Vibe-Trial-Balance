@@ -3,7 +3,7 @@
 ## Overview
 Vibe Trial Balance can pull a client's trial balance straight from QuickBooks Online (QBO). The connection is read-only — nothing is ever written back to QuickBooks. Each client is bound to one QuickBooks company, and "Import from QuickBooks" on the Trial Balance page loads that company's Trial Balance report for the period into the unadjusted columns.
 
-Everything is configured inside the app: **Setup > QuickBooks** holds the Intuit app credentials (admin only) and the per-client connections. The same page has a **Setup guide (PDF)** button that prints this walkthrough with the instance's own redirect URI filled in.
+Everything is configured inside the app: **Admin > QuickBooks API** holds the Intuit app credentials (administrators only — other users cannot open the page) and **Setup > QuickBooks** holds the per-client connections. Both pages have a **Setup guide (PDF)** button that prints this walkthrough with the instance's own redirect URI filled in.
 
 ## One-time setup (administrator)
 
@@ -15,17 +15,17 @@ Everything is configured inside the app: **Setup > QuickBooks** holds the Intuit
 
 ### 2. Sandbox vs. production keys
 - Every Intuit app has two credential sets under **Keys & credentials**: the **Development** tab (sandbox companies only) and the **Production** tab (real companies, unlocked after Intuit's app assessment).
-- The **Environment** setting on the QuickBooks page must match the key set entered.
+- The **Environment** setting on the QuickBooks API page must match the key set entered.
 - Switching environments invalidates every client connection; each client must be reconnected.
 
 ### 3. Add the redirect URI
 1. On Keys & credentials, find **Redirect URIs** and choose **Add URI**.
-2. Paste the redirect URI shown on the QuickBooks page (use the **Copy** button). It ends in `/api/v1/integrations/qbo/callback`.
+2. Paste the redirect URI shown on the QuickBooks API page (use the **Copy** button). It ends in `/api/v1/integrations/qbo/callback`.
 3. Add it under Development now, and again under Production once those keys are unlocked.
 4. Sandbox accepts `http://localhost`; production requires a public HTTPS address.
 
 ### 4. Enter the credentials in Vibe Trial Balance
-1. Open **Setup > QuickBooks** as an administrator.
+1. Open **Admin > QuickBooks API** (administrators only).
 2. Choose the Environment, paste the Client ID and Client Secret, and **Save**. The secret is stored encrypted and never shown again; leaving the field blank on a later save keeps the stored value.
 3. Use **Redirect URI override** only when the derived address is not what the browser actually reaches (reverse proxy, different hostname). Whatever is shown as the effective redirect URI is what must be registered at Intuit.
 4. Press **Test credentials**. Green means Intuit accepted them.
@@ -33,9 +33,15 @@ Everything is configured inside the app: **Setup > QuickBooks** holds the Intuit
 Environment variables `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_ENVIRONMENT` and `QBO_REDIRECT_URI` are an optional fallback; values saved on the page take precedence and the page shows a notice when the environment is supplying them.
 
 ### 5. Going to production
-- Complete the **App assessment questionnaire** on the Production tab. This is a private, unlisted app used by one firm with a read-only accounting scope; it is not published to the App Store.
-- Intuit requires a public HTTPS redirect URI, a privacy policy URL and an end-user licence URL. A short page on the firm's website satisfies both.
-- Set `APP_BASE_URL` on the server to the public HTTPS address (or set the redirect URI override), register that redirect URI under Production, switch Environment to Production and enter the production keys.
+Production keys stay locked until the app's **App details** and **Compliance** tasks on the Intuit developer dashboard are complete. This is a private, unlisted app used by one firm with a read-only accounting scope — it is never published to the App Store — but Intuit still requires every item. **Admin > QuickBooks API** prints every value under *Intuit production checklist values* with Copy buttons, and the setup guide PDF repeats them.
+
+1. First make the server reachable at a public HTTPS address: set `APP_BASE_URL` (or the redirect URI override) to it. Intuit rejects `http://` and `localhost` for production.
+2. **Review your profile and verify the email** on the Intuit developer portal.
+3. **End-user license agreement and privacy policy URLs** — this app serves both without a login at `<public base>/terms` and `<public base>/privacy`. They name the firm from **Settings > Firm identity** (name, address, contact email); fill that in first or the pages say the operator has not been named.
+4. **Host domain, launch URL, disconnect URL, connect/reconnect URL** — host domain is the bare domain (no `https://`); launch and connect/reconnect are the Setup > QuickBooks page (`<public base>/quickbooks`); disconnect is `<public base>/quickbooks?disconnected=1`, where QuickBooks sends a user who removes the app from a company's My Apps page (that client then shows *Needs re-authorization*).
+5. **Where your app is hosted** — the country and the public IP address (or range) the server calls Intuit from: the outbound address of the server or its internet connection (hosting provider, router, or `curl https://api.ipify.org` on the server). Update it if a residential address changes.
+6. **App assessment questionnaire** — private app used only by the firm, not listed; read-only Accounting scope; no payments; data on the firm's own server; OAuth 2.0 with encrypted token storage; users disconnect from Setup > QuickBooks or QuickBooks My Apps.
+7. Register the redirect URI under the **Production** tab, then once the keys unlock switch Environment to Production on Admin > QuickBooks API, enter the production keys, Save and Test. Every sandbox connection must be reconnected.
 
 ## Connecting a client company
 1. On **Setup > QuickBooks**, find the client in the Connections table and press **Connect**.
@@ -80,13 +86,13 @@ What lands:
 ## Troubleshooting
 | Symptom | Cause / fix |
 |---|---|
-| `redirect_uri mismatch` or "Something went wrong" at Intuit | The effective redirect URI on the QuickBooks page is not registered on the Intuit app for the selected environment. Copy it exactly. |
+| `redirect_uri mismatch` or "Something went wrong" at Intuit | The effective redirect URI on the QuickBooks API page is not registered on the Intuit app for the selected environment. Copy it exactly. |
 | `invalid_grant` / Needs re-authorization | The refresh token was revoked, expired, or belongs to a different environment. Press Reconnect. |
 | Environment mismatch on a connection | The connection was authorized under the other environment. Reconnect after switching. |
 | Client Secret rejected on Test | Secrets are shown once at Intuit. Generate a new one on Keys & credentials and paste it again. |
 | HTTP 429 / throttled | Intuit rate-limits per company. The server retries with backoff; wait a minute and try again. |
 | "Report totals do not add up" on preview | The report format changed or contains a row the parser could not read. The import is refused rather than importing a partial balance. |
-| Import button missing | The connector is not configured (no credentials saved) — administrators still see the QuickBooks page to set it up. |
+| Import button missing | The connector is not configured (no credentials saved) — an administrator enters them under Admin > QuickBooks API. |
 | Import button disabled | The period is locked, or this client has no active connection. |
 
 Weekly, the server refreshes every active connection so refresh tokens do not lapse from disuse, and logs a warning when a token is within two weeks of expiry.

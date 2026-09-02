@@ -94,7 +94,7 @@ function respondQboError(res: Response, err: unknown): boolean {
         ? 'QuickBooks no longer accepts this connection — reconnect the client under Setup → QuickBooks.'
         : err.kind === 'transient'
           ? 'Intuit is temporarily unavailable. Try again in a minute.'
-          : `Intuit rejected the app credentials (${err.intuitError ?? `HTTP ${err.status}`}). Check the Client ID / Client Secret under Setup → QuickBooks.`;
+          : `Intuit rejected the app credentials (${err.intuitError ?? `HTTP ${err.status}`}). Check the Client ID / Client Secret under Admin → QuickBooks API.`;
     res.status(err.kind === 'transient' ? 503 : 409).json({ data: null, error: { code: `QBO_OAUTH_${err.kind.toUpperCase()}`, message } });
     return true;
   }

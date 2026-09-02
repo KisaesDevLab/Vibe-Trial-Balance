@@ -12,6 +12,7 @@ import { getAiPricing, saveAiPricing, fetchAiPricingFromClaude, getAiUsage, getA
 import { useAuthStore } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
 import { PasswordInput } from '../components/PasswordInput';
+import { FirmIdentityCard } from '../components/FirmIdentityCard';
 import { ROUTER_BASENAME } from '../lib/baseConfig';
 
 function AdminBadge() {
@@ -637,6 +638,9 @@ export function SettingsPage() {
           <div className="mt-3 px-3 py-2 rounded text-xs bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400">Password changed.</div>
         )}
       </div>
+
+      {/* Firm identity: PDF headers + the public legal pages (admin) */}
+      {isAdmin && <FirmIdentityCard />}
 
       {/* AI Mode (MIG-1 dual-mode): admin-selectable router vs direct */}
       {isAdmin && llmData && (

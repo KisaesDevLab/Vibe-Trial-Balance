@@ -22,6 +22,7 @@ import {
 } from '../qbo/oauth';
 import {
   defaultRedirectUri,
+  intuitAppUrls,
   publicBaseFromRedirectUri,
   QBO_CALLBACK_PATH,
   QBO_SCOPE,
@@ -173,4 +174,20 @@ test('hashState is sha256 hex of the raw nonce', () => {
   assert.equal(hashState('abc'), createHash('sha256').update('abc').digest('hex'));
   assert.equal(hashState('abc').length, 64);
   assert.notEqual(hashState('abc'), hashState('abd'));
+});
+
+test('intuitAppUrls: every production-checklist address hangs off the public base, host domain is bare', () => {
+  const u = intuitAppUrls('https://tb.example.com/tb/');
+  assert.equal(u.hostDomain, 'tb.example.com');
+  assert.equal(u.launchUrl, 'https://tb.example.com/tb/quickbooks');
+  assert.equal(u.connectUrl, 'https://tb.example.com/tb/quickbooks');
+  assert.equal(u.disconnectUrl, 'https://tb.example.com/tb/quickbooks?disconnected=1');
+  assert.equal(u.privacyPolicyUrl, 'https://tb.example.com/tb/privacy');
+  assert.equal(u.eulaUrl, 'https://tb.example.com/tb/terms');
+  // Non-default port stays in the host domain; a base that is not a URL degrades without throwing.
+  assert.equal(intuitAppUrls('https://tb.example.com:8443').hostDomain, 'tb.example.com:8443');
+  assert.equal(intuitAppUrls('tb.example.com/x').hostDomain, 'tb.example.com');
+  // Derived from the same base the callback redirects to, so the two can never disagree.
+  const base = publicBaseFromRedirectUri(defaultRedirectUri('https://tb.example.com/tb'));
+  assert.equal(intuitAppUrls(base).privacyPolicyUrl, 'https://tb.example.com/tb/privacy');
 });

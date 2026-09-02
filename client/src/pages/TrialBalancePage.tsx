@@ -44,7 +44,7 @@ import {
   type TBTickmarkMap,
 } from '../api/tickmarks';
 import { listImports, type DocumentImport } from '../api/pdfImport';
-import { listQboConnections } from '../api/qbo';
+import { useQboConnections, findQboConnection } from '../hooks/useQboConnections';
 import { useFeatures } from '../hooks/useFeatures';
 import { downloadXlsx } from '../utils/downloadXlsx';
 import { checkFileSize } from '../utils/fileLimits';
@@ -301,12 +301,8 @@ export function TrialBalancePage() {
   // QuickBooks: the button only shows when the connector is configured, and only
   // works when THIS client has a live connection (set up on the QuickBooks page).
   const features = useFeatures();
-  const { data: qboConnections } = useQuery({
-    queryKey: ['qbo-connections'],
-    queryFn: async () => { const r = await listQboConnections(); return r.data ?? []; },
-    enabled: features?.quickbooks === true,
-  });
-  const qboConnection = qboConnections?.find((c) => c.clientId === selectedClientId) ?? null;
+  const { data: qboConnections } = useQboConnections(features?.quickbooks === true);
+  const qboConnection = findQboConnection(qboConnections, selectedClientId);
   const qboActive = qboConnection?.status === 'active';
 
   const { data: clients } = useQuery({
