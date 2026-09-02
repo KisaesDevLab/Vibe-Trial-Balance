@@ -76,3 +76,35 @@ export function extractJsonArray<T = unknown>(raw: string): T[] | null {
     return null;
   }
 }
+
+/**
+ * Best-effort recovery of a JSON array whose reply was cut off at max_tokens
+ * (or otherwise mangled after the first elements). Walks from the first `[`
+ * and keeps every complete top-level object; `complete` is true only when
+ * the closing `]` was reached. Used so that a truncated batch reply keeps
+ * the rows it did finish instead of losing the whole batch.
+ */
+export function salvageJsonArray<T = unknown>(raw: string): { items: T[]; complete: boolean } {
+  const cleaned = stripFences(raw.trim());
+  const start = cleaned.indexOf('[');
+  if (start < 0) return { items: [], complete: false };
+  const items: T[] = [];
+  let i = start + 1;
+  while (i < cleaned.length) {
+    const ch = cleaned[i];
+    if (ch === ']') return { items, complete: true };
+    if (ch === '{') {
+      const obj = findBalanced(cleaned.slice(i), '{', '}');
+      if (!obj) break;
+      try {
+        items.push(JSON.parse(obj) as T);
+      } catch {
+        break;
+      }
+      i += obj.length;
+      continue;
+    }
+    i++;
+  }
+  return { items, complete: false };
+}

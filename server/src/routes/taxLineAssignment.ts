@@ -8,7 +8,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider, getAiTokenSettings } from '../lib/aiClient';
 import { TB_TASK_CLASSES } from '../lib/routerProvider';
-import { extractJsonArray } from '../lib/aiJsonExtract';
+import { extractJsonArray, salvageJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 import { buildHistoryBuckets, rankHistoryMatches, type HistoryBuckets, type HistoryRow } from '../lib/taxCodeHistory';
 import { selectCatalogForBatch, shortlistCodes } from '../lib/taxCodeShortlist';
@@ -284,10 +284,10 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
     // Step d: batch AI for remaining accounts
     if (needsAi.length > 0) {
       try {
-        const aiSuggestions = await getAiSuggestions(needsAi, taxCodes, entityType, activityType, { userId: req.user?.userId ?? null, userRole: req.user?.role ?? null, clientId });
+        const { results: aiSuggestions, uncovered } = await getAiSuggestions(needsAi, taxCodes, entityType, activityType, { userId: req.user?.userId ?? null, userRole: req.user?.role ?? null, clientId });
 
         for (const account of needsAi) {
-          const aiResult = aiSuggestions.find((r) => r.account_number === account.account_number);
+          const aiResult = aiSuggestions.get(account.account_number.trim());
           if (!aiResult || !aiResult.suggested_tax_code) {
             suggestions.push({
               accountId: account.id,
@@ -299,7 +299,7 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
               suggestedDescription: null,
               confidence: 0,
               source: 'unmappable',
-              reasoning: aiResult?.reasoning ?? 'AI could not determine an appropriate tax code.',
+              reasoning: aiResult?.reasoning ?? uncovered ?? 'AI could not determine an appropriate tax code.',
             });
           } else {
             const tc = taxCodeMap.get(String(aiResult.suggested_tax_code).trim());
@@ -406,13 +406,32 @@ interface AiSuggestionOutput {
   reasoning: string;
 }
 
+interface AiSuggestionsResult {
+  /** Keyed by trimmed account_number — models return numbers as numbers, so the key is normalised. */
+  results: Map<string, AiSuggestionOutput>;
+  /** Set when at least one account never got a usable reply: the reason shown on those rows. */
+  uncovered: string | null;
+}
+
+/**
+ * Accounts per AI call. Small on purpose: the reply is one JSON element per
+ * account and a reasoning model spends the same max_tokens budget on its
+ * thinking first, so a big batch is cut off mid-array and every row in it
+ * is lost. Accounts the first pass missed are retried once in RETRY_BATCH_SIZE.
+ */
+const BATCH_SIZE = 15;
+const RETRY_BATCH_SIZE = 6;
+/** Output budget per account plus headroom for the model's own reasoning tokens. */
+const TOKENS_PER_ACCOUNT = 200;
+const TOKENS_HEADROOM = 2048;
+
 async function getAiSuggestions(
   accounts: AiAccountInput[],
   taxCodes: TaxCodeRow[],
   entityType: string,
   activityType: string,
   logCtx: { userId: number | null; userRole: string | null; clientId: number },
-): Promise<AiSuggestionOutput[]> {
+): Promise<AiSuggestionsResult> {
   const { provider, fastModel } = await getLLMProvider();
   const tokenSettings = await getAiTokenSettings();
 
@@ -433,15 +452,15 @@ IMPORTANT:
 - Each account carries a "likely" list: tax codes whose line label shares words with the account name. They are lexical hints, not answers — prefer one when it fits, ignore it when the name is misleading, and choose from the full list otherwise
 - If no appropriate tax code exists, set suggested_tax_code to null
 - Confidence: 0.0-1.0 (1.0 = certain, 0.7 = likely, 0.5 = best guess, 0.0 = unknown)
-- Reasoning should be 1-2 sentences explaining the choice`;
+- Keep "reasoning" to one short clause, under 15 words
+- account_number must be returned as a string, exactly as given`;
 
-  // Batch accounts into groups of 30 to avoid output truncation
-  const BATCH_SIZE = 30;
-  const allResults: AiSuggestionOutput[] = [];
+  const results = new Map<string, AiSuggestionOutput>();
+  let truncated = 0;
+  let unreadable = 0;
 
-  for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
-    const batch = accounts.slice(i, i + BATCH_SIZE);
-    const maxTokens = Math.max(tokenSettings.maxTokensDefault, batch.length * 120);
+  const runBatch = async (batch: AiAccountInput[], label: string): Promise<void> => {
+    const maxTokens = Math.max(tokenSettings.maxTokensDefault, batch.length * TOKENS_PER_ACCOUNT + TOKENS_HEADROOM);
 
     const batchCatalog = selectCatalogForBatch(batch, taxCodes, CATALOG_CAP);
     const taxCodeList = batchCatalog.map((tc) => ({
@@ -462,10 +481,10 @@ Accounts to assign:
 ${JSON.stringify(batchPrompt, null, 2)}
 
 Return a JSON array where each element has:
-- account_number: string (the original account_number)
+- account_number: string (the original account_number, as a string)
 - suggested_tax_code: string | null (exact tax_code from the list, or null)
 - confidence: number (0.0 to 1.0)
-- reasoning: string (1-2 sentences)`;
+- reasoning: string (one short clause)`;
 
     const { result: aiResult, logId } = await aiComplete(
       provider,
@@ -473,19 +492,58 @@ Return a JSON array where each element has:
       { endpoint: 'tax/auto-assign', userId: logCtx.userId, userRole: logCtx.userRole, clientId: logCtx.clientId },
     );
 
-    const parsed = extractJsonArray<AiSuggestionOutput>(aiResult.text);
+    let parsed = extractJsonArray<AiSuggestionOutput>(aiResult.text);
     if (!parsed) {
+      // A reply cut off at max_tokens (finish=length) is the common case with
+      // a reasoning model: keep the rows it did finish and retry the rest,
+      // instead of dropping the whole batch as "AI could not determine".
       const detail = `finish=${aiResult.stopReason ?? 'unknown'}, text[0..500]=${JSON.stringify(aiResult.text.slice(0, 500))}`;
-      console.error(`[taxLineAssignment] AI batch ${Math.floor(i / BATCH_SIZE) + 1} returned non-array:`, detail);
-      markAiUsageParseError(logId, `Batch ${Math.floor(i / BATCH_SIZE) + 1} invalid JSON array. ${detail}`);
-      // Don't fail the whole run — skip this batch, caller will mark them unmappable
-      continue;
+      const salvaged = salvageJsonArray<AiSuggestionOutput>(aiResult.text);
+      if (salvaged.items.length === 0) {
+        unreadable++;
+        console.error(`[taxLineAssignment] AI ${label} returned no JSON array:`, detail);
+        markAiUsageParseError(logId, `${label} invalid JSON array. ${detail}`);
+        return;
+      }
+      truncated++;
+      console.warn(`[taxLineAssignment] AI ${label} reply cut off; kept ${salvaged.items.length} of ${batch.length} (${detail.slice(0, 120)})`);
+      markAiUsageParseError(logId, `${label} reply truncated: ${salvaged.items.length}/${batch.length} rows salvaged. ${detail}`);
+      parsed = salvaged.items;
     }
-    allResults.push(...parsed);
-    console.log(`[taxLineAssignment] Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${parsed.length} suggestions from ${batch.length} accounts`);
+    let matched = 0;
+    for (const r of parsed) {
+      if (!r || typeof r !== 'object') continue;
+      const key = String(r.account_number ?? '').trim();
+      if (!key || results.has(key)) continue;
+      results.set(key, { ...r, account_number: key });
+      matched++;
+    }
+    console.log(`[taxLineAssignment] AI ${label}: ${matched} suggestions for ${batch.length} accounts`);
+  };
+
+  for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
+    await runBatch(accounts.slice(i, i + BATCH_SIZE), `batch ${Math.floor(i / BATCH_SIZE) + 1}`);
   }
 
-  return allResults;
+  // One retry pass, in smaller batches, for whatever the first pass missed —
+  // rows lost to truncation, an unreadable reply, or an account the model
+  // simply skipped. Bounded: a second miss is reported, not retried again.
+  const missed = accounts.filter((a) => !results.has(a.account_number.trim()));
+  if (missed.length > 0) {
+    console.warn(`[taxLineAssignment] ${missed.length} of ${accounts.length} accounts had no AI reply; retrying in batches of ${RETRY_BATCH_SIZE}`);
+    for (let i = 0; i < missed.length; i += RETRY_BATCH_SIZE) {
+      await runBatch(missed.slice(i, i + RETRY_BATCH_SIZE), `retry ${Math.floor(i / RETRY_BATCH_SIZE) + 1}`);
+    }
+  }
+
+  const stillMissing = accounts.filter((a) => !results.has(a.account_number.trim()));
+  let uncovered: string | null = null;
+  if (stillMissing.length > 0) {
+    uncovered = truncated > 0 || unreadable > 0
+      ? `No usable AI reply for this account: the model's reply was ${truncated > 0 ? 'cut off at its token limit' : 'not a JSON array'} even on retry (see the AI usage log). Run auto-assign again for the remaining accounts.`
+      : 'The AI reply did not include this account. Run auto-assign again for the remaining accounts.';
+  }
+  return { results, uncovered };
 }
 
 function getEntityRules(entityType: string, activityType: string): string {
