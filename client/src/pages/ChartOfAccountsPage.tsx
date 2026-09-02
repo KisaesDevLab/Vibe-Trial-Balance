@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
-import { useState, useRef, useMemo, useEffect } from 'react';
+import { useState, useRef, useMemo, useEffect, useCallback, memo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   useReactTable,
@@ -11,6 +11,7 @@ import {
   flexRender,
   createColumnHelper,
   type SortingState,
+  type Row,
 } from '@tanstack/react-table';
 import {
   listAccounts,
@@ -41,6 +42,166 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 const columnHelper = createColumnHelper<Account>();
+
+/**
+ * Everything a cell needs that changes between renders. The column defs are
+ * built ONCE and read this through `table.options.meta`, so a checkbox click
+ * does not hand TanStack a new `columns` array — which made it rebuild every
+ * row model and re-render all 200+ rows × 11 cells per click.
+ */
+interface CoaTableMeta {
+  selectedIds: Set<number>;
+  allVisibleSelected: boolean;
+  someVisibleSelected: boolean;
+  visibleCount: number;
+  leadSheetById: Map<number, { code: string | null; name: string }>;
+  toggleAllVisible: () => void;
+  toggleRow: (id: number, orderedIds: number[], shift: boolean) => void;
+  onEdit: (account: Account) => void;
+  onDelete: (account: Account) => void;
+}
+const metaOf = (table: { options: { meta?: unknown } }): CoaTableMeta => table.options.meta as CoaTableMeta;
+
+const COA_COLUMNS = [
+  columnHelper.display({
+    id: 'select',
+    enableSorting: false,
+    header: ({ table }) => {
+      const m = metaOf(table);
+      return (
+        <input
+          type="checkbox"
+          aria-label={m.allVisibleSelected ? 'Deselect all shown accounts' : 'Select all shown accounts'}
+          checked={m.allVisibleSelected}
+          ref={(el) => { if (el) el.indeterminate = !m.allVisibleSelected && m.someVisibleSelected; }}
+          onChange={m.toggleAllVisible}
+          disabled={m.visibleCount === 0}
+          className="rounded border-gray-300 dark:border-gray-600 cursor-pointer"
+        />
+      );
+    },
+    cell: ({ row, table }) => {
+      const m = metaOf(table);
+      return (
+        <input
+          type="checkbox"
+          aria-label={`Select ${row.original.account_number}`}
+          checked={m.selectedIds.has(row.original.id)}
+          onChange={() => { /* handled in onClick so the shift key is visible */ }}
+          onClick={(e) => m.toggleRow(
+            row.original.id,
+            table.getRowModel().rows.map((r) => r.original.id),
+            e.shiftKey,
+          )}
+          className="rounded border-gray-300 dark:border-gray-600 cursor-pointer"
+        />
+      );
+    },
+  }),
+  columnHelper.accessor('account_number', {
+    header: 'Account #',
+    cell: (info) => <span className="font-mono text-sm">{info.getValue()}</span>,
+  }),
+  columnHelper.accessor('account_name', {
+    header: 'Account Name',
+    cell: (info) => <span className="font-medium">{info.getValue()}</span>,
+  }),
+  columnHelper.accessor('category', {
+    header: 'Category',
+    cell: (info) => (
+      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${CATEGORY_COLORS[info.getValue()]}`}>
+        {CATEGORY_LABELS[info.getValue()]}
+      </span>
+    ),
+  }),
+  columnHelper.accessor('subcategory', {
+    header: 'Subcategory',
+    cell: (info) => info.getValue() ?? <span className="text-gray-300">—</span>,
+  }),
+  columnHelper.accessor('normal_balance', {
+    header: 'Normal Bal.',
+    cell: (info) => <span className="capitalize">{info.getValue()}</span>,
+  }),
+  columnHelper.accessor('tax_code_id', {
+    header: 'Tax Code',
+    cell: (info) => {
+      const acct = info.row.original;
+      if (!acct.tax_code_id) return <span className="text-gray-300">—</span>;
+      return <span className="font-mono text-xs">{acct.tax_line ?? `#${acct.tax_code_id}`}</span>;
+    },
+  }),
+  columnHelper.accessor('lead_sheet_id', {
+    header: 'Lead Sheet',
+    cell: (info) => {
+      const ls = info.getValue() !== null ? metaOf(info.table).leadSheetById.get(info.getValue()!) : undefined;
+      if (!ls) return <span className="text-gray-300 dark:text-gray-600">—</span>;
+      return (
+        <span
+          title={ls.name}
+          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+        >
+          <span className="font-mono mr-1">{ls.code ?? '—'}</span>
+          {ls.name}
+        </span>
+      );
+    },
+  }),
+  columnHelper.accessor('workpaper_ref', {
+    header: 'W/P Ref',
+    cell: (info) => info.getValue() ?? <span className="text-gray-300">—</span>,
+  }),
+  columnHelper.accessor('unit', {
+    header: 'Unit',
+    cell: (info) => info.getValue() ?? <span className="text-gray-300">—</span>,
+  }),
+  columnHelper.display({
+    id: 'actions',
+    header: '',
+    enableSorting: false,
+    cell: ({ row, table }) => (
+      <div className="flex items-center gap-2 justify-end">
+        <button
+          onClick={() => metaOf(table).onEdit(row.original)}
+          className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+        >
+          Edit
+        </button>
+        <button
+          onClick={() => metaOf(table).onDelete(row.original)}
+          className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+        >
+          Delete
+        </button>
+      </div>
+    ),
+  }),
+];
+
+/**
+ * One table row, memoised on the things that can change what it draws: the
+ * row object (stable while data/sorting/columns are), its selection, and the
+ * lead-sheet lookup. Ticking one box therefore repaints one row, not 200.
+ */
+const AccountRow = memo(function AccountRow({ row, selected }: {
+  row: Row<Account>;
+  selected: boolean;
+  /** Not read here — present so a changed lookup re-renders the Lead Sheet cell. */
+  leadSheetById: CoaTableMeta['leadSheetById'];
+}) {
+  return (
+    <tr
+      className={selected
+        ? 'bg-blue-50 dark:bg-blue-900/20'
+        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}
+    >
+      {row.getVisibleCells().map((cell) => (
+        <td key={cell.id} className="px-3 py-2.5 text-gray-700 dark:text-gray-300">
+          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+        </td>
+      ))}
+    </tr>
+  );
+});
 
 const defaultNormalBalance = (category: string): 'debit' | 'credit' =>
   (category === 'assets' || category === 'expenses') ? 'debit' : 'credit';
@@ -1249,118 +1410,25 @@ export function ChartOfAccountsPage() {
     [leadSheets],
   );
 
-  const columns = [
-    columnHelper.display({
-      id: 'select',
-      enableSorting: false,
-      header: () => (
-        <input
-          type="checkbox"
-          aria-label={allVisibleSelected ? 'Deselect all shown accounts' : 'Select all shown accounts'}
-          checked={allVisibleSelected}
-          ref={(el) => { if (el) el.indeterminate = !allVisibleSelected && someVisibleSelected; }}
-          onChange={toggleAllVisible}
-          disabled={visibleIds.length === 0}
-          className="rounded border-gray-300 dark:border-gray-600 cursor-pointer"
-        />
-      ),
-      cell: ({ row, table }) => (
-        <input
-          type="checkbox"
-          aria-label={`Select ${row.original.account_number}`}
-          checked={selectedIds.has(row.original.id)}
-          onChange={() => { /* handled in onClick so the shift key is visible */ }}
-          onClick={(e) => toggleRow(
-            row.original.id,
-            table.getRowModel().rows.map((r) => r.original.id),
-            e.shiftKey,
-          )}
-          className="rounded border-gray-300 dark:border-gray-600 cursor-pointer"
-        />
-      ),
-    }),
-    columnHelper.accessor('account_number', {
-      header: 'Account #',
-      cell: (info) => <span className="font-mono text-sm">{info.getValue()}</span>,
-    }),
-    columnHelper.accessor('account_name', {
-      header: 'Account Name',
-      cell: (info) => <span className="font-medium">{info.getValue()}</span>,
-    }),
-    columnHelper.accessor('category', {
-      header: 'Category',
-      cell: (info) => (
-        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${CATEGORY_COLORS[info.getValue()]}`}>
-          {CATEGORY_LABELS[info.getValue()]}
-        </span>
-      ),
-    }),
-    columnHelper.accessor('subcategory', {
-      header: 'Subcategory',
-      cell: (info) => info.getValue() ?? <span className="text-gray-300">—</span>,
-    }),
-    columnHelper.accessor('normal_balance', {
-      header: 'Normal Bal.',
-      cell: (info) => <span className="capitalize">{info.getValue()}</span>,
-    }),
-    columnHelper.accessor('tax_code_id', {
-      header: 'Tax Code',
-      cell: (info) => {
-        const acct = info.row.original;
-        if (!acct.tax_code_id) return <span className="text-gray-300">—</span>;
-        return <span className="font-mono text-xs">{acct.tax_line ?? `#${acct.tax_code_id}`}</span>;
-      },
-    }),
-    columnHelper.accessor('lead_sheet_id', {
-      header: 'Lead Sheet',
-      cell: (info) => {
-        const ls = info.getValue() !== null ? leadSheetById.get(info.getValue()!) : undefined;
-        if (!ls) return <span className="text-gray-300 dark:text-gray-600">—</span>;
-        return (
-          <span
-            title={ls.name}
-            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
-          >
-            <span className="font-mono mr-1">{ls.code ?? '—'}</span>
-            {ls.name}
-          </span>
-        );
-      },
-    }),
-    columnHelper.accessor('workpaper_ref', {
-      header: 'W/P Ref',
-      cell: (info) => info.getValue() ?? <span className="text-gray-300">—</span>,
-    }),
-    columnHelper.accessor('unit', {
-      header: 'Unit',
-      cell: (info) => info.getValue() ?? <span className="text-gray-300">—</span>,
-    }),
-    columnHelper.display({
-      id: 'actions',
-      header: '',
-      enableSorting: false,
-      cell: ({ row }) => (
-        <div className="flex items-center gap-2 justify-end">
-          <button
-            onClick={() => { setEditAccount(row.original); setFormError(null); }}
-            className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-          >
-            Edit
-          </button>
-          <button
-            onClick={async () => {
-              if (await confirmAction({ message: `Delete "${row.original.account_name}"?`, tone: 'danger' })) {
-                deleteMutation.mutate(row.original.id);
-              }
-            }}
-            className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-          >
-            Delete
-          </button>
-        </div>
-      ),
-    }),
-  ];
+  const onEdit = useCallback((account: Account) => { setEditAccount(account); setFormError(null); }, []);
+  const { mutate: deleteAccountMutate } = deleteMutation;
+  const onDelete = useCallback(async (account: Account) => {
+    if (await confirmAction({ message: `Delete "${account.account_name}"?`, tone: 'danger' })) {
+      deleteAccountMutate(account.id);
+    }
+  }, [deleteAccountMutate]);
+  const meta: CoaTableMeta = {
+    selectedIds,
+    allVisibleSelected,
+    someVisibleSelected,
+    visibleCount: visibleIds.length,
+    leadSheetById,
+    toggleAllVisible,
+    toggleRow,
+    onEdit,
+    onDelete,
+  };
+  const columns = COA_COLUMNS;
 
   const table = useReactTable({
     data: filteredData,
@@ -1369,6 +1437,7 @@ export function ChartOfAccountsPage() {
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    meta,
   });
 
   if (!selectedClientId) {
@@ -1527,18 +1596,12 @@ export function ChartOfAccountsPage() {
                   </tr>
                 ) : (
                   table.getRowModel().rows.map((row) => (
-                    <tr
+                    <AccountRow
                       key={row.id}
-                      className={`transition-colors ${selectedIds.has(row.original.id)
-                        ? 'bg-blue-50 dark:bg-blue-900/20'
-                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}
-                    >
-                      {row.getVisibleCells().map((cell) => (
-                        <td key={cell.id} className="px-3 py-2.5 text-gray-700 dark:text-gray-300">
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </td>
-                      ))}
-                    </tr>
+                      row={row}
+                      selected={selectedIds.has(row.original.id)}
+                      leadSheetById={leadSheetById}
+                    />
                   ))
                 )}
               </tbody>
