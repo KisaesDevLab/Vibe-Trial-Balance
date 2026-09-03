@@ -26,6 +26,15 @@ export function isForeignKeyViolation(err: unknown): err is PgErrorShape {
   return typeof err === 'object' && err !== null && (err as PgErrorShape).code === PG_FOREIGN_KEY_VIOLATION;
 }
 
+/** SQLSTATE P0001 — a PL/pgSQL `RAISE EXCEPTION` with no explicit code, i.e. one of our own triggers refusing. */
+export const PG_RAISE_EXCEPTION = 'P0001';
+
+export function isRaisedException(err: unknown): err is PgErrorShape & { message: string } {
+  return typeof err === 'object' && err !== null
+    && (err as PgErrorShape).code === PG_RAISE_EXCEPTION
+    && typeof (err as { message?: unknown }).message === 'string';
+}
+
 /** Human labels for the tables most likely to hold on to a parent row. */
 const TABLE_LABELS: Record<string, string> = {
   bank_transactions: 'bank transactions',

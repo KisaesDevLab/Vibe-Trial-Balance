@@ -8,7 +8,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
-import { isForeignKeyViolation, foreignKeyBlockMessage } from '../lib/pgErrors';
+import { isForeignKeyViolation, foreignKeyBlockMessage, isRaisedException } from '../lib/pgErrors';
 
 export const periodCollectionRouter = Router({ mergeParams: true });
 periodCollectionRouter.use(authMiddleware);
@@ -245,6 +245,14 @@ periodItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise
     if (isForeignKeyViolation(err)) {
       console.warn(`[periods] delete ${id} blocked by ${err.table ?? err.constraint ?? 'unknown FK'}`);
       res.status(409).json({ data: null, error: { code: 'PERIOD_IN_USE', message: foreignKeyBlockMessage(err, 'this period') } });
+      return;
+    }
+    // A trigger that RAISEd (SQLSTATE P0001) — the audit log's append-only
+    // guard is the known one. Its message says what refused; pass it on
+    // rather than hiding it behind "internal error".
+    if (isRaisedException(err)) {
+      console.warn(`[periods] delete ${id} refused by a database rule: ${err.message}`);
+      res.status(409).json({ data: null, error: { code: 'PERIOD_DELETE_REFUSED', message: `Cannot delete this period: ${err.message}` } });
       return;
     }
     sendServerError(res, err, 'periods');

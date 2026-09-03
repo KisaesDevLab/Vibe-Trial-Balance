@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { describeBlockingTable, foreignKeyBlockMessage, isForeignKeyViolation } from '../pgErrors';
+import { describeBlockingTable, foreignKeyBlockMessage, isForeignKeyViolation, isRaisedException } from '../pgErrors';
+
+test('isRaisedException recognises a trigger RAISE (P0001) that carries a message', () => {
+  assert.equal(isRaisedException({ code: 'P0001', message: 'audit_log is append-only: DELETE is not permitted.' }), true);
+  assert.equal(isRaisedException({ code: 'P0001' }), false);
+  assert.equal(isRaisedException({ code: '23503', message: 'fk' }), false);
+  assert.equal(isRaisedException(new Error('plain')), false);
+});
 
 test('isForeignKeyViolation recognises SQLSTATE 23503 and nothing else', () => {
   assert.equal(isForeignKeyViolation({ code: '23503' }), true);

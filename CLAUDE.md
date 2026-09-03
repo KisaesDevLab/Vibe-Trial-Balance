@@ -490,6 +490,16 @@ All planned phases complete. App is feature-complete.
   on any other delete route instead of letting `sendServerError` swallow it. A new table that
   references periods must say `onDelete(...)` explicitly. The PeriodsPage delete mutation reads
   `res.error` (apiFetch resolves, never throws), which it previously ignored.
+  **That was not enough**: `audit_log.period_id` was already CASCADE, and `audit_log` is append-only
+  via BEFORE UPDATE/DELETE triggers (`20260418000002`) — so the cascade itself RAISEd for any period
+  with audit history, i.e. every real one, and a fresh test database (no audit rows) could not show
+  it. Migration `20260903000002` makes it **SET NULL** (the trail outlives the period; rows keep
+  `client_id`) and teaches the guard ONE exception: an UPDATE that changes nothing but `period_id`,
+  to NULL (`to_jsonb(NEW) - 'period_id' = to_jsonb(OLD) - 'period_id'`). Everything else still
+  raises; client delete/replace-restore keep using `SET LOCAL app.audit_log_mutation_allowed`. The
+  route maps a P0001 (`isRaisedException`) to `409 PERIOD_DELETE_REFUSED` with the trigger's own
+  text. **Test any delete path with audit rows present** — `logAudit` has been writing them for
+  every action since Phase 1.
 - QA Round 1 & 2: 30-item UX audit — period lock enforcement on TB grid, batch op toasts,
   reopen reconciliation feedback, engagement double-submit prevention, FS comparative layout,
   Spinner component, consistent error/success box styles, sidebar workflow ordering,
