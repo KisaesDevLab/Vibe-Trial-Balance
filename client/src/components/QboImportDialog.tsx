@@ -20,16 +20,26 @@
  * reviewer can change — nothing is written on the model's say-so. Zero-balance
  * rows start skipped: QuickBooks lists every account with activity, and a
  * zero line has nothing to import.
+ *
+ * A QuickBooks account with no AcctNum arrives with NO number (the old
+ * `QB<Id>` placeholder is gone — it leaked into charts as a real number) and
+ * the import will not confirm until it has one: "Suggest account numbers"
+ * asks the numbering model (consent first) and fills whatever it misses in
+ * sequence from the client's own bands; "in sequence" skips the AI. The view
+ * tabs (All / Matches / New accounts / Exceptions / Skipped) filter the same
+ * rows — edits always address the row by its original index.
  */
 
 import { useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
 import {
   previewQboImport,
   confirmQboImport,
   suggestQboMatches,
+  suggestQboAccountNumbers,
   QBO_SUGGEST_CHUNK_SIZE,
+  QBO_NUMBER_CHUNK_SIZE,
   type QboSuggestConfidence,
   type QboAccountingMethod,
   type QboPreviewResult,
@@ -40,6 +50,7 @@ import {
   type QboImportTarget,
 } from '../api/qbo';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
+import { QuickAddAccountModal } from './QuickAddAccountModal';
 import { AiConsentDialog, AI_PII } from './AiConsentDialog';
 import { useFeatures } from '../hooks/useFeatures';
 import { pushToast } from '../store/uiStore';
@@ -56,8 +67,33 @@ interface QboImportDialogProps {
 type Stage = 'fetch' | 'preview';
 
 /** A preview row plus the reviewer's edits. */
+type NumberSource = 'ai' | 'sequence' | null;
+
+/** Which rows a view tab shows. */
+type View = 'all' | 'matches' | 'new' | 'exceptions' | 'skipped';
+
+const VIEWS: Array<{ id: View; label: string; hint: string }> = [
+  { id: 'all', label: 'All', hint: 'Every row on the report' },
+  { id: 'matches', label: 'Matches', hint: 'Rows landing on an existing account — by id, number, name or AI suggestion' },
+  { id: 'new', label: 'New accounts', hint: 'Rows that will create an account, with their suggested numbers' },
+  { id: 'exceptions', label: 'Exceptions', hint: 'Rows the matcher could not place on its own' },
+  { id: 'skipped', label: 'Skipped', hint: 'Rows left out of the import' },
+];
+
+function inView(r: EditableRow, view: View): boolean {
+  switch (view) {
+    case 'all': return true;
+    case 'matches': return r.decision === 'match';
+    case 'new': return r.decision === 'create_new';
+    case 'exceptions': return r.action === 'exception';
+    case 'skipped': return r.decision === 'skip';
+  }
+}
+
 interface EditableRow extends QboPreviewRow {
   decision: QboDecisionAction;
+  /** Where the Acct # came from when not typed by hand; cleared on any edit. */
+  numberSource: NumberSource;
   /** Remembered when a row is unticked so re-ticking restores it. */
   preSkipDecision: Exclude<QboDecisionAction, 'skip'>;
   /** Set when the current match came from the AI pass; cleared the moment the reviewer changes it. */
@@ -95,7 +131,7 @@ function toEditable(r: QboPreviewRow, skipZero: boolean): EditableRow {
   const pre = initialDecision(r);
   // An exception has nowhere to go until the reviewer says so — it starts skipped.
   const skip = r.action === 'exception' || (skipZero && isZero(r));
-  return { ...r, decision: skip ? 'skip' : pre, preSkipDecision: pre, aiConfidence: null };
+  return { ...r, decision: skip ? 'skip' : pre, preSkipDecision: pre, aiConfidence: null, numberSource: null };
 }
 
 function rowBorderClass(r: EditableRow): string {
@@ -169,6 +205,12 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
   const features = useFeatures();
   const [showAiConsent, setShowAiConsent] = useState(false);
   const [suggesting, setSuggesting] = useState<{ done: number; total: number } | null>(null);
+  const [showNumberConsent, setShowNumberConsent] = useState(false);
+  const [numbering, setNumbering] = useState<{ done: number; total: number } | null>(null);
+  const [view, setView] = useState<View>('all');
+  // Row index awaiting the "+ New Account" quick-add, the same flow the AJE dialogs use.
+  const [quickAddIdx, setQuickAddIdx] = useState<number | null>(null);
+  const qc = useQueryClient();
 
   const { data: accounts = [] } = useQuery<Account[]>({
     queryKey: ['accounts', clientId],
@@ -319,6 +361,69 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
     }
   };
 
+  // ── Account numbers for new accounts ──────────────────────────────────────
+
+  /** A new account with nothing in its Acct # cell. */
+  const needsNumber = (r: EditableRow): boolean => r.decision === 'create_new' && !(r.newAccountNumber ?? '').trim();
+  const needsNumberCount = rows.filter(needsNumber).length;
+
+  const runNumbering = async (useAi: boolean) => {
+    if (!preview) return;
+    const keys = rows.filter(needsNumber).map((r) => r.rowKey);
+    if (keys.length === 0) return;
+    setNumbering({ done: 0, total: keys.length });
+    let fromAi = 0;
+    let fromSequence = 0;
+    let aiError: string | null = null;
+    try {
+      // Numbers typed or already suggested are handed forward so no chunk
+      // reuses one; the server also avoids every number on the chart.
+      const reserved = new Set<string>();
+      for (const r of rowsRef.current) {
+        const n = (r.newAccountNumber ?? '').trim();
+        if (r.decision === 'create_new' && n) reserved.add(n);
+      }
+      for (let i = 0; i < keys.length; i += QBO_NUMBER_CHUNK_SIZE) {
+        const chunk = keys.slice(i, i + QBO_NUMBER_CHUNK_SIZE);
+        const res = await suggestQboAccountNumbers({ importId: preview.importId, rowKeys: chunk, reservedNumbers: Array.from(reserved), useAi });
+        if (res.error || !res.data) throw new Error(res.error?.message ?? 'Numbering failed');
+        if (res.data.aiError && !aiError) aiError = res.data.aiError;
+        const byKey = new Map(res.data.suggestions.map((sg) => [sg.rowKey, sg]));
+        // Applied to the rows as they are NOW: a number the reviewer typed
+        // while the call ran is theirs and is not overwritten.
+        const current = rowsRef.current;
+        const next = current.map((r): EditableRow => {
+          const sg = byKey.get(r.rowKey);
+          if (!sg || !needsNumber(r) || reserved.has(sg.suggestedNumber)) return r;
+          reserved.add(sg.suggestedNumber);
+          if (sg.source === 'ai') fromAi++; else fromSequence++;
+          return {
+            ...r,
+            newAccountNumber: sg.suggestedNumber,
+            newCategory: r.newCategory ?? sg.suggestedCategory,
+            newNormalBalance: r.newNormalBalance ?? sg.suggestedNormalBalance,
+            numberSource: sg.source,
+          };
+        });
+        rowsRef.current = next;
+        setRows(next);
+        setNumbering({ done: Math.min(i + chunk.length, keys.length), total: keys.length });
+      }
+      const total = fromAi + fromSequence;
+      if (total === 0) {
+        pushToast('No numbers were suggested', 'error');
+      } else if (aiError) {
+        pushToast(`Numbered ${total} account${total === 1 ? '' : 's'} in sequence — the AI pass was unavailable (${aiError})`, 'success');
+      } else {
+        pushToast(`Numbered ${total} account${total === 1 ? '' : 's'} (${fromAi} by AI · ${fromSequence} in sequence) — review each before importing`, 'success');
+      }
+    } catch (e) {
+      pushToast((e as Error).message, 'error');
+    } finally {
+      setNumbering(null);
+    }
+  };
+
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const totals = useMemo(() => {
@@ -344,6 +449,19 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
 
   const zeroCount = useMemo(() => rows.filter(isZero).length, [rows]);
   const aiCount = useMemo(() => rows.filter((r) => r.aiConfidence && r.decision === 'match').length, [rows]);
+
+  const viewCounts = useMemo(() => {
+    const counts = { all: rows.length, matches: 0, new: 0, exceptions: 0, skipped: 0 } as Record<View, number>;
+    for (const r of rows) {
+      if (r.decision === 'match') counts.matches++;
+      if (r.decision === 'create_new') counts.new++;
+      if (r.action === 'exception') counts.exceptions++;
+      if (r.decision === 'skip') counts.skipped++;
+    }
+    return counts;
+  }, [rows]);
+  // Filtered for display only; every edit still addresses `rows` by the original index.
+  const visible = useMemo(() => rows.map((r, idx) => ({ r, idx })).filter(({ r }) => inView(r, view)), [rows, view]);
 
   const exceptionCount = rows.filter((r) => r.action === 'exception').length;
   const reportUnbalanced = preview?.warnings.includes('OUT_OF_BALANCE') ?? false;
@@ -494,6 +612,26 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
                 </div>
               )}
 
+              <div className="flex items-center gap-1 flex-wrap text-xs" role="tablist" aria-label="Rows to show">
+                {VIEWS.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={view === v.id}
+                    title={v.hint}
+                    onClick={() => setView(v.id)}
+                    className={`px-2.5 py-1 rounded-full border transition-colors ${
+                      view === v.id
+                        ? 'bg-blue-600 border-blue-600 text-white'
+                        : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                    }`}
+                  >
+                    {v.label} <span className={view === v.id ? 'text-blue-100' : 'text-gray-400'}>({viewCounts[v.id]})</span>
+                  </button>
+                ))}
+              </div>
+
               <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
                 <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300">
                   <input type="checkbox" checked={skipZero} onChange={(e) => toggleSkipZero(e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600" />
@@ -501,6 +639,36 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
                 </label>
                 <div className="flex items-center gap-3">
                   {aiCount > 0 && <span className="text-indigo-700 dark:text-indigo-300">{aiCount} AI suggestion{aiCount === 1 ? '' : 's'} to review</span>}
+                  {needsNumberCount > 0 && (
+                    <span className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => (features?.ai ? setShowNumberConsent(true) : void runNumbering(false))}
+                        disabled={!!numbering}
+                        title={features?.ai
+                          ? `Ask the numbering model for an account number for each of the ${needsNumberCount} new accounts that have none — names and types only; anything it misses is numbered in sequence`
+                          : `Number the ${needsNumberCount} new accounts in sequence from this chart's own bands`}
+                        className="px-3 py-1 border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 rounded hover:bg-emerald-50 dark:hover:bg-emerald-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {numbering ? (
+                          <span className="flex items-center gap-1.5">
+                            <span className="inline-block w-3 h-3 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                            Numbering… {numbering.done}/{numbering.total}
+                          </span>
+                        ) : `Suggest account numbers${features?.ai ? ' with AI' : ''} (${needsNumberCount})`}
+                      </button>
+                      {features?.ai && !numbering && (
+                        <button
+                          type="button"
+                          onClick={() => void runNumbering(false)}
+                          title="Skip the AI: continue this chart's own numbering bands in steps of ten"
+                          className="text-emerald-700 dark:text-emerald-300 underline decoration-dotted hover:text-emerald-900 dark:hover:text-emerald-100"
+                        >
+                          in sequence
+                        </button>
+                      )}
+                    </span>
+                  )}
                   {features?.ai && (
                     <button
                       type="button"
@@ -534,7 +702,7 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((r, idx) => (
+                    {visible.map(({ r, idx }) => (
                       <tr key={r.rowKey} className={`${rowBorderClass(r)} hover:bg-gray-50 dark:hover:bg-gray-700/40`}>
                         <td className="px-2 py-1.5 text-center border-b dark:border-gray-700">
                           <input
@@ -555,13 +723,31 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
                         </td>
                         <td className="px-3 py-1.5 font-mono text-xs border-b dark:border-gray-700">
                           {r.decision === 'create_new' ? (
-                            <input
-                              type="text"
-                              value={r.newAccountNumber ?? ''}
-                              onChange={(e) => updateRow(idx, { newAccountNumber: e.target.value })}
-                              placeholder={r.qboAcctNum ?? 'e.g. 1000'}
-                              className="w-24 border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                            />
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={r.newAccountNumber ?? ''}
+                                onChange={(e) => updateRow(idx, { newAccountNumber: e.target.value, numberSource: null })}
+                                placeholder={r.qboAcctNum ?? 'needs #'}
+                                aria-invalid={needsNumber(r)}
+                                title={needsNumber(r) ? 'This new account has no number yet — type one or use Suggest account numbers' : undefined}
+                                className={`w-24 border rounded px-1 py-0.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-white ${
+                                  needsNumber(r) ? 'border-red-400 dark:border-red-600 bg-red-50 dark:bg-red-900/20' : 'border-gray-300 dark:border-gray-600'
+                                }`}
+                              />
+                              {r.numberSource && (
+                                <span
+                                  title={r.numberSource === 'ai' ? 'Suggested by the numbering model' : 'Next number in this chart\'s own band'}
+                                  className={`px-1 rounded text-[10px] font-medium ${
+                                    r.numberSource === 'ai'
+                                      ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300'
+                                      : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
+                                  }`}
+                                >
+                                  {r.numberSource === 'ai' ? 'AI' : 'seq'}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-gray-600 dark:text-gray-400">{r.qboAcctNum ?? '—'}</span>
                           )}
@@ -586,6 +772,7 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
                               accounts={accounts}
                               value={r.matchedAccountId ?? ''}
                               onChange={(id) => pickAccount(idx, id)}
+                              onCreateNew={() => setQuickAddIdx(idx)}
                               placeholder="Select account…"
                               className="w-full"
                             />
@@ -626,6 +813,9 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
                     ))}
                     {rows.length === 0 && (
                       <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-gray-400">QuickBooks returned no balances for these dates.</td></tr>
+                    )}
+                    {rows.length > 0 && visible.length === 0 && (
+                      <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-gray-400">No rows in this view.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -710,6 +900,27 @@ export function QboImportDialog({ periodId, clientId, target = 'current', onClos
           piiItems={AI_PII.qboMatch}
           onCancel={() => setShowAiConsent(false)}
           onConfirm={() => { setShowAiConsent(false); void runSuggestions(); }}
+        />
+      )}
+      {showNumberConsent && (
+        <AiConsentDialog
+          feature="Account numbering for new accounts"
+          piiItems={AI_PII.qboNumbering}
+          onCancel={() => setShowNumberConsent(false)}
+          onConfirm={() => { setShowNumberConsent(false); void runNumbering(true); }}
+        />
+      )}
+      {quickAddIdx !== null && (
+        <QuickAddAccountModal
+          clientId={clientId}
+          onClose={() => setQuickAddIdx(null)}
+          onCreated={(accountId) => {
+            // The account is on the chart now; the list refetches and the
+            // dropdown shows it by id. The row becomes a plain match to it.
+            void qc.invalidateQueries({ queryKey: ['accounts', clientId] });
+            updateRow(quickAddIdx, { decision: 'match', preSkipDecision: 'match', matchedAccountId: accountId, matchedAccountNumber: null, matchedAccountName: null, aiConfidence: null });
+            setQuickAddIdx(null);
+          }}
         />
       )}
     </div>

@@ -244,6 +244,39 @@ export function suggestQboMatches(body: { importId: number; rowKeys?: string[] }
   return apiFetch<QboSuggestResult>('/import/qbo/suggest-matches', { method: 'POST', body: JSON.stringify(body) });
 }
 
+export interface QboNumberSuggestion {
+  rowKey: string;
+  suggestedNumber: string;
+  suggestedCategory: string | null;
+  suggestedNormalBalance: string | null;
+  /** `ai` from the numbering model; `sequence` from the client's own bands, in steps of ten. */
+  source: 'ai' | 'sequence';
+}
+
+export interface QboSuggestNumbersResult {
+  suggestions: QboNumberSuggestion[];
+  rowsConsidered: number;
+  aiUsed: boolean;
+  aiError: string | null;
+}
+
+/** Rows per request; the server runs one AI call per 25 within it. */
+export const QBO_NUMBER_CHUNK_SIZE = 50;
+
+/**
+ * Account numbers for the QuickBooks accounts that came without one. Never a
+ * `QB<Id>` placeholder: the AI pass when `useAi`, the in-sequence fallback for
+ * whatever it misses. Returns suggestions only — nothing is written.
+ */
+export function suggestQboAccountNumbers(body: {
+  importId: number;
+  rowKeys?: string[];
+  reservedNumbers?: string[];
+  useAi: boolean;
+}): Promise<ApiResult<QboSuggestNumbersResult>> {
+  return apiFetch<QboSuggestNumbersResult>('/import/qbo/suggest-numbers', { method: 'POST', body: JSON.stringify(body) });
+}
+
 export function confirmQboImport(body: {
   importId: number;
   decisions: QboImportDecision[];

@@ -13,7 +13,6 @@ import {
   classificationToCategory,
   findAbsentNonzeroAccounts,
   matchRows,
-  placeholderAccountNumber,
   type CoaRowForMatch,
   type QboAccountLite,
 } from '../qbo/matcher';
@@ -58,12 +57,23 @@ test('unknown account becomes create_new typed from Classification', () => {
   assert.equal(m.newNormalBalance, 'credit');
 });
 
-test('no AcctNum → QB<Id> placeholder; unknown Classification → untyped', () => {
+test('no AcctNum → no number at all (never a QB placeholder); unknown Classification → untyped', () => {
   const [m] = matchRows([row('81', 'Mystery', 5)], coa, [acct('81', 'Mystery', null, 'Weird')]);
   assert.equal(m.action, 'create_new');
-  assert.equal(m.newAccountNumber, 'QB81');
+  assert.equal(m.newAccountNumber, null);
   assert.equal(m.newCategory, null);
-  assert.equal(placeholderAccountNumber('12/3 4'), 'QB1234');
+});
+
+test('two unnumbered QBO accounts are both create_new — a missing number is not a duplicate of another missing number', () => {
+  const out = matchRows(
+    [row('81', 'Mystery', 5), row('82', 'Enigma', 7)],
+    coa,
+    [acct('81', 'Mystery', null, 'Expense'), acct('82', 'Enigma', null, 'Expense')],
+  );
+  assert.deepEqual(out.map((m) => [m.action, m.newAccountNumber, m.exceptionReason]), [
+    ['create_new', null, null],
+    ['create_new', null, null],
+  ]);
 });
 
 test('AcctNum already bound to a different QBO account is an exception, never a silent re-bind', () => {

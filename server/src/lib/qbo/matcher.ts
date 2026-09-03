@@ -117,10 +117,11 @@ export function normalizeQboDisplayName(name: string): string {
     .join(':');
 }
 
-/** `QB<Id>` — a placeholder number for a QBO account with no AcctNum; the user can retype it in the preview. */
-export function placeholderAccountNumber(qboId: string): string {
-  return `QB${qboId}`.replace(/[^a-zA-Z0-9.\-]/g, '').slice(0, 20);
-}
+// There is deliberately NO placeholder number for a QBO account without an
+// AcctNum. `newAccountNumber` stays null and the preview will not confirm
+// until the reviewer types one or takes a suggestion (AI or in-sequence via
+// POST /import/qbo/suggest-numbers). A `QB<Id>` stand-in used to be minted
+// here; it leaked into charts of accounts as a real number.
 
 export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccounts: QboAccountLite[]): MatchedRow[] {
   const coaByQboId = new Map<string, CoaRowForMatch>();
@@ -191,11 +192,13 @@ export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccoun
       }
     }
 
-    const newNumber = acctNum ?? placeholderAccountNumber(row.qboAccountId);
-    if (claimedNewNumbers.has(newNumber) || coaByNumber.has(newNumber)) {
-      return { ...base, exceptionReason: 'DUPLICATE_ACCT_NUM' };
+    const newNumber = acctNum ?? null;
+    if (newNumber !== null) {
+      if (claimedNewNumbers.has(newNumber) || coaByNumber.has(newNumber)) {
+        return { ...base, exceptionReason: 'DUPLICATE_ACCT_NUM' };
+      }
+      claimedNewNumbers.add(newNumber);
     }
-    claimedNewNumbers.add(newNumber);
     const typed = classificationToCategory(acct?.Classification);
     return {
       ...base,

@@ -75,13 +75,23 @@ test('a decision can re-route an exception to a hand-picked account or a new acc
   assert.equal(c.newNormalBalance, 'debit');
 });
 
-test('create_new falls back to the row, then to a QB<Id> placeholder; bad category is ignored', () => {
-  const rows = [matched({ rowKey: '3', action: 'create_new', matchedAccountId: null, qboAccountId: '77', newAccountNumber: null, newAccountName: null, newCategory: 'expenses', newNormalBalance: 'debit' })];
+test('create_new falls back to the row for number and name; bad category is ignored', () => {
+  const rows = [matched({ rowKey: '3', action: 'create_new', matchedAccountId: null, qboAccountId: '77', newAccountNumber: '6150', newAccountName: null, newCategory: 'expenses', newNormalBalance: 'debit' })];
   const [c] = applyDecisions(rows, [{ rowKey: '3', action: 'create_new', newCategory: 'bogus', newNormalBalance: 'sideways' }]);
-  assert.equal(c.newAccountNumber, 'QB77');
+  assert.equal(c.newAccountNumber, '6150');
   assert.equal(c.newAccountName, 'Checking');
   assert.equal(c.newCategory, 'expenses');
   assert.equal(c.newNormalBalance, 'debit');
+});
+
+test('create_new with no number anywhere is a DecisionError — never a QB<Id> placeholder', () => {
+  const rows = [matched({ rowKey: '3', action: 'create_new', matchedAccountId: null, qboAccountId: '77', newAccountNumber: null, newAccountName: null, newCategory: 'expenses', newNormalBalance: 'debit' })];
+  assert.throws(
+    () => applyDecisions(rows, [{ rowKey: '3', action: 'create_new', newAccountNumber: '   ' }]),
+    (e: unknown) => e instanceof DecisionError && e.rowKey === '3' && /no account number/.test(e.message),
+  );
+  // With no decision at all the row's own null number is just as unacceptable.
+  assert.throws(() => applyDecisions(rows, []), DecisionError);
 });
 
 test('match with no account anywhere is a DecisionError', () => {

@@ -10,7 +10,7 @@
  * re-derived on confirm — a decision payload carrying cents is ignored.
  */
 import { CATEGORY_NORMAL_BALANCE, isCategory, type AccountCategory, type NormalBalance } from '../accountTypeInference';
-import { placeholderAccountNumber, type MatchedRow } from './matcher';
+import { type MatchedRow } from './matcher';
 
 export type DecisionAction = 'match' | 'create_new' | 'skip';
 
@@ -84,7 +84,12 @@ export function applyDecisions(rows: MatchedRow[], decisions: ImportDecision[]):
       return { ...base, action: 'match', matchedAccountId: id };
     }
 
-    const number = (d?.newAccountNumber ?? '').trim() || row.newAccountNumber || placeholderAccountNumber(row.qboAccountId ?? row.rowKey);
+    // No placeholder: a number the reviewer never saw would land on the chart
+    // of accounts as if they had chosen it.
+    const number = (d?.newAccountNumber ?? '').trim() || row.newAccountNumber;
+    if (!number) {
+      throw new DecisionError(row.rowKey, `Row ${row.rowKey} (${row.qboFullName}) is a new account but has no account number.`);
+    }
     const decidedCategory = d?.newCategory;
     const category: AccountCategory | null =
       typeof decidedCategory === 'string' && isCategory(decidedCategory) ? decidedCategory : row.newCategory;

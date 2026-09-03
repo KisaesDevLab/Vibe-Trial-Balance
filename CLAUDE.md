@@ -424,7 +424,25 @@ All planned phases complete. App is feature-complete.
   has it and its `category` does not contradict QBO's Classification; badged **by name** in the
   preview, `writeQboId`), else create-new typed from `Classification`. The name pass exists because
   a company that never turned on QBO account numbers has no `AcctNum` at all and every account came
-  back "Create new" with a `QB<Id>` placeholder. **Still no fuzzy matching in code**: the leftovers
+  back "Create new" — originally with a `QB<Id>` placeholder number, **now with NO number**: the
+  placeholder was minted in `matcher.ts` and fell through two more fallbacks (`applyDecisions`, the
+  confirm insert) onto real charts of accounts. All three are gone; `newAccountNumber` is null,
+  `applyDecisions` throws `DecisionError` and the confirm returns `422 MISSING_ACCOUNT_NUMBER` for a
+  new account without one, and the dialog's `canConfirm` already gated on `missingNumber`. Numbers
+  come from **`POST /import/qbo/suggest-numbers`** (`{importId, rowKeys?, reservedNumbers?, useAi}`):
+  the AI pass (`TB_TASK_CLASSES.ACCOUNT_NUMBERING`, the same class the CSV/PDF numbering uses;
+  consent `AI_PII.qboNumbering`; rows referred to by `ref` = rowKey) and then
+  `assignSequentialNumbers` in `lib/accountNumbering.ts` (pure, tested) for whatever the AI missed
+  or for everything when `useAi` is false / the provider fails — the client's own band per category
+  (whichever expense digit it favours), its own digit width, next multiple of ten above the band's
+  highest. QBO's Classification beats the model's category. The dialog badges each number `AI` /
+  `seq` (`numberSource`, cleared by a hand edit), highlights an empty Acct # in red, offers "Suggest
+  account numbers with AI" + an "in sequence" link (just the button when AI is off), and has
+  **view tabs** All / Matches / New accounts / Exceptions / Skipped over the same `rows` — filtered
+  for display only, every edit still addresses the original index. Its `AccountSearchDropdown`
+  carries `onCreateNew` → `QuickAddAccountModal`, the same flow as the AJE dialogs (a quick-added
+  account becomes a plain match after `['accounts', clientId]` is invalidated).
+  **Still no fuzzy matching in code**: the leftovers
   go to the opt-in AI pass — `POST /import/qbo/suggest-matches` (`lib/qbo/suggest.ts`,
   `TB_TASK_CLASSES.QBO_MATCH` = `tb_qbo_match`, consent dialog `AI_PII.qboMatch`) sends QBO
   names + Classification and COA number/name/category only (no client name, no amounts; COA rows

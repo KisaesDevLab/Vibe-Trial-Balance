@@ -29,7 +29,8 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
-import { inferAccountType } from '../lib/accountTypeInference';
+import { inferAccountType, type AccountCategory } from '../lib/accountTypeInference';
+import { assignSequentialNumbers } from '../lib/accountNumbering';
 import { suggestLeadSheet } from '../lib/leadSheets';
 import { loadQboConfig } from '../lib/qbo/settings';
 import { apiForConnection, loadConnectionForClient, QboConnectionError } from '../lib/qbo/tokenStore';
@@ -396,6 +397,192 @@ qboImportRouter.post('/suggest-matches', async (req: AuthRequest, res: Response)
   }
 });
 
+// ── POST /suggest-numbers ─────────────────────────────────────────────────────
+// Account numbers for the QuickBooks accounts that have none (a company that
+// never turned on account numbers sends every account without an AcctNum).
+// There is no `QB<Id>` placeholder any more: the preview will not confirm a
+// new account without a number, and this is how the reviewer gets one.
+//
+// Two sources, in order: the AI numbering pass (the same task class the CSV
+// and PDF imports use, opt-in with consent on the client) when `useAi` is set
+// and the router/provider answers, then `assignSequentialNumbers` for every
+// row the AI missed — or for all of them when AI is off or fails. Nothing is
+// written; the numbers land in the preview's editable Acct # cells.
+// `reservedNumbers` carries numbers earlier chunks were already handed.
+
+const numberSchema = z.object({
+  importId: z.number().int().positive(),
+  rowKeys: z.array(z.string().min(1).max(20)).max(500).optional(),
+  reservedNumbers: z.array(z.string().max(40)).max(5000).optional(),
+  useAi: z.boolean().optional().default(true),
+});
+
+const NUMBER_AI_BATCH_SIZE = 25;
+const NUMBER_AI_MAX_TOKENS = 8000;
+
+interface NumberSuggestion {
+  rowKey: string;
+  suggestedNumber: string;
+  suggestedCategory: string | null;
+  suggestedNormalBalance: string | null;
+  source: 'ai' | 'sequence';
+}
+
+const VALID_CATEGORIES = new Set(['assets', 'liabilities', 'equity', 'revenue', 'expenses']);
+
+qboImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response): Promise<void> => {
+  const parsed = numberSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    return;
+  }
+  const { importId, rowKeys, reservedNumbers, useAi } = parsed.data;
+  try {
+    const importRow = await db('document_imports').where({ id: importId, import_type: 'qbo' }).first();
+    if (!importRow) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Import not found.' } });
+      return;
+    }
+    if (importRow.status !== 'pending') {
+      res.status(409).json({ data: null, error: { code: 'IMPORT_ALREADY_CONFIRMED', message: 'This import was already confirmed. Run a new preview.' } });
+      return;
+    }
+    const clientId = importRow.client_id as number;
+    const periodId = importRow.period_id as number;
+    const stored = (typeof importRow.ai_extraction === 'string' ? JSON.parse(importRow.ai_extraction) : importRow.ai_extraction) as StoredQboImport;
+
+    const coa = await loadCoaForMatch(clientId);
+    const matched = matchRows(flattenTrialBalanceRows(stored.raw), coa, stored.accounts ?? []);
+    const wanted = rowKeys ? new Set(rowKeys) : null;
+    // Only rows QuickBooks sent without a number; a row that has one keeps it.
+    const targets = matched.filter(
+      (r) => (wanted ? wanted.has(r.rowKey) : true) && r.action !== 'match' && !(r.qboAcctNum ?? '').trim(),
+    );
+    if (targets.length === 0) {
+      res.json({ data: { suggestions: [] as NumberSuggestion[], rowsConsidered: 0, aiUsed: false, aiError: null }, error: null });
+      return;
+    }
+
+    const existing = coa.map((c) => ({ number: c.account_number, category: (c.category ?? null) as AccountCategory | null }));
+    const used = new Set<string>(existing.map((e) => e.number));
+    const reserved: string[] = [];
+    for (const n of reservedNumbers ?? []) {
+      const clean = String(n).trim();
+      if (clean) { reserved.push(clean); used.add(clean); }
+    }
+
+    const results = new Map<string, NumberSuggestion>();
+    let aiUsed = false;
+    let aiError: string | null = null;
+
+    if (useAi) {
+      try {
+        const { provider, fastModel } = await getLLMProvider();
+        const existingList = coa.map((c) => `${c.account_number} — ${c.account_name} (${c.category ?? 'untyped'})`).join('\n');
+        const assignedSoFar: string[] = [];
+        for (let i = 0; i < targets.length; i += NUMBER_AI_BATCH_SIZE) {
+          const batch = targets.slice(i, i + NUMBER_AI_BATCH_SIZE);
+          const accountList = batch
+            .map((r) => `ref ${r.rowKey}: "${r.qboFullName}"${r.newCategory ? ` [category: ${r.newCategory}]` : r.classification ? ` [QuickBooks type: ${r.classification}]` : ''}`)
+            .join('\n');
+          const prompt = `You are an expert accountant. Assign standard chart of accounts numbers to these accounts.
+
+Standard numbering conventions:
+- 1000-1999: Assets (1000-1099 cash/bank, 1100-1199 receivables, 1200-1299 inventory, 1300-1499 prepaid/other current, 1500-1999 fixed assets)
+- 2000-2999: Liabilities (2000-2099 accounts payable, 2100-2199 accrued liabilities, 2200-2499 other current, 2500-2999 long-term debt)
+- 3000-3999: Equity (3000-3099 contributed capital/paid-in, 3900-3999 retained earnings/distributions)
+- 4000-4999: Revenue / income
+- 5000-5999: Cost of goods sold / direct costs
+- 6000-7999: Operating expenses (6000-6999 general & admin, 7000-7999 other operating)
+- 8000-8999: Other income/expense, interest, taxes
+
+Follow the digit count and bands this chart already uses. Existing account numbers already in use (avoid conflicts):
+${existingList || '(none)'}
+${assignedSoFar.length > 0 ? `\nAlso already assigned earlier in this same import (avoid these too):\n${assignedSoFar.join(', ')}\n` : ''}
+
+Accounts that need numbers:
+${accountList}
+
+Assign numbers with gaps of 10-50 between consecutive entries to allow future insertions. Infer the category and normal balance from the account name when no category is given.
+
+Return ONLY a valid JSON array (no prose, no markdown fences). Use the EXACT ref values shown above:
+[
+  { "ref": "12", "suggestedNumber": "1000", "suggestedCategory": "assets", "suggestedNormalBalance": "debit" }
+]`;
+          const { result, logId } = await aiComplete(
+            provider,
+            {
+              model: fastModel,
+              taskClass: TB_TASK_CLASSES.ACCOUNT_NUMBERING,
+              maxTokens: Math.min(NUMBER_AI_MAX_TOKENS, Math.max(2048, batch.length * 150)),
+              messages: [{ role: 'user', content: prompt }],
+            },
+            { endpoint: 'qbo/suggest-numbers', userId: req.user?.userId, userRole: req.user?.role, clientId, periodId },
+          );
+          aiUsed = true;
+          type Raw = { ref?: string | number; suggestedNumber?: string | number; suggestedCategory?: string; suggestedNormalBalance?: string };
+          const arr = extractJsonArray<Raw>(result.text);
+          if (!arr) {
+            markAiUsageParseError(logId, `Invalid JSON (finish=${result.stopReason ?? 'unknown'}). text[0..500]=${JSON.stringify(result.text.slice(0, 500))}`);
+            continue;
+          }
+          const byKey = new Map(batch.map((r) => [r.rowKey, r]));
+          for (const raw of arr) {
+            if (!raw || typeof raw !== 'object') continue;
+            const row = byKey.get(String(raw.ref ?? '').trim());
+            if (!row || results.has(row.rowKey)) continue;
+            let num = String(raw.suggestedNumber ?? '').replace(/[^0-9]/g, '').slice(0, 20);
+            if (!num) continue;
+            while (used.has(num)) num = String(parseInt(num, 10) + 1);
+            used.add(num);
+            assignedSoFar.push(num);
+            const cat = String(raw.suggestedCategory ?? '').toLowerCase().trim();
+            const nb = String(raw.suggestedNormalBalance ?? '').toLowerCase().trim();
+            results.set(row.rowKey, {
+              rowKey: row.rowKey,
+              suggestedNumber: num,
+              // QuickBooks' own Classification, when it typed the row, beats the model's guess.
+              suggestedCategory: row.newCategory ?? (VALID_CATEGORIES.has(cat) ? cat : null),
+              suggestedNormalBalance: row.newNormalBalance ?? (nb === 'credit' || nb === 'debit' ? nb : null),
+              source: 'ai',
+            });
+          }
+        }
+      } catch (err) {
+        // AI unavailable or refused: the sequence fills every row instead,
+        // and the client is told why the numbers are plain.
+        aiError = err instanceof Error ? err.message : String(err);
+        console.warn(`[qbo/suggest-numbers] AI pass failed, numbering in sequence: ${aiError}`);
+      }
+    }
+
+    const rest = targets.filter((r) => !results.has(r.rowKey));
+    if (rest.length > 0) {
+      const seq = assignSequentialNumbers(
+        rest.map((r) => ({ key: r.rowKey, name: r.qboFullName, category: r.newCategory })),
+        existing,
+        [...reserved, ...Array.from(results.values()).map((s) => s.suggestedNumber)],
+      );
+      for (const s of seq) {
+        const row = rest.find((r) => r.rowKey === s.key)!;
+        results.set(s.key, {
+          rowKey: s.key,
+          suggestedNumber: s.number,
+          suggestedCategory: row.newCategory ?? s.category,
+          suggestedNormalBalance: row.newNormalBalance ?? s.normalBalance,
+          source: 'sequence',
+        });
+      }
+    }
+
+    const suggestions = targets.map((r) => results.get(r.rowKey)!);
+    res.json({ data: { suggestions, rowsConsidered: targets.length, aiUsed, aiError }, error: null });
+  } catch (err) {
+    if (respondQboError(res, err)) return;
+    sendServerError(res, err, 'qbo/suggest-numbers');
+  }
+});
+
 qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = confirmSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -460,7 +647,14 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
     const seenNew = new Set<string>();
     for (const r of finalRows) {
       if (r.action !== 'create_new') continue;
-      const num = r.newAccountNumber!;
+      // Same cleaning the insert applies, done here so a number that cleans
+      // to nothing is refused up front — there is no QB<Id> stand-in any more.
+      const num = (r.newAccountNumber ?? '').replace(/[^a-zA-Z0-9.\-]/g, '').slice(0, 20);
+      if (!num) {
+        res.status(422).json({ data: null, error: { code: 'MISSING_ACCOUNT_NUMBER', message: `"${r.qboFullName}" is a new account but has no usable account number.` } });
+        return;
+      }
+      r.newAccountNumber = num;
       if (seenNew.has(num)) {
         res.status(422).json({ data: null, error: { code: 'DUPLICATE_ACCOUNT_NUMBER', message: `Account number ${num} is used by more than one new account.` } });
         return;
@@ -553,7 +747,8 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
           accountId = r.matchedAccountId!;
           stats.accountsMatched++;
         } else {
-          const number = r.newAccountNumber!.replace(/[^a-zA-Z0-9.\-]/g, '').slice(0, 20) || `QB${(r.qboAccountId ?? r.rowKey).replace(/[^0-9]/g, '')}`.slice(0, 20);
+          // Cleaned and verified non-empty by the loop above.
+          const number = r.newAccountNumber!;
           const existing = existingByNumber.get(number);
           if (existing) {
             // Number already on the books (e.g. the number was retyped to an existing one): treat as a match.
