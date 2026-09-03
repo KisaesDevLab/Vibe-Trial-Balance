@@ -537,6 +537,14 @@ export function JournalEntriesPage() {
                   }`}>
                     {entry.entry_type === 'book' ? 'BOOK' : entry.entry_type === 'tax' ? 'TAX' : 'TRANS'} #{entry.entry_number}
                   </span>
+                  {entry.source_tag === 'py_tieout' && (
+                    <span
+                      title="Prior-year true-up, created from the PY Tie-Out screen. Posted in the current year; that screen shows what it does to the prior year."
+                      className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 mr-3 whitespace-nowrap"
+                    >
+                      PY true-up
+                    </span>
+                  )}
                   {entry.workpaper_ref && (
                     <span
                       title="Supporting workpaper"

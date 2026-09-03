@@ -23,6 +23,13 @@ export interface JournalEntry {
   description: string | null;
   /** Workpaper supporting this entry — printed on the AJE listing. */
   workpaper_ref: string | null;
+  /**
+   * What produced this entry, when it was not typed by hand. `py_tieout` is a
+   * prior-year true-up created from the PY Tie-Out screen; that screen applies
+   * these entries' lines back to the uploaded prior year to show whether it
+   * would tie, since the entry itself must be posted in the current year.
+   */
+  source_tag: 'py_tieout' | string | null;
   is_recurring: boolean;
   created_by: number | null;
   created_at: string;

@@ -18,6 +18,34 @@ export interface PyComparisonAccount {
   varianceDebit: number;
   varianceCredit: number;
   status: 'match' | 'diff';
+  /** Net effect of the tagged PY true-up entries on this account. */
+  trueUpDebit: number;
+  trueUpCredit: number;
+  /** uploaded + true-up — the prior year the adjustments imply. */
+  adjustedPyDebit: number;
+  adjustedPyCredit: number;
+  /** adjusted − rolled, net debit. 0 = this account ties to the rolled prior year. */
+  remainingVarianceCents: number;
+}
+
+/**
+ * What the tagged PY true-up entries do. They are posted in the CURRENT year
+ * because the prior one is closed, so this is the only place their effect on
+ * the prior year is visible.
+ */
+export interface PyTrueUpSummary {
+  trueUpEntries: number;
+  trueUpDebitCents: number;
+  trueUpCreditCents: number;
+  /** Σ net debit of the upload as it stands. 0 = the bookkeeper's file balances. */
+  uploadedNetCents: number;
+  /** Σ net debit after the true-ups. 0 = the adjusted prior year balances. */
+  adjustedNetCents: number;
+  rolledNetCents: number;
+  /** Accounts whose adjusted balance still differs from the rolled one. */
+  accountsStillOff: number;
+  /** Σ |adjusted − rolled|. Opposite misses do not cancel. */
+  remainingAbsCents: number;
 }
 
 export interface PyComparisonResult {
@@ -32,6 +60,7 @@ export interface PyComparisonResult {
     matched: number;
     variances: number;
     netVarianceCents: number;
+    trueUp: PyTrueUpSummary;
   };
 }
 

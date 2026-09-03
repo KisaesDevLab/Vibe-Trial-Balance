@@ -207,6 +207,26 @@ All planned phases complete. App is feature-complete.
   truth and the upload is the bookkeeper's opening balance, so the entry's sign is **rolled − uploaded**
   — the OPPOSITE of the Variance column (uploaded − rolled). `AjePanel` preview and
   `POST .../py-comparison/create-aje` both do this and must stay mirrored. It shipped reversed once.
+  **An account absent from the upload is uploaded ZERO, not "no data".** That is how the comparison
+  GET computes its variance (`pyMap.get(id) ?? {dr:0,cr:0}`), and it is the commonest reason to need a
+  true-up — the bookkeeper's file just omits the account. `create-aje` iterated the
+  `py_comparison_data` rows instead, so selecting only such an account 404'd with "No PY comparison
+  data found for selected accounts" while the panel showed a correct preview. It now iterates the
+  (deduped) `accountIds` and loads the whole period's upload as a map; the 404 survives only for a
+  period with **no** upload at all.
+- **PY true-ups are tagged** (`journal_entries.source_tag = 'py_tieout'`, migration `20260903000003`).
+  The entry must be posted in the CURRENT year — the prior one is closed — so the tag is the only way
+  to answer "would my adjustments make the prior year tie?". The comparison GET sums the tagged
+  entries' lines per account through `lib/pyTieOut.ts` (pure, tested) and returns `trueUpDebit/Credit`,
+  `adjustedPy*` (= uploaded + true-up) and `remainingVarianceCents` (= adjusted − rolled) per account,
+  plus a `summary.trueUp` block. **Balancing and tying are different questions and both are reported**:
+  `adjustedNetCents === 0` means the adjusted prior year balances, `accountsStillOff === 0` means it
+  ties to the rolled prior year account by account. A true-up whose offset went to Retained Earnings
+  balances by construction while leaving RE off the rolled figure — that is real and must stay
+  visible, not averaged away (`remainingAbsCents` sums magnitudes so opposite misses never cancel).
+  An account only a true-up touched gets a comparison row so the plug is never hidden. The screen
+  shows a True-up and a Remaining column (only once entries exist) plus a status strip; the JE list
+  badges the entry "PY true-up".
 - **TB grid has FOUR fixed leading columns** (Acct #, Name, Cat., LS) — `FIXED_COLS` in
   `TrialBalancePage.tsx` drives every leading `colSpan` (group header row + subtotal/total rows, both
   view modes). Adding a leading column means bumping that constant, not hunting literals. The

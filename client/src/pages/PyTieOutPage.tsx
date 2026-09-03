@@ -163,6 +163,12 @@ export function PyTieOutPage() {
   // ── Comparison state ─────────────────────────────────────────────────────
 
   const { source, accounts, summary } = result;
+  // Older responses (a cached page mid-deploy) carry no true-up block.
+  const trueUp = summary.trueUp ?? {
+    trueUpEntries: 0, trueUpDebitCents: 0, trueUpCreditCents: 0,
+    uploadedNetCents: 0, adjustedNetCents: 0, rolledNetCents: 0,
+    accountsStillOff: 0, remainingAbsCents: 0,
+  };
   const selectedVariances = accounts.filter((a) => selectedAccountIds.has(a.accountId) && a.status === 'diff');
 
   return (
@@ -265,6 +271,41 @@ export function PyTieOutPage() {
         </div>
       </div>
 
+      {/* PY true-up reconciliation — the whole point of tagging the entries:
+          they are posted in the CURRENT year because the prior one is closed,
+          so this is the only place their effect on the prior year is visible. */}
+      {trueUp.trueUpEntries > 0 && (
+        <div className={`px-6 py-2 border-b text-xs flex items-center gap-x-6 gap-y-1 flex-wrap ${
+          trueUp.accountsStillOff === 0 && trueUp.adjustedNetCents === 0
+            ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-800 dark:text-green-300'
+            : 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 text-indigo-800 dark:text-indigo-300'
+        }`}>
+          <span className="font-semibold">
+            {trueUp.trueUpEntries} PY true-up {trueUp.trueUpEntries === 1 ? 'entry' : 'entries'} applied
+          </span>
+          <span className="opacity-60">|</span>
+          <span title="Does the prior year, with these adjustments, balance on its own?">
+            Adjusted PY{' '}
+            {trueUp.adjustedNetCents === 0
+              ? <strong className="text-green-700 dark:text-green-400">balances</strong>
+              : <strong className="text-red-600 dark:text-red-400">out of balance by ${fmt(trueUp.adjustedNetCents)}</strong>}
+          </span>
+          <span className="opacity-60">|</span>
+          <span title="Does uploaded + true-ups equal this app's own prior year, account by account?">
+            {trueUp.accountsStillOff === 0
+              ? <strong className="text-green-700 dark:text-green-400">Ties to the rolled prior year</strong>
+              : <>
+                  <strong className="text-amber-600 dark:text-amber-400">{trueUp.accountsStillOff} account{trueUp.accountsStillOff === 1 ? '' : 's'} still differ{trueUp.accountsStillOff === 1 ? 's' : ''}</strong>
+                  {' '}from the rolled prior year (${fmt(trueUp.remainingAbsCents)} total)
+                </>}
+          </span>
+          <span className="flex-1" />
+          <span className="text-gray-500 dark:text-gray-400">
+            These entries are posted in the current year — this line shows what they would do to the prior year.
+          </span>
+        </div>
+      )}
+
       {/* Comparison table */}
       <div className="flex-1 overflow-auto">
         <ComparisonTable
@@ -273,6 +314,7 @@ export function PyTieOutPage() {
           onSelectionChange={setSelectedAccountIds}
           viewMode={viewMode}
           searchFilter={searchFilter}
+          showTrueUp={trueUp.trueUpEntries > 0}
         />
       </div>
 

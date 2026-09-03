@@ -21,11 +21,13 @@ interface Props {
   onSelectionChange: (ids: Set<number>) => void;
   viewMode: 'all' | 'variances';
   searchFilter: string;
+  /** Show the true-up and remaining columns — only worth the width once entries exist. */
+  showTrueUp: boolean;
 }
 
 function netBalance(dr: number, cr: number): number { return dr - cr; }
 
-export function ComparisonTable({ accounts, selectedIds, onSelectionChange, viewMode, searchFilter }: Props) {
+export function ComparisonTable({ accounts, selectedIds, onSelectionChange, viewMode, searchFilter, showTrueUp }: Props) {
   const filtered = useMemo(() => {
     let list = accounts;
     if (viewMode === 'variances') list = list.filter((a) => a.status === 'diff');
@@ -42,17 +44,19 @@ export function ComparisonTable({ accounts, selectedIds, onSelectionChange, view
 
   // Group by category
   const grouped = useMemo(() => {
-    const groups: Array<{ category: string; label: string; rows: PyComparisonAccount[]; subtotalRolled: number; subtotalUploaded: number; subtotalVariance: number }> = [];
+    const groups: Array<{ category: string; label: string; rows: PyComparisonAccount[]; subtotalRolled: number; subtotalUploaded: number; subtotalVariance: number; subtotalTrueUp: number; subtotalRemaining: number }> = [];
     let current: typeof groups[0] | null = null;
     for (const a of filtered) {
       if (!current || current.category !== a.category) {
-        current = { category: a.category, label: CATEGORY_LABELS[a.category] ?? a.category, rows: [], subtotalRolled: 0, subtotalUploaded: 0, subtotalVariance: 0 };
+        current = { category: a.category, label: CATEGORY_LABELS[a.category] ?? a.category, rows: [], subtotalRolled: 0, subtotalUploaded: 0, subtotalVariance: 0, subtotalTrueUp: 0, subtotalRemaining: 0 };
         groups.push(current);
       }
       current.rows.push(a);
       current.subtotalRolled += netBalance(a.rolledPyDebit, a.rolledPyCredit);
       current.subtotalUploaded += netBalance(a.uploadedPyDebit, a.uploadedPyCredit);
       current.subtotalVariance += (a.varianceDebit - a.varianceCredit);
+      current.subtotalTrueUp += netBalance(a.trueUpDebit ?? 0, a.trueUpCredit ?? 0);
+      current.subtotalRemaining += a.remainingVarianceCents ?? 0;
     }
     return groups;
   }, [filtered]);
@@ -75,12 +79,14 @@ export function ComparisonTable({ accounts, selectedIds, onSelectionChange, view
     onSelectionChange(next);
   };
 
-  const colCount = 8;
+  const colCount = showTrueUp ? 10 : 8;
 
   // Grand totals across all filtered accounts
   const totalRolled = filtered.reduce((s, a) => s + netBalance(a.rolledPyDebit, a.rolledPyCredit), 0);
   const totalUploaded = filtered.reduce((s, a) => s + netBalance(a.uploadedPyDebit, a.uploadedPyCredit), 0);
   const totalVariance = filtered.reduce((s, a) => s + (a.varianceDebit - a.varianceCredit), 0);
+  const totalTrueUp = filtered.reduce((s, a) => s + netBalance(a.trueUpDebit ?? 0, a.trueUpCredit ?? 0), 0);
+  const totalRemaining = filtered.reduce((s, a) => s + (a.remainingVarianceCents ?? 0), 0);
 
   return (
     <table className="w-full text-sm border-collapse">
@@ -103,6 +109,12 @@ export function ComparisonTable({ accounts, selectedIds, onSelectionChange, view
           <th className="px-2 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Rolled PY</th>
           <th className="px-2 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Uploaded PY</th>
           <th className="px-2 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Variance</th>
+          {showTrueUp && (
+            <>
+              <th title="Net effect of the tagged PY true-up entries on this account" className="px-2 py-2 text-right text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase">True-up</th>
+              <th title="Uploaded + true-up, against the rolled prior year. Blank means this account ties." className="px-2 py-2 text-right text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase">Remaining</th>
+            </>
+          )}
         </tr>
       </thead>
       <tbody>
@@ -113,6 +125,7 @@ export function ComparisonTable({ accounts, selectedIds, onSelectionChange, view
             selectedIds={selectedIds}
             onToggle={toggleOne}
             colCount={colCount}
+            showTrueUp={showTrueUp}
           />
         ))}
         {filtered.length === 0 && (
@@ -140,6 +153,16 @@ export function ComparisonTable({ accounts, selectedIds, onSelectionChange, view
             }`}>
               {fmtNet(totalVariance)}
             </td>
+            {showTrueUp && (
+              <>
+                <td className="px-2 py-2 text-right font-mono tabular-nums text-sm text-indigo-700 dark:text-indigo-300">{fmtNet(totalTrueUp)}</td>
+                <td className={`px-2 py-2 text-right font-mono tabular-nums text-sm font-bold ${
+                  totalRemaining === 0 ? 'text-green-700 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'
+                }`}>
+                  {totalRemaining === 0 ? 'ties' : fmtNet(totalRemaining)}
+                </td>
+              </>
+            )}
           </tr>
         </tfoot>
       )}
@@ -147,11 +170,12 @@ export function ComparisonTable({ accounts, selectedIds, onSelectionChange, view
   );
 }
 
-function GroupRows({ group, selectedIds, onToggle, colCount }: {
-  group: { category: string; label: string; rows: PyComparisonAccount[]; subtotalRolled: number; subtotalUploaded: number; subtotalVariance: number };
+function GroupRows({ group, selectedIds, onToggle, colCount, showTrueUp }: {
+  group: { category: string; label: string; rows: PyComparisonAccount[]; subtotalRolled: number; subtotalUploaded: number; subtotalVariance: number; subtotalTrueUp: number; subtotalRemaining: number };
   selectedIds: Set<number>;
   onToggle: (id: number) => void;
   colCount: number;
+  showTrueUp: boolean;
 }) {
   return (
     <>
@@ -166,6 +190,8 @@ function GroupRows({ group, selectedIds, onToggle, colCount }: {
         const rolledNet = netBalance(a.rolledPyDebit, a.rolledPyCredit);
         const uploadedNet = netBalance(a.uploadedPyDebit, a.uploadedPyCredit);
         const variance = a.varianceDebit - a.varianceCredit;
+        const trueUpNet = netBalance(a.trueUpDebit ?? 0, a.trueUpCredit ?? 0);
+        const remaining = a.remainingVarianceCents ?? 0;
         const isDiff = a.status === 'diff';
         return (
           <tr
@@ -205,6 +231,21 @@ function GroupRows({ group, selectedIds, onToggle, colCount }: {
             }`}>
               {fmtNet(variance)}
             </td>
+            {showTrueUp && (
+              <>
+                <td className={`px-2 py-1.5 text-right font-mono tabular-nums ${trueUpNet === 0 ? 'text-gray-300 dark:text-gray-600' : 'text-indigo-700 dark:text-indigo-300'}`}>
+                  {fmtNet(trueUpNet)}
+                </td>
+                <td
+                  title={remaining === 0 ? 'Uploaded + true-up equals the rolled prior year' : 'Still differs from the rolled prior year after the true-ups'}
+                  className={`px-2 py-1.5 text-right font-mono tabular-nums font-semibold ${
+                    remaining === 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'
+                  }`}
+                >
+                  {remaining === 0 ? '✓' : fmtNet(remaining)}
+                </td>
+              </>
+            )}
           </tr>
         );
       })}
@@ -224,6 +265,16 @@ function GroupRows({ group, selectedIds, onToggle, colCount }: {
         }`}>
           {fmtNet(group.subtotalVariance)}
         </td>
+        {showTrueUp && (
+          <>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-xs text-indigo-600 dark:text-indigo-400">{fmtNet(group.subtotalTrueUp)}</td>
+            <td className={`px-2 py-1 text-right font-mono tabular-nums text-xs font-semibold ${
+              group.subtotalRemaining === 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'
+            }`}>
+              {fmtNet(group.subtotalRemaining)}
+            </td>
+          </>
+        )}
       </tr>
     </>
   );

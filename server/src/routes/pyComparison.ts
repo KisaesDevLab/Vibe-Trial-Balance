@@ -9,6 +9,10 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { sendServerError } from '../lib/safeError';
+import { reconcilePyTieOut, sumTrueUpLines, type TrueUpLine } from '../lib/pyTieOut';
+
+/** `journal_entries.source_tag` for an entry this screen created. */
+export const PY_TIEOUT_TAG = 'py_tieout';
 
 export const pyComparisonRouter = Router({ mergeParams: true });
 pyComparisonRouter.use(authMiddleware);
@@ -87,6 +91,11 @@ pyComparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
       pyMap.set(py.account_id, { dr: Number(py.py_debit), cr: Number(py.py_credit) });
     }
 
+    // Named lookup for accounts that appear only on a true-up line.
+    const coaById = new Map<number, { account_number: string; account_name: string; category: string }>();
+    for (const r of tbRows) coaById.set(r.account_id, { account_number: r.account_number, account_name: r.account_name, category: r.category });
+    for (const r of pyRows) coaById.set(r.account_id, { account_number: r.account_number, account_name: r.account_name, category: r.category });
+
     // Build comparison: union of all accounts in either TB or PY data
     type ComparisonAccount = {
       accountId: number;
@@ -100,6 +109,14 @@ pyComparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
       varianceDebit: number;
       varianceCredit: number;
       status: 'match' | 'diff';
+      /** Net effect of the tagged PY true-up entries on this account. */
+      trueUpDebit?: number;
+      trueUpCredit?: number;
+      /** uploaded + true-up. */
+      adjustedPyDebit?: number;
+      adjustedPyCredit?: number;
+      /** adjusted − rolled, net debit. 0 = this account ties. */
+      remainingVarianceCents?: number;
     };
     const accounts: ComparisonAccount[] = [];
     const seen = new Set<number>();
@@ -162,11 +179,58 @@ pyComparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
     };
 
     const variances = accounts.filter((a) => a.status === 'diff');
+
+    // Tagged PY true-ups. They are posted in the CURRENT year — the prior year
+    // is closed — so the only way to answer "would my adjustments make the
+    // prior year tie?" is to apply their lines to the uploaded balances here.
+    const tagged = (await db('journal_entries')
+      .where({ period_id: periodId, source_tag: PY_TIEOUT_TAG })
+      .select('id')) as Array<{ id: number }>;
+    const taggedLines: TrueUpLine[] = tagged.length === 0 ? [] : ((await db('journal_entry_lines')
+      .whereIn('journal_entry_id', tagged.map((t) => t.id))
+      .select('account_id', 'debit', 'credit')) as Array<{ account_id: number; debit: string | number; credit: string | number }>)
+      .map((l) => ({ accountId: l.account_id, debit: Number(l.debit), credit: Number(l.credit) }));
+
+    const tieOut = reconcilePyTieOut(accounts, sumTrueUpLines(taggedLines), tagged.length);
+    // An account only a true-up touched (an offset that carried no variance of
+    // its own) has no comparison row yet; give it one so the plug is visible.
+    for (const [accountId, row] of tieOut.rows) {
+      if (accounts.some((a) => a.accountId === accountId)) continue;
+      const coa = coaById.get(accountId);
+      accounts.push({
+        accountId,
+        accountNumber: coa?.account_number ?? String(accountId),
+        accountName: coa?.account_name ?? 'Unknown account',
+        category: coa?.category ?? 'assets',
+        rolledPyDebit: 0,
+        rolledPyCredit: 0,
+        uploadedPyDebit: 0,
+        uploadedPyCredit: 0,
+        varianceDebit: 0,
+        varianceCredit: 0,
+        status: 'match',
+        trueUpDebit: row.trueUpDebit,
+        trueUpCredit: row.trueUpCredit,
+        adjustedPyDebit: row.adjustedPyDebit,
+        adjustedPyCredit: row.adjustedPyCredit,
+        remainingVarianceCents: row.remainingVarianceCents,
+      });
+    }
+    for (const a of accounts) {
+      const row = tieOut.rows.get(a.accountId);
+      a.trueUpDebit = row?.trueUpDebit ?? 0;
+      a.trueUpCredit = row?.trueUpCredit ?? 0;
+      a.adjustedPyDebit = row?.adjustedPyDebit ?? a.uploadedPyDebit;
+      a.adjustedPyCredit = row?.adjustedPyCredit ?? a.uploadedPyCredit;
+      a.remainingVarianceCents = row?.remainingVarianceCents ?? 0;
+    }
+
     const summary = {
       totalAccounts: accounts.length,
       matched: accounts.length - variances.length,
       variances: variances.length,
       netVarianceCents: accounts.reduce((s, a) => s + (a.varianceDebit - a.varianceCredit), 0),
+      trueUp: tieOut.summary,
     };
 
     res.json({ data: { source, accounts, summary }, error: null });
@@ -641,15 +705,24 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
     const entry = await db.transaction(async (trx) => {
       await assertPeriodUnlocked(periodId, trx);
 
-      // Get PY comparison data for selected accounts
+      // The WHOLE period's upload, not just the selected accounts: an account
+      // absent from the file is uploaded ZERO, not "no data". That is exactly
+      // how the comparison screen computes its variance, and it is the most
+      // common reason to need a true-up — the bookkeeper's file simply omitted
+      // the account. Selecting only such rows used to refuse the entry with
+      // "No PY comparison data found for selected accounts" even though the
+      // screen was showing the variance and a correct preview of the lines.
       const pyRows = await trx('py_comparison_data')
-        .whereIn('account_id', accountIds)
         .where({ period_id: periodId })
         .select('account_id', 'py_debit', 'py_credit');
 
       if (pyRows.length === 0) {
-        throw Object.assign(new Error('No PY comparison data found for selected accounts'), { code: 'NOT_FOUND', status: 404 });
+        throw Object.assign(new Error('No prior-year balances have been uploaded for this period, so there is nothing to true up against.'), { code: 'NOT_FOUND', status: 404 });
       }
+      const pyMap = new Map<number, { dr: number; cr: number }>(
+        pyRows.map((r: { account_id: number; py_debit: string | number; py_credit: string | number }) =>
+          [r.account_id, { dr: Number(r.py_debit), cr: Number(r.py_credit) }]),
+      );
 
       // Get rolled PY from trial_balance
       const tbRows = await trx('trial_balance')
@@ -666,23 +739,25 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
       let totalDebit = 0;
       let totalCredit = 0;
 
-      for (const py of pyRows) {
-        const rolled = tbMap.get(py.account_id) ?? { pyDr: 0, pyCr: 0 };
+      // Deduped: one line per account however the selection arrived.
+      for (const accountId of Array.from(new Set(accountIds))) {
+        const rolled = tbMap.get(accountId) ?? { pyDr: 0, pyCr: 0 };
+        const uploaded = pyMap.get(accountId) ?? { dr: 0, cr: 0 };
         // Direction: the rolled PY (this app's final prior year, AJEs
         // included) is the truth and the upload is the bookkeeper's opening
         // balance. The entry brings the bookkeeper's balance TO the rolled
         // one, so a positive value here (rolled more debit than uploaded) is
         // a DEBIT. This is rolled − uploaded — the opposite sign of the
         // variance column, which reads uploaded − rolled. Mirrors AjePanel.
-        const netVariance = (rolled.pyDr - Number(py.py_debit)) - (rolled.pyCr - Number(py.py_credit));
+        const netVariance = (rolled.pyDr - uploaded.dr) - (rolled.pyCr - uploaded.cr);
 
         if (netVariance === 0) continue;
 
         if (netVariance > 0) {
-          lines.push({ accountId: py.account_id, debit: netVariance, credit: 0 });
+          lines.push({ accountId, debit: netVariance, credit: 0 });
           totalDebit += netVariance;
         } else {
-          lines.push({ accountId: py.account_id, debit: 0, credit: Math.abs(netVariance) });
+          lines.push({ accountId, debit: 0, credit: Math.abs(netVariance) });
           totalCredit += Math.abs(netVariance);
         }
       }
@@ -726,6 +801,10 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
           entry_date: entryDate,
           description: description ?? 'PY true-up — bring opening balances to prior-year final',
           is_recurring: false,
+          // Tagged so the tie-out screen can apply these lines back to the
+          // uploaded prior year and report whether it would tie — the entry
+          // itself has to be posted in the current year, the prior one is closed.
+          source_tag: PY_TIEOUT_TAG,
           created_by: req.user!.userId,
         })
         .returning('*');
