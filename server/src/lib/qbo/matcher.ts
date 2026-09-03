@@ -50,7 +50,7 @@ export interface QboAccountLite {
 
 export type MatchAction = 'match' | 'create_new' | 'exception';
 export type MatchType = 'qbo_id' | 'acct_num' | 'qbo_name' | 'name';
-export type ExceptionReason = 'NO_ACCOUNT_ID' | 'ACCT_NUM_BOUND_ELSEWHERE' | 'DUPLICATE_ACCT_NUM';
+export type ExceptionReason = 'NO_ACCOUNT_ID' | 'ACCT_NUM_BOUND_ELSEWHERE' | 'DUPLICATE_ACCT_NUM' | 'ACCT_NUM_INACTIVE';
 
 export interface MatchedRow {
   /** Stable per-import key: the row's index in the flattened report. */
@@ -123,7 +123,19 @@ export function normalizeQboDisplayName(name: string): string {
 // POST /import/qbo/suggest-numbers). A `QB<Id>` stand-in used to be minted
 // here; it leaked into charts of accounts as a real number.
 
-export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccounts: QboAccountLite[]): MatchedRow[] {
+export interface MatchOptions {
+  /**
+   * Numbers held by this client's INACTIVE accounts. They are not match
+   * candidates (a balance must not land on a retired account), but the
+   * `UNIQUE (client_id, account_number)` index still counts them, so a
+   * create-new that would reuse one is an exception in the preview instead
+   * of a duplicate-key 500 at confirm.
+   */
+  inactiveNumbers?: ReadonlySet<string>;
+}
+
+export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccounts: QboAccountLite[], opts: MatchOptions = {}): MatchedRow[] {
+  const inactiveNumbers = opts.inactiveNumbers ?? new Set<string>();
   const coaByQboId = new Map<string, CoaRowForMatch>();
   const coaByNumber = new Map<string, CoaRowForMatch>();
   for (const c of coa) {
@@ -196,6 +208,9 @@ export function matchRows(rows: QboReportRow[], coa: CoaRowForMatch[], qboAccoun
     if (newNumber !== null) {
       if (claimedNewNumbers.has(newNumber) || coaByNumber.has(newNumber)) {
         return { ...base, exceptionReason: 'DUPLICATE_ACCT_NUM' };
+      }
+      if (inactiveNumbers.has(newNumber)) {
+        return { ...base, exceptionReason: 'ACCT_NUM_INACTIVE' };
       }
       claimedNewNumbers.add(newNumber);
     }

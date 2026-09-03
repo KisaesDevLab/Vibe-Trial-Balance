@@ -1,6 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { describeBlockingTable, foreignKeyBlockMessage, isForeignKeyViolation, isRaisedException } from '../pgErrors';
+import { describeBlockingTable, foreignKeyBlockMessage, isForeignKeyViolation, isRaisedException, isUniqueViolation, uniqueViolationMessage } from '../pgErrors';
+
+test('unique violations name the index a user can run into, else fall back to the detail', () => {
+  assert.equal(isUniqueViolation({ code: '23505' }), true);
+  assert.equal(isUniqueViolation({ code: '23503' }), false);
+  assert.match(
+    uniqueViolationMessage({ code: '23505', constraint: 'chart_of_accounts_client_id_account_number_unique' }, 'import'),
+    /^Cannot import: that account number already exists/,
+  );
+  assert.match(
+    uniqueViolationMessage({ code: '23505', constraint: 'chart_of_accounts_qbo_account_unique' }, 'import'),
+    /already linked to another account/,
+  );
+  assert.equal(
+    uniqueViolationMessage({ code: '23505', constraint: 'some_other_unique', detail: 'Key (x)=(1) already exists.' }, 'save'),
+    'Cannot save: key (x)=(1) already exists.',
+  );
+});
 
 test('isRaisedException recognises a trigger RAISE (P0001) that carries a message', () => {
   assert.equal(isRaisedException({ code: 'P0001', message: 'audit_log is append-only: DELETE is not permitted.' }), true);

@@ -108,6 +108,7 @@ const EXCEPTION_TEXT: Record<QboExceptionReason, string> = {
   NO_ACCOUNT_ID: 'QuickBooks reported this line without an account id — pick the account it belongs to, or leave it out.',
   ACCT_NUM_BOUND_ELSEWHERE: 'An account with this number is already linked to a different QuickBooks account — pick where this one goes.',
   DUPLICATE_ACCT_NUM: 'Another QuickBooks account on this report already claims this account number.',
+  ACCT_NUM_INACTIVE: 'An inactive account on the chart already has this number — reactivate it and match to it, or create the account with a different number.',
 };
 
 const WARNING_TEXT: Record<string, string> = {

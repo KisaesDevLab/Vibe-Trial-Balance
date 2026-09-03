@@ -44,6 +44,7 @@ import {
 } from '../lib/qbo/reportParser';
 import { findAbsentNonzeroAccounts, matchRows, type CoaRowForMatch, type QboAccountLite } from '../lib/qbo/matcher';
 import { applyDecisions, DecisionError } from '../lib/qbo/decisions';
+import { isUniqueViolation, uniqueViolationMessage } from '../lib/pgErrors';
 import { buildSuggestPrompt, sanitizeSuggestions, QBO_SUGGEST_BATCH_SIZE, type MatchSuggestion, type SuggestCandidate } from '../lib/qbo/suggest';
 import { aiComplete, markAiUsageParseError } from '../lib/aiComplete';
 import { getLLMProvider } from '../lib/aiClient';
@@ -111,6 +112,20 @@ async function loadCoaForMatch(clientId: number): Promise<CoaRowForMatch[]> {
   return (await db('chart_of_accounts')
     .where({ client_id: clientId, is_active: true })
     .select('id', 'account_number', 'account_name', 'qbo_account_id', 'qbo_account_name', 'category')) as CoaRowForMatch[];
+}
+
+/**
+ * The client's INACTIVE accounts, by number. Never match candidates, but the
+ * chart's unique indexes still count them: a confirm that created an account
+ * with a retired account's number, or one still carrying the QuickBooks id a
+ * retired account holds, died on a duplicate-key 500. Every step that picks
+ * or checks a number sees these as taken.
+ */
+async function loadInactiveByNumber(clientId: number): Promise<Map<string, { id: number; account_name: string; qbo_account_id: string | null }>> {
+  const rows = (await db('chart_of_accounts')
+    .where({ client_id: clientId, is_active: false })
+    .select('id', 'account_number', 'account_name', 'qbo_account_id')) as Array<{ id: number; account_number: string; account_name: string; qbo_account_id: string | null }>;
+  return new Map(rows.map((r) => [r.account_number.trim(), { id: r.id, account_name: r.account_name, qbo_account_id: r.qbo_account_id }]));
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -205,7 +220,8 @@ qboImportRouter.post('/preview', async (req: AuthRequest, res: Response): Promis
     }
 
     const coa = await loadCoaForMatch(clientId);
-    const rows = matchRows(reportRows, coa, accounts);
+    const inactive = await loadInactiveByNumber(clientId);
+    const rows = matchRows(reportRows, coa, accounts, { inactiveNumbers: new Set(inactive.keys()) });
     const matchedIds = new Set(rows.filter((r) => r.matchedAccountId !== null).map((r) => r.matchedAccountId!));
     const tbRows = (await db('trial_balance as tb')
       .join('chart_of_accounts as coa', 'coa.id', 'tb.account_id')
@@ -349,7 +365,8 @@ qboImportRouter.post('/suggest-matches', async (req: AuthRequest, res: Response)
     const stored = (typeof importRow.ai_extraction === 'string' ? JSON.parse(importRow.ai_extraction) : importRow.ai_extraction) as StoredQboImport;
 
     const coa = await loadCoaForMatch(clientId);
-    const matched = matchRows(flattenTrialBalanceRows(stored.raw), coa, stored.accounts ?? []);
+    const inactive = await loadInactiveByNumber(clientId);
+    const matched = matchRows(flattenTrialBalanceRows(stored.raw), coa, stored.accounts ?? [], { inactiveNumbers: new Set(inactive.keys()) });
     const wanted = rowKeys ? new Set(rowKeys) : null;
     const unresolved = matched.filter(
       (r) => (wanted ? wanted.has(r.rowKey) : true) && r.qboAccountId !== null && r.action !== 'match',
@@ -452,7 +469,8 @@ qboImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response)
     const stored = (typeof importRow.ai_extraction === 'string' ? JSON.parse(importRow.ai_extraction) : importRow.ai_extraction) as StoredQboImport;
 
     const coa = await loadCoaForMatch(clientId);
-    const matched = matchRows(flattenTrialBalanceRows(stored.raw), coa, stored.accounts ?? []);
+    const inactive = await loadInactiveByNumber(clientId);
+    const matched = matchRows(flattenTrialBalanceRows(stored.raw), coa, stored.accounts ?? [], { inactiveNumbers: new Set(inactive.keys()) });
     const wanted = rowKeys ? new Set(rowKeys) : null;
     // Only rows QuickBooks sent without a number; a row that has one keeps it.
     const targets = matched.filter(
@@ -464,6 +482,8 @@ qboImportRouter.post('/suggest-numbers', async (req: AuthRequest, res: Response)
     }
 
     const existing = coa.map((c) => ({ number: c.account_number, category: (c.category ?? null) as AccountCategory | null }));
+    // Inactive accounts keep their numbers: neither the model nor the sequence may hand one out.
+    for (const n of inactive.keys()) existing.push({ number: n, category: null });
     const used = new Set<string>(existing.map((e) => e.number));
     const reserved: string[] = [];
     for (const n of reservedNumbers ?? []) {
@@ -624,7 +644,8 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       return;
     }
     const existingCoa = await loadCoaForMatch(clientId);
-    const matched = matchRows(reportRows, existingCoa, stored.accounts ?? []);
+    const inactive = await loadInactiveByNumber(clientId);
+    const matched = matchRows(reportRows, existingCoa, stored.accounts ?? [], { inactiveNumbers: new Set(inactive.keys()) });
     let finalRows;
     try {
       finalRows = applyDecisions(matched, decisions);
@@ -655,6 +676,17 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
         return;
       }
       r.newAccountNumber = num;
+      const retired = inactive.get(num);
+      if (retired) {
+        res.status(422).json({
+          data: null,
+          error: {
+            code: 'ACCOUNT_NUMBER_INACTIVE',
+            message: `Account number ${num} belongs to the inactive account "${retired.account_name}". Reactivate that account in the Chart of Accounts and match "${r.qboFullName}" to it, or give the new account a different number.`,
+          },
+        });
+        return;
+      }
       if (seenNew.has(num)) {
         res.status(422).json({ data: null, error: { code: 'DUPLICATE_ACCOUNT_NUMBER', message: `Account number ${num} is used by more than one new account.` } });
         return;
@@ -759,6 +791,14 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
             const normalBalance = r.newNormalBalance ?? inferAccountType(number, r.newAccountName ?? '').normalBalance;
             const hit = suggestLeadSheet({ category, subcategory: null, accountNumber: number, accountName: r.newAccountName ?? '' });
             const leadSheetId = hit ? leadSheetByCode.get(hit.code.toUpperCase()) ?? null : null;
+            // An account nothing on the preview could see (inactive, or bound
+            // since the preview) may still hold this QuickBooks id; the partial
+            // unique index would refuse the insert. The reviewer chose to create
+            // a new account for it, so the old link is stale — clear it first,
+            // exactly as stampQboId does for a match.
+            if (r.qboAccountId) {
+              await trx('chart_of_accounts').where({ client_id: clientId, qbo_account_id: r.qboAccountId }).update({ qbo_account_id: null });
+            }
             const [created] = (await trx('chart_of_accounts')
               .insert({
                 client_id: clientId,
@@ -855,6 +895,13 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       return;
     }
     if (respondQboError(res, err)) return;
+    // A unique index nothing above caught (a number or QuickBooks link taken
+    // by a row the preview could not see): say which, instead of "internal error".
+    if (isUniqueViolation(err)) {
+      console.warn(`[qbo-import confirm] refused by ${err.constraint ?? 'a unique index'}: ${err.detail ?? ''}`);
+      res.status(409).json({ data: null, error: { code: 'IMPORT_CONFLICT', message: uniqueViolationMessage(err, 'import') } });
+      return;
+    }
     sendServerError(res, err, 'qbo-import confirm');
   }
 });

@@ -140,7 +140,7 @@ export interface QboPriorRange {
 }
 export type QboMatchAction = 'match' | 'create_new' | 'exception';
 export type QboDecisionAction = 'match' | 'create_new' | 'skip';
-export type QboExceptionReason = 'NO_ACCOUNT_ID' | 'ACCT_NUM_BOUND_ELSEWHERE' | 'DUPLICATE_ACCT_NUM';
+export type QboExceptionReason = 'NO_ACCOUNT_ID' | 'ACCT_NUM_BOUND_ELSEWHERE' | 'DUPLICATE_ACCT_NUM' | 'ACCT_NUM_INACTIVE';
 
 export interface QboPreviewRow {
   rowKey: string;

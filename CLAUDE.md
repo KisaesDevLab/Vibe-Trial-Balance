@@ -442,6 +442,19 @@ All planned phases complete. App is feature-complete.
   for display only, every edit still addresses the original index. Its `AccountSearchDropdown`
   carries `onCreateNew` → `QuickAddAccountModal`, the same flow as the AJE dialogs (a quick-added
   account becomes a plain match after `['accounts', clientId]` is invalidated).
+  **Inactive accounts are invisible to the preview but not to the unique indexes.** `loadCoaForMatch`
+  is `is_active` only, so a confirm that created an account with a retired account's number, or one
+  whose QBO id a retired account still held, died on `chart_of_accounts_client_id_account_number_unique`
+  / `chart_of_accounts_qbo_account_unique` as a bare 500 (reproduced end to end against a throwaway
+  Postgres with the real server — `scratchpad/repro_qbo_confirm.sh` pattern: migrate, seed admin,
+  rotate the bootstrap password via `/auth/change-password`, insert a `document_imports` row with a
+  synthetic report, POST `/confirm`). Now `loadInactiveByNumber` feeds `matchRows(..., { inactiveNumbers })`
+  at every call site (an AcctNum on a retired account is exception `ACCT_NUM_INACTIVE`), suggest-numbers
+  treats retired numbers as taken, the confirm refuses a typed retired number with `422
+  ACCOUNT_NUMBER_INACTIVE` naming the account, and a create-new insert first clears the QBO id from
+  whatever row holds it (the reviewer chose "new", so the old link is stale — the same clearing
+  `stampQboId` does for a match). Any 23505 that still escapes is a `409 IMPORT_CONFLICT` via
+  `isUniqueViolation` / `uniqueViolationMessage` in `lib/pgErrors.ts`, never "internal error".
   **Still no fuzzy matching in code**: the leftovers
   go to the opt-in AI pass — `POST /import/qbo/suggest-matches` (`lib/qbo/suggest.ts`,
   `TB_TASK_CLASSES.QBO_MATCH` = `tb_qbo_match`, consent dialog `AI_PII.qboMatch`) sends QBO

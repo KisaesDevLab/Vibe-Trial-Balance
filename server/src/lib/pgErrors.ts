@@ -26,6 +26,28 @@ export function isForeignKeyViolation(err: unknown): err is PgErrorShape {
   return typeof err === 'object' && err !== null && (err as PgErrorShape).code === PG_FOREIGN_KEY_VIOLATION;
 }
 
+/** SQLSTATE 23505 */
+export const PG_UNIQUE_VIOLATION = '23505';
+
+export function isUniqueViolation(err: unknown): err is PgErrorShape {
+  return typeof err === 'object' && err !== null && (err as PgErrorShape).code === PG_UNIQUE_VIOLATION;
+}
+
+/** Readable text for the unique indexes a user can actually run into. */
+const UNIQUE_LABELS: Record<string, string> = {
+  chart_of_accounts_client_id_account_number_unique: 'that account number already exists on this client\'s chart of accounts (it may be on an inactive account)',
+  chart_of_accounts_qbo_account_unique: 'that QuickBooks account is already linked to another account on this client (it may be an inactive one)',
+  trial_balance_period_id_account_id_unique: 'that account already has a trial balance row for this period',
+  qbo_connections_client_id_unique: 'this client already has a QuickBooks connection',
+};
+
+/** "Cannot import: that account number already exists…" */
+export function uniqueViolationMessage(err: PgErrorShape, subject: string): string {
+  const known = err.constraint ? UNIQUE_LABELS[err.constraint] : undefined;
+  const what = known ?? (err.detail ? err.detail.replace(/^Key /, 'key ').replace(/\.$/, '') : 'a value that must be unique is already taken');
+  return `Cannot ${subject}: ${what}.`;
+}
+
 /** SQLSTATE P0001 — a PL/pgSQL `RAISE EXCEPTION` with no explicit code, i.e. one of our own triggers refusing. */
 export const PG_RAISE_EXCEPTION = 'P0001';
 
