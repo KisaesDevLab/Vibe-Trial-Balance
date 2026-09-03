@@ -17,6 +17,8 @@ import {
   type AssignmentSuggestion,
 } from '../api/taxLineAssignment';
 import { AssignmentPreviewModal } from '../components/AssignmentPreviewModal';
+import { Spinner } from '../components/Spinner';
+import { mapWithConcurrency } from '../utils/concurrency';
 import { categoryNet } from '../lib/accounting';
 import { confirmAction } from '../components/ConfirmDialog';
 
@@ -622,6 +624,11 @@ export function TaxMappingPage() {
   // unmapped COA that adds up past the ~100s proxy timeout in front of the AI
   // router, which surfaces as a bare 524 with no error of our own.
   const AUTO_ASSIGN_CHUNK_SIZE = 25;
+  // Chunks in flight at once. Each is its own request, so the server's
+  // waterfall and AI batches for one chunk overlap the next chunk's instead of
+  // queueing behind it. Kept small: every chunk still has to finish inside the
+  // proxy timeout on its own, and the router has its own rate limit.
+  const AUTO_ASSIGN_CONCURRENCY = 3;
 
   const handleAutoAssignOpen = async () => {
     if (!selectedClientId) return;
@@ -638,17 +645,35 @@ export function TaxMappingPage() {
         return;
       }
 
-      const collected: AssignmentSuggestion[] = [];
-      let chunkError: string | null = null;
+      const chunks: number[][] = [];
       for (let i = 0; i < targets.length; i += AUTO_ASSIGN_CHUNK_SIZE) {
-        setAutoAssignProgress({ done: i, total: targets.length });
-        const res = await autoAssignTaxLines(selectedClientId, {
-          accountIds: targets.slice(i, i + AUTO_ASSIGN_CHUNK_SIZE),
-        });
-        if (res.error) { chunkError = res.error.message; break; }
-        collected.push(...(res.data?.suggestions ?? []));
+        chunks.push(targets.slice(i, i + AUTO_ASSIGN_CHUNK_SIZE));
       }
-      setAutoAssignProgress(null);
+
+      let chunkError: string | null = null;
+      let done = 0;
+      setAutoAssignProgress({ done: 0, total: targets.length });
+      // Results are slotted by chunk index so the preview keeps account order
+      // no matter which request returns first; a failed chunk stops new ones
+      // from starting but lets the in-flight ones finish and count.
+      const perChunk = await mapWithConcurrency(
+        chunks,
+        AUTO_ASSIGN_CONCURRENCY,
+        async (chunk) => {
+          const res = await autoAssignTaxLines(selectedClientId, { accountIds: chunk });
+          if (res.error) {
+            if (!chunkError) chunkError = res.error.message;
+            return [] as AssignmentSuggestion[];
+          }
+          // Advance once the chunk has actually come back, so the modal counts
+          // rows processed rather than rows sent.
+          done += chunk.length;
+          setAutoAssignProgress({ done: Math.min(done, targets.length), total: targets.length });
+          return res.data?.suggestions ?? [];
+        },
+        () => chunkError !== null,
+      );
+      const collected: AssignmentSuggestion[] = perChunk.flatMap((r) => r ?? []);
 
       // Show what was analyzed before the failure — confirming those is still
       // useful, and a re-run only has to cover what is still unmapped.
@@ -729,6 +754,38 @@ export function TaxMappingPage() {
 
   return (
     <div className="p-6">
+      {/* Auto-assign progress — a modal while the chunked analysis runs; it
+          closes itself when the preview (the next step) opens. */}
+      {autoAssignLoading && !autoAssignOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-busy="true"
+            aria-live="polite"
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm px-6 py-6 flex flex-col items-center text-center"
+          >
+            <Spinner size="lg" />
+            <h2 className="mt-4 text-lg font-semibold text-gray-900 dark:text-white">Analyzing accounts</h2>
+            <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+              {autoAssignProgress
+                ? `${autoAssignProgress.done} of ${autoAssignProgress.total} accounts processed`
+                : 'Preparing…'}
+            </p>
+            {autoAssignProgress && autoAssignProgress.total > 0 && (
+              <div className="mt-3 w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-blue-600 rounded-full transition-all"
+                  style={{ width: `${Math.round((autoAssignProgress.done / autoAssignProgress.total) * 100)}%` }}
+                />
+              </div>
+            )}
+            <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+              Checking prior periods, other clients and firm history first, then asking the AI about the rest.
+            </p>
+          </div>
+        </div>
+      )}
       {/* Auto-assign modal */}
       {autoAssignOpen && (
         <AssignmentPreviewModal
@@ -777,9 +834,7 @@ export function TaxMappingPage() {
             disabled={isLoading || autoAssignLoading || !selectedClientId}
             className="px-3 py-1.5 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {autoAssignLoading
-              ? (autoAssignProgress ? `Analyzing… ${autoAssignProgress.done} of ${autoAssignProgress.total}` : 'Analyzing…')
-              : 'Auto-assign Tax Codes'}
+            {autoAssignLoading ? 'Analyzing…' : 'Auto-assign Tax Codes'}
           </button>
         </div>
       </div>

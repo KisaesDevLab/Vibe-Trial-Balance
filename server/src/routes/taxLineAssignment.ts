@@ -12,6 +12,7 @@ import { extractJsonArray, salvageJsonArray } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 import { buildHistoryBuckets, rankHistoryMatches, type HistoryBuckets, type HistoryRow } from '../lib/taxCodeHistory';
 import { selectCatalogForBatch, shortlistCodes } from '../lib/taxCodeShortlist';
+import { mapWithConcurrency } from '../lib/concurrency';
 
 export const taxLineAssignmentRouter = Router();
 taxLineAssignmentRouter.use(authMiddleware);
@@ -91,6 +92,64 @@ async function loadFirmHistory(entityType: string): Promise<HistoryBuckets> {
 // lookups in the waterfall below, and whatever falls through to step (d) is a
 // tb_tax_code_assign call; on a large unmapped COA the total runs past the
 // ~100s proxy timeout in front of the AI router and the caller just sees a 524.
+/**
+ * Step b in bulk: for each account number, the tax code of the most recently
+ * updated row on this client that carries one. One query for the whole chunk.
+ */
+async function loadPriorPeriodMappings(clientId: number, accountNumbers: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const numbers = Array.from(new Set(accountNumbers));
+  if (numbers.length === 0) return out;
+  const rows = await db('chart_of_accounts')
+    .where({ client_id: clientId })
+    .whereIn('account_number', numbers)
+    .whereNotNull('tax_code_id')
+    .orderBy('updated_at', 'desc')
+    .select('account_number', 'tax_code_id') as Array<{ account_number: string; tax_code_id: number }>;
+  for (const r of rows) {
+    if (!out.has(r.account_number)) out.set(r.account_number, r.tax_code_id);
+  }
+  return out;
+}
+
+function normalizeCrossClientName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+/**
+ * Step c in bulk: for each normalized account name, the tax code most other
+ * clients of this entity type map it to, with the count of accounts agreeing.
+ * Ties break on the lower tax code id so the answer is stable across runs.
+ */
+async function loadCrossClientMappings(
+  clientId: number,
+  entityType: string,
+  accountNames: string[],
+): Promise<Map<string, { taxCodeId: number; cnt: number }>> {
+  const out = new Map<string, { taxCodeId: number; cnt: number }>();
+  const names = Array.from(new Set(accountNames.map(normalizeCrossClientName))).filter((n) => n.length > 0);
+  if (names.length === 0) return out;
+  const placeholders = names.map(() => '?').join(', ');
+  const rows = await db('chart_of_accounts as coa')
+    .join('clients as c', 'c.id', 'coa.client_id')
+    .where('c.entity_type', entityType)
+    .where('coa.is_active', true)
+    .whereNotNull('coa.tax_code_id')
+    .whereNot('coa.client_id', clientId)
+    .whereRaw('LOWER(TRIM(coa.account_name)) IN (' + placeholders + ')', names)
+    .groupByRaw('LOWER(TRIM(coa.account_name)), coa.tax_code_id')
+    .select(db.raw('LOWER(TRIM(coa.account_name)) as norm'), 'coa.tax_code_id')
+    .count('* as cnt') as Array<{ norm: string; tax_code_id: number; cnt: string | number }>;
+  for (const r of rows) {
+    const cnt = Number(r.cnt);
+    const cur = out.get(r.norm);
+    if (!cur || cnt > cur.cnt || (cnt === cur.cnt && r.tax_code_id < cur.taxCodeId)) {
+      out.set(r.norm, { taxCodeId: r.tax_code_id, cnt });
+    }
+  }
+  return out;
+}
+
 // The AI step batches at BATCH_SIZE internally as well, which guards against
 // output truncation but does nothing for total request time.
 
@@ -168,6 +227,13 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
     const catalogIds = new Set(taxCodes.map((tc) => tc.id));
     let firmHistory: HistoryBuckets | null = null;
 
+    // Steps b and c used to run two queries per account, in sequence — on a
+    // 200-account COA that was 400 round trips before the AI even started.
+    // Both tiers are answered from one query per request instead.
+    const unmapped = accounts.filter((a) => a.tax_code_id === null);
+    const priorByNumber = await loadPriorPeriodMappings(clientId, unmapped.map((a) => a.account_number));
+    const crossByName = await loadCrossClientMappings(clientId, entityType, unmapped.map((a) => a.account_name));
+
     for (const account of accounts) {
       // Step a: existing mapping
       if (account.tax_code_id !== null) {
@@ -188,14 +254,9 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
       }
 
       // Step b: same-client prior periods (same account_number, same client, tax_code_id IS NOT NULL)
-      const priorMapping = await db('chart_of_accounts')
-        .where({ client_id: clientId, account_number: account.account_number })
-        .whereNotNull('tax_code_id')
-        .orderBy('updated_at', 'desc')
-        .first('tax_code_id');
-
-      if (priorMapping?.tax_code_id) {
-        const tc = taxCodeById.get(priorMapping.tax_code_id);
+      const priorTaxCodeId = priorByNumber.get(account.account_number);
+      if (priorTaxCodeId) {
+        const tc = taxCodeById.get(priorTaxCodeId);
         if (tc) {
           suggestions.push({
             accountId: account.id,
@@ -214,25 +275,11 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
       }
 
       // Step c: cross-client patterns
-      const normalizedName = account.account_name.trim().toLowerCase();
-      const crossClientRows = await db('chart_of_accounts as coa')
-        .join('clients as c', 'c.id', 'coa.client_id')
-        .where('c.entity_type', entityType)
-        .where('coa.is_active', true)
-        .whereNotNull('coa.tax_code_id')
-        .whereNot('coa.client_id', clientId)
-        .whereRaw('LOWER(TRIM(coa.account_name)) = ?', [normalizedName])
-        .groupBy('coa.tax_code_id')
-        .select('coa.tax_code_id')
-        .count('* as cnt')
-        .orderBy('cnt', 'desc')
-        .limit(1);
-
-      if (crossClientRows.length > 0 && crossClientRows[0]) {
-        const row = crossClientRows[0] as { tax_code_id: number; cnt: string | number };
-        const cnt = Number(row.cnt);
+      const cross = crossByName.get(normalizeCrossClientName(account.account_name));
+      if (cross) {
+        const cnt = cross.cnt;
         if (cnt >= 2) {
-          const tc = taxCodeById.get(row.tax_code_id);
+          const tc = taxCodeById.get(cross.taxCodeId);
           if (tc) {
             const confidence = Math.min(0.90, cnt / (cnt + 2));
             suggestions.push({
@@ -430,6 +477,12 @@ interface AiSuggestionsResult {
  */
 const BATCH_SIZE = 15;
 const RETRY_BATCH_SIZE = 6;
+/**
+ * Batches in flight at once. They are independent (each joins its own refs),
+ * so running them side by side divides the AI wall time by this factor; kept
+ * modest so one request does not swamp the router's rate limit.
+ */
+const AI_BATCH_CONCURRENCY = 3;
 /** Output budget per account plus headroom for the model's own reasoning tokens. */
 const TOKENS_PER_ACCOUNT = 200;
 const TOKENS_HEADROOM = 2048;
@@ -533,9 +586,14 @@ Return a JSON array where each element has:
     console.log(`[taxLineAssignment] AI ${label}: ${matched} suggestions for ${batch.length} accounts`);
   };
 
-  for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
-    await runBatch(accounts.slice(i, i + BATCH_SIZE), `batch ${Math.floor(i / BATCH_SIZE) + 1}`);
-  }
+  const chunk = <T,>(list: T[], size: number): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+    return out;
+  };
+
+  await mapWithConcurrency(chunk(accounts, BATCH_SIZE), AI_BATCH_CONCURRENCY,
+    (batch, idx) => runBatch(batch, `batch ${idx + 1}`));
 
   // One retry pass, in smaller batches, for whatever the first pass missed —
   // rows lost to truncation, an unreadable reply, or an account the model
@@ -543,9 +601,8 @@ Return a JSON array where each element has:
   const missed = accounts.filter((a) => !results.has(a.account_number.trim()));
   if (missed.length > 0) {
     console.warn(`[taxLineAssignment] ${missed.length} of ${accounts.length} accounts had no AI reply; retrying in batches of ${RETRY_BATCH_SIZE}`);
-    for (let i = 0; i < missed.length; i += RETRY_BATCH_SIZE) {
-      await runBatch(missed.slice(i, i + RETRY_BATCH_SIZE), `retry ${Math.floor(i / RETRY_BATCH_SIZE) + 1}`);
-    }
+    await mapWithConcurrency(chunk(missed, RETRY_BATCH_SIZE), AI_BATCH_CONCURRENCY,
+      (batch, idx) => runBatch(batch, `retry ${idx + 1}`));
   }
 
   const stillMissing = accounts.filter((a) => !results.has(a.account_number.trim()));

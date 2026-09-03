@@ -137,6 +137,15 @@ All planned phases complete. App is feature-complete.
   and rows that never get a reply say so (reason names truncation / non-JSON and points at the AI usage
   log, where the call is marked `parse_error` with `finish=` and the first 500 chars) instead of the
   generic "could not determine".
+  **Nothing in the pipeline waits in line.** AI batches (and the retry batches) run
+  `AI_BATCH_CONCURRENCY = 3` at a time through `mapWithConcurrency` (`lib/concurrency.ts`, tested) —
+  they are independent because each joins its own refs. The prior-period and cross-client tiers are
+  **one query per request each** (`loadPriorPeriodMappings` / `loadCrossClientMappings`), not two
+  queries per account: a 200-account COA used to make 400 sequential round trips before the AI even
+  started. The page sends `AUTO_ASSIGN_CONCURRENCY = 3` chunks at once (`utils/concurrency.ts`, a copy
+  of the server helper), slots results by chunk index so the preview keeps account order, and a
+  failed chunk stops new ones from starting while in-flight ones finish and still count. The
+  progress modal counts chunks as they *return*, not as they are sent.
 - Plan Phase 13: Smart CSV Import — document_imports migration, POST /import/csv/analyze (AI column mapping + account matching), POST /import/csv/confirm (upsert TB rows), CsvImportDialog with drag-and-drop, confidence-coded preview table, "Import from CSV" button on TrialBalancePage
 - Plan Phase 14: PDF Import with AI Extraction — pdf-parse installed, POST /import/pdf/analyze (text extraction → Claude AI extraction), POST /import/pdf/confirm, PdfImportDialog with consent dialog, "Import from PDF" button on TrialBalancePage
 - Plan Phase 15: PDF Verification Engine — POST /import/pdf/verify (AI line-by-line comparison), GET verify/:importId (cached), GET imports?periodId, VerificationPanel component on TrialBalancePage showing match/discrepancy detail
