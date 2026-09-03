@@ -8,6 +8,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
+import { isForeignKeyViolation, foreignKeyBlockMessage } from '../lib/pgErrors';
 
 export const periodCollectionRouter = Router({ mergeParams: true });
 periodCollectionRouter.use(authMiddleware);
@@ -223,15 +224,29 @@ periodItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: 'Cannot delete a locked period. Ask an admin to unlock it first.' } });
       return;
     }
-    // Log before delete (period_id will CASCADE)
-    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'period', entityId: id, action: 'delete', description: `Deleted period "${period.period_name ?? id}"` });
-    const [deleted] = await db('periods').where({ id }).delete().returning('id');
+    // Children cascade (migration 20260903000001 covers the five that once
+    // did not). The audit row is written in the same transaction as the delete
+    // so a refused delete leaves no "Deleted period" entry behind.
+    let deleted: number | undefined;
+    await db.transaction(async (trx) => {
+      await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'period', entityId: id, action: 'delete', description: `Deleted period "${period.period_name ?? id}"` }, trx);
+      const rows = await trx('periods').where({ id }).delete().returning('id');
+      deleted = rows[0] ? Number((rows[0] as { id: number }).id ?? rows[0]) : undefined;
+    });
     if (!deleted) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
       return;
     }
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {
+    // A table that still references the period and has no delete action.
+    // Say what it is instead of "internal error", so the user can clear it
+    // (or an admin can add the cascade) rather than guessing.
+    if (isForeignKeyViolation(err)) {
+      console.warn(`[periods] delete ${id} blocked by ${err.table ?? err.constraint ?? 'unknown FK'}`);
+      res.status(409).json({ data: null, error: { code: 'PERIOD_IN_USE', message: foreignKeyBlockMessage(err, 'this period') } });
+      return;
+    }
     sendServerError(res, err, 'periods');
   }
 });

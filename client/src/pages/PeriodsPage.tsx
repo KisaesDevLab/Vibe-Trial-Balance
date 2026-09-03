@@ -326,7 +326,13 @@ export function PeriodsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: deletePeriod,
-    onSuccess: () => invalidate(),
+    // apiFetch resolves with { error } rather than throwing, so a refused
+    // delete (409 PERIOD_IN_USE, locked, 500) must be read here or it is
+    // silently swallowed and the row just stays put.
+    onSuccess: (res) => {
+      if (res.error) { setLockError(res.error.message); return; }
+      invalidate();
+    },
   });
 
   const lockMutation = useMutation({

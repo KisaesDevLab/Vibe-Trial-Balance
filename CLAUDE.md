@@ -461,6 +461,17 @@ All planned phases complete. App is feature-complete.
   the guard the insert dies on the partial unique index over `(bucket, object_key)`. Restoring into
   the SAME client keeps its keys and its link, which is the whole point of that mode.
 - Variance notes (per account per period, TB Report inline editing)
+- **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
+  trusts cascades; five references shipped with none (bank_transactions, document_imports,
+  variance_notes ×2, bank_reconciliations, and the `rolled_forward_from` self-pointer), so deleting
+  any period that had ever been used was a 23503 reported as a 500. Migration `20260903000001` sets
+  CASCADE on the period-scoped ones and SET NULL on the roll-forward pointer (provenance, like
+  backup_history). The route now runs in a transaction (audit row + delete together) and maps a
+  remaining FK violation to `409 PERIOD_IN_USE` naming the blocking table via
+  `lib/pgErrors.ts` (`isForeignKeyViolation` / `foreignKeyBlockMessage`, tested) — use that helper
+  on any other delete route instead of letting `sendServerError` swallow it. A new table that
+  references periods must say `onDelete(...)` explicitly. The PeriodsPage delete mutation reads
+  `res.error` (apiFetch resolves, never throws), which it previously ignored.
 - QA Round 1 & 2: 30-item UX audit — period lock enforcement on TB grid, batch op toasts,
   reopen reconciliation feedback, engagement double-submit prevention, FS comparative layout,
   Spinner component, consistent error/success box styles, sidebar workflow ordering,
