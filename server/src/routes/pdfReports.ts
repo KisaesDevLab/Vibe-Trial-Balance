@@ -21,6 +21,7 @@ import {
   generateEquityStatementPdf,
   parseFsBasis,
   parseFsPriorYear,
+  parseFsGroupByLeadSheet,
   type FsPdfOptions,
   generateTaxCodeReportPdf,
   generateWorkpaperIndexPdf,
@@ -192,9 +193,14 @@ pdfReportsRouter.get('/periods/:periodId/general-ledger', async (req: AuthReques
 // GET /api/v1/reports/periods/:periodId/equity-statement
 //   ?basis=unadjusted|book|tax   (default book — the page's View select)
 //   ?priorYear=true|false        (default automatic: on when the period has PY balances)
+//   ?groupByLeadSheet=true|false (default off; ignored when no account is mapped)
 // ─────────────────────────────────────────────────────────────────────────────
 function fsOptions(req: AuthRequest): FsPdfOptions {
-  return { basis: parseFsBasis(req.query.basis), priorYear: parseFsPriorYear(req.query.priorYear) };
+  return {
+    basis: parseFsBasis(req.query.basis),
+    priorYear: parseFsPriorYear(req.query.priorYear),
+    groupByLeadSheet: parseFsGroupByLeadSheet(req.query.groupByLeadSheet),
+  };
 }
 
 const FS_STATEMENTS: Array<{ path: string; file: string; generate: (id: number, o: FsPdfOptions) => Promise<Buffer> }> = [

@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listClients } from '../api/clients';
@@ -11,6 +11,7 @@ import { useUIStore, useAuthStore } from '../store/uiStore';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
 import { filterReportableRows } from '../utils/tbActivity';
+import { groupByLeadSheet, hasLeadSheetMapping } from '../lib/leadSheetGrouping';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,49 @@ function AccountRow({ label, cents, priorCents }: { label: string; cents: number
   );
 }
 
+/**
+ * The account rows of one statement section, optionally sub-grouped by lead
+ * sheet with a subtotal per group.
+ *
+ * Grouping is inside a section only. A lead sheet can span categories, and the
+ * statements sign by category, so a group crossing sections would sum figures
+ * measured on opposite scales. Sections whose accounts carry no lead sheet fall
+ * back to the flat list rather than printing one "Unassigned" heading over
+ * everything.
+ */
+function SectionRows({ rows, colSet, grouped }: { rows: TBRow[]; colSet: ColSet; grouped: boolean }) {
+  const groups = grouped && hasLeadSheetMapping(rows)
+    ? groupByLeadSheet(rows)
+    : [{ id: null as number | null, label: '', rows }];
+
+  return (
+    <>
+      {groups.map((g) => {
+        const total = g.rows.reduce((sum, r) => sum + fsDisplayBalance(r, colSet), 0);
+        const pyTotal = g.rows.reduce((sum, r) => sum + fsDisplayBalance(r, 'prior-year'), 0);
+        return (
+          <Fragment key={g.id ?? `~${g.label}`}>
+            {g.label && (
+              <tr className="bg-gray-50 dark:bg-gray-800/40">
+                <td colSpan={5} className="px-6 py-1 text-xs font-semibold text-gray-600 dark:text-gray-400">{g.label}</td>
+              </tr>
+            )}
+            {g.rows.map((r) => (
+              <AccountRow
+                key={r.account_id}
+                label={`${r.account_number} – ${r.account_name}`}
+                cents={fsDisplayBalance(r, colSet)}
+                priorCents={fsDisplayBalance(r, 'prior-year')}
+              />
+            ))}
+            {g.label && <SubtotalRow label={`Total ${g.label}`} cents={total} priorCents={pyTotal} indent />}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
 function SubtotalRow({ label, cents, priorCents, indent = false }: { label: string; cents: number; priorCents?: number; indent?: boolean }) {
   const changeCents = priorCents !== undefined ? cents - priorCents : undefined;
   const borderClass = 'border-t border-b-2 border-gray-400 dark:border-gray-500';
@@ -123,7 +167,7 @@ function TotalRow({ label, cents, priorCents, double: isDouble = false }: { labe
 
 // ─── Income Statement ─────────────────────────────────────────────────────────
 
-function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
+function IncomeStatement({ rows, colSet, groupByLs }: { rows: TBRow[]; colSet: ColSet; groupByLs: boolean }) {
   const revenue = rows.filter((r) => r.category === 'revenue').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
   const expenses = rows.filter((r) => r.category === 'expenses').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
 
@@ -150,9 +194,7 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
         </thead>
         <tbody>
           <SectionHeader title="Revenue" />
-          {revenue.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
-          ))}
+          <SectionRows rows={revenue} colSet={colSet} grouped={groupByLs} />
           {revenue.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No revenue accounts found. Add revenue accounts to the Chart of Accounts page.</td></tr>
           )}
@@ -161,9 +203,7 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           <tr><td colSpan={5} className="py-1" /></tr>
 
           <SectionHeader title="Expenses" />
-          {expenses.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
-          ))}
+          <SectionRows rows={expenses} colSet={colSet} grouped={groupByLs} />
           {expenses.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No expense accounts found. Add expense accounts to the Chart of Accounts page.</td></tr>
           )}
@@ -179,7 +219,7 @@ function IncomeStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
 
 // ─── Balance Sheet ────────────────────────────────────────────────────────────
 
-function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
+function BalanceSheet({ rows, colSet, groupByLs }: { rows: TBRow[]; colSet: ColSet; groupByLs: boolean }) {
   const assets = rows.filter((r) => r.category === 'assets').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
   const liabilities = rows.filter((r) => r.category === 'liabilities').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
   const equity = rows.filter((r) => r.category === 'equity').sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
@@ -216,9 +256,7 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
         </thead>
         <tbody>
           <SectionHeader title="Assets" />
-          {assets.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
-          ))}
+          <SectionRows rows={assets} colSet={colSet} grouped={groupByLs} />
           {assets.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No asset accounts found. Add asset accounts to the Chart of Accounts page.</td></tr>
           )}
@@ -227,9 +265,7 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           <tr><td colSpan={5} className="py-2" /></tr>
 
           <SectionHeader title="Liabilities" />
-          {liabilities.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
-          ))}
+          <SectionRows rows={liabilities} colSet={colSet} grouped={groupByLs} />
           {liabilities.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No liability accounts found. Add liability accounts to the Chart of Accounts page.</td></tr>
           )}
@@ -238,9 +274,7 @@ function BalanceSheet({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           <tr><td colSpan={5} className="py-1" /></tr>
 
           <SectionHeader title="Equity" />
-          {equity.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
-          ))}
+          <SectionRows rows={equity} colSet={colSet} grouped={groupByLs} />
           {equity.length === 0 && (
             <tr><td colSpan={5} className="px-6 py-2 text-sm text-gray-400 italic">No equity accounts found. Add equity accounts to the Chart of Accounts page.</td></tr>
           )}
@@ -316,9 +350,9 @@ function EquityStatement({ rows, colSet }: { rows: TBRow[]; colSet: ColSet }) {
           <tr><td colSpan={5} className="py-1" /></tr>
 
           <SectionHeader title="Ending Equity Balance" />
-          {equity.map((r) => (
-            <AccountRow key={r.account_id} label={`${r.account_number} – ${r.account_name}`} cents={fsDisplayBalance(r, colSet)} priorCents={fsDisplayBalance(r, 'prior-year')} />
-          ))}
+          {/* Not grouped: this statement is an opening/activity/closing
+              narrative, not a listing of a category. */}
+          <SectionRows rows={equity} colSet={colSet} grouped={false} />
           <AccountRow label="Net Income (current period)" cents={netIncome} priorCents={pyNetIncome} />
           <TotalRow label="Total Equity" cents={closingEquity} priorCents={openingEquity} double />
         </tbody>
@@ -344,12 +378,17 @@ export function FinancialStatementsPage() {
   const [colSet, setColSet] = useState<Exclude<ColSet, 'prior-year'>>('book');
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  // Persisted like the Trial Balance view toggles: a firm that works by lead
+  // schedule wants the grouped statements every time, not once per visit.
+  const groupByLeadSheetPref = useUIStore((st) => st.fsGroupByLeadSheet);
+  const setGroupByLeadSheetPref = useUIStore((st) => st.setFsGroupByLeadSheet);
 
-  // The PDF is the screen on paper: same statement, same View basis, and the
-  // server adds the Prior Year / Change / % columns whenever PY balances exist.
+  // The PDF is the screen on paper: same statement, same View basis, same
+  // grouping, and the server adds the Prior Year / Change / % columns whenever
+  // PY balances exist.
   const pdfUrl = (periodId: number) =>
-    tab === 'income' ? pdfReports.incomeStatement(periodId, colSet)
-    : tab === 'balance' ? pdfReports.balanceSheet(periodId, colSet)
+    tab === 'income' ? pdfReports.incomeStatement(periodId, colSet, groupByLs)
+    : tab === 'balance' ? pdfReports.balanceSheet(periodId, colSet, groupByLs)
     : pdfReports.equityStatement(periodId, colSet);
 
   const handlePreview = async (reportUrl: string) => {
@@ -407,6 +446,12 @@ export function FinancialStatementsPage() {
   // are left off reports — see utils/tbActivity.ts.
   const rows = filterReportableRows((data ?? []).filter((r) => r.is_active));
 
+  // Offer the grouping only when the chart of accounts carries lead sheets:
+  // unmapped, every account lands in one "Unassigned" heap, which is the flat
+  // statement with a pointless heading on it.
+  const canGroupByLeadSheet = hasLeadSheetMapping(rows);
+  const groupByLs = groupByLeadSheetPref && canGroupByLeadSheet;
+
   const handleExport = () => {
     if (!rows.length) return;
     const revenue = rows.filter((r) => r.category === 'revenue');
@@ -459,6 +504,17 @@ export function FinancialStatementsPage() {
             <option value="book">Book Adjusted</option>
             <option value="tax">Tax Adjusted</option>
           </select>
+          {canGroupByLeadSheet && tab !== 'equity' && (
+            <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={groupByLeadSheetPref}
+                onChange={(e) => setGroupByLeadSheetPref(e.target.checked)}
+                className="rounded border-gray-300 dark:border-gray-600"
+              />
+              Group by lead sheet
+            </label>
+          )}
           <button
             onClick={handleExport}
             disabled={!rows.length}
@@ -544,9 +600,9 @@ export function FinancialStatementsPage() {
       {isLoading ? (
         <div className="flex items-center justify-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
       ) : tab === 'income' ? (
-        <IncomeStatement rows={rows} colSet={colSet} />
+        <IncomeStatement rows={rows} colSet={colSet} groupByLs={groupByLs} />
       ) : tab === 'balance' ? (
-        <BalanceSheet rows={rows} colSet={colSet} />
+        <BalanceSheet rows={rows} colSet={colSet} groupByLs={groupByLs} />
       ) : (
         <EquityStatement rows={rows} colSet={colSet} />
       )}

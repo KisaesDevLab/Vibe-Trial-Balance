@@ -50,6 +50,10 @@ interface UIStore {
   /** Trial Balance grid view toggles (Single / PY / Tax / Non-zero only). */
   tbView: TbView;
   setTbView: (patch: Partial<TbView>) => void;
+  /** Sub-group the financial statements by lead sheet. Has no effect on a
+   *  chart of accounts with no lead sheets mapped — the page hides the control. */
+  fsGroupByLeadSheet: boolean;
+  setFsGroupByLeadSheet: (v: boolean) => void;
 }
 
 export interface TbView {
@@ -81,10 +85,12 @@ export const useUIStore = create<UIStore>()(
       toggleDarkMode: () => set((s) => ({ isDarkMode: !s.isDarkMode })),
       tbView: { singleColumn: false, showPY: false, showTax: true, nonZeroOnly: false },
       setTbView: (patch) => set((s) => ({ tbView: { ...s.tbView, ...patch } })),
+      fsGroupByLeadSheet: false,
+      setFsGroupByLeadSheet: (v) => set({ fsGroupByLeadSheet: v }),
     }),
     {
       name: 'ui-prefs',
-      partialize: (s) => ({ fontSize: s.fontSize, selectedClientId: s.selectedClientId, selectedPeriodId: s.selectedPeriodId, isDarkMode: s.isDarkMode, tbView: s.tbView }),
+      partialize: (s) => ({ fontSize: s.fontSize, selectedClientId: s.selectedClientId, selectedPeriodId: s.selectedPeriodId, isDarkMode: s.isDarkMode, tbView: s.tbView, fsGroupByLeadSheet: s.fsGroupByLeadSheet }),
       // A stored copy written before tbView existed has no such key; keep the
       // defaults for it. The same spread covers a copy written before
       // nonZeroOnly joined the group.

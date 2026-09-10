@@ -10,6 +10,7 @@ import { Knex } from 'knex';
 import type { Content, TableCell } from 'pdfmake/interfaces';
 import { PdfTemplateService, DocOptions } from './PdfTemplateService';
 import { pdfSafeSymbol } from './reportGlyphs';
+import { groupByLeadSheet, hasLeadSheetMapping } from '../lib/leadSheetGrouping';
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
 import { whereHasActivity } from '../lib/tbActivity';
 import { currentStampsForClient } from '../lib/leadSheetStamp';
@@ -589,6 +590,15 @@ export interface FsPdfOptions {
    * otherwise print two dead columns.
    */
   priorYear?: boolean;
+  /**
+   * Sub-group each section by lead sheet, with a subtotal per group.
+   *
+   * Ignored when the chart of accounts carries no lead sheets: every account
+   * would land in one "Unassigned" heap, which is the flat statement plus a
+   * pointless header. Grouping happens INSIDE a section, never across one —
+   * a lead sheet can span categories and the statements sign by category.
+   */
+  groupByLeadSheet?: boolean;
 }
 
 const FS_BASIS_LABEL: Record<FsBasis, string> = {
@@ -612,6 +622,12 @@ export function parseFsPriorYear(v: unknown): boolean | undefined {
   if (v === 'true' || v === '1') return true;
   if (v === 'false' || v === '0') return false;
   return undefined;
+}
+
+/** `?groupByLeadSheet=true|1` sub-groups each section. Anything else = off, which
+ *  is what the binder gets, so the merged package keeps its existing layout. */
+export function parseFsGroupByLeadSheet(v: unknown): boolean {
+  return v === 'true' || v === '1';
 }
 
 type FsRow = Record<string, unknown>;
@@ -725,13 +741,35 @@ export async function generateIncomeStatementPdf(
     tableBody.push(svc.sectionHeaderRow(section, cols.length));
     let sectionTotal = 0, sectionTotalPY = 0;
 
-    for (const r of sectionRows) {
-      const amt = fsCurrent(r, basis);
-      const amtPY = fsPrior(r);
-      sectionTotal += amt;
-      sectionTotalPY += amtPY;
-      tableBody.push(fsRow(L, r.account_number as string, r.account_name as string, amt, amtPY, { isAlt: rowIdx % 2 === 1 }));
-      rowIdx++;
+    // One group covering everything when grouping is off or nothing is mapped,
+    // so the flat statement and the grouped one run through the same loop.
+    const grouped = options.groupByLeadSheet && hasLeadSheetMapping(sectionRows);
+    const groups = grouped
+      ? groupByLeadSheet(sectionRows)
+      : [{ id: null, label: '', rows: sectionRows }];
+
+    for (const g of groups) {
+      if (g.label) {
+        // Header only — blank amount cells, not a zero, since the group has no
+        // figure of its own until its subtotal below.
+        tableBody.push(svc.dataRow(['', g.label, ...Array(cols.length - 2).fill('')], { bold: true }));
+        rowIdx++;
+      }
+      let groupTotal = 0, groupTotalPY = 0;
+      for (const r of g.rows) {
+        const amt = fsCurrent(r, basis);
+        const amtPY = fsPrior(r);
+        groupTotal += amt;
+        groupTotalPY += amtPY;
+        tableBody.push(fsRow(L, r.account_number as string, r.account_name as string, amt, amtPY, { isAlt: rowIdx % 2 === 1 }));
+        rowIdx++;
+      }
+      sectionTotal += groupTotal;
+      sectionTotalPY += groupTotalPY;
+      if (g.label) {
+        tableBody.push(fsRow(L, '', `Total ${g.label}`, groupTotal, groupTotalPY, { bold: true }));
+        rowIdx++;
+      }
     }
     if (section === 'revenue') { totalRevenue = sectionTotal; totalRevenuePY = sectionTotalPY; }
     else { totalExpenses = sectionTotal; totalExpensesPY = sectionTotalPY; }
@@ -794,13 +832,35 @@ export async function generateBalanceSheetPdf(
     tableBody.push(svc.sectionHeaderRow(section, cols.length));
     let sectionTotal = 0, sectionTotalPY = 0;
 
-    for (const r of sectionRows) {
-      const amt = fsCurrent(r, basis);
-      const amtPY = fsPrior(r);
-      sectionTotal += amt;
-      sectionTotalPY += amtPY;
-      tableBody.push(fsRow(L, r.account_number as string, r.account_name as string, amt, amtPY, { isAlt: rowIdx % 2 === 1 }));
-      rowIdx++;
+    // One group covering everything when grouping is off or nothing is mapped,
+    // so the flat statement and the grouped one run through the same loop.
+    const grouped = options.groupByLeadSheet && hasLeadSheetMapping(sectionRows);
+    const groups = grouped
+      ? groupByLeadSheet(sectionRows)
+      : [{ id: null, label: '', rows: sectionRows }];
+
+    for (const g of groups) {
+      if (g.label) {
+        // Header only — blank amount cells, not a zero, since the group has no
+        // figure of its own until its subtotal below.
+        tableBody.push(svc.dataRow(['', g.label, ...Array(cols.length - 2).fill('')], { bold: true }));
+        rowIdx++;
+      }
+      let groupTotal = 0, groupTotalPY = 0;
+      for (const r of g.rows) {
+        const amt = fsCurrent(r, basis);
+        const amtPY = fsPrior(r);
+        groupTotal += amt;
+        groupTotalPY += amtPY;
+        tableBody.push(fsRow(L, r.account_number as string, r.account_name as string, amt, amtPY, { isAlt: rowIdx % 2 === 1 }));
+        rowIdx++;
+      }
+      sectionTotal += groupTotal;
+      sectionTotalPY += groupTotalPY;
+      if (g.label) {
+        tableBody.push(fsRow(L, '', `Total ${g.label}`, groupTotal, groupTotalPY, { bold: true }));
+        rowIdx++;
+      }
     }
 
     if (section === 'equity') {

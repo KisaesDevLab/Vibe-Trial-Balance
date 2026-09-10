@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fsChangePct, parseFsBasis, parseFsPriorYear } from '../../pdf/reportGenerators';
+import { fsChangePct, parseFsBasis, parseFsPriorYear, parseFsGroupByLeadSheet } from '../../pdf/reportGenerators';
 
 test('change % mirrors the screen: dash when both zero, N/A with no prior, parens when down', () => {
   assert.equal(fsChangePct(0, 0), '—');
@@ -35,4 +35,19 @@ test('priorYear query: explicit on/off, otherwise automatic', () => {
   assert.equal(parseFsPriorYear('0'), false);
   assert.equal(parseFsPriorYear(undefined), undefined);
   assert.equal(parseFsPriorYear('yes'), undefined);
+});
+
+// ── Lead sheet sub-grouping knob ────────────────────────────────────────────
+
+test('groupByLeadSheet is opt-in: only an explicit true turns it on', () => {
+  assert.equal(parseFsGroupByLeadSheet('true'), true);
+  assert.equal(parseFsGroupByLeadSheet('1'), true);
+  assert.equal(parseFsGroupByLeadSheet('false'), false);
+  assert.equal(parseFsGroupByLeadSheet('0'), false);
+  // Absent or junk is off, so the binder — which passes no options at all —
+  // keeps printing the flat statements it always has.
+  assert.equal(parseFsGroupByLeadSheet(undefined), false);
+  assert.equal(parseFsGroupByLeadSheet(''), false);
+  assert.equal(parseFsGroupByLeadSheet('yes'), false);
+  assert.equal(parseFsGroupByLeadSheet(['true']), false);
 });

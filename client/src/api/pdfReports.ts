@@ -69,7 +69,12 @@ export async function downloadPdf(url: string, filename: string, token: string):
 }
 
 export type FsPdfBasis = 'unadjusted' | 'book' | 'tax';
-const fsQuery = (basis?: FsPdfBasis) => (basis ? `?basis=${basis}` : '');
+const fsQuery = (basis?: FsPdfBasis, groupByLeadSheet?: boolean) => {
+  const parts: string[] = [];
+  if (basis) parts.push(`basis=${basis}`);
+  if (groupByLeadSheet) parts.push('groupByLeadSheet=true');
+  return parts.length > 0 ? `?${parts.join('&')}` : '';
+};
 
 // Convenience wrappers for each report type
 export const pdfReports = {
@@ -79,8 +84,8 @@ export const pdfReports = {
   generalLedger: (periodId: number, accountId?: number) => `${API_BASE_URL}/reports/periods/${periodId}/general-ledger${accountId ? `?accountId=${accountId}` : ''}`,
   // Financial statements take the page's View basis so the PDF prints the
   // columns on screen; prior-year/change columns are automatic server-side.
-  incomeStatement: (periodId: number, basis?: FsPdfBasis) => `${API_BASE_URL}/reports/periods/${periodId}/income-statement${fsQuery(basis)}`,
-  balanceSheet: (periodId: number, basis?: FsPdfBasis) => `${API_BASE_URL}/reports/periods/${periodId}/balance-sheet${fsQuery(basis)}`,
+  incomeStatement: (periodId: number, basis?: FsPdfBasis, groupByLeadSheet?: boolean) => `${API_BASE_URL}/reports/periods/${periodId}/income-statement${fsQuery(basis, groupByLeadSheet)}`,
+  balanceSheet: (periodId: number, basis?: FsPdfBasis, groupByLeadSheet?: boolean) => `${API_BASE_URL}/reports/periods/${periodId}/balance-sheet${fsQuery(basis, groupByLeadSheet)}`,
   equityStatement: (periodId: number, basis?: FsPdfBasis) => `${API_BASE_URL}/reports/periods/${periodId}/equity-statement${fsQuery(basis)}`,
   taxCodeReport: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-code-report`,
   workpaperIndex: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/workpaper-index`,
