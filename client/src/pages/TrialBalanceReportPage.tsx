@@ -23,7 +23,8 @@ function fmtTotal(cents: number): string {
   return (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-type ColGroup = 'priorYear' | 'unadjusted' | 'bookAje' | 'bookAdjusted' | 'taxAje' | 'taxAdjusted' | 'variance';
+type ColGroup = 'priorYear' | 'unadjusted' | 'bookAje' | 'bookAdjusted' | 'taxAje' | 'taxAdjusted' | 'variance'
+  | 'workpaperRef' | 'marks' | 'leadSheet';
 
 const COL_GROUP_LABELS: Record<ColGroup, string> = {
   priorYear: 'Prior Year',
@@ -33,9 +34,15 @@ const COL_GROUP_LABELS: Record<ColGroup, string> = {
   taxAje: 'Tax AJE',
   taxAdjusted: 'Tax Adjusted',
   variance: 'CY vs PY',
+  // The workpaper trail. PDF-only for now: the on-screen report is already
+  // wide, and these live on the working grid where they are edited.
+  workpaperRef: 'W/P Ref (PDF)',
+  marks: 'Marks (PDF)',
+  leadSheet: 'Lead Sheet (PDF)',
 };
 
-const ALL_COL_GROUPS: ColGroup[] = ['priorYear', 'unadjusted', 'bookAje', 'bookAdjusted', 'taxAje', 'taxAdjusted', 'variance'];
+const ALL_COL_GROUPS: ColGroup[] = ['priorYear', 'unadjusted', 'bookAje', 'bookAdjusted', 'taxAje', 'taxAdjusted', 'variance',
+  'workpaperRef', 'marks', 'leadSheet'];
 
 const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'] as const;
 const CAT_LABEL: Record<string, string> = {

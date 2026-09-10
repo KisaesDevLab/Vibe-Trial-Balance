@@ -59,7 +59,32 @@ function fmtDate(d: string | null | undefined): string {
 
 const TB_CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'];
 
-export async function generateTrialBalancePdf(db: Knex, periodId: number, visibleGroups?: string[]): Promise<Buffer> {
+export interface TbPdfOptions {
+  /** Explicit column groups. Wins over `basis` — this is the report page's
+   *  own checkbox list, an intentional per-render choice. */
+  visibleGroups?: string[];
+  /**
+   * Show the walk up to this basis and no further, when the caller has not
+   * named its columns. Printing the tax columns on a book-basis package asks
+   * the reader to ignore half the page.
+   */
+  basis?: TbBasis;
+}
+
+/** Everything up to and including the chosen basis — the walk, not the world. */
+const TB_BASIS_GROUPS: Record<TbBasis, string[]> = {
+  unadjusted: ['priorYear', 'unadjusted', 'workpaperRef', 'marks', 'leadSheet'],
+  book:       ['priorYear', 'unadjusted', 'bookAje', 'bookAdjusted', 'workpaperRef', 'marks', 'leadSheet'],
+  tax:        ['priorYear', 'unadjusted', 'bookAje', 'bookAdjusted', 'taxAje', 'taxAdjusted', 'workpaperRef', 'marks', 'leadSheet'],
+};
+
+export async function generateTrialBalancePdf(
+  db: Knex,
+  periodId: number,
+  options: TbPdfOptions | string[] = {},
+): Promise<Buffer> {
+  // A bare array is the old positional `visibleGroups` argument.
+  const opts: TbPdfOptions = Array.isArray(options) ? { visibleGroups: options } : options;
   const svc  = await PdfTemplateService.fromDb(db);
   const info = await getPeriodInfo(db, periodId);
 
@@ -68,7 +93,25 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
     .modify(whereHasActivity)
     .orderBy('account_number', 'asc');
 
-  const showGroup = (g: string) => !visibleGroups || visibleGroups.includes(g);
+  // Tickmarks for the Marks column, symbol-substituted once at the source.
+  const tickRows = await db('tb_tickmarks as tt')
+    .join('tickmark_library as tl', 'tl.id', 'tt.tickmark_id')
+    .where('tt.period_id', periodId)
+    .orderBy('tl.sort_order', 'asc')
+    .select('tt.account_id', 'tl.id as tm_id', 'tl.symbol', 'tl.description');
+  const marksByAccount = new Map<number, Array<{ id: number; symbol: string; description: string }>>();
+  for (const t of tickRows as Array<Record<string, unknown>>) {
+    const aid = Number(t.account_id);
+    if (!marksByAccount.has(aid)) marksByAccount.set(aid, []);
+    marksByAccount.get(aid)!.push({
+      id: Number(t.tm_id),
+      symbol: pdfSafeSymbol(String(t.symbol)),
+      description: String(t.description),
+    });
+  }
+
+  const effectiveGroups = opts.visibleGroups ?? (opts.basis ? TB_BASIS_GROUPS[opts.basis] : undefined);
+  const showGroup = (g: string) => !effectiveGroups || effectiveGroups.includes(g);
 
   const cols: string[] = ['Acct #', 'Account Name'];
   const numericColCount =
@@ -95,6 +138,11 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
   if (showGroup('bookAdjusted')) { cols.push('Book DR', 'Book CR'); widths.push(numColWidth, numColWidth); }
   if (showGroup('taxAje'))       { cols.push('Tax Adj DR', 'Tax Adj CR'); widths.push(numColWidth, numColWidth); }
   if (showGroup('taxAdjusted'))  { cols.push('Tax DR', 'Tax CR'); widths.push(numColWidth, numColWidth); }
+  // The workpaper trail, after the figures: which schedule an account sits on,
+  // what was ticked on it, and where the supporting work is filed.
+  if (showGroup('workpaperRef')) { cols.push('W/P Ref'); widths.push(46); }
+  if (showGroup('marks'))        { cols.push('Marks');   widths.push(38); }
+  if (showGroup('leadSheet'))    { cols.push('LS');      widths.push(28); }
 
   const tableBody: TableCell[][] = [svc.headerRow(cols)];
 
@@ -107,6 +155,11 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
     book_dr: 0, book_cr: 0,
     tax_dr: 0, tax_cr: 0,
   };
+
+  // Only the marks actually printed get a legend, and only accounts that
+  // carry a note reach the schedule.
+  const usedTbMarks = new Map<number, { symbol: string; description: string }>();
+  const tbNotes: Array<{ account: string; preparer: string; reviewer: string }> = [];
 
   let rowIdx = 0;
   for (const category of TB_CATEGORIES) {
@@ -146,6 +199,24 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
       if (showGroup('bookAdjusted')) { cells.push(bDr, bCr); }
       if (showGroup('taxAje'))       { cells.push(taDr, taCr); }
       if (showGroup('taxAdjusted'))  { cells.push(tDr, tCr); }
+      if (showGroup('workpaperRef')) { cells.push((r.workpaper_ref as string) ?? ''); }
+      if (showGroup('marks')) {
+        const marks = marksByAccount.get(Number(r.account_id)) ?? [];
+        for (const m of marks) usedTbMarks.set(m.id, m);
+        cells.push(marks.map((m) => m.symbol).join(' '));
+      }
+      if (showGroup('leadSheet'))    { cells.push((r.lead_sheet_code as string) ?? ''); }
+
+      // Collected for the schedule printed under the table.
+      const prep = String(r.preparer_notes ?? '').trim();
+      const rev  = String(r.reviewer_notes ?? '').trim();
+      if (prep || rev) {
+        tbNotes.push({
+          account: `${r.account_number as string} — ${r.account_name as string}`,
+          preparer: prep,
+          reviewer: rev,
+        });
+      }
 
       tableBody.push(svc.dataRow(cells, { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
@@ -167,6 +238,11 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
   if (showGroup('bookAdjusted')) { grandCells.push(totals.book_dr, totals.book_cr); }
   if (showGroup('taxAje'))       { grandCells.push(totals.tax_adj_dr, totals.tax_adj_cr); }
   if (showGroup('taxAdjusted'))  { grandCells.push(totals.tax_dr, totals.tax_cr); }
+  // The workpaper trail columns have nothing to total, but the row still has to
+  // be as wide as the header or pdfmake cannot lay the table out.
+  if (showGroup('workpaperRef')) { grandCells.push(''); }
+  if (showGroup('marks'))        { grandCells.push(''); }
+  if (showGroup('leadSheet'))    { grandCells.push(''); }
   tableBody.push(svc.dataRow(grandCells, { bold: true, shade: true }));
 
   // Verify every displayed layer foots DR = CR (integer cents — exact), not
@@ -202,6 +278,37 @@ export async function generateTrialBalancePdf(db: Knex, periodId: number, visibl
       margin: [0, 4, 0, 0] as [number, number, number, number],
     },
   ];
+
+  // Legend for the marks that actually appear, so the Marks column means
+  // something to a reader who was not the one who ticked it.
+  if (usedTbMarks.size > 0) {
+    content.push({ text: 'Tickmarks', fontSize: 8, bold: true, margin: [0, 10, 0, 3] } as Content);
+    content.push({
+      table: {
+        widths: [26, '*'],
+        body: [...usedTbMarks.values()].map((m) => [
+          { text: m.symbol, fontSize: 8, bold: true, alignment: 'center' },
+          { text: m.description, fontSize: 7, color: '#333333' },
+        ]),
+      },
+      layout: { hLineWidth: (i: number) => (i === 0 ? 0 : 0.5), vLineWidth: () => 0, hLineColor: () => '#e5e5e5' },
+    } as Content);
+  }
+
+  // Notes schedule. A note typed on the grid is review evidence; leaving it
+  // out of the printed trial balance loses it the moment the binder is filed.
+  if (tbNotes.length > 0) {
+    content.push({ text: 'Notes', fontSize: 8, bold: true, margin: [0, 10, 0, 3] } as Content);
+    const noteBody: TableCell[][] = [svc.headerRow(['Account', 'Preparer', 'Reviewer'])];
+    for (let i = 0; i < tbNotes.length; i++) {
+      const n = tbNotes[i];
+      noteBody.push(svc.dataRow([n.account, n.preparer, n.reviewer], { isAlt: i % 2 === 1 }));
+    }
+    content.push({
+      table: { headerRows: 1, widths: [180, '*', '*'], body: noteBody },
+      layout: { hLineWidth: (i: number) => (i <= 1 ? 0.5 : 0), vLineWidth: () => 0, hLineColor: () => '#cccccc' },
+    } as Content);
+  }
 
   const docOpts: DocOptions = {
     title:       'Working Trial Balance',

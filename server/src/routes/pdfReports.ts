@@ -122,7 +122,12 @@ pdfReportsRouter.get('/periods/:periodId/trial-balance', async (req: AuthRequest
   }
   try {
     const columns = typeof req.query.columns === 'string' ? req.query.columns.split(',') : undefined;
-    const buffer = await generateTrialBalancePdf(db, periodId, columns);
+    // `columns` is the report page's own checkbox list and wins; `basis` is the
+    // fallback for callers that name no columns, notably the workpaper binder.
+    const buffer = await generateTrialBalancePdf(db, periodId, {
+      visibleGroups: columns,
+      basis: parseFsBasis(req.query.basis),
+    });
     sendPdf(res, buffer, await reportFilename(periodId, `trial-balance-${periodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
@@ -458,6 +463,7 @@ const REPORT_GENERATORS: Record<string, { label: string; generate: (periodId: nu
 function generatorsFor(fs: FsPdfOptions): typeof REPORT_GENERATORS {
   return {
     ...REPORT_GENERATORS,
+    'pdf-tb':     { ...REPORT_GENERATORS['pdf-tb'],     generate: (id: number) => generateTrialBalancePdf(db, id, { basis: fs.basis }) },
     'pdf-is':     { ...REPORT_GENERATORS['pdf-is'],     generate: (id: number) => generateIncomeStatementPdf(db, id, fs) },
     'pdf-bs':     { ...REPORT_GENERATORS['pdf-bs'],     generate: (id: number) => generateBalanceSheetPdf(db, id, fs) },
     'pdf-equity': { ...REPORT_GENERATORS['pdf-equity'], generate: (id: number) => generateEquityStatementPdf(db, id, fs) },

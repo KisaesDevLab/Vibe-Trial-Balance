@@ -311,7 +311,7 @@ interface PdfReportSection {
 const PDF_REPORT_SECTIONS: PdfReportSection[] = [
   { id: 'pdf-wp-index',     label: 'Workpaper Index (PDF)',       url: (id) => pdfReports.workpaperIndex(id),  filename: (id) => `workpaper-index-${id}.pdf` },
   { id: 'pdf-lead-sheets',  label: 'Lead Sheets (PDF)',           url: (id) => pdfReports.leadSheets(id),      filename: (id) => `lead-sheets-${id}.pdf` },
-  { id: 'pdf-tb',           label: 'Trial Balance (PDF)',         url: (id) => pdfReports.trialBalance(id),    filename: (id) => `trial-balance-${id}.pdf` },
+  { id: 'pdf-tb',           label: 'Trial Balance (PDF)',         url: (id, fs) => pdfReports.trialBalance(id, fs.basis), filename: (id) => `trial-balance-${id}.pdf` },
   { id: 'pdf-is',           label: 'Income Statement (PDF)',      url: (id, fs) => pdfReports.incomeStatement(id, fs.basis, fs.groupByLeadSheet), filename: (id) => `income-statement-${id}.pdf` },
   { id: 'pdf-bs',           label: 'Balance Sheet (PDF)',         url: (id, fs) => pdfReports.balanceSheet(id, fs.basis, fs.groupByLeadSheet),    filename: (id) => `balance-sheet-${id}.pdf` },
   { id: 'pdf-equity',       label: 'Statement of Equity (PDF)',   url: (id, fs) => pdfReports.equityStatement(id, fs.basis), filename: (id) => `equity-statement-${id}.pdf` },
@@ -562,11 +562,11 @@ export function WorkpaperPackagePage() {
           Include supporting documents
         </label>
         <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-          Statements
+          Basis
           <select
             value={fsBasis}
             onChange={(e) => setFsBasis(e.target.value as FsPdfBasis)}
-            title="Which balances the income statement and balance sheet print"
+            title="Which balances the trial balance and the statements print, and how far the trial balance's columns run"
             className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
           >
             <option value="unadjusted">Unadjusted</option>
@@ -587,9 +587,11 @@ export function WorkpaperPackagePage() {
           The merged PDF opens with a table of contents listing each selected report and the page it
           starts on, in the order shown above. With supporting documents included, each lead sheet's
           attachments follow it, listed by reference code. “Save to Documents” files the same PDF in
-          the client's workpaper folder instead of downloading it. The Statements settings apply to
-          the income statement and balance sheet, in the merged PDF and in the individual downloads
-          alike; grouping has no effect on a chart of accounts with no lead sheets mapped.
+          the client's workpaper folder instead of downloading it. Basis applies to the trial
+          balance and the statements alike, in the merged PDF and in the individual downloads — the
+          trial balance prints the walk up to that basis and no further, so a book-basis package
+          carries no tax columns. Grouping has no effect on a chart of accounts with no lead sheets
+          mapped.
         </p>
         {pdfErrors.length > 0 && (
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 text-xs px-3 py-2 rounded space-y-1">

@@ -76,7 +76,10 @@ export async function downloadPdf(url: string, filename: string, token: string):
 
 // Convenience wrappers for each report type
 export const pdfReports = {
-  trialBalance: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/trial-balance`,
+  /** `basis` trims the columns to the walk up to that basis, for callers that
+   *  do not name their own `columns` (the workpaper binder). */
+  trialBalance: (periodId: number, basis?: FsPdfBasis) =>
+    `${API_BASE_URL}/reports/periods/${periodId}/trial-balance${basis ? `?basis=${basis}` : ''}`,
   journalEntries: (periodId: number, type?: string) => `${API_BASE_URL}/reports/periods/${periodId}/journal-entries${type ? `?type=${type}` : ''}`,
   ajeListing: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/aje-listing`,
   generalLedger: (periodId: number, accountId?: number) => `${API_BASE_URL}/reports/periods/${periodId}/general-ledger${accountId ? `?accountId=${accountId}` : ''}`,
