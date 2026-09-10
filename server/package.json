@@ -1,6 +1,6 @@
 {
   "name": "vibe-tb-server",
-  "version": "0.1.47",
+  "version": "0.1.48",
   "private": true,
   "scripts": {
     "dev": "tsx watch src/app.ts",
