@@ -47,7 +47,7 @@ export interface PdfMatchRow {
   matchedAccountNumber: string | null;
   matchedAccountName: string | null;
   confidence: number;
-  matchType: 'exact' | 'fuzzy' | 'alias' | 'none';
+  matchType: 'exact' | 'exact_name' | 'fuzzy' | 'alias' | 'none';
   action: 'match' | 'create_new' | 'skip';
   category: string;
   // User-editable fields for create_new rows

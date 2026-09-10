@@ -8,6 +8,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
+import { parseAliases, applyAliasClaims, type AliasClaim } from '../lib/importAliases';
 
 export const tbPeriodRouter = Router({ mergeParams: true });
 tbPeriodRouter.use(authMiddleware);
@@ -140,11 +141,6 @@ const importRowSchema = z.object({
 });
 const importSchema = z.object({ rows: z.array(importRowSchema).min(1) });
 
-function parseAliases(val: unknown): string[] {
-  if (Array.isArray(val)) return val as string[];
-  if (typeof val === 'string') { try { return JSON.parse(val); } catch { return []; } }
-  return [];
-}
 
 tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<void> => {
   const periodId = Number(req.params.periodId);
@@ -174,7 +170,7 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
         .select('id', 'account_number');
       const accountMap = new Map<string, number>(accounts.map((a: { id: number; account_number: string }) => [a.account_number, a.id]));
 
-      const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
+      const aliasClaims: AliasClaim[] = [];
       for (const row of result.data.rows) {
         const accountId = accountMap.get(row.accountNumber);
         if (!accountId) { skipped++; continue; }
@@ -191,30 +187,15 @@ tbPeriodRouter.post('/import', async (req: AuthRequest, res: Response): Promise<
           .merge(['unadjusted_debit', 'unadjusted_credit', 'updated_by', 'updated_at']);
         upserted++;
         if (row.accountName?.trim()) {
-          aliasUpdates.push({ accountId, importName: row.accountName.trim() });
+          aliasClaims.push({ accountId, name: row.accountName.trim() });
         }
       }
 
       // Store imported account names as aliases for future matching
-      if (aliasUpdates.length > 0) {
-        const uniqueIds = [...new Set(aliasUpdates.map((u) => u.accountId))];
-        const currentAliasData = await trx('chart_of_accounts')
-          .whereIn('id', uniqueIds)
-          .select('id', 'account_name', 'import_aliases');
-        const aliasMap = new Map(currentAliasData.map((a: { id: number; account_name: string; import_aliases: unknown }) => [
-          a.id, { accountName: a.account_name, aliases: parseAliases(a.import_aliases) },
-        ]));
-        for (const { accountId, importName } of aliasUpdates) {
-          const data = aliasMap.get(accountId);
-          if (!data) continue;
-          if (importName.toLowerCase() !== data.accountName.toLowerCase() && !data.aliases.some((a) => a.toLowerCase() === importName.toLowerCase())) {
-            data.aliases.push(importName);
-            await trx('chart_of_accounts')
-              .where({ id: accountId })
-              .update({ import_aliases: JSON.stringify(data.aliases), updated_at: trx.fn.now() });
-          }
-        }
-      }
+      // One text means one account: applyAliasClaims grants each alias to the
+      // account the row imported into and strips it from whoever held it, so a
+      // correction made in the preview is not undone by the next import.
+      await applyAliasClaims(trx, period.client_id, aliasClaims);
       await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported unadjusted balances — ${upserted} upserted, ${skipped} skipped` }, trx);
     });
     if (notFound) {
@@ -269,7 +250,7 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
         .select('id', 'account_number');
       const accountMap = new Map<string, number>(accounts.map((a: { id: number; account_number: string }) => [a.account_number, a.id]));
 
-      const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
+      const aliasClaims: AliasClaim[] = [];
       for (const row of result.data.rows) {
         const accountId = accountMap.get(row.accountNumber);
         if (!accountId) { skipped++; continue; }
@@ -288,30 +269,15 @@ tbPeriodRouter.post('/import-prior-year', async (req: AuthRequest, res: Response
           .merge(['prior_year_debit', 'prior_year_credit', 'updated_by', 'updated_at']);
         upserted++;
         if (row.accountName?.trim()) {
-          aliasUpdates.push({ accountId, importName: row.accountName.trim() });
+          aliasClaims.push({ accountId, name: row.accountName.trim() });
         }
       }
 
       // Store imported account names as aliases for future matching
-      if (aliasUpdates.length > 0) {
-        const uniqueIds = [...new Set(aliasUpdates.map((u) => u.accountId))];
-        const currentAliasData = await trx('chart_of_accounts')
-          .whereIn('id', uniqueIds)
-          .select('id', 'account_name', 'import_aliases');
-        const aliasMap = new Map(currentAliasData.map((a: { id: number; account_name: string; import_aliases: unknown }) => [
-          a.id, { accountName: a.account_name, aliases: parseAliases(a.import_aliases) },
-        ]));
-        for (const { accountId, importName } of aliasUpdates) {
-          const data = aliasMap.get(accountId);
-          if (!data) continue;
-          if (importName.toLowerCase() !== data.accountName.toLowerCase() && !data.aliases.some((a) => a.toLowerCase() === importName.toLowerCase())) {
-            data.aliases.push(importName);
-            await trx('chart_of_accounts')
-              .where({ id: accountId })
-              .update({ import_aliases: JSON.stringify(data.aliases), updated_at: trx.fn.now() });
-          }
-        }
-      }
+      // One text means one account: applyAliasClaims grants each alias to the
+      // account the row imported into and strips it from whoever held it, so a
+      // correction made in the preview is not undone by the next import.
+      await applyAliasClaims(trx, period.client_id, aliasClaims);
       await logAudit({ userId: req.user!.userId, periodId, entityType: 'trial_balance', entityId: periodId, action: 'import', description: `Imported prior year balances — ${upserted} upserted, ${skipped} skipped` }, trx);
     });
     if (notFound) {

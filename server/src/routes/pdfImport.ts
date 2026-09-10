@@ -19,6 +19,7 @@ import { sendServerError } from '../lib/safeError';
 import { fillNewAccountType, inferAccountType, isCategory } from '../lib/accountTypeInference';
 import { looksLikeTotalRow } from '../lib/importSkipRules';
 import { loadOcrSettings, isOcrConfigured, ocrPages } from '../lib/ocrProvider';
+import { parseAliases, applyAliasClaims, type AliasClaim } from '../lib/importAliases';
 
 export const pdfImportRouter = Router();
 pdfImportRouter.use(authMiddleware);
@@ -38,7 +39,7 @@ export interface PdfMatchRow {
   matchedAccountNumber: string | null;
   matchedAccountName: string | null;
   confidence: number;
-  matchType: 'exact' | 'fuzzy' | 'alias' | 'none';
+  matchType: 'exact' | 'exact_name' | 'fuzzy' | 'alias' | 'none';
   action: 'match' | 'create_new' | 'skip';
   category: string;
   // User-editable fields for create_new rows
@@ -56,11 +57,6 @@ export interface PdfAnalysisResult {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function parseAliases(val: unknown): string[] {
-  if (Array.isArray(val)) return val as string[];
-  if (typeof val === 'string') { try { return JSON.parse(val); } catch { return []; } }
-  return [];
-}
 
 // ── POST /api/v1/import/pdf/analyze ─────────────────────────────────────────
 
@@ -208,9 +204,11 @@ Rules:
 - For P&L: revenue line items have creditCents > 0 (isDebit=false); expense line items have debitCents > 0 (isDebit=true)
 - For Balance Sheet: asset line items have debitCents > 0; liability/equity line items have creditCents > 0
 - matchedAccountId: use the id from the COA if confident match (prefer exact account number match), else null
-- confidence: 0-1 where 1=exact account number match, 0.95=matched via import alias, 0.8=same number different name, 0.7=fuzzy name match, 0=no match
-- matchType: "exact" (same account number), "alias" (matched an import alias), "fuzzy" (name/partial match), "none" (no match)
-- When the PDF account name matches an entry in the import_aliases column, use matchType "alias" with confidence 0.95
+- confidence: 0-1 where 1=exact account number match, 0.98=exact account_name match, 0.95=matched via import alias, 0.8=same number different name, 0.7=fuzzy name match, 0=no match
+- matchType: "exact" (same account number), "exact_name" (same account_name), "alias" (matched an import alias), "fuzzy" (name/partial match), "none" (no match)
+- Try these in order and stop at the first hit: account number, then an exact account_name, then import_aliases, then a fuzzy name.
+- An account's OWN account_name always beats another account's import alias. If the PDF name equals account A's account_name and also appears in account B's import_aliases, choose A with matchType "exact_name".
+- When the PDF account name matches an entry in the import_aliases column and no account_name matches it exactly, use matchType "alias" with confidence 0.95
 - action: "match" if matched to COA, "create_new" if no match but looks like a real account, "skip" if subtotal/header/total/blank
 - category: your best guess at "assets", "liabilities", "equity", "revenue", or "expenses" based on the account name and document section
 - warnings: array of strings for any issues found (e.g., "Document appears to be comparative — using current year column", "No account numbers found in document")
@@ -395,7 +393,7 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       let accountsMatched = 0;
       let rowsImported = 0;
       let rowsSkipped = 0;
-      const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
+      const aliasClaims: AliasClaim[] = [];
 
       for (const match of matches) {
         if (match.action === 'skip') { rowsSkipped++; continue; }
@@ -413,6 +411,11 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
           if (accountNum && existingByNumber.has(accountNum)) {
             accountId = existingByNumber.get(accountNum)!;
             accountsMatched++;
+            // A match in all but name — record the file's name so the next
+            // import of the same document matches on it directly.
+            if (match.pdfAccountName?.trim()) {
+              aliasClaims.push({ accountId, name: match.pdfAccountName.trim() });
+            }
           } else {
             // Same inference the analyze step used, so a body without the
             // fields cannot land a different type than the preview showed.
@@ -439,7 +442,7 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
         } else {
           accountsMatched++;
           if (accountId && match.pdfAccountName?.trim()) {
-            aliasUpdates.push({ accountId, importName: match.pdfAccountName.trim() });
+            aliasClaims.push({ accountId, name: match.pdfAccountName.trim() });
           }
         }
 
@@ -461,26 +464,10 @@ pdfImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       }
 
       // Apply alias updates — add import name as alias for matched accounts where name differs
-      if (aliasUpdates.length > 0) {
-        const uniqueIds = [...new Set(aliasUpdates.map((u) => u.accountId))];
-        const currentAliasData = await trx('chart_of_accounts')
-          .whereIn('id', uniqueIds)
-          .select('id', 'account_name', 'import_aliases');
-        const aliasMap = new Map(currentAliasData.map((a: { id: number; account_name: string; import_aliases: unknown }) => [
-          a.id, { accountName: a.account_name, aliases: parseAliases(a.import_aliases) },
-        ]));
-        for (const { accountId, importName } of aliasUpdates) {
-          const data = aliasMap.get(accountId);
-          if (!data) continue;
-          if (importName !== data.accountName && !data.aliases.includes(importName)) {
-            data.aliases.push(importName);
-            await trx('chart_of_accounts')
-              .where({ id: accountId })
-              .update({ import_aliases: JSON.stringify(data.aliases), updated_at: trx.fn.now() });
-          }
-        }
-      }
-
+      // One text means one account: applyAliasClaims grants each alias to the
+      // account the row imported into and strips it from whoever held it, so a
+      // correction made in the preview is not undone by the next import.
+      await applyAliasClaims(trx, clientId, aliasClaims);
       await trx('document_imports').insert({
         client_id: clientId,
         period_id: periodId,

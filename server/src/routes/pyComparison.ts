@@ -10,6 +10,7 @@ import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { sendServerError } from '../lib/safeError';
 import { reconcilePyTieOut, sumTrueUpLines, type TrueUpLine } from '../lib/pyTieOut';
+import { parseAliases, applyAliasClaims, type AliasClaim } from '../lib/importAliases';
 
 /** `journal_entries.source_tag` for an entry this screen created. */
 export const PY_TIEOUT_TAG = 'py_tieout';
@@ -17,11 +18,6 @@ export const PY_TIEOUT_TAG = 'py_tieout';
 export const pyComparisonRouter = Router({ mergeParams: true });
 pyComparisonRouter.use(authMiddleware);
 
-function parseAliases(val: unknown): string[] {
-  if (Array.isArray(val)) return val as string[];
-  if (typeof val === 'string') { try { return JSON.parse(val); } catch { return []; } }
-  return [];
-}
 
 // ─── GET / — Comparison data with variances ────────────────────────────────
 
@@ -374,7 +370,7 @@ pyComparisonRouter.post('/confirm-csv', async (req: AuthRequest, res: Response):
       let imported = 0;
       let skipped = 0;
       let created = 0;
-      const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
+      const aliasClaims: AliasClaim[] = [];
 
       // Build lookup of existing accounts by number for create_new dedup
       const existingAccounts = await trx('chart_of_accounts')
@@ -434,31 +430,15 @@ pyComparisonRouter.post('/confirm-csv', async (req: AuthRequest, res: Response):
         imported++;
 
         if (match.csvAccountName?.trim() && accountId) {
-          aliasUpdates.push({ accountId, importName: match.csvAccountName.trim() });
+          aliasClaims.push({ accountId, name: match.csvAccountName.trim() });
         }
       }
 
       // Store import aliases
-      if (aliasUpdates.length > 0) {
-        const uniqueIds = [...new Set(aliasUpdates.map((u) => u.accountId))];
-        const currentAliasData = await trx('chart_of_accounts')
-          .whereIn('id', uniqueIds)
-          .select('id', 'account_name', 'import_aliases');
-        const aliasMap = new Map(currentAliasData.map((a: { id: number; account_name: string; import_aliases: unknown }) => [
-          a.id, { accountName: a.account_name, aliases: parseAliases(a.import_aliases) },
-        ]));
-        for (const { accountId, importName } of aliasUpdates) {
-          const data = aliasMap.get(accountId);
-          if (!data) continue;
-          if (importName.toLowerCase() !== data.accountName.toLowerCase() && !data.aliases.some((a) => a.toLowerCase() === importName.toLowerCase())) {
-            data.aliases.push(importName);
-            await trx('chart_of_accounts')
-              .where({ id: accountId })
-              .update({ import_aliases: JSON.stringify(data.aliases), updated_at: trx.fn.now() });
-          }
-        }
-      }
-
+      // One text means one account: applyAliasClaims grants each alias to the
+      // account the row imported into and strips it from whoever held it, so a
+      // correction made in the preview is not undone by the next import.
+      await applyAliasClaims(trx, clientId, aliasClaims);
       await logAudit({
         userId: req.user!.userId,
         periodId,
@@ -538,7 +518,7 @@ pyComparisonRouter.post('/confirm-pdf', async (req: AuthRequest, res: Response):
       let imported = 0;
       let skipped = 0;
       let created = 0;
-      const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
+      const aliasClaims: AliasClaim[] = [];
 
       // Build lookup of existing accounts by number for create_new dedup
       const existingAccounts = await trx('chart_of_accounts')
@@ -597,31 +577,15 @@ pyComparisonRouter.post('/confirm-pdf', async (req: AuthRequest, res: Response):
 
         const name = match.pdfAccountName?.trim();
         if (name && accountId) {
-          aliasUpdates.push({ accountId, importName: name });
+          aliasClaims.push({ accountId, name: name });
         }
       }
 
       // Store import aliases
-      if (aliasUpdates.length > 0) {
-        const uniqueIds = [...new Set(aliasUpdates.map((u) => u.accountId))];
-        const currentAliasData = await trx('chart_of_accounts')
-          .whereIn('id', uniqueIds)
-          .select('id', 'account_name', 'import_aliases');
-        const aliasMap = new Map(currentAliasData.map((a: { id: number; account_name: string; import_aliases: unknown }) => [
-          a.id, { accountName: a.account_name, aliases: parseAliases(a.import_aliases) },
-        ]));
-        for (const { accountId, importName } of aliasUpdates) {
-          const data = aliasMap.get(accountId);
-          if (!data) continue;
-          if (importName.toLowerCase() !== data.accountName.toLowerCase() && !data.aliases.some((a) => a.toLowerCase() === importName.toLowerCase())) {
-            data.aliases.push(importName);
-            await trx('chart_of_accounts')
-              .where({ id: accountId })
-              .update({ import_aliases: JSON.stringify(data.aliases), updated_at: trx.fn.now() });
-          }
-        }
-      }
-
+      // One text means one account: applyAliasClaims grants each alias to the
+      // account the row imported into and strips it from whoever held it, so a
+      // correction made in the preview is not undone by the next import.
+      await applyAliasClaims(trx, clientId, aliasClaims);
       await logAudit({
         userId: req.user!.userId,
         periodId,

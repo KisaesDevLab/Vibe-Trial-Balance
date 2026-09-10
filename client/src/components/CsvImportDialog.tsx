@@ -47,6 +47,9 @@ function confidenceBadge(match: CsvMatchRow): React.ReactNode {
   if (match.action === 'create_new') {
     return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">New</span>;
   }
+  if (match.matchType === 'exact_name') {
+    return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400" title="The file's account name is this account's name">name</span>;
+  }
   if (match.matchType === 'alias') {
     return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400" title="Matched via import alias">alias</span>;
   }

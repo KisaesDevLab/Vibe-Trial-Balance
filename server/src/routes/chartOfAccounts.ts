@@ -9,6 +9,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
+import { parseAliases, normalizeAlias, applyAliasClaims, type AliasClaim } from '../lib/importAliases';
 
 // Mounted at /api/v1/clients/:clientId/chart-of-accounts
 export const coaCollectionRouter = Router({ mergeParams: true });
@@ -51,11 +52,6 @@ async function leadSheetBelongsToClient(
   return !!row;
 }
 
-function parseAliases(val: unknown): string[] {
-  if (Array.isArray(val)) return val as string[];
-  if (typeof val === 'string') { try { return JSON.parse(val); } catch { return []; } }
-  return [];
-}
 
 // GET /api/v1/clients/:clientId/chart-of-accounts
 coaCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -187,6 +183,8 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
   const { rows } = parsed.data;
   let inserted = 0;
   let updated = 0;
+  // Old names of accounts this import renames — claimed after the rows land.
+  const coaRenameClaims: AliasClaim[] = [];
 
   try {
     // Pre-build a tax_code string → id lookup for the import batch
@@ -213,9 +211,15 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
 
         const existing = await trx('chart_of_accounts')
           .where({ client_id: clientId, account_number: r.accountNumber })
-          .first('id');
+          .first('id', 'account_name');
 
         if (existing) {
+          // This path renames accounts in bulk and used to drop the old name,
+          // unlike the Edit Account dialog — so a COA re-import silently threw
+          // away the matching history every earlier import had built up.
+          if (normalizeAlias(String(existing.account_name)) !== normalizeAlias(r.accountName)) {
+            coaRenameClaims.push({ accountId: existing.id as number, name: String(existing.account_name) });
+          }
           await trx('chart_of_accounts').where({ id: existing.id }).update({
             account_name: r.accountName,
             category: r.category,
@@ -253,6 +257,7 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
           inserted++;
         }
       }
+      await applyAliasClaims(trx, clientId, coaRenameClaims);
     });
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', action: 'import', description: `COA import — ${inserted} created, ${updated} updated (${rows.length} total)` });
     res.json({ data: { inserted, updated, total: rows.length }, error: null });
@@ -579,24 +584,32 @@ coaItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<voi
     updates.lead_sheet_source = d.leadSheetId === null ? null : 'manual';
   }
 
-  // Handle import_aliases: auto-save old name when renaming, merge with explicit list
+  // Handle import_aliases: keep the old name when renaming, merged with an
+  // explicit list if the caller sent one. The rename claim is applied after the
+  // row is written (below) so it can also take the name off another account.
+  let renamedFrom: string | null = null;
   if (d.accountName !== undefined || d.importAliases !== undefined) {
     const current = await db('chart_of_accounts').where({ id }).first('account_name', 'import_aliases');
     if (current) {
-      // Start from explicit list if provided, else keep existing
-      let aliases = d.importAliases !== undefined ? [...d.importAliases] : parseAliases(current.import_aliases);
-      // Auto-save old name as alias when renaming
-      if (d.accountName !== undefined && d.accountName !== current.account_name) {
-        if (!aliases.includes(current.account_name)) {
-          aliases.push(current.account_name);
-        }
+      if (d.importAliases !== undefined) {
+        // Explicit list replaces — this is the Edit Account dialog, the only
+        // place an alias can be removed by hand.
+        updates.import_aliases = JSON.stringify(d.importAliases);
       }
-      updates.import_aliases = JSON.stringify(aliases);
+      if (d.accountName !== undefined && normalizeAlias(d.accountName) !== normalizeAlias(current.account_name)) {
+        renamedFrom = current.account_name;
+      }
     }
   }
 
   try {
     const [updated] = await db('chart_of_accounts').where({ id }).update(updates).returning('*');
+    if (updated && renamedFrom) {
+      // A renamed account keeps answering to its old name on import. Claimed,
+      // not appended, so the old name stops pointing at anyone else.
+      await db.transaction((trx) =>
+        applyAliasClaims(trx, updated.client_id as number, [{ accountId: id, name: renamedFrom! }]));
+    }
     if (!updated) {
       res
         .status(404)

@@ -14,7 +14,7 @@ export interface CsvMatchRow {
   matchedAccountNumber: string | null;
   matchedAccountName: string | null;
   confidence: number;
-  matchType: 'exact' | 'qbo_id' | 'fuzzy' | 'alias' | 'none';
+  matchType: 'exact' | 'qbo_id' | 'exact_name' | 'fuzzy' | 'alias' | 'none';
   action: 'match' | 'create_new' | 'skip';
   debitCents: number;
   creditCents: number;

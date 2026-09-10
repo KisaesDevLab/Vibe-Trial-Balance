@@ -25,6 +25,7 @@ import {
   type DetectedImportFormat,
   type PnlFlag,
 } from '../lib/balancesExport';
+import { parseAliases, applyAliasClaims, type AliasClaim } from '../lib/importAliases';
 
 // ── Excel → CSV conversion ──────────────────────────────────────────────────
 
@@ -101,7 +102,7 @@ export interface CsvMatchRow {
   matchedAccountNumber: string | null;
   matchedAccountName: string | null;
   confidence: number;
-  matchType: 'exact' | 'qbo_id' | 'fuzzy' | 'alias' | 'none';
+  matchType: 'exact' | 'qbo_id' | 'exact_name' | 'fuzzy' | 'alias' | 'none';
   action: 'match' | 'create_new' | 'skip';
   debitCents: number;
   creditCents: number;
@@ -148,11 +149,6 @@ function statementHint(pnl: PnlFlag | null | undefined): StatementHint | null {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function parseAliases(val: unknown): string[] {
-  if (Array.isArray(val)) return val as string[];
-  if (typeof val === 'string') { try { return JSON.parse(val); } catch { return []; } }
-  return [];
-}
 
 // ── Amount parsing helpers ───────────────────────────────────────────────────
 
@@ -636,7 +632,22 @@ Only give indexes for lines shown above — the file may be longer, and you must
         if (match.csvAccountName?.trim()) {
           const matchNameLower = match.csvAccountName.trim().toLowerCase();
 
-          // 3. Alias exact match
+          // 3. The account's OWN name, exactly. This tier used to be missing:
+          // aliases were tried first and a real name only ever reached the
+          // fuzzy tier at 0.55, so an alias on account B that happened to equal
+          // account A's actual name took rows away from A.
+          const nameExact = (coa as CoaRow[]).find((a) => a.account_name.trim().toLowerCase() === matchNameLower);
+          if (nameExact) {
+            match.matchedAccountId = nameExact.id;
+            match.matchedAccountNumber = nameExact.account_number;
+            match.matchedAccountName = nameExact.account_name;
+            match.confidence = 0.98;
+            match.matchType = 'exact_name';
+            if (!keepSkipped) match.action = 'match';
+            continue;
+          }
+
+          // 4. Alias exact match
           const aliasMatch = (coa as CoaRow[]).find((a) =>
             parseAliases(a.import_aliases).some((alias) => alias.toLowerCase() === matchNameLower)
           );
@@ -650,7 +661,7 @@ Only give indexes for lines shown above — the file may be longer, and you must
             continue;
           }
 
-          // 4. Fuzzy name match
+          // 5. Fuzzy name match
           const nameMatch = (coa as CoaRow[]).find((a) => {
             const coaLower = a.account_name.toLowerCase();
             return coaLower === matchNameLower || coaLower.includes(matchNameLower) || matchNameLower.includes(coaLower);
@@ -1065,7 +1076,7 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
         await trx('chart_of_accounts').where({ id: accountId, client_id: clientId }).update({ ...patch, updated_at: trx.fn.now() });
       };
       // Track which matched accounts need their alias list updated
-      const aliasUpdates: Array<{ accountId: number; importName: string }> = [];
+      const aliasClaims: AliasClaim[] = [];
 
       for (const match of matches) {
         if (match.action === 'skip') { rowsSkipped++; continue; }
@@ -1083,6 +1094,10 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
           if (accountNum && existingByNumber.has(accountNum)) {
             accountId = existingByNumber.get(accountNum)!;
             accountsMatched++;
+            // "Create new" that lands on an existing number is a match in all
+            // but name, and the file's name is exactly what the next import
+            // will arrive with — so it earns an alias like any other match.
+            aliasClaims.push({ accountId, name: match.csvAccountName.trim() });
           } else {
             // The analyze step already decided these and the preview showed
             // them; the fallback only covers a body assembled without it
@@ -1111,7 +1126,7 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
           accountsMatched++;
           // Queue alias update for matched rows
           if (accountId && match.csvAccountName?.trim()) {
-            aliasUpdates.push({ accountId, importName: match.csvAccountName.trim() });
+            aliasClaims.push({ accountId, name: match.csvAccountName.trim() });
           }
         }
 
@@ -1135,26 +1150,10 @@ csvImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       }
 
       // Apply alias updates — add import name as alias for matched accounts where name differs
-      if (aliasUpdates.length > 0) {
-        const uniqueIds = [...new Set(aliasUpdates.map((u) => u.accountId))];
-        const currentAliasData = await trx('chart_of_accounts')
-          .whereIn('id', uniqueIds)
-          .select('id', 'account_name', 'import_aliases');
-        const aliasMap = new Map(currentAliasData.map((a: { id: number; account_name: string; import_aliases: unknown }) => [
-          a.id, { accountName: a.account_name, aliases: parseAliases(a.import_aliases) },
-        ]));
-        for (const { accountId, importName } of aliasUpdates) {
-          const data = aliasMap.get(accountId);
-          if (!data) continue;
-          if (importName !== data.accountName && !data.aliases.includes(importName)) {
-            data.aliases.push(importName);
-            await trx('chart_of_accounts')
-              .where({ id: accountId })
-              .update({ import_aliases: JSON.stringify(data.aliases), updated_at: trx.fn.now() });
-          }
-        }
-      }
-
+      // One text means one account: applyAliasClaims grants each alias to the
+      // account the row imported into and strips it from whoever held it, so a
+      // correction made in the preview is not undone by the next import.
+      await applyAliasClaims(trx, clientId, aliasClaims);
       await trx('document_imports').insert({
         client_id: clientId,
         period_id: periodId,
