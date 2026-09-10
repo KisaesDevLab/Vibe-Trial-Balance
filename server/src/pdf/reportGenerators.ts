@@ -1285,8 +1285,14 @@ export async function generateLeadSheetsPdf(
     }
   }
 
+  // Debit minus credit, matching the Trial Balance grid and the Lead Sheets
+  // screen. A schedule may span categories (a "Due to/from" sheet holds both
+  // receivable and payable accounts), and category signing would give each
+  // category its own "positive means normal" scale — so the subtotal would add
+  // figures measured on opposite scales and tie to nothing. One convention per
+  // schedule is what lets it tie to the trial balance.
   const net = (r: Record<string, unknown>, d: string, c: string): number =>
-    categoryNet(String(r.category), Number(r[d] ?? 0), Number(r[c] ?? 0));
+    Number(r[d] ?? 0) - Number(r[c] ?? 0);
 
   // Group, with unassigned accounts collected into a trailing bucket.
   const groups = new Map<string, { id: number | null; code: string; name: string; rows: Array<Record<string, unknown>> }>();
@@ -1316,7 +1322,6 @@ export async function generateLeadSheetsPdf(
 
   const content: Content[] = [];
   const recap: Array<{ label: string; book: number; tax: number }> = [];
-  let checkTotal = 0;
 
   for (let gi = 0; gi < ordered.length; gi++) {
     const g = ordered[gi];
@@ -1338,8 +1343,6 @@ export async function generateLeadSheetsPdf(
       const vBook = net(r, 'book_adjusted_debit', 'book_adjusted_credit');
       const vTax  = net(r, 'tax_adjusted_debit', 'tax_adjusted_credit');
       py += vPy; un += vUn; aje += vAje; book += vBook; tax += vTax;
-      // Raw debit-minus-credit, so the recap's balance check foots to zero.
-      checkTotal += Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0);
 
       const marks = tickMap.get(r.account_id as number) ?? [];
       for (const m of marks) usedHere.set(m.id, m);
@@ -1419,8 +1422,14 @@ export async function generateLeadSheetsPdf(
   }
 
   // Recap — this is what proves the lead sheets tie to the trial balance. It is
-  // meaningless on a single schedule: the balance check only foots to zero
-  // across every account, so scoped to one sheet it would read as an error.
+  // meaningless on a single schedule: the total only foots to zero across every
+  // account, so scoped to one sheet it would read as an error.
+  //
+  // Now that schedules foot in debit-minus-credit, the Total row IS the balance
+  // check — every account appears on exactly one schedule (unassigned ones in
+  // their own bucket), so the schedules sum to total debits minus total credits.
+  // There was previously a separate check line computed on a different scale
+  // from the per-sheet figures above it, which could not be reconciled by eye.
   if (recap.length > 0 && oneSheetId === null) {
     content.push({ text: '', pageBreak: 'before' } as Content);
     content.push({ text: 'Lead Sheet Recap', fontSize: 12, bold: true, margin: [0, 0, 0, 8] } as Content);
@@ -1431,8 +1440,11 @@ export async function generateLeadSheetsPdf(
       bookTotal += recap[i].book;
       taxTotal += recap[i].tax;
     }
-    recapBody.push(svc.dataRow(['Total', bookTotal, taxTotal], { bold: true, shade: true }));
-    recapBody.push(svc.dataRow(['Balance Check (should be 0.00)', checkTotal, ''], { bold: true, shade: true }));
+    // showZero: on this row a zero is the answer, not a blank.
+    recapBody.push(svc.dataRow(
+      ['Total — balance check (should be 0.00)', bookTotal, taxTotal],
+      { bold: true, shade: true, showZero: true },
+    ));
     content.push({ table: { headerRows: 1, widths: ['*', 90, 90], body: recapBody }, layout: tableLayout } as Content);
   }
 

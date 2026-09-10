@@ -30,7 +30,6 @@ import { TICKMARK_COLOR_CLASSES, type TickmarkColor } from '../api/tickmarks';
 import { useUIStore, useAuthStore, pushToast } from '../store/uiStore';
 import { downloadPdf, pdfReports } from '../api/pdfReports';
 import { confirmAction } from '../components/ConfirmDialog';
-import { categoryNet } from '../lib/accounting';
 import { LeadSheetAssignmentModal } from '../components/LeadSheetAssignmentModal';
 import { LeadSheetNotesModal } from '../components/LeadSheetNotesModal';
 import {
@@ -59,9 +58,23 @@ function fmt(cents: number): string {
   return cents < 0 ? `(${str})` : str;
 }
 
-// Category-based signing, never normal_balance — a contra account whose flag
-// disagrees with its category would otherwise export inverted.
-const net = (r: LeadSheetMemberRow, dr: number, cr: number): number => categoryNet(r.category, dr, cr);
+// A lead schedule foots in ONE convention: debit minus credit, the same as the
+// Trial Balance grid. That is what lets the schedule tie to the trial balance,
+// which is the whole point of a lead sheet.
+//
+// Category signing (assets debit-positive, liabilities credit-positive) was
+// used here and is wrong for a SUBTOTAL, because a schedule may span
+// categories — "Due to/from" holds both receivable and payable accounts — and
+// each category then carries its own "positive means normal" scale. Adding
+// them produced a figure that tied to nothing. Signing by the per-account
+// Debit/Credit flag would be worse still: it is an editable display setting, so
+// a contra account like Accumulated Depreciation (category assets, flag credit)
+// would add to fixed assets instead of reducing them.
+//
+// Statements that genuinely need category signing — the P&L, balance sheet,
+// tax mapping — still use categoryNet from lib/accounting.ts. This is a
+// workpaper schedule, not a statement.
+const net = (dr: number, cr: number): number => dr - cr;
 
 function SignBadge({ role, status }: { role: SignoffRole; status: SignoffStatus }) {
   const letter = role === 'preparer' ? 'P' : 'R';
@@ -736,19 +749,19 @@ export function LeadSheetsPage() {
                             <td className="px-3 py-2 font-mono text-gray-600 dark:text-gray-400">{r.account_number}</td>
                             <td className="px-3 py-2 text-gray-900 dark:text-white">{r.account_name}</td>
                             <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">
-                              {fmt(net(r, r.prior_year_debit, r.prior_year_credit))}
+                              {fmt(net(r.prior_year_debit, r.prior_year_credit))}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">
-                              {fmt(net(r, r.unadjusted_debit, r.unadjusted_credit))}
+                              {fmt(net(r.unadjusted_debit, r.unadjusted_credit))}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">
-                              {fmt(net(r, r.book_adj_debit, r.book_adj_credit))}
+                              {fmt(net(r.book_adj_debit, r.book_adj_credit))}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums font-medium text-gray-900 dark:text-white">
-                              {fmt(net(r, r.book_adjusted_debit, r.book_adjusted_credit))}
+                              {fmt(net(r.book_adjusted_debit, r.book_adjusted_credit))}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">
-                              {fmt(net(r, r.tax_adjusted_debit, r.tax_adjusted_credit))}
+                              {fmt(net(r.tax_adjusted_debit, r.tax_adjusted_credit))}
                             </td>
                             <td className="px-3 py-2">
                               <button
@@ -820,19 +833,19 @@ export function LeadSheetsPage() {
                             Total {active.code ? `${active.code} — ` : ''}{active.name}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">
-                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r, r.prior_year_debit, r.prior_year_credit), 0))}
+                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r.prior_year_debit, r.prior_year_credit), 0))}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">
-                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r, r.unadjusted_debit, r.unadjusted_credit), 0))}
+                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r.unadjusted_debit, r.unadjusted_credit), 0))}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">
-                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r, r.book_adj_debit, r.book_adj_credit), 0))}
+                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r.book_adj_debit, r.book_adj_credit), 0))}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">
-                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r, r.book_adjusted_debit, r.book_adjusted_credit), 0))}
+                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r.book_adjusted_debit, r.book_adjusted_credit), 0))}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">
-                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r, r.tax_adjusted_debit, r.tax_adjusted_credit), 0))}
+                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r.tax_adjusted_debit, r.tax_adjusted_credit), 0))}
                           </td>
                           <td colSpan={4} />
                         </tr>

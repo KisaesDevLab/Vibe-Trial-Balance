@@ -123,10 +123,15 @@ export class PdfTemplateService {
     }));
   }
 
-  /** Data row — cells can be string | number | null; numbers are formatted as money */
+  /** Data row — cells can be string | number | null; numbers are formatted as money.
+   *
+   *  `showZero` prints a zero as "0.00" instead of the usual em dash. Reserve it
+   *  for rows where zero is the RESULT rather than the absence of one — a
+   *  balance check that reads "—" tells the reader nothing, since that is also
+   *  what an empty column looks like. */
   dataRow(
     cells: (string | number | null | undefined)[],
-    opts: { bold?: boolean; shade?: boolean; isAlt?: boolean } = {},
+    opts: { bold?: boolean; shade?: boolean; isAlt?: boolean; showZero?: boolean } = {},
   ): TableCell[] {
     const fill = opts.shade
       ? COLORS.subtotalBg
@@ -136,7 +141,9 @@ export class PdfTemplateService {
 
     return cells.map((cell) => {
       const isNum  = typeof cell === 'number';
-      const text   = isNum ? this.formatCents(cell as number) : (cell ?? '');
+      const text   = isNum
+        ? (opts.showZero && cell === 0 ? '0.00' : this.formatCents(cell as number))
+        : (cell ?? '');
       const isNeg  = isNum && this.isNegative(cell as number);
       return {
         text: String(text),
