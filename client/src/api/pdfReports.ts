@@ -85,6 +85,9 @@ export const pdfReports = {
   taxCodeReport: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-code-report`,
   workpaperIndex: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/workpaper-index`,
   leadSheets: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/lead-sheets`,
+  /** One lead schedule. `includeAttachments` appends that schedule's own files. */
+  leadSheet: (periodId: number, leadSheetId: number, includeAttachments = false) =>
+    `${API_BASE_URL}/reports/periods/${periodId}/lead-sheets/${leadSheetId}${includeAttachments ? '?includeAttachments=1' : ''}`,
   taxBasisPl: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-basis-pl`,
   taxReturnOrder: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-return-order`,
   cashFlow: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/cash-flow`,

@@ -4,6 +4,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { invalidateAfterJournalEntry } from '../lib/queryInvalidation';
 import { useUIStore } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
 import { getComparison, clearPyData } from '../api/pyComparison';
@@ -327,8 +328,7 @@ export function PyTieOutPage() {
           onAjeCreated={() => {
             setSelectedAccountIds(new Set());
             qc.invalidateQueries({ queryKey });
-            qc.invalidateQueries({ queryKey: ['trial-balance'] });
-            qc.invalidateQueries({ queryKey: ['journal-entries'] });
+            invalidateAfterJournalEntry(qc);
           }}
         />
       )}

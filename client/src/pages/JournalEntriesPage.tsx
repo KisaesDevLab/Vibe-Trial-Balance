@@ -21,6 +21,7 @@ import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 import { DateInput } from '../components/DateInput';
 import { confirmAction } from '../components/ConfirmDialog';
 import { useJeLineEditing } from '../hooks/useJeLineEditing';
+import { invalidateAfterJournalEntry } from '../lib/queryInvalidation';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -445,10 +446,7 @@ export function JournalEntriesPage() {
   });
 
   const invalidateAll = () => {
-    qc.invalidateQueries({ queryKey: ['journal-entries', selectedPeriodId] });
-    qc.invalidateQueries({ queryKey: ['trial-balance', selectedPeriodId] });
-    qc.invalidateQueries({ queryKey: ['bank-transactions'] });
-    qc.invalidateQueries({ queryKey: ['journal-entries-zoom'] });
+    invalidateAfterJournalEntry(qc);
   };
 
   const createMutation = useMutation({

@@ -13,6 +13,7 @@ import { evalAndFormatAmount } from '../utils/evalAmountExpr';
 import { validateJeLines } from '../utils/jeLines';
 import { useUnsavedGuard, confirmDiscard } from '../utils/useUnsavedGuard';
 import { useJeLineEditing } from '../hooks/useJeLineEditing';
+import { invalidateAfterJournalEntry } from '../lib/queryInvalidation';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -118,8 +119,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
     mutationFn: (input: JEInput) => createJournalEntry(input),
     onSuccess: (res) => {
       if (res.error) { setError(res.error.message); return; }
-      qc.invalidateQueries({ queryKey: ['journal-entries'] });
-      qc.invalidateQueries({ queryKey: ['trial-balance'] });
+      invalidateAfterJournalEntry(qc);
       onSuccess();
     },
     onError: (e) => setError(e.message),

@@ -6,11 +6,11 @@ import { Router, Response } from 'express';
 import { PDFDocument } from 'pdf-lib';
 import { db } from '../db';
 import { z } from 'zod';
-import { buildWorkpaperPackage } from '../lib/workpaperPackage';
+import { buildWorkpaperPackage, buildLeadSheetPdf } from '../lib/workpaperPackage';
 import { storeDocument, workpaperSection } from '../lib/documentStore';
 import { logAudit } from '../lib/periodGuard';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { engagementFilename, pdfDisposition } from '../lib/reportFilename';
+import { engagementFilename, pdfDisposition, safeFilePart } from '../lib/reportFilename';
 import {
   generateTrialBalancePdf,
   generateJournalEntryListingPdf,
@@ -342,6 +342,52 @@ pdfReportsRouter.get('/periods/:periodId/lead-sheets', async (req: AuthRequest, 
   try {
     const buffer = await generateLeadSheetsPdf(db, periodId);
     sendPdf(res, buffer, await reportFilename(periodId, `lead-sheets-${periodId}.pdf`), isPreview(req));
+  } catch (err: unknown) {
+    const e = err as { code?: string; status?: number; message?: string };
+    res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });
+  }
+});
+
+// GET /api/v1/reports/periods/:periodId/lead-sheets/:leadSheetId
+// ONE lead schedule, printed from the Lead Sheets screen. `?includeAttachments=1`
+// appends that schedule's own supporting files — both the ones hung on the
+// schedule and the ones hung on its account rows.
+//
+// Declared AFTER the all-sheets route above; Express matches in order, and a
+// literal path and a parameterised one at the same depth would otherwise be
+// ambiguous to a reader even though these two differ in segment count.
+pdfReportsRouter.get('/periods/:periodId/lead-sheets/:leadSheetId', async (req: AuthRequest, res: Response): Promise<void> => {
+  const periodId = getPeriodId(req);
+  const leadSheetId = Number(req.params.leadSheetId);
+  if (periodId === null || !Number.isInteger(leadSheetId) || leadSheetId <= 0) {
+    res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period or lead sheet ID' } });
+    return;
+  }
+  const includeAttachments = req.query.includeAttachments === '1' || req.query.includeAttachments === 'true';
+
+  try {
+    // Joined through the period's client, not looked up on its own: a lead
+    // sheet id from another client would otherwise print that client's schedule
+    // name in the title and the filename, on an empty report.
+    const sheet = await db('lead_sheets as ls')
+      .join('periods as p', 'p.client_id', 'ls.client_id')
+      .where('ls.id', leadSheetId)
+      .where('p.id', periodId)
+      .first('ls.code as code', 'ls.name as name');
+    if (!sheet) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Lead sheet not found for this period' } });
+      return;
+    }
+    const { buffer, skippedAttachments } = await buildLeadSheetPdf(db, periodId, leadSheetId, { includeAttachments });
+    // A corrupt attachment is skipped, not fatal — surfaced in a header so the
+    // UI can mention it without failing the download.
+    if (skippedAttachments.length > 0) {
+      res.setHeader('X-Skipped-Attachments', skippedAttachments.map((s) => s.refCode).join(','));
+    }
+    const slug = safeFilePart([sheet.code as string | null, sheet.name as string].filter(Boolean).join(' '))
+      .replace(/\s+/g, '-')
+      .toLowerCase() || String(leadSheetId);
+    sendPdf(res, buffer, await reportFilename(periodId, `lead-sheet-${slug}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     res.status(e.status ?? 500).json({ data: null, error: { code: e.code ?? 'SERVER_ERROR', message: e.message ?? 'Unknown error' } });

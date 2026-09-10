@@ -1163,13 +1163,32 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number, page
 // used); it groups by lead sheet instead of workpaper_ref and adds sign-off.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function generateLeadSheetsPdf(db: Knex, periodId: number): Promise<Buffer> {
+export interface LeadSheetsPdfOptions {
+  /** Print ONE schedule instead of the whole set (the Lead Sheets screen's
+   *  per-schedule print). Scoping also drops the recap page — see below. */
+  leadSheetId?: number;
+}
+
+export async function generateLeadSheetsPdf(
+  db: Knex,
+  periodId: number,
+  opts: LeadSheetsPdfOptions = {},
+): Promise<Buffer> {
   const svc  = await PdfTemplateService.fromDb(db);
   const info = await getPeriodInfo(db, periodId);
+  const oneSheetId = opts.leadSheetId ?? null;
+
+  // Scoped title comes from the lead sheet itself, not from the member rows —
+  // a schedule with no activity this period still has to name itself.
+  const oneSheet = oneSheetId === null
+    ? null
+    : ((await db('lead_sheets').where({ id: oneSheetId }).first('code', 'name')) ?? null) as
+        { code: string | null; name: string } | null;
 
   const rows = await db('v_adjusted_trial_balance as vtb')
     .where('vtb.period_id', periodId)
     .where('vtb.is_active', true)
+    .modify((qb) => { if (oneSheetId !== null) void qb.where('vtb.lead_sheet_id', oneSheetId); })
     .modify(whereHasActivity, 'vtb')
     .select(
       'vtb.account_id', 'vtb.account_number', 'vtb.account_name', 'vtb.category',
@@ -1222,6 +1241,10 @@ export async function generateLeadSheetsPdf(db: Knex, periodId: number): Promise
   if (await db.schema.hasTable('lead_sheet_attachments')) {
     const atts = await db('lead_sheet_attachments')
       .where({ period_id: periodId })
+      // Tombstones keep their ref code reserved but must not be listed: the
+      // file is gone, so printing its code promises a page that the attachment
+      // merge (which does filter deleted_at) will never produce.
+      .whereNull('deleted_at')
       .orderBy('ref_code', 'asc')
       .select('account_id', 'ref_code');
     for (const a of atts as Array<Record<string, unknown>>) {
@@ -1382,8 +1405,10 @@ export async function generateLeadSheetsPdf(db: Knex, periodId: number): Promise
     content.push({ table: { headerRows: 1, widths: [40, '*'], body: legendBody }, layout: tableLayout } as Content);
   }
 
-  // Recap — this is what proves the lead sheets tie to the trial balance.
-  if (recap.length > 0) {
+  // Recap — this is what proves the lead sheets tie to the trial balance. It is
+  // meaningless on a single schedule: the balance check only foots to zero
+  // across every account, so scoped to one sheet it would read as an error.
+  if (recap.length > 0 && oneSheetId === null) {
     content.push({ text: '', pageBreak: 'before' } as Content);
     content.push({ text: 'Lead Sheet Recap', fontSize: 12, bold: true, margin: [0, 0, 0, 8] } as Content);
     const recapBody: TableCell[][] = [svc.headerRow(['Lead Sheet', 'Book Balance', 'Tax Balance'])];
@@ -1399,11 +1424,21 @@ export async function generateLeadSheetsPdf(db: Knex, periodId: number): Promise
   }
 
   if (content.length === 0) {
-    content.push({ text: 'No accounts with activity in this period.', fontSize: 10, italics: true } as Content);
+    content.push({
+      text: oneSheetId === null
+        ? 'No accounts with activity in this period.'
+        : 'No accounts with activity on this lead sheet for this period.',
+      fontSize: 10,
+      italics: true,
+    } as Content);
   }
 
+  const title = oneSheet
+    ? `Lead Sheet — ${[oneSheet.code, oneSheet.name].filter(Boolean).join(' — ')}`
+    : 'Lead Sheets';
+
   return svc.generateBuffer(svc.buildDocument({
-    title:      'Lead Sheets',
+    title,
     clientName: info.client_name,
     ein:        info.ein ?? undefined,
     periodName: info.name,

@@ -27,7 +27,8 @@ import {
   type SignoffStatus,
 } from '../api/leadSheets';
 import { TICKMARK_COLOR_CLASSES, type TickmarkColor } from '../api/tickmarks';
-import { useUIStore, pushToast } from '../store/uiStore';
+import { useUIStore, useAuthStore, pushToast } from '../store/uiStore';
+import { downloadPdf, pdfReports } from '../api/pdfReports';
 import { confirmAction } from '../components/ConfirmDialog';
 import { categoryNet } from '../lib/accounting';
 import { LeadSheetAssignmentModal } from '../components/LeadSheetAssignmentModal';
@@ -41,6 +42,8 @@ import {
   type LeadSheetAttachment,
 } from '../api/leadSheetAttachments';
 import { listTickmarks } from '../api/tickmarks';
+import { listPeriods, type Period } from '../api/periods';
+import { JournalEntryDialog } from '../components/JournalEntryDialog';
 
 // pdfjs is ~1 MB; keep it out of the initial bundle.
 const LeadSheetPdfViewer = lazy(() =>
@@ -126,6 +129,7 @@ function SignoffControl({ role, detail, busy, onSign, onUnsign }: SignoffControl
 
 export function LeadSheetsPage() {
   const { selectedClientId, selectedPeriodId } = useUIStore();
+  const token = useAuthStore((s) => s.token) ?? '';
   const qc = useQueryClient();
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -142,6 +146,11 @@ export function LeadSheetsPage() {
   // Which account row's paperclip is mid-upload, so only that row shows a spinner.
   const [uploadingFor, setUploadingFor] = useState<number | null>(null);
   const [notesFor, setNotesFor] = useState<LeadSheetMemberRow | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  // Off by default, like the binder's own attachment switch: printing a
+  // schedule to check a number should not pull down 200 pages of support.
+  const [includeFiles, setIncludeFiles] = useState(false);
+  const [showJEDialog, setShowJEDialog] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rowFileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingAccountRef = useRef<number | null>(null);
@@ -183,6 +192,17 @@ export function LeadSheetsPage() {
       const res = await listAttachments(selectedPeriodId!);
       if (res.error) throw new Error(res.error.message);
       return res.data ?? [];
+    },
+  });
+
+  const periodsQuery = useQuery({
+    queryKey: ['periods', selectedClientId],
+    enabled: selectedClientId !== null,
+    queryFn: async () => {
+      if (!selectedClientId) return [] as Period[];
+      const res = await listPeriods(selectedClientId);
+      if (res.error) throw new Error(res.error.message);
+      return res.data;
     },
   });
 
@@ -290,10 +310,30 @@ export function LeadSheetsPage() {
 
   const attachments = attachmentsQuery.data ?? [];
   const tickmarks = tickmarksQuery.data ?? [];
+  const currentPeriod = periodsQuery.data?.find((p) => p.id === selectedPeriodId);
+  const isPeriodLocked = !!currentPeriod?.locked_at;
   const activeAttachments = useMemo(
     () => (active ? attachments.filter((a) => a.lead_sheet_id === active.id) : []),
     [attachments, active],
   );
+
+  // Print THIS schedule. `active` falls back to the first sheet when nothing has
+  // been clicked, so the id comes off `active`, never off `selectedId`.
+  const handlePrintSchedule = async () => {
+    if (!selectedPeriodId || !active) return;
+    setPdfBusy(true);
+    try {
+      await downloadPdf(
+        pdfReports.leadSheet(selectedPeriodId, active.id, includeFiles && activeAttachments.length > 0),
+        `lead-sheet-${active.code ?? active.id}.pdf`,
+        token,
+      );
+    } catch (e) {
+      pushToast((e as Error).message, 'error');
+    } finally {
+      setPdfBusy(false);
+    }
+  };
 
   const handleUpload = async (file: File) => {
     if (!selectedPeriodId || !active) return;
@@ -580,8 +620,42 @@ export function LeadSheetsPage() {
                     <span className="font-mono text-gray-500 dark:text-gray-400 mr-2">{active.code ?? '—'}</span>
                     {active.name}
                   </h3>
-                  {selectedPeriodId && activeDetail && (
-                    <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    {selectedPeriodId && selectedClientId && (
+                      <button
+                        onClick={() => !isPeriodLocked && setShowJEDialog(true)}
+                        disabled={isPeriodLocked}
+                        title={isPeriodLocked ? 'Period is locked' : 'Create a journal entry'}
+                        className="px-3 py-1.5 text-xs border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        New JE
+                      </button>
+                    )}
+                    {selectedPeriodId && (
+                      <>
+                        {activeAttachments.length > 0 && (
+                          <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={includeFiles}
+                              onChange={(e) => setIncludeFiles(e.target.checked)}
+                              className="rounded border-gray-300 dark:border-gray-600"
+                            />
+                            Include files ({activeAttachments.length})
+                          </label>
+                        )}
+                        <button
+                          onClick={() => void handlePrintSchedule()}
+                          disabled={pdfBusy}
+                          title="Download this lead schedule as a PDF"
+                          className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-50"
+                        >
+                          {pdfBusy ? 'Building…' : 'Print PDF'}
+                        </button>
+                      </>
+                    )}
+                    {selectedPeriodId && activeDetail && (
+                      <>
                       <SignoffControl
                         role="preparer"
                         detail={activeDetail}
@@ -596,8 +670,9 @@ export function LeadSheetsPage() {
                         onSign={(role) => signMutation.mutate({ role })}
                         onUnsign={(role) => unsignMutation.mutate({ role })}
                       />
-                    </div>
-                  )}
+                      </>
+                    )}
+                  </div>
                 </div>
 
                 {activeDetail && (activeDetail.status.preparer === 'stale' || activeDetail.status.reviewer === 'stale') && (
@@ -848,6 +923,19 @@ export function LeadSheetsPage() {
             onStamped={invalidate}
           />
         </Suspense>
+      )}
+
+      {/* Same New JE dialog as the Trial Balance screen. A posted entry moves the
+          balances behind this schedule, so the lead sheet queries are invalidated
+          too — which is also what re-computes the sign-off staleness stamp. */}
+      {showJEDialog && selectedPeriodId && selectedClientId && (
+        <JournalEntryDialog
+          periodId={selectedPeriodId}
+          clientId={selectedClientId}
+          periodEndDate={currentPeriod?.end_date?.slice(0, 10)}
+          onClose={() => setShowJEDialog(false)}
+          onSuccess={() => { setShowJEDialog(false); invalidate(); }}
+        />
       )}
 
       {showAssign && selectedClientId && (

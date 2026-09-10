@@ -18,6 +18,7 @@ import { validateJeLines } from '../utils/jeLines';
 import { useUnsavedGuard, confirmDiscard } from '../utils/useUnsavedGuard';
 import { confirmAction } from './ConfirmDialog';
 import { useJeLineEditing } from '../hooks/useJeLineEditing';
+import { invalidateAfterJournalEntry } from '../lib/queryInvalidation';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -156,11 +157,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
     onSuccess: (res) => {
       if (res.error) { setError(res.error.message); return; }
       // Invalidate all related caches
-      qc.invalidateQueries({ queryKey: ['general-ledger'] });
-      qc.invalidateQueries({ queryKey: ['trial-balance'] });
-      qc.invalidateQueries({ queryKey: ['journal-entries'] });
-      qc.invalidateQueries({ queryKey: ['journal-entry'] });
-      qc.invalidateQueries({ queryKey: ['bank-transactions'] });
+      invalidateAfterJournalEntry(qc);
       onSaved();
     },
     onError: (e) => setError(e.message),
@@ -170,10 +167,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
     mutationFn: () => deleteJournalEntry(journalEntryId),
     onSuccess: (res) => {
       if (res.error) { setError(res.error.message); return; }
-      qc.invalidateQueries({ queryKey: ['general-ledger'] });
-      qc.invalidateQueries({ queryKey: ['trial-balance'] });
-      qc.invalidateQueries({ queryKey: ['journal-entries'] });
-      qc.invalidateQueries({ queryKey: ['bank-transactions'] });
+      invalidateAfterJournalEntry(qc);
       onSaved();
     },
     onError: (e) => setError(e.message),

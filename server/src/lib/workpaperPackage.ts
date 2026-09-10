@@ -15,7 +15,7 @@
 
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { Knex } from 'knex';
-import { generateWorkpaperTocPdf, type TocEntry } from '../pdf/reportGenerators';
+import { generateWorkpaperTocPdf, generateLeadSheetsPdf, type TocEntry } from '../pdf/reportGenerators';
 import { readDocumentBuffer, type DocumentRow } from './documentStore';
 
 /** Two rebuilds settle the numbering; the third is belt and braces. */
@@ -34,6 +34,115 @@ export interface BuildPackageResult {
   buffer: Buffer;
   /** Attachments that could not be read or parsed — reported, never fatal. */
   skippedAttachments: Array<{ refCode: string; reason: string }>;
+}
+
+interface AttachmentEntry {
+  label: string;
+  doc: PDFDocument;
+  pageCount: number;
+  refCode: string;
+  sourceName: string;
+}
+
+/**
+ * Load this period's lead sheet attachments as parsed PDFs, in ref-code order.
+ *
+ * `leadSheetId` narrows to one schedule — which picks up BOTH the files hung on
+ * the schedule as a whole and the ones hung on its individual account rows,
+ * because every attachment carries its lead sheet id either way.
+ *
+ * A file that will not read or parse is collected into `skipped`, never thrown:
+ * one corrupt attachment must not fail a 200-page binder.
+ */
+async function loadAttachmentPdfs(
+  db: Knex,
+  periodId: number,
+  leadSheetId?: number,
+): Promise<{ entries: AttachmentEntry[]; skipped: Array<{ refCode: string; reason: string }> }> {
+  const entries: AttachmentEntry[] = [];
+  const skipped: Array<{ refCode: string; reason: string }> = [];
+
+  const rows = await db('lead_sheet_attachments as a')
+    .join('client_documents as d', 'd.id', 'a.document_id')
+    .where('a.period_id', periodId)
+    .modify((qb) => { if (leadSheetId != null) void qb.where('a.lead_sheet_id', leadSheetId); })
+    .whereNull('a.deleted_at')
+    .orderBy('a.ref_code', 'asc')
+    .select('a.ref_code', 'a.source_file_name', 'd.*');
+
+  for (const r of rows as Array<Record<string, unknown>>) {
+    const refCode = r.ref_code as string;
+    try {
+      const bytes = await readDocumentBuffer(r as unknown as DocumentRow);
+      const doc = await PDFDocument.load(bytes);
+      entries.push({
+        label: `${refCode} — ${r.source_file_name || 'attachment'}`,
+        doc,
+        pageCount: doc.getPageCount(),
+        refCode,
+        sourceName: (r.source_file_name as string) || 'attachment',
+      });
+    } catch (err) {
+      skipped.push({ refCode, reason: (err as Error).message });
+    }
+  }
+
+  return { entries, skipped };
+}
+
+/**
+ * Copy attachment pages onto the end of `merged`, stamping each with its ref
+ * code and original file name so a page pulled out of the binder still says
+ * where it came from. Cheap: attachments are stored already stamped with their
+ * tickmarks, so this is a straight copyPages with no render step.
+ */
+async function appendAttachmentPages(merged: PDFDocument, entries: AttachmentEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+  const font = await merged.embedFont(StandardFonts.Helvetica);
+  for (const a of entries) {
+    for (const page of await merged.copyPages(a.doc, a.doc.getPageIndices())) {
+      const added = merged.addPage(page);
+      const { height } = added.getSize();
+      added.drawText(`${a.refCode} — ${a.sourceName}`.slice(0, 90), {
+        x: 18,
+        y: height - 16,
+        size: 7,
+        font,
+        color: rgb(0.4, 0.4, 0.4),
+      });
+    }
+  }
+}
+
+/**
+ * One lead schedule as a standalone PDF, optionally with its own supporting
+ * files appended — the Lead Sheets screen's per-schedule print.
+ *
+ * No table of contents: a single schedule plus its files does not need one, and
+ * the binder's TOC exists to number a stack of separate reports.
+ */
+export async function buildLeadSheetPdf(
+  db: Knex,
+  periodId: number,
+  leadSheetId: number,
+  opts: BuildPackageOptions = {},
+): Promise<BuildPackageResult> {
+  const schedule = await generateLeadSheetsPdf(db, periodId, { leadSheetId });
+  if (!opts.includeAttachments) {
+    return { buffer: schedule, skippedAttachments: [] };
+  }
+
+  const { entries, skipped } = await loadAttachmentPdfs(db, periodId, leadSheetId);
+  if (entries.length === 0) {
+    return { buffer: schedule, skippedAttachments: skipped };
+  }
+
+  const merged = await PDFDocument.create();
+  const scheduleDoc = await PDFDocument.load(schedule);
+  for (const page of await merged.copyPages(scheduleDoc, scheduleDoc.getPageIndices())) merged.addPage(page);
+  await appendAttachmentPages(merged, entries);
+
+  return { buffer: Buffer.from(await merged.save()), skippedAttachments: skipped };
 }
 
 export async function buildWorkpaperPackage(
@@ -59,35 +168,9 @@ export async function buildWorkpaperPackage(
     });
   }
 
-  const skipped: Array<{ refCode: string; reason: string }> = [];
-  const attachmentEntries: Array<{ label: string; doc: PDFDocument; pageCount: number; refCode: string; sourceName: string }> = [];
-
-  if (opts.includeAttachments) {
-    const rows = await db('lead_sheet_attachments as a')
-      .join('client_documents as d', 'd.id', 'a.document_id')
-      .where('a.period_id', periodId)
-      .whereNull('a.deleted_at')
-      .orderBy('a.ref_code', 'asc')
-      .select('a.ref_code', 'a.source_file_name', 'd.*');
-
-    for (const r of rows as Array<Record<string, unknown>>) {
-      const refCode = r.ref_code as string;
-      try {
-        const bytes = await readDocumentBuffer(r as unknown as DocumentRow);
-        const doc = await PDFDocument.load(bytes);
-        attachmentEntries.push({
-          label: `${refCode} — ${r.source_file_name || 'attachment'}`,
-          doc,
-          pageCount: doc.getPageCount(),
-          refCode,
-          sourceName: (r.source_file_name as string) || 'attachment',
-        });
-      } catch (err) {
-        // One corrupt file must never fail a 200-page binder.
-        skipped.push({ refCode, reason: (err as Error).message });
-      }
-    }
-  }
+  const { entries: attachmentEntries, skipped } = opts.includeAttachments
+    ? await loadAttachmentPdfs(db, periodId)
+    : { entries: [] as AttachmentEntry[], skipped: [] as Array<{ refCode: string; reason: string }> };
 
   const buildToc = (tocPageCount: number): Promise<Buffer> => {
     const entries: TocEntry[] = [];
@@ -122,24 +205,7 @@ export async function buildWorkpaperPackage(
     for (const page of await merged.copyPages(b.doc, b.doc.getPageIndices())) merged.addPage(page);
   }
 
-  if (attachmentEntries.length > 0) {
-    const font = await merged.embedFont(StandardFonts.Helvetica);
-    for (const a of attachmentEntries) {
-      for (const page of await merged.copyPages(a.doc, a.doc.getPageIndices())) {
-        const added = merged.addPage(page);
-        // Stamp the provenance so a page pulled out of the binder still says
-        // where it came from.
-        const { height } = added.getSize();
-        added.drawText(`${a.refCode} — ${a.sourceName}`.slice(0, 90), {
-          x: 18,
-          y: height - 16,
-          size: 7,
-          font,
-          color: rgb(0.4, 0.4, 0.4),
-        });
-      }
-    }
-  }
+  await appendAttachmentPages(merged, attachmentEntries);
 
   return { buffer: Buffer.from(await merged.save()), skippedAttachments: skipped };
 }
