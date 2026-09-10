@@ -59,3 +59,18 @@ export function invalidateAfterJournalEntry(qc: QueryClient): void {
     void qc.invalidateQueries({ queryKey: [key] });
   }
 }
+
+/**
+ * Assigning or removing a tickmark moves two caches, because two screens show
+ * the same `tb_tickmarks` rows: the Trial Balance grid reads them keyed by
+ * account (`tb-tickmarks`), while the lead schedules get them embedded in each
+ * member row (`lead-sheets-period`). Toggling from one screen used to leave the
+ * other showing the old marks.
+ *
+ * Not a sign-off concern: the staleness stamp hashes raw TB amounts, so a mark
+ * does not make a signed schedule stale.
+ */
+export function invalidateAfterTickmarkToggle(qc: QueryClient): void {
+  void qc.invalidateQueries({ queryKey: ['tb-tickmarks'] });
+  void qc.invalidateQueries({ queryKey: ['lead-sheets-period'] });
+}

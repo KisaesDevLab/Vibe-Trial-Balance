@@ -41,9 +41,11 @@ import {
   MAX_ATTACHMENT_BYTES,
   type LeadSheetAttachment,
 } from '../api/leadSheetAttachments';
-import { listTickmarks } from '../api/tickmarks';
+import { listTickmarks, toggleTBTickmark } from '../api/tickmarks';
 import { listPeriods, type Period } from '../api/periods';
 import { JournalEntryDialog } from '../components/JournalEntryDialog';
+import { TickmarkPickerModal } from '../components/TickmarkPickerModal';
+import { invalidateAfterTickmarkToggle } from '../lib/queryInvalidation';
 
 // pdfjs is ~1 MB; keep it out of the initial bundle.
 const LeadSheetPdfViewer = lazy(() =>
@@ -151,6 +153,7 @@ export function LeadSheetsPage() {
   // schedule to check a number should not pull down 200 pages of support.
   const [includeFiles, setIncludeFiles] = useState(false);
   const [showJEDialog, setShowJEDialog] = useState(false);
+  const [tickmarkRow, setTickmarkRow] = useState<LeadSheetMemberRow | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rowFileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingAccountRef = useRef<number | null>(null);
@@ -316,6 +319,14 @@ export function LeadSheetsPage() {
     () => (active ? attachments.filter((a) => a.lead_sheet_id === active.id) : []),
     [attachments, active],
   );
+
+  // Tickmarks are the same period+account rows the Trial Balance grid writes,
+  // so this posts to the same endpoint and refreshes both screens' caches.
+  const toggleTickmarkMut = useMutation({
+    mutationFn: ({ accountId, tickmarkId }: { accountId: number; tickmarkId: number }) =>
+      toggleTBTickmark(selectedPeriodId!, accountId, tickmarkId),
+    onSettled: () => invalidateAfterTickmarkToggle(qc),
+  });
 
   // Print THIS schedule. `active` falls back to the first sheet when nothing has
   // been clicked, so the id comes off `active`, never off `selectedId`.
@@ -728,19 +739,30 @@ export function LeadSheetsPage() {
                               {fmt(net(r, r.tax_adjusted_debit, r.tax_adjusted_credit))}
                             </td>
                             <td className="px-3 py-2">
-                              <span className="flex flex-wrap gap-1">
-                                {r.tickmarks.map((t) => (
-                                  <span
-                                    key={t.id}
-                                    title={t.description}
-                                    className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold ${
-                                      TICKMARK_COLOR_CLASSES[t.color as TickmarkColor] ?? TICKMARK_COLOR_CLASSES.gray
-                                    }`}
-                                  >
-                                    {t.symbol}
-                                  </span>
-                                ))}
-                              </span>
+                              <button
+                                onClick={() => !isPeriodLocked && setTickmarkRow(r)}
+                                disabled={isPeriodLocked}
+                                title={isPeriodLocked ? 'Period is locked' : `Assign tickmarks to ${r.account_number}`}
+                                className={`flex flex-wrap items-center gap-1 min-w-[2rem] h-6 px-1 rounded ${
+                                  isPeriodLocked ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                                }`}
+                              >
+                                {r.tickmarks.length === 0 ? (
+                                  <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>
+                                ) : (
+                                  r.tickmarks.map((t) => (
+                                    <span
+                                      key={t.id}
+                                      title={t.description}
+                                      className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold ${
+                                        TICKMARK_COLOR_CLASSES[t.color as TickmarkColor] ?? TICKMARK_COLOR_CLASSES.gray
+                                      }`}
+                                    >
+                                      {t.symbol}
+                                    </span>
+                                  ))
+                                )}
+                              </button>
                             </td>
                             <td className="px-3 py-2">
                               <span className="flex items-center gap-1 flex-wrap">
@@ -923,6 +945,19 @@ export function LeadSheetsPage() {
             onStamped={invalidate}
           />
         </Suspense>
+      )}
+
+      {tickmarkRow && selectedPeriodId && (
+        <TickmarkPickerModal
+          accountNumber={tickmarkRow.account_number}
+          accountName={tickmarkRow.account_name}
+          library={tickmarks}
+          // Read back out of the live rows, not the captured row, so the marks
+          // repaint as they are toggled instead of after the modal closes.
+          assigned={activeDetail?.rows.find((x) => x.account_id === tickmarkRow.account_id)?.tickmarks ?? tickmarkRow.tickmarks}
+          onClose={() => setTickmarkRow(null)}
+          onToggle={(tickmarkId) => toggleTickmarkMut.mutate({ accountId: tickmarkRow.account_id, tickmarkId })}
+        />
       )}
 
       {/* Same New JE dialog as the Trial Balance screen. A posted entry moves the

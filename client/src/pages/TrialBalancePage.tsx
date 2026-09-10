@@ -35,6 +35,8 @@ import { updateAccount, type AccountInput } from '../api/chartOfAccounts';
 import { listClients } from '../api/clients';
 import { listPeriods, type Period } from '../api/periods';
 import { useUIStore, pushToast } from '../store/uiStore';
+import { TickmarkPickerModal } from '../components/TickmarkPickerModal';
+import { invalidateAfterTickmarkToggle } from '../lib/queryInvalidation';
 import {
   listTickmarks,
   getTBTickmarks,
@@ -270,7 +272,7 @@ export function TrialBalancePage() {
   const toggleTickmarkMut = useMutation({
     mutationFn: ({ accountId, tickmarkId }: { accountId: number; tickmarkId: number }) =>
       toggleTBTickmark(selectedPeriodId!, accountId, tickmarkId),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tb-tickmarks', selectedPeriodId] }),
+    onSettled: () => invalidateAfterTickmarkToggle(qc),
   });
 
   const { data: periods } = useQuery({
@@ -1739,8 +1741,9 @@ export function TrialBalancePage() {
 
       {/* Tickmark modal */}
       {tickmarkRow && (
-        <TickmarkModal
-          row={tickmarkRow}
+        <TickmarkPickerModal
+          accountNumber={tickmarkRow.account_number}
+          accountName={tickmarkRow.account_name}
           library={tickmarkLibrary ?? []}
           assigned={tbTickmarks?.[tickmarkRow.account_id] ?? []}
           onClose={() => setTickmarkRow(null)}
@@ -2045,63 +2048,6 @@ function TBImportModal({ periodId, mode, onClose, onSuccess }: {
             </div>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Tickmark Modal ────────────────────────────────────────────────────────────
-
-function TickmarkModal({ row, library, assigned, onClose, onToggle }: {
-  row: TBRow;
-  library: Tickmark[];
-  assigned: Pick<Tickmark, 'id' | 'symbol' | 'description' | 'color'>[];
-  onClose: () => void;
-  onToggle: (tickmarkId: number) => void;
-}) {
-  const assignedIds = new Set(assigned.map((a) => a.id));
-
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-sm">
-        <div className="flex items-center justify-between px-5 py-4 border-b dark:border-gray-700">
-          <div>
-            <h2 className="text-base font-semibold dark:text-white">{row.account_number} — {row.account_name}</h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Assign Tickmarks</p>
-          </div>
-          <button onClick={onClose} aria-label="Close" className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
-        </div>
-        <div className="px-5 py-3 space-y-1 max-h-80 overflow-y-auto">
-          {library.length === 0 ? (
-            <p className="text-sm text-gray-400 dark:text-gray-500 py-4 text-center">No tickmarks defined for this client.</p>
-          ) : (
-            library.map((tm) => {
-              const isOn = assignedIds.has(tm.id);
-              return (
-                <button
-                  key={tm.id}
-                  onClick={() => onToggle(tm.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg border text-left transition-colors ${
-                    isOn ? 'border-blue-400 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
-                  }`}
-                >
-                  <span className={`inline-flex items-center justify-center w-7 h-7 rounded text-sm font-bold shrink-0 ${TICKMARK_COLOR_CLASSES[tm.color]}`}>
-                    {tm.symbol}
-                  </span>
-                  <span className="text-sm text-gray-700 dark:text-gray-300 flex-1">{tm.description}</span>
-                  {isOn && (
-                    <svg className="w-4 h-4 text-blue-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
-                    </svg>
-                  )}
-                </button>
-              );
-            })
-          )}
-        </div>
-        <div className="px-5 py-3 border-t dark:border-gray-700 flex justify-end">
-          <button onClick={onClose} className="px-4 py-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm rounded hover:bg-gray-200 dark:hover:bg-gray-600">Done</button>
-        </div>
       </div>
     </div>
   );
