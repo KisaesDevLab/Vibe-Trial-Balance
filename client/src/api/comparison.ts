@@ -25,16 +25,31 @@ export interface ComparisonRow {
   variance_amount: number;
   variance_pct: number | null;
   note: string | null;
+  /** Carried so the page can sub-group without a second round trip. */
+  lead_sheet_id: number | null;
+  lead_sheet_code: string | null;
+  lead_sheet_name: string | null;
+  lead_sheet_sort: number | null;
 }
+
+export type ComparisonBasis = 'unadjusted' | 'book' | 'tax';
 
 export interface ComparisonData {
   period: ComparisonPeriod;
   comparePeriod: ComparisonPeriod;
+  /** Echoed back so the page can label what it is showing. */
+  basis: ComparisonBasis;
   rows: ComparisonRow[];
 }
 
-export const getComparison = (periodId: number, comparePeriodId: number) =>
-  apiFetch<ComparisonData>(`/periods/${periodId}/compare/${comparePeriodId}`);
+export const getComparison = (
+  periodId: number,
+  comparePeriodId: number,
+  basis?: ComparisonBasis,
+) =>
+  apiFetch<ComparisonData>(
+    `/periods/${periodId}/compare/${comparePeriodId}${basis ? `?basis=${basis}` : ''}`,
+  );
 
 export const upsertComparisonNote = (
   periodId: number,

@@ -9,6 +9,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
 import { categoryNet } from '../lib/accounting';
+import { parseTbBasis, tbBasisColumns } from '../lib/tbBasis';
 import { whereHasActivity } from '../lib/tbActivity';
 
 export const comparisonRouter = Router({ mergeParams: true });
@@ -22,6 +23,11 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
     res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid period IDs' } });
     return;
   }
+
+  // Which balances to compare. Defaults to book-adjusted, the only thing this
+  // report could read before, so an existing caller sees no change.
+  const basis = parseTbBasis(req.query.basis);
+  const { debit: debitCol, credit: creditCol } = tbBasisColumns(basis);
 
   try {
     const [period, comparePeriod] = await Promise.all([
@@ -50,7 +56,8 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
         .select(
           'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
           'vtb.category', 'vtb.normal_balance', 'vtb.is_active',
-          'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
+          'vtb.lead_sheet_id', 'vtb.lead_sheet_code', 'vtb.lead_sheet_name', 'vtb.lead_sheet_sort',
+          { basis_debit: `vtb.${debitCol}`, basis_credit: `vtb.${creditCol}` },
         )
         .orderBy('vtb.account_number', 'asc'),
       db('v_adjusted_trial_balance as vtb')
@@ -59,7 +66,8 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
         .select(
           'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
           'vtb.category', 'vtb.normal_balance', 'vtb.is_active',
-          'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
+          'vtb.lead_sheet_id', 'vtb.lead_sheet_code', 'vtb.lead_sheet_name', 'vtb.lead_sheet_sort',
+          { basis_debit: `vtb.${debitCol}`, basis_credit: `vtb.${creditCol}` },
         ),
     ]);
 
@@ -97,10 +105,10 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
       const cat = String(meta.category);
 
       const currentBalance = cur
-        ? categoryNet(cat, Number(cur.book_adjusted_debit), Number(cur.book_adjusted_credit))
+        ? categoryNet(cat, Number(cur.basis_debit), Number(cur.basis_credit))
         : 0;
       const compareBalance = cmp
-        ? categoryNet(cat, Number(cmp.book_adjusted_debit), Number(cmp.book_adjusted_credit))
+        ? categoryNet(cat, Number(cmp.basis_debit), Number(cmp.basis_credit))
         : 0;
 
       const varianceAmount = currentBalance - compareBalance;
@@ -122,6 +130,12 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
         account_name:    String(meta.account_name),
         category:        String(meta.category),
         normal_balance:  nb,
+        // Carried so the client can sub-group without a second round trip.
+        // Metadata comes from whichever period has the row, same as the name.
+        lead_sheet_id:   meta.lead_sheet_id == null ? null : Number(meta.lead_sheet_id),
+        lead_sheet_code: meta.lead_sheet_code == null ? null : String(meta.lead_sheet_code),
+        lead_sheet_name: meta.lead_sheet_name == null ? null : String(meta.lead_sheet_name),
+        lead_sheet_sort: meta.lead_sheet_sort == null ? null : Number(meta.lead_sheet_sort),
         is_active:       Boolean(meta.is_active),
         in_current:      !!cur,
         in_compare:      !!cmp,
@@ -136,7 +150,7 @@ comparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<void>
     // makes "200" sort before "1000" instead of the lexical "1000" < "200".
     .sort((a, b) => a.account_number.localeCompare(b.account_number, undefined, { numeric: true }));
 
-    res.json({ data: { period, comparePeriod, rows }, error: null });
+    res.json({ data: { period, comparePeriod, basis, rows }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'comparison');
   }

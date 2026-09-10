@@ -77,6 +77,8 @@ function isPreview(req: AuthRequest): boolean {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/reports/periods/:periodId/flux/:comparePeriodId
+//   ?basis=unadjusted|book|tax   (default book)
+//   ?groupByLeadSheet=true|false (default off; ignored when nothing is mapped)
 // ─────────────────────────────────────────────────────────────────────────────
 pdfReportsRouter.get('/periods/:periodId/flux/:comparePeriodId', async (req: AuthRequest, res: Response): Promise<void> => {
   const periodId        = getPeriodId(req);
@@ -98,7 +100,10 @@ pdfReportsRouter.get('/periods/:periodId/flux/:comparePeriodId', async (req: Aut
       res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Periods must belong to the same client' } });
       return;
     }
-    const buffer = await generateFluxAnalysisPdf(db, periodId, comparePeriodId);
+    const buffer = await generateFluxAnalysisPdf(db, periodId, comparePeriodId, {
+      basis: parseFsBasis(req.query.basis),
+      groupByLeadSheet: parseFsGroupByLeadSheet(req.query.groupByLeadSheet),
+    });
     sendPdf(res, buffer, await reportFilename(periodId, `flux-analysis-${periodId}-vs-${comparePeriodId}.pdf`), isPreview(req));
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };

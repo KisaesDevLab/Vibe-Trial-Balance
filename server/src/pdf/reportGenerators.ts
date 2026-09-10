@@ -11,6 +11,7 @@ import type { Content, TableCell } from 'pdfmake/interfaces';
 import { PdfTemplateService, DocOptions } from './PdfTemplateService';
 import { pdfSafeSymbol } from './reportGlyphs';
 import { groupByLeadSheet, hasLeadSheetMapping } from '../lib/leadSheetGrouping';
+import { TB_BASIS_LABEL, TB_BASIS_COLUMN, parseTbBasis, tbBasisColumns, type TbBasis } from '../lib/tbBasis';
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
 import { whereHasActivity } from '../lib/tbActivity';
 import { currentStampsForClient } from '../lib/leadSheetStamp';
@@ -601,20 +602,13 @@ export interface FsPdfOptions {
   groupByLeadSheet?: boolean;
 }
 
-const FS_BASIS_LABEL: Record<FsBasis, string> = {
-  unadjusted: 'Unadjusted',
-  book:       'Book Adjusted',
-  tax:        'Tax Adjusted',
-};
-
-const FS_BASIS_COLUMN: Record<FsBasis, string> = {
-  unadjusted: 'unadjusted',
-  book:       'book_adjusted',
-  tax:        'tax_adjusted',
-};
+// The statements' basis IS the shared one — these aliases keep the existing
+// names (and their tests) while there is only one definition to maintain.
+const FS_BASIS_LABEL = TB_BASIS_LABEL;
+const FS_BASIS_COLUMN = TB_BASIS_COLUMN;
 
 export function parseFsBasis(v: unknown): FsBasis {
-  return v === 'unadjusted' || v === 'tax' ? v : 'book';
+  return parseTbBasis(v);
 }
 
 /** `?priorYear=true|1` forces the columns on, `false|0` off, anything else = automatic. */
@@ -1718,11 +1712,21 @@ export async function generateTaxReturnOrderPdf(db: Knex, periodId: number): Pro
 // (j) Flux Analysis PDF  (two-period comparison with variance)
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface FluxPdfOptions {
+  /** Which balances to compare. Defaults to book-adjusted, as before. */
+  basis?: TbBasis;
+  /** Sub-group each category by lead sheet, with a subtotal per group. */
+  groupByLeadSheet?: boolean;
+}
+
 export async function generateFluxAnalysisPdf(
   db: Knex,
   periodId: number,
   comparePeriodId: number,
+  options: FluxPdfOptions = {},
 ): Promise<Buffer> {
+  const basis = options.basis ?? 'book';
+  const { debit: fluxDebitCol, credit: fluxCreditCol } = tbBasisColumns(basis);
   const svc  = await PdfTemplateService.fromDb(db);
   const info = await getPeriodInfo(db, periodId);
 
@@ -1737,7 +1741,8 @@ export async function generateFluxAnalysisPdf(
   const cmpSelect = [
     'vtb.account_id', 'vtb.account_number', 'vtb.account_name',
     'vtb.category', 'vtb.normal_balance',
-    'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
+    'vtb.lead_sheet_id', 'vtb.lead_sheet_code', 'vtb.lead_sheet_name', 'vtb.lead_sheet_sort',
+    { basis_debit: `vtb.${fluxDebitCol}`, basis_credit: `vtb.${fluxCreditCol}` },
   ];
   const [currentRows, compareRows] = await Promise.all([
     db('v_adjusted_trial_balance as vtb')
@@ -1784,19 +1789,33 @@ export async function generateFluxAnalysisPdf(
     let catCurrent = 0;
     let catCompare = 0;
 
-    for (const r of catRows) {
+    // Grouping runs INSIDE the category, never across it: a lead sheet can span
+    // categories and this report signs by category, so a group crossing a
+    // section would net figures measured on opposite scales.
+    const fluxGroups = options.groupByLeadSheet && hasLeadSheetMapping(catRows)
+      ? groupByLeadSheet(catRows)
+      : [{ id: null as number | null, label: '', rows: catRows }];
+
+    for (const g of fluxGroups) {
+      if (g.label) {
+        tableBody.push(svc.dataRow(['', g.label, ...Array(cols.length - 2).fill('')], { bold: true }));
+        rowIdx++;
+      }
+      let groupCurrent = 0, groupCompare = 0;
+
+    for (const r of g.rows) {
       const accountId = Number(r.account_id);
       const cur = curMap.get(accountId);
       const cmp = cmpMap.get(accountId);
       // Category-based signing (matches comparison.ts): contra accounts show
       // negative within their category so the subtotals net correctly.
-      const curr = cur ? categoryNet(cat, Number(cur.book_adjusted_debit), Number(cur.book_adjusted_credit)) : 0;
-      const prev = cmp ? categoryNet(cat, Number(cmp.book_adjusted_debit), Number(cmp.book_adjusted_credit)) : 0;
+      const curr = cur ? categoryNet(cat, Number(cur.basis_debit), Number(cur.basis_credit)) : 0;
+      const prev = cmp ? categoryNet(cat, Number(cmp.basis_debit), Number(cmp.basis_credit)) : 0;
       const chg  = curr - prev;
       const pct  = prev !== 0 ? (chg / Math.abs(prev)) * 100 : null;
 
-      catCurrent += curr;
-      catCompare += prev;
+      groupCurrent += curr;
+      groupCompare += prev;
 
       tableBody.push(svc.dataRow([
         r.account_number as string,
@@ -1808,6 +1827,20 @@ export async function generateFluxAnalysisPdf(
         notesMap.get(accountId) ?? '',
       ], { isAlt: rowIdx % 2 === 1 }));
       rowIdx++;
+    }
+
+      catCurrent += groupCurrent;
+      catCompare += groupCompare;
+
+      if (g.label) {
+        const gChg = groupCurrent - groupCompare;
+        const gPct = groupCompare !== 0 ? (gChg / Math.abs(groupCompare)) * 100 : null;
+        tableBody.push(svc.dataRow([
+          '', `Total ${g.label}`, groupCurrent, groupCompare, gChg,
+          gPct !== null ? `${gPct >= 0 ? '+' : ''}${gPct.toFixed(1)}%` : '—', '',
+        ], { bold: true }));
+        rowIdx++;
+      }
     }
 
     const catChg = catCurrent - catCompare;

@@ -2,11 +2,12 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
-import { useState, useMemo } from 'react';
+import { Fragment, useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore, useUIStore, pushToast } from '../store/uiStore';
 import { listPeriods, type Period } from '../api/periods';
-import { getComparison, upsertComparisonNote, type ComparisonRow } from '../api/comparison';
+import { getComparison, upsertComparisonNote, type ComparisonRow, type ComparisonBasis } from '../api/comparison';
+import { groupByLeadSheet, hasLeadSheetMapping } from '../lib/leadSheetGrouping';
 import { downloadPdf, openPdfPreview } from '../api/pdfReports';
 import { API_BASE_URL } from '../lib/baseConfig';
 
@@ -113,6 +114,11 @@ export function MultiPeriodPage() {
   const { selectedClientId, selectedPeriodId } = useUIStore();
   const [comparePeriodId, setComparePeriodId]   = useState<number | ''>('');
   const [threshold, setThreshold]               = useState(10); // % significance threshold
+  const [basis, setBasis]                       = useState<ComparisonBasis>('book');
+  // Shares the persisted preference with the financial statements: a firm that
+  // reads by lead schedule wants both grouped, not one of them.
+  const groupPref = useUIStore((st) => st.fsGroupByLeadSheet);
+  const setGroupPref = useUIStore((st) => st.setFsGroupByLeadSheet);
 
   // All periods for this client (to populate the compare dropdown)
   const { data: periodsData } = useQuery({
@@ -129,9 +135,9 @@ export function MultiPeriodPage() {
 
   // Comparison data
   const { data: compData, isLoading, error } = useQuery({
-    queryKey: ['comparison', selectedPeriodId, comparePeriodId],
+    queryKey: ['comparison', selectedPeriodId, comparePeriodId, basis],
     queryFn: async () => {
-      const res = await getComparison(selectedPeriodId!, Number(comparePeriodId));
+      const res = await getComparison(selectedPeriodId!, Number(comparePeriodId), basis);
       if (res.error) throw new Error(res.error.message);
       return res.data!;
     },
@@ -139,12 +145,19 @@ export function MultiPeriodPage() {
   });
 
   const rows = useMemo(() => compData?.rows ?? [], [compData]);
+  // Offered only where the chart of accounts is actually mapped, same rule as
+  // the financial statements.
+  const canGroupByLs = hasLeadSheetMapping(rows);
+  const groupByLs = groupPref && canGroupByLs;
 
   // The flux PDF endpoint requires Bearer auth, so a bare <a href> would 401.
   // Fetch the PDF as a blob with the JWT header, then preview/download.
   const token = useAuthStore((s) => s.token);
   const buildPdfUrl = (preview: boolean) =>
-    `${API_BASE_URL}/reports/periods/${selectedPeriodId}/flux/${comparePeriodId}?preview=${preview ? 'true' : 'false'}`;
+    `${API_BASE_URL}/reports/periods/${selectedPeriodId}/flux/${comparePeriodId}`
+    + `?preview=${preview ? 'true' : 'false'}`
+    + `&basis=${basis}`
+    + (groupByLs ? '&groupByLeadSheet=true' : '');
 
   async function handlePreviewPdf(): Promise<void> {
     if (!token) return;
@@ -223,6 +236,30 @@ export function MultiPeriodPage() {
           </select>
         </div>
         <div className="flex items-center gap-2">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">View</label>
+          <select
+            value={basis}
+            onChange={(e) => setBasis(e.target.value as ComparisonBasis)}
+            title="Which balances both periods are compared on"
+            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="unadjusted">Unadjusted</option>
+            <option value="book">Book Adjusted</option>
+            <option value="tax">Tax Adjusted</option>
+          </select>
+        </div>
+        {canGroupByLs && (
+          <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={groupPref}
+              onChange={(e) => setGroupPref(e.target.checked)}
+              className="rounded border-gray-300 dark:border-gray-600"
+            />
+            Group by lead sheet
+          </label>
+        )}
+        <div className="flex items-center gap-2">
           <label className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">Flag variances &gt;</label>
           <input
             type="number"
@@ -293,8 +330,17 @@ export function MultiPeriodPage() {
                       </td>
                     </tr>
 
-                    {/* Account rows */}
-                    {catRows.map((r, i) => {
+                    {/* Account rows, optionally sub-grouped by lead sheet.
+                        Inside the category only: a lead sheet can span
+                        categories and this report signs by category. */}
+                    {(groupByLs ? groupByLeadSheet(catRows) : [{ id: null as number | null, label: '', rows: catRows }]).map((g) => (
+                      <Fragment key={`${cat}-${g.id ?? g.label}`}>
+                        {g.label && (
+                          <tr className="bg-gray-50/60 dark:bg-gray-800/40 border-t border-gray-100 dark:border-gray-700">
+                            <td colSpan={7} className="px-6 py-1 text-xs font-semibold text-gray-600 dark:text-gray-400">{g.label}</td>
+                          </tr>
+                        )}
+                    {g.rows.map((r, i) => {
                       const isSignificant =
                         r.variance_pct !== null
                           ? Math.abs(r.variance_pct) >= threshold && r.variance_amount !== 0
@@ -329,6 +375,33 @@ export function MultiPeriodPage() {
                         </tr>
                       );
                     })}
+
+                        {g.label && (() => {
+                          const gs = g.rows.reduce(
+                            (acc, r) => ({
+                              current: acc.current + r.current_balance,
+                              compare: acc.compare + r.compare_balance,
+                              variance: acc.variance + r.variance_amount,
+                            }),
+                            { current: 0, compare: 0, variance: 0 },
+                          );
+                          const gPct = gs.compare !== 0 ? (gs.variance / Math.abs(gs.compare)) * 100 : null;
+                          return (
+                            <tr className="border-t border-gray-200 dark:border-gray-600 bg-gray-50/80 dark:bg-gray-800/50">
+                              <td className="px-3 py-1.5" />
+                              <td className="px-6 py-1.5 text-sm font-semibold text-gray-700 dark:text-gray-300">Total {g.label}</td>
+                              <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold tabular-nums dark:text-gray-200">{fmtCents(gs.current)}</td>
+                              <td className="px-3 py-1.5 text-right text-sm font-mono font-semibold tabular-nums text-gray-500 dark:text-gray-400">{fmtCents(gs.compare)}</td>
+                              <td className={`px-3 py-1.5 text-right text-sm font-mono font-semibold tabular-nums ${varianceColor(cat, gs.variance)}`}>{fmtCents(gs.variance)}</td>
+                              <td className="px-3 py-1.5 text-right text-xs text-gray-500 dark:text-gray-400">
+                                {gPct !== null ? `${gPct >= 0 ? '+' : ''}${gPct.toFixed(1)}%` : '—'}
+                              </td>
+                              <td className="px-3 py-1.5" />
+                            </tr>
+                          );
+                        })()}
+                      </Fragment>
+                    ))}
 
                     {/* Category subtotal */}
                     <tr key={`sub-${cat}`} className="border-t border-gray-300 dark:border-gray-600 bg-gray-100/60 dark:bg-gray-700/40">
