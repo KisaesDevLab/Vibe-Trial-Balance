@@ -21,9 +21,16 @@ const vfsData: Record<string, string> = require('pdfmake/build/vfs_fonts') as an
  */
 export const ROBOTO_MEDIUM: Buffer = Buffer.from(vfsData['Roboto-Medium.ttf'], 'base64');
 
+/**
+ * The body font every report is set in. Exported so `reportGlyphs.ts` can ask
+ * it — via fontkit — which characters it can actually draw, rather than
+ * discovering at print time that it silently drew a hollow box.
+ */
+export const ROBOTO_REGULAR: Buffer = Buffer.from(vfsData['Roboto-Regular.ttf'], 'base64');
+
 const FONTS = {
   Roboto: {
-    normal:      Buffer.from(vfsData['Roboto-Regular.ttf'],       'base64'),
+    normal:      ROBOTO_REGULAR,
     bold:        ROBOTO_MEDIUM,
     italics:     Buffer.from(vfsData['Roboto-Italic.ttf'],        'base64'),
     bolditalics: Buffer.from(vfsData['Roboto-MediumItalic.ttf'],  'base64'),

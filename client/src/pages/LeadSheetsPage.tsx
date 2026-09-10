@@ -320,6 +320,18 @@ export function LeadSheetsPage() {
     [attachments, active],
   );
 
+  // The marks actually used on the visible schedule, first-appearance order —
+  // the on-screen counterpart of the legend printed under each schedule in the
+  // PDF. A symbol means nothing without its description, and the library can
+  // hold dozens the sheet never uses.
+  const usedTickmarks = useMemo(() => {
+    const seen = new Map<number, { id: number; symbol: string; description: string; color: string }>();
+    for (const r of activeDetail?.rows ?? []) {
+      for (const t of r.tickmarks) if (!seen.has(t.id)) seen.set(t.id, t);
+    }
+    return [...seen.values()];
+  }, [activeDetail]);
+
   // Tickmarks are the same period+account rows the Trial Balance grid writes,
   // so this posts to the same endpoint and refreshes both screens' caches.
   const toggleTickmarkMut = useMutation({
@@ -826,6 +838,29 @@ export function LeadSheetsPage() {
                         </tr>
                       </tfoot>
                     </table>
+                  </div>
+                )}
+
+                {/* ── Tickmark legend ──────────────────────────────────── */}
+                {usedTickmarks.length > 0 && (
+                  <div className="border-t border-gray-100 dark:border-gray-700 px-5 py-3">
+                    <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-2">
+                      Tickmarks on this schedule
+                    </h4>
+                    <div className="flex flex-wrap gap-x-6 gap-y-2">
+                      {usedTickmarks.map((t) => (
+                        <span key={t.id} className="flex items-center gap-2">
+                          <span
+                            className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold shrink-0 ${
+                              TICKMARK_COLOR_CLASSES[t.color as TickmarkColor] ?? TICKMARK_COLOR_CLASSES.gray
+                            }`}
+                          >
+                            {t.symbol}
+                          </span>
+                          <span className="text-xs text-gray-600 dark:text-gray-400">{t.description}</span>
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
 

@@ -9,6 +9,7 @@
 import { Knex } from 'knex';
 import type { Content, TableCell } from 'pdfmake/interfaces';
 import { PdfTemplateService, DocOptions } from './PdfTemplateService';
+import { pdfSafeSymbol } from './reportGlyphs';
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
 import { whereHasActivity } from '../lib/tbActivity';
 import { currentStampsForClient } from '../lib/leadSheetStamp';
@@ -1053,7 +1054,9 @@ export async function generateWorkpaperIndexPdf(db: Knex, periodId: number, page
   for (const t of tickmarkRows) {
     const aid = t.account_id as number;
     if (!tickMap.has(aid)) tickMap.set(aid, []);
-    tickMap.get(aid)!.push({ id: t.tm_id as number, symbol: t.symbol as string, description: t.tm_description as string });
+    // Substituted HERE, at the single point symbols enter the document, so the
+    // member rows and the legend can never disagree about what a mark looks like.
+    tickMap.get(aid)!.push({ id: t.tm_id as number, symbol: pdfSafeSymbol(t.symbol as string), description: t.tm_description as string });
   }
 
   const cols   = ['Acct #', 'Account Name', 'Cat.', 'Book Bal', 'Tax Bal', 'Marks', 'Notes'];
@@ -1214,7 +1217,9 @@ export async function generateLeadSheetsPdf(
   for (const t of tickmarkRows) {
     const aid = t.account_id as number;
     if (!tickMap.has(aid)) tickMap.set(aid, []);
-    tickMap.get(aid)!.push({ id: t.tm_id as number, symbol: t.symbol as string, description: t.tm_description as string });
+    // Substituted HERE, at the single point symbols enter the document, so the
+    // member rows and the legend can never disagree about what a mark looks like.
+    tickMap.get(aid)!.push({ id: t.tm_id as number, symbol: pdfSafeSymbol(t.symbol as string), description: t.tm_description as string });
   }
 
   // Sign-offs. Staleness uses the SHARED stamp helper — never recomputed
@@ -1310,7 +1315,6 @@ export async function generateLeadSheetsPdf(
   const tableLayout = { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' };
 
   const content: Content[] = [];
-  const usedTickmarks = new Set<number>();
   const recap: Array<{ label: string; book: number; tax: number }> = [];
   let checkTotal = 0;
 
@@ -1321,6 +1325,9 @@ export async function generateLeadSheetsPdf(
     const label = g.id === null ? 'Unassigned — no lead sheet' : `${g.code} — ${g.name}`;
     const tableBody: TableCell[][] = [svc.headerRow(cols)];
     tableBody.push(svc.sectionHeaderRow(label, cols.length));
+
+    // Marks used on THIS schedule, in the order they first appear on it.
+    const usedHere = new Map<number, { symbol: string; description: string }>();
 
     let py = 0, un = 0, aje = 0, book = 0, tax = 0;
     for (let ri = 0; ri < g.rows.length; ri++) {
@@ -1335,7 +1342,7 @@ export async function generateLeadSheetsPdf(
       checkTotal += Number(r.book_adjusted_debit ?? 0) - Number(r.book_adjusted_credit ?? 0);
 
       const marks = tickMap.get(r.account_id as number) ?? [];
-      for (const m of marks) usedTickmarks.add(m.id);
+      for (const m of marks) usedHere.set(m.id, m);
 
       tableBody.push(svc.dataRow([
         r.account_number as string,
@@ -1353,6 +1360,25 @@ export async function generateLeadSheetsPdf(
     recap.push({ label, book, tax });
 
     content.push({ table: { headerRows: 1, widths, body: tableBody }, layout: tableLayout } as Content);
+
+    // Legend for the marks used on THIS schedule, printed with it rather than
+    // gathered onto one page at the back. A lead sheet is pulled out and
+    // reviewed on its own, so it has to explain its own tickmarks; a reviewer
+    // holding page 4 should not have to go and find page 12 to read it.
+    if (usedHere.size > 0) {
+      content.push({ text: 'Tickmarks', fontSize: 9, bold: true, margin: [0, 10, 0, 4] } as Content);
+      const legendBody: TableCell[][] = [];
+      for (const m of usedHere.values()) {
+        legendBody.push([
+          { text: m.symbol, fontSize: 9, bold: true, alignment: 'center' },
+          { text: m.description, fontSize: 8, color: '#333333' },
+        ]);
+      }
+      content.push({
+        table: { widths: [30, '*'], body: legendBody },
+        layout: { hLineWidth: (i: number) => (i === 0 ? 0 : 0.5), vLineWidth: () => 0, hLineColor: () => '#e5e5e5' },
+      } as Content);
+    }
 
     // Review notes, above the sign-off — a reviewer signing the page should be
     // looking at the open queries on it.
@@ -1390,19 +1416,6 @@ export async function generateLeadSheetsPdf(
       text: `${line('preparer')}          ${line('reviewer')}`,
       fontSize: 7, italics: true, margin: [0, 10, 0, 0], color: '#555555',
     } as Content);
-  }
-
-  // Tickmark legend — only symbols actually used on the printed sheets.
-  if (usedTickmarks.size > 0) {
-    content.push({ text: '', pageBreak: 'before' } as Content);
-    content.push({ text: 'Tickmark Legend', fontSize: 12, bold: true, margin: [0, 0, 0, 8] } as Content);
-    const legendBody: TableCell[][] = [svc.headerRow(['Symbol', 'Description'])];
-    const uniqueMarks = new Map<number, { symbol: string; description: string }>();
-    for (const m of [...tickMap.values()].flat()) {
-      if (usedTickmarks.has(m.id)) uniqueMarks.set(m.id, m);
-    }
-    for (const m of uniqueMarks.values()) legendBody.push(svc.dataRow([m.symbol, m.description], {}));
-    content.push({ table: { headerRows: 1, widths: [40, '*'], body: legendBody }, layout: tableLayout } as Content);
   }
 
   // Recap — this is what proves the lead sheets tie to the trial balance. It is
