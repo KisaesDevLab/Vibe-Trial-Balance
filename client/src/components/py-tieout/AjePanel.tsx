@@ -109,8 +109,11 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
   });
 
   return (
-    <div className="border-t-2 border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/10 px-6 py-4 shrink-0">
-      <div className="flex items-center justify-between mb-3">
+    // Capped at half the viewport: a true-up across dozens of variances used to
+    // grow the panel past the bottom of the window, taking the Totals row and
+    // the Create button with it. Only the line rows scroll — see below.
+    <div className="border-t-2 border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/10 px-6 py-4 shrink-0 flex flex-col max-h-[50vh] overflow-hidden">
+      <div className="flex items-center justify-between mb-3 shrink-0">
         <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
           Create AJE from {selectedAccounts.length} variance{selectedAccounts.length !== 1 ? 's' : ''}
         </h3>
@@ -139,7 +142,7 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
 
       {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-3 py-2 rounded text-xs mb-3">{error}</div>}
 
-      <div className="grid grid-cols-2 gap-4 mb-3">
+      <div className="grid grid-cols-2 gap-4 mb-3 shrink-0">
         <div>
           <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
           <input
@@ -160,13 +163,13 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
       </div>
 
       {/* JE Preview */}
-      <div className="bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 overflow-hidden mb-3">
+      <div className="bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto mb-3 flex-1 min-h-0">
         <table className="w-full text-xs">
           <thead>
-            <tr className="bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
-              <th className="px-2 py-1.5 text-left font-semibold text-gray-600 dark:text-gray-400">Account</th>
-              <th className="px-2 py-1.5 text-right font-semibold text-gray-600 dark:text-gray-400 w-28">Debit</th>
-              <th className="px-2 py-1.5 text-right font-semibold text-gray-600 dark:text-gray-400 w-28">Credit</th>
+            <tr className="border-b border-gray-200 dark:border-gray-700">
+              <th className="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700 px-2 py-1.5 text-left font-semibold text-gray-600 dark:text-gray-400">Account</th>
+              <th className="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700 px-2 py-1.5 text-right font-semibold text-gray-600 dark:text-gray-400 w-28">Debit</th>
+              <th className="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700 px-2 py-1.5 text-right font-semibold text-gray-600 dark:text-gray-400 w-28">Credit</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
@@ -182,12 +185,12 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
             ))}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60 font-semibold">
-              <td className="px-2 py-1.5 text-gray-600 dark:text-gray-400">Totals</td>
-              <td className={`px-2 py-1.5 text-right font-mono tabular-nums ${jePreview.balanced ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+            <tr className="border-t-2 border-gray-300 dark:border-gray-600 font-semibold">
+              <td className="sticky bottom-0 z-10 bg-gray-50 dark:bg-gray-700 px-2 py-1.5 text-gray-600 dark:text-gray-400">Totals</td>
+              <td className={`sticky bottom-0 z-10 bg-gray-50 dark:bg-gray-700 px-2 py-1.5 text-right font-mono tabular-nums ${jePreview.balanced ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                 {fmt(jePreview.totalDebit)}
               </td>
-              <td className={`px-2 py-1.5 text-right font-mono tabular-nums ${jePreview.balanced ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+              <td className={`sticky bottom-0 z-10 bg-gray-50 dark:bg-gray-700 px-2 py-1.5 text-right font-mono tabular-nums ${jePreview.balanced ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                 {fmt(jePreview.totalCredit)}
               </td>
             </tr>
@@ -195,7 +198,7 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
         </table>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end shrink-0">
         <button
           onClick={() => mutation.mutate()}
           disabled={mutation.isPending || !jePreview.balanced || offsetAccountId === ''}
