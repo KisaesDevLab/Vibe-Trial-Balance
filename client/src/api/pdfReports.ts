@@ -4,6 +4,11 @@
 
 import { API_BASE_URL } from '../lib/baseConfig';
 import { apiFetch } from './client';
+// Pure query-string helpers, split out so they can be unit-tested without Vite.
+import { fsQuery, withPreviewFlag, type FsPdfBasis } from '../utils/reportUrls';
+
+export { withPreviewFlag } from '../utils/reportUrls';
+export type { FsPdfBasis } from '../utils/reportUrls';
 
 // Helper to open/download a PDF from an authenticated endpoint
 // Since fetch with auth headers can't directly trigger download, use this approach:
@@ -12,7 +17,7 @@ import { apiFetch } from './client';
 // 3. Either open in new tab (preview) or trigger download link
 
 export async function openPdfPreview(url: string, token: string): Promise<void> {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(withPreviewFlag(url), { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) {
     let detail = '';
     try {
@@ -68,13 +73,6 @@ export async function downloadPdf(url: string, filename: string, token: string):
   URL.revokeObjectURL(objectUrl);
 }
 
-export type FsPdfBasis = 'unadjusted' | 'book' | 'tax';
-const fsQuery = (basis?: FsPdfBasis, groupByLeadSheet?: boolean) => {
-  const parts: string[] = [];
-  if (basis) parts.push(`basis=${basis}`);
-  if (groupByLeadSheet) parts.push('groupByLeadSheet=true');
-  return parts.length > 0 ? `?${parts.join('&')}` : '';
-};
 
 // Convenience wrappers for each report type
 export const pdfReports = {

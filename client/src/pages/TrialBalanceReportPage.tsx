@@ -105,7 +105,7 @@ export function TrialBalanceReportPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await openPdfPreview(pdfReports.trialBalance(selectedPeriodId) + `?preview=true&columns=${colsParam}`, token);
+      await openPdfPreview(pdfReports.trialBalance(selectedPeriodId) + `?columns=${colsParam}`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {

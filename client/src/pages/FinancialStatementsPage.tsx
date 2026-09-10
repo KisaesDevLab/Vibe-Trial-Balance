@@ -396,7 +396,7 @@ export function FinancialStatementsPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await openPdfPreview(reportUrl + '?preview=true', token);
+      await openPdfPreview(reportUrl, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {

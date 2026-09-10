@@ -88,7 +88,7 @@ export function AJEListingPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await openPdfPreview(pdfReports.ajeListing(selectedPeriodId) + '?preview=true', token);
+      await openPdfPreview(pdfReports.ajeListing(selectedPeriodId), token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {

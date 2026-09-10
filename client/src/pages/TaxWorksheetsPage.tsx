@@ -172,7 +172,7 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
   const handleM1Preview = async () => {
     if (!token) return;
     setPdfBusy(true);
-    try { await openPdfPreview(pdfReports.m1(periodId) + '?preview=true', token); }
+    try { await openPdfPreview(pdfReports.m1(periodId), token); }
     catch (e) { pushToast((e as Error).message, 'error'); }
     finally { setPdfBusy(false); }
   };
@@ -434,7 +434,7 @@ function TaxBasisTab({ periodId }: { periodId: number }) {
   const handlePreview = async () => {
     if (!token) return;
     setPdfBusy(true);
-    try { await openPdfPreview(pdfReports.taxBasisSchedule(periodId) + '?preview=true', token); }
+    try { await openPdfPreview(pdfReports.taxBasisSchedule(periodId), token); }
     catch (e) { pushToast((e as Error).message, 'error'); }
     finally { setPdfBusy(false); }
   };

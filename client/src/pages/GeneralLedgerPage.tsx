@@ -146,7 +146,7 @@ export function GeneralLedgerPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await openPdfPreview(pdfReports.generalLedger(selectedPeriodId) + '?preview=true', token);
+      await openPdfPreview(pdfReports.generalLedger(selectedPeriodId), token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {

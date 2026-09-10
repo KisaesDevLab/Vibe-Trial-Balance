@@ -43,7 +43,7 @@ export function WorkpaperIndexPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await openPdfPreview(pdfReports.workpaperIndex(selectedPeriodId) + `?preview=true&pageBreak=${pageBreakByGroup}`, token);
+      await openPdfPreview(pdfReports.workpaperIndex(selectedPeriodId) + `?pageBreak=${pageBreakByGroup}`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {

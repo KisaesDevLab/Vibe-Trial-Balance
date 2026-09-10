@@ -38,7 +38,7 @@ export function TaxCodeReportPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await openPdfPreview(pdfReports.taxCodeReport(selectedPeriodId) + `?columns=${colSet}&preview=true`, token);
+      await openPdfPreview(pdfReports.taxCodeReport(selectedPeriodId) + `?columns=${colSet}`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {

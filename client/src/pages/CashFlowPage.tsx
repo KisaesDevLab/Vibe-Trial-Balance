@@ -197,7 +197,7 @@ function StatementTab({ periodId }: { periodId: number }) {
   const handlePreview = async () => {
     if (!token) return;
     setPdfBusy(true);
-    try { await openPdfPreview(pdfReports.cashFlow(periodId) + '?preview=true', token); }
+    try { await openPdfPreview(pdfReports.cashFlow(periodId), token); }
     catch (e) { pushToast((e as Error).message, 'error'); }
     finally { setPdfBusy(false); }
   };
