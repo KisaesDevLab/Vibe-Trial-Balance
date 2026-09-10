@@ -89,3 +89,31 @@ export function validateJeLines(rawLines: JeLineInput[]): JeLinesStatus {
     lines,
   };
 }
+
+/**
+ * The amount and side the target line needs for the entry to foot.
+ *
+ * Totals exclude the target line's OWN amounts, so the answer is "what this row
+ * should hold", not "what to add to it" — applying it twice is idempotent
+ * rather than compounding. Returns null when every other line already foots,
+ * which means the target row is itself the imbalance and should be cleared.
+ *
+ * Amounts that `validateJeLines` leaves out of its totals (a row carrying an
+ * amount but no account) are excluded here too, so the plug always agrees with
+ * the out-of-balance figure shown on screen.
+ */
+export function balancingPlug(
+  rawLines: JeLineInput[],
+  targetIdx: number,
+): { side: 'debit' | 'credit'; cents: number } | null {
+  const others = rawLines.map((l, i) => (i === targetIdx ? { ...l, debit: '', credit: '' } : l));
+  const { totalDebit, totalCredit } = validateJeLines(others);
+  const diff = totalDebit - totalCredit;
+  if (diff === 0) return null;
+  return diff > 0 ? { side: 'credit', cents: diff } : { side: 'debit', cents: -diff };
+}
+
+/** Cents rendered for an amount input — matches evalAndFormatAmount's 2-dp form. */
+export function centsToAmountInput(cents: number): string {
+  return (cents / 100).toFixed(2);
+}

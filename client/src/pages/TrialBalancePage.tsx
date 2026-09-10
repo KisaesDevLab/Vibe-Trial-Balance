@@ -180,8 +180,11 @@ export function TrialBalancePage() {
   // View toggles live in the persisted UI store so they survive navigation
   // and reloads — a preparer who works single-column with PY on should not
   // have to re-tick both every time they open the grid.
+  // Non-zero-only sits with them: also a standing preference, not a per-visit
+  // filter, so it survives navigating away and reloading.
   const { tbView, setTbView } = useUIStore();
-  const { showTax, showPY, singleColumn } = tbView;
+  const { showTax, showPY, singleColumn, nonZeroOnly: hideZeroBalances } = tbView;
+  const setHideZeroBalances = (v: boolean) => setTbView({ nonZeroOnly: v });
   const setShowTax = (v: boolean) => setTbView({ showTax: v });
   const setShowPY = (v: boolean) => setTbView({ showPY: v });
   const setSingleColumn = (v: boolean) => setTbView({ singleColumn: v });
@@ -197,7 +200,6 @@ export function TrialBalancePage() {
   const [filterText, setFilterText] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('');
   const [filterUnit, setFilterUnit] = useState<string>('');
-  const [hideZeroBalances, setHideZeroBalances] = useState(false);
 
   // Excel-like cell selection
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -1406,9 +1408,11 @@ export function TrialBalancePage() {
           />
           Non-zero only
         </label>
-        {(filterText || filterCategory || filterUnit || hideZeroBalances) && (
+        {/* Clear resets the transient filters only. Non-zero-only is a standing
+            preference, so it is turned off by unticking it, not by Clear. */}
+        {(filterText || filterCategory || filterUnit) && (
           <button
-            onClick={() => { setFilterText(''); setFilterCategory(''); setFilterUnit(''); setHideZeroBalances(false); }}
+            onClick={() => { setFilterText(''); setFilterCategory(''); setFilterUnit(''); }}
             className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
           >
             Clear

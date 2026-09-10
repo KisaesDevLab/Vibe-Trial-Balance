@@ -52,6 +52,9 @@ interface AccountSearchDropdownProps {
   triggerCol?: number;
   /** When provided, shows a "+ New Account" action at the bottom of the dropdown */
   onCreateNew?: () => void;
+  /** Fired after the user commits an account (click or Enter), NOT on "— clear —".
+   *  Line editors use it to move focus on to the Debit field of the same row. */
+  onSelected?: (accountId: number) => void;
 }
 
 export function AccountSearchDropdown({
@@ -66,6 +69,7 @@ export function AccountSearchDropdown({
   triggerRow,
   triggerCol,
   onCreateNew,
+  onSelected,
 }: AccountSearchDropdownProps) {
   const [open, setOpen] = useState(defaultOpen);
   const [search, setSearch] = useState('');
@@ -165,6 +169,7 @@ export function AccountSearchDropdown({
   const select = (accountId: number | '') => {
     onChange(accountId);
     closeDropdown();
+    if (accountId !== '') onSelected?.(accountId);
   };
 
   // onFocus: open the dropdown whenever the trigger button receives focus

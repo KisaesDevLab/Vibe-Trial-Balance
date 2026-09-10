@@ -20,6 +20,7 @@ import { listPeriods } from '../api/periods';
 import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 import { DateInput } from '../components/DateInput';
 import { confirmAction } from '../components/ConfirmDialog';
+import { useJeLineEditing } from '../hooks/useJeLineEditing';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -84,6 +85,7 @@ function JEForm({
       { accountId: '', debit: '', credit: '' },
     ],
   );
+  const { linesBodyRef, focusDebit, fillBalance } = useJeLineEditing<JEFormLine>();
 
   const { data: accountsData } = useQuery({
     queryKey: ['chart-of-accounts', clientId],
@@ -164,7 +166,7 @@ function JEForm({
               <th className="w-8"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+          <tbody ref={linesBodyRef} className="divide-y divide-gray-100 dark:divide-gray-700">
             {lines.map((line, idx) => (
               <tr key={idx}>
                 <td className="px-1 py-1">
@@ -172,10 +174,12 @@ function JEForm({
                     accounts={accounts}
                     value={line.accountId}
                     onChange={(accountId) => setLine(idx, 'accountId', accountId)}
+                    onSelected={() => focusDebit(idx)}
                   />
                 </td>
                 <td className="px-1 py-1">
                   <input
+                    data-je-debit={idx}
                     value={line.debit}
                     onChange={(e) => setLine(idx, 'debit', e.target.value)}
                     onBlur={(e) => setLine(idx, 'debit', evalAndFormatAmount(e.target.value))}
@@ -217,10 +221,15 @@ function JEForm({
             </tr>
           </tfoot>
         </table>
-        {!balanced && totalDebit > 0 && (
-          <p className="text-xs text-red-600 dark:text-red-400 mt-1">
-            Entry is out of balance by {fmt(Math.abs(totalDebit - totalCredit))}.
-          </p>
+        {!balanced && (totalDebit > 0 || totalCredit > 0) && (
+          <button
+            type="button"
+            onClick={() => fillBalance(lines, setLines)}
+            title="Put the balancing amount on the last line"
+            className="block text-xs text-red-600 dark:text-red-400 mt-1 underline decoration-dotted underline-offset-2 hover:text-red-700 dark:hover:text-red-300"
+          >
+            Entry is out of balance by {fmt(Math.abs(totalDebit - totalCredit))}. Click to balance.
+          </button>
         )}
         {lineStatus.blockers.map((b) => (
           <p key={b} className="text-xs text-red-600 dark:text-red-400 mt-1">{b}</p>
@@ -265,6 +274,7 @@ function TransEditForm({
       credit: l.credit > 0 ? (l.credit / 100).toFixed(2) : '',
     })),
   );
+  const { linesBodyRef, focusDebit, fillBalance } = useJeLineEditing<JEFormLine>();
 
   const { data: accountsData } = useQuery({
     queryKey: ['chart-of-accounts', clientId],
@@ -317,14 +327,14 @@ function TransEditForm({
               <th className="w-8"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+          <tbody ref={linesBodyRef} className="divide-y divide-gray-100 dark:divide-gray-700">
             {lines.map((line, idx) => (
               <tr key={idx}>
                 <td className="px-1 py-1">
-                  <AccountSearchDropdown accounts={accounts} value={line.accountId} onChange={(accountId) => setLine(idx, 'accountId', accountId)} />
+                  <AccountSearchDropdown accounts={accounts} value={line.accountId} onChange={(accountId) => setLine(idx, 'accountId', accountId)} onSelected={() => focusDebit(idx)} />
                 </td>
                 <td className="px-1 py-1">
-                  <input value={line.debit} onChange={(e) => setLine(idx, 'debit', e.target.value)} onBlur={(e) => setLine(idx, 'debit', evalAndFormatAmount(e.target.value))} placeholder="0.00" className="w-full text-right border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400" />
+                  <input data-je-debit={idx} value={line.debit} onChange={(e) => setLine(idx, 'debit', e.target.value)} onBlur={(e) => setLine(idx, 'debit', evalAndFormatAmount(e.target.value))} placeholder="0.00" className="w-full text-right border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400" />
                 </td>
                 <td className="px-1 py-1">
                   <input value={line.credit} onChange={(e) => setLine(idx, 'credit', e.target.value)} onBlur={(e) => setLine(idx, 'credit', evalAndFormatAmount(e.target.value))} placeholder="0.00" className="w-full text-right border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400" />
@@ -346,7 +356,16 @@ function TransEditForm({
             </tr>
           </tfoot>
         </table>
-        {!balanced && totalDebit > 0 && <p className="text-xs text-red-600 dark:text-red-400 mt-1">Entry is out of balance by {fmt(Math.abs(totalDebit - totalCredit))}.</p>}
+        {!balanced && (totalDebit > 0 || totalCredit > 0) && (
+          <button
+            type="button"
+            onClick={() => fillBalance(lines, setLines)}
+            title="Put the balancing amount on the last line"
+            className="block text-xs text-red-600 dark:text-red-400 mt-1 underline decoration-dotted underline-offset-2 hover:text-red-700 dark:hover:text-red-300"
+          >
+            Entry is out of balance by {fmt(Math.abs(totalDebit - totalCredit))}. Click to balance.
+          </button>
+        )}
         {lineStatus.blockers.map((b) => (
           <p key={b} className="text-xs text-red-600 dark:text-red-400 mt-1">{b}</p>
         ))}

@@ -12,6 +12,7 @@ import { DateInput } from './DateInput';
 import { evalAndFormatAmount } from '../utils/evalAmountExpr';
 import { validateJeLines } from '../utils/jeLines';
 import { useUnsavedGuard, confirmDiscard } from '../utils/useUnsavedGuard';
+import { useJeLineEditing } from '../hooks/useJeLineEditing';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
   ]);
   const [error, setError] = useState<string | null>(null);
   const [quickAddLineIdx, setQuickAddLineIdx] = useState<number | null>(null);
+  const { linesBodyRef, focusDebit, fillBalance } = useJeLineEditing<FormLine>();
 
   const { data: accountsData } = useQuery({
     queryKey: ['chart-of-accounts', clientId],
@@ -201,7 +203,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
                     <th className="w-8"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                <tbody ref={linesBodyRef} className="divide-y divide-gray-100 dark:divide-gray-700">
                   {lines.map((line, idx) => (
                     <tr key={line._key}>
                       <td className="px-1 py-1">
@@ -210,10 +212,12 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
                           value={line.accountId}
                           onChange={(accountId) => setLine(idx, 'accountId', accountId)}
                           onCreateNew={() => setQuickAddLineIdx(idx)}
+                          onSelected={() => focusDebit(idx)}
                         />
                       </td>
                       <td className="px-1 py-1">
                         <input
+                          data-je-debit={idx}
                           value={line.debit}
                           onChange={(e) => setLine(idx, 'debit', e.target.value)}
                           onBlur={(e) => setLine(idx, 'debit', evalAndFormatAmount(e.target.value))}
@@ -260,10 +264,15 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
                 </tfoot>
               </table>
 
-              {!balanced && totalDebit > 0 && (
-                <p className="text-xs text-red-600 dark:text-red-400 mt-1">
-                  Entry is out of balance by {fmt(Math.abs(totalDebit - totalCredit))}.
-                </p>
+              {!balanced && (totalDebit > 0 || totalCredit > 0) && (
+                <button
+                  type="button"
+                  onClick={() => fillBalance(lines, setLines)}
+                  title="Put the balancing amount on the last line"
+                  className="block text-xs text-red-600 dark:text-red-400 mt-1 underline decoration-dotted underline-offset-2 hover:text-red-700 dark:hover:text-red-300"
+                >
+                  Entry is out of balance by {fmt(Math.abs(totalDebit - totalCredit))}. Click to balance.
+                </button>
               )}
               {lineStatus.blockers.map((b) => (
                 <p key={b} className="text-xs text-red-600 dark:text-red-400 mt-1">{b}</p>
@@ -289,6 +298,7 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
           onClose={() => setQuickAddLineIdx(null)}
           onCreated={(accountId) => {
             setLine(quickAddLineIdx, 'accountId', accountId);
+            focusDebit(quickAddLineIdx);
             setQuickAddLineIdx(null);
           }}
         />

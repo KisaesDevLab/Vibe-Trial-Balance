@@ -47,7 +47,7 @@ interface UIStore {
   decreaseFontSize: () => void;
   isDarkMode: boolean;
   toggleDarkMode: () => void;
-  /** Trial Balance grid view toggles (Single / PY / Tax). */
+  /** Trial Balance grid view toggles (Single / PY / Tax / Non-zero only). */
   tbView: TbView;
   setTbView: (patch: Partial<TbView>) => void;
 }
@@ -56,6 +56,9 @@ export interface TbView {
   singleColumn: boolean;
   showPY: boolean;
   showTax: boolean;
+  /** Hide accounts whose every balance is zero. Lives here with the other view
+   *  toggles because it is a standing preference, not a per-visit filter. */
+  nonZeroOnly: boolean;
 }
 
 export const useUIStore = create<UIStore>()(
@@ -76,13 +79,15 @@ export const useUIStore = create<UIStore>()(
       }),
       isDarkMode: false,
       toggleDarkMode: () => set((s) => ({ isDarkMode: !s.isDarkMode })),
-      tbView: { singleColumn: false, showPY: false, showTax: true },
+      tbView: { singleColumn: false, showPY: false, showTax: true, nonZeroOnly: false },
       setTbView: (patch) => set((s) => ({ tbView: { ...s.tbView, ...patch } })),
     }),
     {
       name: 'ui-prefs',
       partialize: (s) => ({ fontSize: s.fontSize, selectedClientId: s.selectedClientId, selectedPeriodId: s.selectedPeriodId, isDarkMode: s.isDarkMode, tbView: s.tbView }),
-      // A stored copy written before tbView existed has no such key; keep the defaults for it.
+      // A stored copy written before tbView existed has no such key; keep the
+      // defaults for it. The same spread covers a copy written before
+      // nonZeroOnly joined the group.
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<UIStore>;
         return { ...current, ...p, tbView: { ...current.tbView, ...(p.tbView ?? {}) } };
