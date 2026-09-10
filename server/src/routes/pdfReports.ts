@@ -442,6 +442,23 @@ const REPORT_GENERATORS: Record<string, { label: string; generate: (periodId: nu
 };
 
 
+/**
+ * The registry with the three financial statements bound to `fs`.
+ *
+ * The binder used to call them with no options at all, so every package
+ * printed book-adjusted and ungrouped no matter what the Financial Statements
+ * page was showing. Rebinding per request keeps REPORT_GENERATORS itself a
+ * plain constant — every other report is passed through untouched.
+ */
+function generatorsFor(fs: FsPdfOptions): typeof REPORT_GENERATORS {
+  return {
+    ...REPORT_GENERATORS,
+    'pdf-is':     { ...REPORT_GENERATORS['pdf-is'],     generate: (id: number) => generateIncomeStatementPdf(db, id, fs) },
+    'pdf-bs':     { ...REPORT_GENERATORS['pdf-bs'],     generate: (id: number) => generateBalanceSheetPdf(db, id, fs) },
+    'pdf-equity': { ...REPORT_GENERATORS['pdf-equity'], generate: (id: number) => generateEquityStatementPdf(db, id, fs) },
+  };
+}
+
 pdfReportsRouter.get('/periods/:periodId/workpaper-merged', async (req: AuthRequest, res: Response): Promise<void> => {
   const periodId = getPeriodId(req);
   if (periodId === null) {
@@ -458,7 +475,7 @@ pdfReportsRouter.get('/periods/:periodId/workpaper-merged', async (req: AuthRequ
 
   try {
     const { buffer, skippedAttachments } = await buildWorkpaperPackage(
-      db, periodId, reportIds, REPORT_GENERATORS, { includeAttachments },
+      db, periodId, reportIds, generatorsFor(fsOptions(req)), { includeAttachments },
     );
     // A corrupt attachment is skipped, not fatal — surface it in a header so
     // the UI can mention it without failing the download.
@@ -487,6 +504,9 @@ pdfReportsRouter.post('/periods/:periodId/workpaper-merged/save', async (req: Au
   const parsed = z.object({
     reports: z.array(z.string()).min(1),
     includeAttachments: z.boolean().optional(),
+    // Statement options, same meaning as the query params on the GET.
+    basis: z.enum(['unadjusted', 'book', 'tax']).optional(),
+    groupByLeadSheet: z.boolean().optional(),
   }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
@@ -501,7 +521,11 @@ pdfReportsRouter.post('/periods/:periodId/workpaper-merged/save', async (req: Au
     }
 
     const { buffer, skippedAttachments } = await buildWorkpaperPackage(
-      db, periodId, parsed.data.reports, REPORT_GENERATORS,
+      db, periodId, parsed.data.reports,
+      generatorsFor({
+        basis: parseFsBasis(parsed.data.basis),
+        groupByLeadSheet: parsed.data.groupByLeadSheet ?? false,
+      }),
       { includeAttachments: parsed.data.includeAttachments ?? false },
     );
 

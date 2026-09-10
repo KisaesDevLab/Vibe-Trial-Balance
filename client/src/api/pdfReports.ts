@@ -98,8 +98,18 @@ export const pdfReports = {
   cashFlow: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/cash-flow`,
   m1: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/m1`,
   taxBasisSchedule: (periodId: number) => `${API_BASE_URL}/reports/periods/${periodId}/tax-basis-schedule`,
-  workpaperMerged: (periodId: number, reportIds: string[], includeAttachments = false) =>
-    `${API_BASE_URL}/reports/periods/${periodId}/workpaper-merged?reports=${reportIds.join(',')}${includeAttachments ? '&includeAttachments=1' : ''}`,
+  /** `fs` applies to the income statement and balance sheet inside the binder;
+   *  the other reports ignore it. */
+  workpaperMerged: (
+    periodId: number,
+    reportIds: string[],
+    includeAttachments = false,
+    fs?: { basis?: FsPdfBasis; groupByLeadSheet?: boolean },
+  ) =>
+    `${API_BASE_URL}/reports/periods/${periodId}/workpaper-merged?reports=${reportIds.join(',')}`
+    + (includeAttachments ? '&includeAttachments=1' : '')
+    + (fs?.basis ? `&basis=${fs.basis}` : '')
+    + (fs?.groupByLeadSheet ? '&groupByLeadSheet=true' : ''),
 };
 
 export interface SaveWorkpaperPackageResult {
@@ -116,8 +126,14 @@ export const saveWorkpaperPackage = (
   periodId: number,
   reports: string[],
   includeAttachments = false,
+  fs?: { basis?: FsPdfBasis; groupByLeadSheet?: boolean },
 ) =>
   apiFetch<SaveWorkpaperPackageResult>(`/reports/periods/${periodId}/workpaper-merged/save`, {
     method: 'POST',
-    body: JSON.stringify({ reports, includeAttachments }),
+    body: JSON.stringify({
+      reports,
+      includeAttachments,
+      basis: fs?.basis,
+      groupByLeadSheet: fs?.groupByLeadSheet,
+    }),
   });

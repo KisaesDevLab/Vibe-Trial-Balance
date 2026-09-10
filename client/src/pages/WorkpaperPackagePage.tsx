@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useUIStore, useAuthStore, pushToast } from '../store/uiStore';
 import { getTrialBalance, TBRow } from '../api/trialBalance';
-import { downloadPdf, pdfReports, saveWorkpaperPackage } from '../api/pdfReports';
+import { downloadPdf, pdfReports, saveWorkpaperPackage, type FsPdfBasis } from '../api/pdfReports';
 import { getCashFlow } from '../api/cashFlow';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
@@ -290,10 +290,17 @@ const PREVIEW_SECTIONS = [
 
 type PreviewSectionId = typeof PREVIEW_SECTIONS[number]['id'];
 
+/** Options that apply to the three financial statements. The other reports
+ *  ignore them — their `url` simply takes no second argument. */
+export interface FsBinderOptions {
+  basis: FsPdfBasis;
+  groupByLeadSheet: boolean;
+}
+
 interface PdfReportSection {
   id: string;
   label: string;
-  url: (periodId: number) => string;
+  url: (periodId: number, fs: FsBinderOptions) => string;
   filename: (periodId: number) => string;
 }
 
@@ -305,9 +312,9 @@ const PDF_REPORT_SECTIONS: PdfReportSection[] = [
   { id: 'pdf-wp-index',     label: 'Workpaper Index (PDF)',       url: (id) => pdfReports.workpaperIndex(id),  filename: (id) => `workpaper-index-${id}.pdf` },
   { id: 'pdf-lead-sheets',  label: 'Lead Sheets (PDF)',           url: (id) => pdfReports.leadSheets(id),      filename: (id) => `lead-sheets-${id}.pdf` },
   { id: 'pdf-tb',           label: 'Trial Balance (PDF)',         url: (id) => pdfReports.trialBalance(id),    filename: (id) => `trial-balance-${id}.pdf` },
-  { id: 'pdf-is',           label: 'Income Statement (PDF)',      url: (id) => pdfReports.incomeStatement(id), filename: (id) => `income-statement-${id}.pdf` },
-  { id: 'pdf-bs',           label: 'Balance Sheet (PDF)',         url: (id) => pdfReports.balanceSheet(id),    filename: (id) => `balance-sheet-${id}.pdf` },
-  { id: 'pdf-equity',       label: 'Statement of Equity (PDF)',   url: (id) => pdfReports.equityStatement(id), filename: (id) => `equity-statement-${id}.pdf` },
+  { id: 'pdf-is',           label: 'Income Statement (PDF)',      url: (id, fs) => pdfReports.incomeStatement(id, fs.basis, fs.groupByLeadSheet), filename: (id) => `income-statement-${id}.pdf` },
+  { id: 'pdf-bs',           label: 'Balance Sheet (PDF)',         url: (id, fs) => pdfReports.balanceSheet(id, fs.basis, fs.groupByLeadSheet),    filename: (id) => `balance-sheet-${id}.pdf` },
+  { id: 'pdf-equity',       label: 'Statement of Equity (PDF)',   url: (id, fs) => pdfReports.equityStatement(id, fs.basis), filename: (id) => `equity-statement-${id}.pdf` },
   { id: 'pdf-je',           label: 'Journal Entries (PDF)',       url: (id) => pdfReports.journalEntries(id),  filename: (id) => `journal-entries-${id}.pdf` },
   { id: 'pdf-aje',          label: 'AJE Listing (PDF)',           url: (id) => pdfReports.ajeListing(id),      filename: (id) => `aje-listing-${id}.pdf` },
   { id: 'pdf-gl',           label: 'General Ledger (PDF)',        url: (id) => pdfReports.generalLedger(id),   filename: (id) => `general-ledger-${id}.pdf` },
@@ -334,6 +341,13 @@ export function WorkpaperPackagePage() {
   // Off by default: the everyday binder stays small, and the self-contained
   // archive version is a deliberate choice.
   const [includeAttachments, setIncludeAttachments] = useState(false);
+  // The statements print on whichever basis the binder asks for, and optionally
+  // sub-grouped by lead sheet. These used to be fixed: every package printed
+  // book-adjusted, ungrouped, whatever the Financial Statements page showed.
+  const [fsBasis, setFsBasis] = useState<FsPdfBasis>('book');
+  const fsGroupByLeadSheet = useUIStore((st) => st.fsGroupByLeadSheet);
+  const setFsGroupByLeadSheet = useUIStore((st) => st.setFsGroupByLeadSheet);
+  const fsOptions: FsBinderOptions = { basis: fsBasis, groupByLeadSheet: fsGroupByLeadSheet };
   const [savingToDocs, setSavingToDocs] = useState(false);
 
   const { data: clientsData } = useQuery({ queryKey: ['clients'], queryFn: async () => { const r = await listClients(); return r.data ?? []; }, enabled: !!selectedClientId });
@@ -475,7 +489,7 @@ export function WorkpaperPackagePage() {
               const errs: string[] = [];
               for (const section of includedPdfSections) {
                 try {
-                  await downloadPdf(section.url(selectedPeriodId), section.filename(selectedPeriodId), token);
+                  await downloadPdf(section.url(selectedPeriodId, fsOptions), section.filename(selectedPeriodId), token);
                   await new Promise(r => setTimeout(r, 400));
                 } catch (e) {
                   errs.push(`${section.label}: ${(e as Error).message}`);
@@ -498,7 +512,7 @@ export function WorkpaperPackagePage() {
             try {
               const reportIds = includedPdfSections.map(s => s.id);
               await downloadPdf(
-                pdfReports.workpaperMerged(selectedPeriodId, reportIds, includeAttachments),
+                pdfReports.workpaperMerged(selectedPeriodId, reportIds, includeAttachments, fsOptions),
                 `workpaper-package-${selectedPeriodId}.pdf`,
                 token,
               );
@@ -521,6 +535,7 @@ export function WorkpaperPackagePage() {
               selectedPeriodId,
               includedPdfSections.map((s) => s.id),
               includeAttachments,
+              fsOptions,
             );
             setSavingToDocs(false);
             if (res.error) { setPdfErrors([res.error.message]); return; }
@@ -546,11 +561,35 @@ export function WorkpaperPackagePage() {
           />
           Include supporting documents
         </label>
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+          Statements
+          <select
+            value={fsBasis}
+            onChange={(e) => setFsBasis(e.target.value as FsPdfBasis)}
+            title="Which balances the income statement and balance sheet print"
+            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="unadjusted">Unadjusted</option>
+            <option value="book">Book Adjusted</option>
+            <option value="tax">Tax Adjusted</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={fsGroupByLeadSheet}
+            onChange={(e) => setFsGroupByLeadSheet(e.target.checked)}
+            className="rounded border-gray-300 dark:border-gray-600"
+          />
+          Group statements by lead sheet
+        </label>
         <p className="basis-full text-xs text-gray-500 dark:text-gray-400">
           The merged PDF opens with a table of contents listing each selected report and the page it
           starts on, in the order shown above. With supporting documents included, each lead sheet's
           attachments follow it, listed by reference code. “Save to Documents” files the same PDF in
-          the client's workpaper folder instead of downloading it.
+          the client's workpaper folder instead of downloading it. The Statements settings apply to
+          the income statement and balance sheet, in the merged PDF and in the individual downloads
+          alike; grouping has no effect on a chart of accounts with no lead sheets mapped.
         </p>
         {pdfErrors.length > 0 && (
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 text-xs px-3 py-2 rounded space-y-1">

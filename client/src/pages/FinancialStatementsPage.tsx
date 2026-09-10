@@ -460,20 +460,46 @@ export function FinancialStatementsPage() {
     const totalExp = expenses.reduce((s, r) => s + fsDisplayBalance(r, colSet), 0);
     const netIncome = totalRev - totalExp;
 
-    const header = ['Statement', 'Account Number', 'Account Name', 'Category', `${COL_LABELS[colSet] ?? colSet} Net`];
+    // A Lead Sheet column rather than baked-in grouping: in a spreadsheet the
+    // column is strictly more useful, since it pivots and subtotals any way the
+    // reader wants. Only present when the chart of accounts is actually mapped.
+    const header = [
+      'Statement', 'Account Number', 'Account Name', 'Category',
+      ...(canGroupByLeadSheet ? ['Lead Sheet'] : []),
+      `${COL_LABELS[colSet] ?? colSet} Net`,
+    ];
+    const leadSheetOf = (r: TBRow): string =>
+      [r.lead_sheet_code, r.lead_sheet_name].filter(Boolean).join(' — ') || 'Unassigned';
     const dataRows: string[][] = rows
+      .slice()
       .sort((a, b) => {
         const catOrder = ['assets','liabilities','equity','revenue','expenses'];
         const ci = catOrder.indexOf(a.category) - catOrder.indexOf(b.category);
-        return ci !== 0 ? ci : a.account_number.localeCompare(b.account_number, undefined, { numeric: true });
+        if (ci !== 0) return ci;
+        // Within a category, lead sheet order then account number, so the sheet
+        // opens in the same order the grouped statement prints.
+        if (canGroupByLeadSheet) {
+          const as = a.lead_sheet_id == null ? Number.MAX_SAFE_INTEGER : (a.lead_sheet_sort ?? 0);
+          const bs = b.lead_sheet_id == null ? Number.MAX_SAFE_INTEGER : (b.lead_sheet_sort ?? 0);
+          if (as !== bs) return as - bs;
+        }
+        return a.account_number.localeCompare(b.account_number, undefined, { numeric: true });
       })
       .map((r) => {
         const isIS = r.category === 'revenue' || r.category === 'expenses';
         const stmt = isIS ? 'Income Statement' : 'Balance Sheet';
         const amt = fsDisplayBalance(r, colSet);
-        return [stmt, r.account_number, r.account_name, r.category, String(amt / 100)];
+        return [
+          stmt, r.account_number, r.account_name, r.category,
+          ...(canGroupByLeadSheet ? [leadSheetOf(r)] : []),
+          String(amt / 100),
+        ];
       });
-    dataRows.push(['Income Statement', '', 'Net Income', '', String(netIncome / 100)]);
+    dataRows.push([
+      'Income Statement', '', 'Net Income', '',
+      ...(canGroupByLeadSheet ? [''] : []),
+      String(netIncome / 100),
+    ]);
     downloadXlsx(`financial-statements-${colSet}.xlsx`, [header, ...dataRows]);
   };
 
