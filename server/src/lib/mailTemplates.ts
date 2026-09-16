@@ -7,6 +7,8 @@
  * Kept separate from mailService so the transport layer stays free of copy.
  */
 
+import { getPublicBaseUrl } from './publicUrl';
+
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 }
@@ -16,12 +18,12 @@ export function escapeHtml(s: string): string {
 export const escapeAttr = escapeHtml;
 
 /**
- * Absolute URL for a path in the SPA. Prefers APP_BASE_URL, falls back to the
- * first ALLOWED_ORIGIN entry, then localhost for dev.
+ * Absolute URL for a path in the SPA. The base comes from lib/publicUrl.ts:
+ * the admin-set `app.public_url` setting, then APP_BASE_URL, then the first
+ * ALLOWED_ORIGIN entry, then localhost for dev — the same value passkeys bind to.
  */
 export function buildAppUrl(path: string): string {
-  const allowedFirst = (process.env.ALLOWED_ORIGIN || '').split(',')[0]?.trim();
-  const base = (process.env.APP_BASE_URL?.trim() || allowedFirst || 'http://localhost:5173').replace(/\/$/, '');
+  const base = getPublicBaseUrl();
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 }
 

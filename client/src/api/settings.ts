@@ -191,3 +191,23 @@ export const testMail = (data?: MailSettingsPatch) =>
     method: 'POST',
     body: JSON.stringify(data ?? {}),
   });
+
+// ── Sign-in security policy (admin) ─────────────────────────────────────────
+
+export interface SecurityPolicy {
+  requireTwoFactor: boolean;
+  /** The stored setting ('' when unset). */
+  publicUrl: string;
+  effectivePublicUrl: string;
+  publicUrlSource: 'setting' | 'env' | 'origin' | 'default';
+  passkeysAvailable: boolean;
+  passkeyBlockReason: string | null;
+  rpId: string | null;
+  rpOrigin: string | null;
+  usersWithoutTwoFactor: number;
+}
+
+export const getSecurityPolicy = () => apiFetch<SecurityPolicy>('/settings/security');
+
+export const saveSecurityPolicy = (patch: { requireTwoFactor?: boolean; publicUrl?: string }) =>
+  apiFetch<SecurityPolicy>('/settings/security', { method: 'PUT', body: JSON.stringify(patch) });

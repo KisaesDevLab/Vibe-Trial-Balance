@@ -10,6 +10,7 @@ import {
   updateUser,
   deactivateUser,
   sendUserInvite,
+  resetUserTwoFactor,
   type AppUser,
   type UserInput,
   type UserPatch,
@@ -18,6 +19,8 @@ import { useAuthStore, pushToast } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
 import { PasswordInput } from '../components/PasswordInput';
 import { useFeatures } from '../hooks/useFeatures';
+import { RefreshButton } from '../components/RefreshButton';
+import { twoFactorSummary } from '../utils/twoFactorSummary';
 
 const ROLE_BADGE: Record<string, { label: string; cls: string }> = {
   admin:    { label: 'Admin',    cls: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400' },
@@ -230,6 +233,15 @@ export function UsersPage() {
     onSuccess: () => invalidate(),
   });
 
+  const resetTwoFactorMutation = useMutation({
+    mutationFn: (id: number) => resetUserTwoFactor(id),
+    onSuccess: (res) => {
+      if (res.error) { pushToast(res.error.message, 'error'); return; }
+      pushToast('Two-factor authentication reset. The user signs in with their password next time.', 'success');
+      invalidate();
+    },
+  });
+
   if (currentUser?.role !== 'admin') {
     return (
       <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
@@ -249,7 +261,7 @@ export function UsersPage() {
     <div className="p-6 max-w-3xl">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Users</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Users<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-500 mt-0.5">{active.length} active{inactive.length > 0 ? `, ${inactive.length} inactive` : ''}</p>
         </div>
         <button onClick={() => { setShowAdd(true); setFormError(null); }}
@@ -272,18 +284,21 @@ export function UsersPage() {
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Name</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Username</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Role</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">2FA</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Status</th>
                 <th className="px-4 py-2.5"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {users.length === 0 ? (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400 dark:text-gray-500">No users found.</td></tr>
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400 dark:text-gray-500">No users found.</td></tr>
               ) : (
                 users.map((u) => {
                   const badge = ROLE_BADGE[u.role] ?? ROLE_BADGE.preparer;
                   const isSelf = u.id === currentUser?.id;
                   const invite = inviteState(u);
+                  const twoFactor = twoFactorSummary(u);
+                  const requireTwoFactor = !!features?.requireTwoFactor;
                   return (
                     <tr key={u.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 ${!u.is_active ? 'opacity-50' : ''}`}>
                       <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">
@@ -293,6 +308,15 @@ export function UsersPage() {
                       <td className="px-4 py-2.5 font-mono text-gray-600 dark:text-gray-400">{u.username}</td>
                       <td className="px-4 py-2.5">
                         <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold ${badge.cls}`}>{badge.label}</span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {twoFactor.enrolled ? (
+                          <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">{twoFactor.label}</span>
+                        ) : requireTwoFactor && u.is_active ? (
+                          <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" title="Will be asked to enrol at next sign-in">Not enrolled</span>
+                        ) : (
+                          <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400">None</span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5">
                         {!u.is_active
@@ -321,6 +345,21 @@ export function UsersPage() {
                           className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 mr-3">
                           Edit
                         </button>
+                        {twoFactor.enrolled && !isSelf && (
+                          <button
+                            onClick={async () => {
+                              if (await confirmAction({
+                                title: 'Reset two-factor authentication',
+                                message: `Remove "${u.display_name}"'s authenticator app, passkeys and remembered browsers? ${requireTwoFactor ? 'They will be asked to set up a new method at their next sign-in.' : 'They can set up a new method under Settings.'}`,
+                                tone: 'danger',
+                                confirmLabel: 'Reset',
+                              })) resetTwoFactorMutation.mutate(u.id);
+                            }}
+                            disabled={resetTwoFactorMutation.isPending}
+                            className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 mr-3 disabled:opacity-40">
+                            Reset 2FA
+                          </button>
+                        )}
                         {u.is_active && !isSelf ? (
                           <button
                             onClick={async () => { if (await confirmAction({ message: `Deactivate "${u.display_name}"?`, tone: 'danger', confirmLabel: 'Deactivate' })) deactivateMutation.mutate(u.id); }}

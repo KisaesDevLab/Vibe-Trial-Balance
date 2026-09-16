@@ -11,6 +11,12 @@ import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import authRoutes from './routes/auth';
 import passwordResetRoutes from './routes/passwordReset';
+import { totpRouter } from './routes/totp';
+import { passkeysRouter } from './routes/passkeys';
+import { trustedBrowsersRouter } from './routes/trustedBrowsers';
+import { loadSecuritySettings, securitySettings } from './lib/securitySettings';
+import { getRelyingParty } from './lib/publicUrl';
+import { rateLimitKey } from './lib/rateLimitKey';
 import clientRoutes from './routes/clients';
 import { coaCollectionRouter, coaItemRouter } from './routes/chartOfAccounts';
 import { periodCollectionRouter, periodItemRouter } from './routes/periods';
@@ -129,24 +135,8 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
-// Rate-limit bucketing key: prefer the JWT userId (decoded, not verified — we
-// only care about grouping, not trust), fall back to client IP. This prevents
-// an entire office behind one NAT/VPN IP from sharing a single rate-limit
-// bucket when many users are authenticated.
-function rateLimitKey(req: Request): string {
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ')) {
-    try {
-      const decoded = jwt.decode(authHeader.slice(7)) as { userId?: number } | null;
-      if (decoded?.userId) return `u:${decoded.userId}`;
-    } catch {
-      // fall through to IP
-    }
-  }
-  // express 4 normalizes req.ip when trust proxy is set; fall back to the
-  // unconnected socket's address, then a static string if that's also absent.
-  return `ip:${req.ip ?? req.socket?.remoteAddress ?? 'unknown'}`;
-}
+// Rate-limit bucketing key lives in lib/rateLimitKey.ts (shared with the
+// per-account limiters on the second-factor endpoints).
 
 // Global rate limiter — 200 requests per 15 minutes per user (or per IP if unauth)
 app.use('/api/', rateLimit({
@@ -268,14 +258,19 @@ app.get('/api/v1/features', async (_req, res) => {
   // Same underlying fact — a mail transport is configured — under a name that
   // reads right for every mail-dependent feature, not just password reset.
   const mailEnabled = passwordResetEnabled;
+  // Sign-in flags come from in-memory snapshots (no extra DB call): the login
+  // page shows the passkey button only when the relying party is derivable.
+  const passkeys = getRelyingParty().ok;
+  const requireTwoFactor = securitySettings().requireTwoFactor;
+  const totp = true;
   try {
     const ai = await isAiConfigured();
     const quickbooks = await isQboConfigured();
-    res.json({ data: { ai, passwordResetEnabled, mailEnabled, quickbooks }, error: null });
+    res.json({ data: { ai, passwordResetEnabled, mailEnabled, quickbooks, passkeys, totp, requireTwoFactor }, error: null });
   } catch {
     // If the settings table query fails (e.g., DB down), fall back to env.
     const quickbooks = !!process.env.QBO_CLIENT_ID && !!process.env.QBO_CLIENT_SECRET;
-    res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY, passwordResetEnabled, mailEnabled, quickbooks }, error: null });
+    res.json({ data: { ai: !!process.env.ANTHROPIC_API_KEY, passwordResetEnabled, mailEnabled, quickbooks, passkeys, totp, requireTwoFactor }, error: null });
   }
 });
 
@@ -293,6 +288,9 @@ app.get('/api/v1/public/legal', async (_req, res) => {
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/auth', passwordResetRoutes);
+app.use('/api/v1/auth', totpRouter);
+app.use('/api/v1/auth', passkeysRouter);
+app.use('/api/v1/auth', trustedBrowsersRouter);
 app.use('/api/v1/clients', clientRoutes);
 app.use('/api/v1/clients/:clientId/chart-of-accounts', coaCollectionRouter);
 app.use('/api/v1/chart-of-accounts', coaItemRouter);
@@ -400,6 +398,8 @@ async function start(): Promise<void> {
   // before anything consults aiMode(). A DB read failure only logs — env keeps
   // working — unlike bad env config, which is a fatal misconfiguration above.
   await loadAiModeOverrides();
+  // Sign-in policy + public URL (passkey relying party). Failures only log.
+  await loadSecuritySettings();
   const server = app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/api/v1/health`);

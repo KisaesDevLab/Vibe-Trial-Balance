@@ -2,12 +2,17 @@
 
 ## Logging In
 1. Open the app in your browser (typically `http://localhost:5173` in development, or your firm's server address)
-2. Enter your username and password
-3. Click **Login**
+2. Enter your username and password and click **Sign in** — or click **Sign in with a passkey** if you have set one up
+3. If your account has an authenticator app, enter the 6-digit code it shows (tick **Remember this browser for 30 days** to skip this on your own computer)
+
+If your firm requires two-factor authentication and you have none set up yet, you'll be asked to add an authenticator app or a passkey before anything else is reachable. See the User Management guide for details.
 
 If you see "Token expired", log out and log back in. If you've forgotten your password and your account has an email on file, click **Forgot password?** on the login screen to receive a reset link (valid 30 minutes). Otherwise contact your admin to reset it.
 
 First-time admin login uses a fixed, publicly-known bootstrap password: username `admin`, password `admin1234`. The app immediately forces you to pick your own password on first sign-in before anything else in the app is reachable. Passwords must be at least 8 characters and include an uppercase letter, a lowercase letter, and a number.
+
+## Step 0a: Set the Public App URL (Admin, before anyone adds a passkey)
+Go to **Admin > Settings > Sign-in security** and set **Public app URL** to the https address users open (for example `https://tb.yourfirm.com`). Passkeys are bound to this address and cannot be created until it is set. The same address is used for password-reset and invite links.
 
 ## Step 0: Configure AI Provider (Admin)
 Before using AI features (diagnostics, auto-assign, classification, PDF import):

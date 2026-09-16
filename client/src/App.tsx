@@ -58,7 +58,11 @@ import { ROUTER_BASENAME } from './lib/baseConfig';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);
-  if (!token) return <Navigate to="/login" replace />;
+  const user = useAuthStore((s) => s.user);
+  // A session that still owes a forced password change or a required 2FA
+  // enrolment is not a session the app can run on: the API refuses every
+  // other request. The login page owns those screens.
+  if (!token || user?.mustChangePassword || user?.mustEnrolTwoFactor) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 

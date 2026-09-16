@@ -17,6 +17,8 @@ import { extractJsonObject } from '../lib/aiJsonExtract';
 import { sendServerError } from '../lib/safeError';
 import { encrypt, decrypt, isEncrypted } from '../lib/encryption';
 import { logAudit } from '../lib/periodGuard';
+import { REQUIRE_TWO_FACTOR_KEY, loadSecuritySettings, securitySettings } from '../lib/securitySettings';
+import { PUBLIC_URL_SETTING_KEY, getPublicUrlSetting, getRelyingParty, resolvePublicUrl } from '../lib/publicUrl';
 import { loadOcrSettings, testOcrConnection } from '../lib/ocrProvider';
 import { assertSafeOutboundUrl } from '../lib/urlSafety';
 import {
@@ -1210,6 +1212,83 @@ settingsRouter.put('/firm', async (req: AuthRequest, res: Response): Promise<voi
     ]);
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'setting', entityId: null, action: 'update', description: 'Updated firm identity' });
     res.json({ data: await loadFirmIdentity(), error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'settings');
+  }
+});
+
+// ── Sign-in security policy (admin only) ─────────────────────────────────────
+// security.require_two_factor and app.public_url. The public URL is what
+// passkeys bind to (rpID/origin), and what reset/invite links and the QBO
+// redirect are built from; it lives here so a self-hosted firm never edits .env.
+
+async function securityPolicyPayload() {
+  const resolved = resolvePublicUrl();
+  const rp = getRelyingParty();
+  const [{ count }] = await db('app_users')
+    .where({ is_active: true })
+    .whereNot('username', 'mcp_agent')
+    .whereNotExists(db('user_totp').whereRaw('user_totp.user_id = app_users.id').whereNotNull('confirmed_at'))
+    .whereNotExists(db('user_passkeys').whereRaw('user_passkeys.user_id = app_users.id'))
+    .count<{ count: string }[]>('id as count');
+  return {
+    requireTwoFactor: securitySettings().requireTwoFactor,
+    publicUrl: getPublicUrlSetting() ?? '',
+    effectivePublicUrl: resolved.url,
+    publicUrlSource: resolved.source,
+    passkeysAvailable: rp.ok,
+    passkeyBlockReason: rp.ok ? null : rp.reason,
+    rpId: rp.ok ? rp.rpID : null,
+    rpOrigin: rp.ok ? rp.origin : null,
+    usersWithoutTwoFactor: Number(count),
+  };
+}
+
+// GET /api/v1/settings/security (admin only)
+settingsRouter.get('/security', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  try {
+    res.json({ data: await securityPolicyPayload(), error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'settings');
+  }
+});
+
+const securityPutSchema = z.object({
+  requireTwoFactor: z.boolean().optional(),
+  // '' clears the row so the env / origin fallback applies again.
+  publicUrl: z.union([z.literal(''), z.string().trim().url().max(500)]).optional(),
+});
+
+// PUT /api/v1/settings/security (admin only)
+settingsRouter.put('/security', async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    return;
+  }
+  const parsed = securityPutSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'Public URL must be a full URL such as https://tb.example.com' } });
+    return;
+  }
+  try {
+    const changed: string[] = [];
+    if (parsed.data.requireTwoFactor !== undefined) {
+      await upsertSetting(REQUIRE_TWO_FACTOR_KEY, parsed.data.requireTwoFactor ? 'true' : 'false');
+      changed.push(`require_two_factor=${parsed.data.requireTwoFactor}`);
+    }
+    if (parsed.data.publicUrl !== undefined) {
+      const v = parsed.data.publicUrl.replace(/\/+$/, '');
+      if (v) await upsertSetting(PUBLIC_URL_SETTING_KEY, v);
+      else await db('settings').where({ key: PUBLIC_URL_SETTING_KEY }).delete();
+      changed.push(`public_url=${v || '(cleared)'}`);
+    }
+    await loadSecuritySettings();
+    await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'setting', entityId: null, action: 'update', description: `Updated sign-in security: ${changed.join(', ') || 'no change'}` });
+    res.json({ data: await securityPolicyPayload(), error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'settings');
   }

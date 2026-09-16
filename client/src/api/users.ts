@@ -17,6 +17,10 @@ export interface AppUser {
   invite_accepted_at: string | null;
   created_at: string;
   updated_at: string;
+  /** A confirmed authenticator app is set up. */
+  totp_enabled: boolean;
+  passkey_count: number;
+  trusted_browser_count: number;
 }
 
 export type InviteFailureReason =
@@ -66,3 +70,10 @@ export const updateUser = (id: number, input: UserPatch) =>
 
 export const deactivateUser = (id: number) =>
   apiFetch<AppUser>(`/users/${id}`, { method: 'DELETE' });
+
+/** Remove the user's authenticator app, passkeys and remembered browsers (admin). */
+export const resetUserTwoFactor = (id: number) =>
+  apiFetch<{ totpRemoved: boolean; passkeysRemoved: number; trustedBrowsersRevoked: number }>(
+    `/users/${id}/reset-two-factor`,
+    { method: 'POST' },
+  );

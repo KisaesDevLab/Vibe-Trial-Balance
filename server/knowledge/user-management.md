@@ -55,8 +55,45 @@ The `mcp_agent` user is created automatically by the database migration. It appe
 ## Login and Sessions
 - Sessions use JWT tokens that expire after a fixed period
 - If a user sees "Token expired", they need to log out and log back in
-- There is no "remember me" option — all sessions expire
+- Sessions always expire; the only thing that persists is a "remembered browser" (see below), which skips the second-factor prompt but never the password
 - Multiple users can be logged in simultaneously with no conflicts
+
+## Two-Factor Authentication (Authenticator App)
+Any user can add a second factor under **Settings > Account & security > Two-factor authentication**:
+1. Click **Enable authenticator app** and confirm your password
+2. Scan the QR code with Google Authenticator, Microsoft Authenticator, 1Password, Authy or any TOTP app (or type the key shown under "Can't scan?")
+3. Enter the 6-digit code the app shows to finish
+
+From then on, signing in with a password asks for the current code. Codes change every 30 seconds and each code works once. **Turn off** requires your password and a current code.
+
+## Passkeys
+A passkey signs you in with your fingerprint, face or device PIN — no password and no code. Add one under **Settings > Account & security > Passkeys** (confirm your password, then follow the browser prompt). On the login screen, click **Sign in with a passkey** and pick your account.
+
+Passkeys are bound to the app's public address. An admin must set **Public app URL** under **Settings > Sign-in security** to the https address users open; until then the passkey buttons explain why they are unavailable. (Development on `http://localhost` also works.)
+
+If you sign in by password and own a passkey, you are still asked for a second factor — answer with the passkey or an authenticator code.
+
+## Remembered Browsers
+When entering a code, tick **Remember this browser for 30 days** to skip the prompt on that browser. The list of remembered browsers, with a **Revoke** action, is under **Settings > Account & security > Trusted browsers**. Don't use it on a shared computer.
+
+## Requiring 2FA for Everyone (Admin)
+Under **Settings > Sign-in security**, an admin can turn on **Require two-factor authentication for everyone**. From then on, a user with no authenticator app and no passkey is shown only the enrolment screen at their next sign-in until they set one up. Users who already have a factor are unaffected. The Users page shows a **2FA** column so an admin can see who has enrolled.
+
+## Resetting a User's 2FA (Admin)
+If a user loses their phone or passkey device, an admin opens **Admin > Users** and clicks **Reset 2FA** on the row. This removes the user's authenticator app, every passkey and every remembered browser (audit-logged). The user signs in with their password alone and sets up a new factor (immediately, if 2FA is required firm-wide).
+
+### Locked-out sole admin
+If the only admin loses their authenticator, there is no web path back in — by design. On the server run:
+
+```
+npm run reset-2fa -- <username>          # development checkout
+node dist/reset-2fa.js <username>        # production build
+docker compose exec api node dist/reset-2fa.js <username>
+```
+
+This does exactly what the admin button does and writes the same audit row.
+
+Two-factor enrolments are per installation and are **not** included in backups; after restoring onto a new server, users set their factors up again.
 
 ## Password Requirements
 Passwords must meet all of the following:

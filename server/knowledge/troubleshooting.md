@@ -50,6 +50,15 @@
 - If you see "Token expired", log out and log back in
 - If you see "Rate limited", wait 15 minutes — the login endpoint limits to 10 attempts per 15 minutes per IP
 
+## Two-Factor and Passkey Issues
+- **"That code is not valid"**: make sure the app shows the newest code (they change every 30 seconds) and that the phone's clock is set automatically. A code can only be used once. After 5 wrong codes the account waits 15 minutes.
+- **"Your sign-in timed out"**: the code prompt is valid for 5 minutes after the password; sign in again.
+- **Lost phone / authenticator app or passkey device**: an admin clicks **Reset 2FA** on your row under **Admin > Users**. If you are the only admin, run `npm run reset-2fa -- <username>` (or `node dist/reset-2fa.js <username>`) on the server.
+- **"Passkeys unavailable" / passkey button missing**: the admin must set **Public app URL** under **Settings > Sign-in security** to an https address (or `http://localhost` in development). Passkeys never work over plain http on a LAN IP — that is a browser rule, not an app setting.
+- **"This sign-in request has expired"**: the passkey prompt was open for more than 5 minutes or the page was reloaded mid-way. Click the button again.
+- **"That passkey is not registered here"**: the passkey belongs to a different app address or was removed by an admin reset. Add it again from Settings.
+- **Still asked for a code on a remembered browser**: the 30 days elapsed, the browser cleared its cookies, it was revoked under Settings, or an admin reset your 2FA.
+
 ## Server Won't Start ("Port already in use")
 The server exits with a helpful message if the port is already in use. Either:
 1. Stop the other process using the port

@@ -13,6 +13,7 @@ import { logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
 import { passwordSchema } from '../lib/passwordPolicy';
 import { sendUserInvite, type InviteFailureReason, type InviteResult } from '../lib/inviteService';
+import { resetTwoFactor } from '../lib/twoFactorReset';
 
 export const usersRouter = Router();
 usersRouter.use(authMiddleware);
@@ -101,7 +102,12 @@ const USER_COLUMNS = [
 usersRouter.get('/', adminOnly, async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
     const users = await db('app_users')
-      .select(...USER_COLUMNS)
+      .select(
+        ...USER_COLUMNS,
+        db.raw('EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = app_users.id AND t.confirmed_at IS NOT NULL) AS totp_enabled'),
+        db.raw('(SELECT COUNT(*)::int FROM user_passkeys p WHERE p.user_id = app_users.id) AS passkey_count'),
+        db.raw('(SELECT COUNT(*)::int FROM trusted_browsers b WHERE b.user_id = app_users.id AND b.revoked_at IS NULL AND b.expires_at > now()) AS trusted_browser_count'),
+      )
       .orderBy('display_name');
     res.json({ data: users, error: null, meta: { count: users.length } });
   } catch (err: unknown) {
@@ -269,6 +275,33 @@ usersRouter.delete('/:id', adminOnly, async (req: AuthRequest, res: Response): P
     invalidateAuthCache(id);
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: id, action: 'delete', description: `Deactivated user "${updated.username}"` });
     res.json({ data: updated, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'users');
+  }
+});
+
+// ── Two-factor (admin) ───────────────────────────────────────────────────────
+
+// POST /api/v1/users/:id/reset-two-factor — remove the user's authenticator
+// app, passkeys and remembered browsers. Their next sign-in is password-only
+// (and, if the firm requires 2FA, lands on the enrolment screen).
+usersRouter.post('/:id/reset-two-factor', adminOnly, async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'Invalid user id' } });
+    return;
+  }
+  try {
+    const user = await db('app_users').where({ id }).first('id', 'username');
+    if (!user) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'User not found' } });
+      return;
+    }
+    const r = await resetTwoFactor(id, { actorUserId: req.user!.userId, via: 'admin' });
+    res.json({
+      data: { totpEnabled: false, passkeyCount: 0, trustedBrowserCount: 0, totpRemoved: r.totpRemoved, passkeysRemoved: r.passkeysRemoved, trustedBrowsersRevoked: r.trustedBrowsersRevoked },
+      error: null,
+    });
   } catch (err: unknown) {
     sendServerError(res, err, 'users');
   }
