@@ -13,6 +13,7 @@ import { listTaxCodes, type TaxCode } from '../api/taxCodes';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { categoryNet } from '../lib/accounting';
 import { hasReportableActivity } from '../utils/tbActivity';
+import { RefreshButton } from '../components/RefreshButton';
 
 const CATEGORY_LABELS: Record<string, string> = {
   assets: 'Assets', liabilities: 'Liabilities', equity: 'Equity',
@@ -156,7 +157,7 @@ export function TaxReturnOrderPage() {
   const handleDownload = async () => {
     if (!selectedPeriodId) return;
     setPdfLoading(true); setPdfError(null);
-    try { await downloadPdf(pdfReports.taxReturnOrder(selectedPeriodId), `tax-return-order-${selectedPeriodId}.pdf`, token); }
+    try { await downloadPdf(pdfReports.taxReturnOrder(selectedPeriodId), `tax-return-order.pdf`, token); }
     catch (e) { setPdfError((e as Error).message); }
     finally { setPdfLoading(false); }
   };
@@ -176,7 +177,7 @@ export function TaxReturnOrderPage() {
       <div className="shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-6 py-4">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Return Order</h1>
+            <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Return Order<RefreshButton /></h1>
             {client && period && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                 {client.name} — {period.period_name}

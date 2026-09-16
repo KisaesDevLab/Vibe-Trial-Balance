@@ -10,6 +10,7 @@ import { getComparison, upsertComparisonNote, type ComparisonRow, type Compariso
 import { groupByLeadSheet, hasLeadSheetMapping } from '../lib/leadSheetGrouping';
 import { downloadPdf, openPdfPreview } from '../api/pdfReports';
 import { API_BASE_URL } from '../lib/baseConfig';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -173,7 +174,7 @@ export function MultiPeriodPage() {
     try {
       await downloadPdf(
         buildPdfUrl(false),
-        `flux-analysis-${selectedPeriodId}-vs-${comparePeriodId}.pdf`,
+        `flux-analysis.pdf`,
         token,
       );
     } catch (err) {
@@ -197,7 +198,7 @@ export function MultiPeriodPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Period Comparison</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Period Comparison<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Side-by-side variance analysis</p>
         </div>
         {compData && comparePeriodId !== '' && (

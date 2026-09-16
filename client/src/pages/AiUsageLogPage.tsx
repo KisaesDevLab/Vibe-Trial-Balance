@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '../store/uiStore';
 import { getAiUsageDetail, type AiUsageDetailRow, type AiUsageStatus } from '../api/aiUsage';
 import { DateInput } from '../components/DateInput';
+import { RefreshButton } from '../components/RefreshButton';
 
 const LIMIT = 50;
 
@@ -106,7 +107,7 @@ export function AiUsageLogPage() {
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-4">
       <div>
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">AI Usage Log</h1>
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">AI Usage Log<RefreshButton /></h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Per-call log of all AI API requests. Click a row for details. Admin only.</p>
       </div>
 

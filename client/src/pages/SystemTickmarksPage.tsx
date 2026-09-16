@@ -9,6 +9,7 @@ import {
   TICKMARK_COLOR_CLASSES, type SystemTickmark, type TickmarkInput, type TickmarkColor,
 } from '../api/tickmarks';
 import { confirmAction } from '../components/ConfirmDialog';
+import { RefreshButton } from '../components/RefreshButton';
 
 const COLORS: TickmarkColor[] = ['gray', 'blue', 'green', 'red', 'purple', 'amber'];
 
@@ -147,7 +148,7 @@ export function SystemTickmarksPage() {
   return (
     <div className="p-6 max-w-3xl">
       <div className="mb-6">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Default Tickmarks</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Default Tickmarks<RefreshButton /></h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
           Define firm-wide default tickmarks. These can be applied to any client's library from the Tickmarks page.
         </p>

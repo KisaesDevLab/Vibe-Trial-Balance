@@ -28,6 +28,7 @@ import { BankStatementPdfImportDialog } from '../components/BankStatementPdfImpo
 import { AiConsentDialog, AI_PII } from '../components/AiConsentDialog';
 import { checkFileSize } from '../utils/fileLimits';
 import { confirmAction } from '../components/ConfirmDialog';
+import { RefreshButton } from '../components/RefreshButton';
 
 function fmt(cents: number): string {
   const abs = Math.abs(cents);
@@ -370,7 +371,7 @@ export function BankTransactionsPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Bank Transactions</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Bank Transactions<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             {paginationMeta?.total ?? transactions.length} total · {unclassifiedCount} unclassified · {aiSuggestedCount} AI suggested
             {paginationMeta && paginationMeta.pages > 1 && ` · Page ${paginationMeta.page} of ${paginationMeta.pages}`}

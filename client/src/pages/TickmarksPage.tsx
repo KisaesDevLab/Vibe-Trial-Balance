@@ -11,6 +11,7 @@ import {
 } from '../api/tickmarks';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
+import { RefreshButton } from '../components/RefreshButton';
 
 const COLORS: TickmarkColor[] = ['gray', 'blue', 'green', 'red', 'purple', 'amber'];
 
@@ -177,7 +178,7 @@ export function TickmarksPage() {
     <div className="p-6 max-w-3xl">
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Tickmark Library</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Tickmark Library<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             Define symbols and descriptions used to annotate trial balance accounts.
           </p>

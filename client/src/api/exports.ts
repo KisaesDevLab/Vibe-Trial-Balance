@@ -4,6 +4,7 @@
 
 import { apiFetch } from './client';
 import { API_BASE_URL } from '../lib/baseConfig';
+import { filenameFromDisposition } from './pdfReports';
 
 const BASE_URL = API_BASE_URL;
 
@@ -149,11 +150,14 @@ export async function downloadExport(url: string, filename: string): Promise<voi
     throw new Error(`Export failed: ${response.status} ${response.statusText}`);
   }
 
+  // The server names the file for the engagement (period_client_report); the
+  // caller's name is only the fallback when the header is unreadable.
+  const serverName = filenameFromDisposition(response.headers.get('Content-Disposition'));
   const blob = await response.blob();
   const objectUrl = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = objectUrl;
-  a.download = filename;
+  a.download = serverName || filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

@@ -24,6 +24,7 @@ import {
   type CoaTemplateInput,
   type ImportPreviewRow,
 } from '../api/coaTemplates';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -906,7 +907,7 @@ export function CoaTemplatesPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">COA Templates</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">COA Templates<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             Preset and custom chart of account templates for quick client setup
           </p>

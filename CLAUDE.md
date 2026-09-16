@@ -99,11 +99,50 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
   | --- | --- |
   | `tb_classification` | `tb_csv_analyze`, `tb_account_numbering`, `tb_import_chat`, `tb_bank_classify`, `tb_scanned_sheet_classify`, `tb_tax_code_assign` |
   | `tb_doc_extract` | `tb_pdf_extract`, `tb_pdf_verify`, `tb_scanned_sheet_extract`, `tb_import_chat` |
+- **Cache freshness (query cache):** global `staleTime` is **30 s** with `refetchOnWindowFocus`
+  (`main.tsx`) — it was 5 min, and this is a multi-user app whose data also moves from outside the
+  browser (MCP agent, QBO import, another user), so pages showed old figures with nothing on screen to
+  say so. Every page that loads server data carries `<RefreshButton />` inside its title heading
+  (`components/RefreshButton.tsx`): one click runs `qc.invalidateQueries()` with NO filter, which
+  refetches every query mounted on the current page and only marks the rest stale — no page lists
+  its own keys. Mutations still invalidate: a JE goes through `invalidateAfterJournalEntry`, and a
+  TB grid cell edit / balances import / row sync through `invalidateAfterBalanceChange` (both in
+  `lib/queryInvalidation.ts`, one shared `BALANCE_DEPENDENTS` list) — a typed balance used to refresh
+  only `['trial-balance']`, leaving Dashboard, GL, Cash Flow, Comparison and Lead Sheets stale.
+  A new page title gets the button; a new screen that reads balances gets its key added to that list.
+- **Sign-in: password + optional second factor (TOTP or passkey).** `POST /auth/login` returns a
+  `stage`: `ok` (full JWT, unchanged payload), `mfa` (5-min token with `stage:'mfa'`, good only for
+  `/auth/mfa/*`) or `enrol` (15-min token with `stage:'enrol'`, good only for the enrolment endpoints
+  while the admin policy `security.require_two_factor` is on). `gateForRequest` in
+  `middleware/auth.ts` (pure, tested) enforces the allowlists; **only login mints a `stage` claim, so
+  the MCP agent's JWT and every existing token are never gated** — never add a 2FA check keyed on the
+  user row. Order is MFA → password rotation → enrolment. Passkeys (`@simplewebauthn/server`,
+  `lib/passkeyCeremony.ts`) sign in fully and usernameless; a passkey-only user typing a password is
+  still challenged (`lib/loginStage.ts`). TOTP seeds are ENCRYPTED with `lib/encryption.ts`
+  (`user_totp.secret_enc`), never hashed. The relying party comes from `lib/publicUrl.ts`
+  (`app.public_url` setting > `APP_BASE_URL` > first plain `ALLOWED_ORIGIN` > localhost; https or
+  `http://localhost` only) and the same resolver now feeds `buildAppUrl` for reset/invite/QBO links.
+  "Remember this browser" is an httpOnly cookie `vtb_trusted` (`Path=/` because of the multi-app base
+  path) whose SHA-256 is a `trusted_browsers` row. No recovery codes: admin `POST
+  /users/:id/reset-two-factor` or the operator CLI `npm run reset-2fa -- <username>` (`src/reset-2fa.ts`,
+  same `lib/twoFactorReset.ts`). Enrolments are per installation and not in backups. Client: the `mfa`
+  token lives only in LoginPage state, never in `useAuthStore`; `rotate`/`enrol` obligations are flags on
+  the stored user and `ProtectedRoute` bounces on them; `apiFetch` turns a 403
+  `TWO_FACTOR_ENROLMENT_REQUIRED` / `PASSWORD_CHANGE_REQUIRED` into that flag. Tests: `npm run test:twofactor`.
 - Trial Balance Grid = editing balances ONLY, no category subtotals
 - Tax Mapping View (Plan Phase 5) = SEPARATE page: assign tax codes, read-only balances, category subtotals, net income, balance check
 - tax_line VARCHAR on chart_of_accounts: legacy field kept for compat. New system uses tax_code_id FK → tax_codes table. Dual-write: when tax_code_id assigned, also write tax_code string to tax_line.
 - activity_type on clients: business / rental / farm / farm_rental (added Plan Phase 4)
 - PDF strategy: server-side pdfmake (Plan Phase 6). All browser window.print() replaced with download/preview PDF endpoints.
+- **Download filenames are `<period>_<client>_<report>.<ext>`** and nothing else — e.g.
+  `FY2024_Acme Holdings LLC_trial-balance.pdf`. The internal period id used to trail the report name
+  (`trial-balance-12.pdf`); it is gone from every PDF, every server Excel export (which now carry the
+  engagement prefix too, via `fileDisposition`) and every browser-built SheetJS workbook. Server:
+  `engagementFilename` in `lib/reportFilename.ts` (tested); client: an identical copy in
+  `utils/reportFilename.ts` (tested) plus `hooks/useEngagementFilename.ts` for a page that does not
+  already hold the client and period. The client's `downloadPdf` / `downloadExport` both prefer the
+  server's Content-Disposition name; the name a page passes is only a fallback. The flux analysis PDF
+  names the compare PERIOD (`flux-analysis-vs-FY2023.pdf`), not its id.
 - Tax codes: two tables — tax_codes (canonical) + tax_code_software_maps (per-software UltraTax/CCH/Lacerte/GoSystem/Generic)
 
 ## Phase Numbering
@@ -341,7 +380,13 @@ All planned phases complete. App is feature-complete.
   runs BEFORE any `upsertSetting`, since those start their query the moment they are called.
   `{code}` is `clients.client_code` — the firm's own client number, the same idea as Vibe Time &
   Billing's `tax_software_id`; a pattern like `{code} - {name}` tidies its own seams when a client has
-  no code. The fiscal year comes from `periods.folder_year` when set, otherwise from
+  no code. **The Client folders table is server-paged** (`GET /storage/links?page&limit&search&status`,
+  `lib/clientLinksQuery.ts`, tested): search is a submitted ILIKE over name / `client_code` /
+  `storage_path` (LIKE metacharacters escaped), status is `all|unlinked|attention|active`, and
+  `meta.counts` is the WHOLE firm — never narrowed — so the header's "N unlinked / N need attention"
+  stays a true health summary while searching (clicking either sets the filter). Page size is the
+  persisted `storageLinksPageSize` ui-pref; search/status/page are per-visit state.
+  The fiscal year comes from `periods.folder_year` when set, otherwise from
   `periods.end_date` adjusted by `clients.tax_year_end`, never from `period_name` (free text a user
   can rename). `folder_year` exists because derivation cannot know about a short year, a stub period
   or a firm's own naming. Sections come from the editable `storage_folder_template` (seeded as the

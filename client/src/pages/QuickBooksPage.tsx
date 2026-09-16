@@ -28,6 +28,7 @@ import { openPdfPreview } from '../api/pdfReports';
 import { useAuthStore, pushToast } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
 import { useQboConnections } from '../hooks/useQboConnections';
+import { RefreshButton } from '../components/RefreshButton';
 
 const STATUS_STYLE: Record<string, string> = {
   active: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
@@ -205,7 +206,7 @@ export function QuickBooksPage() {
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">QuickBooks Online</h2>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">QuickBooks Online<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             Pull a client's trial balance straight from QuickBooks. Read-only: nothing is ever written back.
           </p>

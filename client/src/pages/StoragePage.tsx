@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   getStorageSettings,
   saveStorageSettings,
@@ -24,12 +24,15 @@ import {
   verifyClientFolder,
   unlinkClientFolder,
   SECRET_KEEP,
+  LINK_PAGE_SIZES,
   type StorageProvider,
   type FolderSectionInput,
   type ClientLinkRow,
+  type LinkStatusFilter,
 } from '../api/storage';
-import { useAuthStore, pushToast } from '../store/uiStore';
+import { useAuthStore, useUIStore, pushToast } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
+import { RefreshButton } from '../components/RefreshButton';
 
 const STATUS_STYLE: Record<string, string> = {
   active: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
@@ -149,14 +152,40 @@ export function StoragePage() {
   });
 
   // ── Links ──────────────────────────────────────────────────────────────────
+  // Search is submitted (Enter / button), not live: `searchInput` is what the
+  // box holds, `search` is what the server was last asked for.
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<LinkStatusFilter>('all');
+  const [page, setPage] = useState(1);
+  const pageSize = useUIStore((st) => st.storageLinksPageSize);
+  const setPageSize = useUIStore((st) => st.setStorageLinksPageSize);
+
+  const linksParams = { page, limit: pageSize, search, status: statusFilter };
   const linksQuery = useQuery({
-    queryKey: ['storage-links'],
+    // Prefix ['storage-links'] is what the mutations invalidate, so every page
+    // and filter combination refetches after a link/verify/unlink.
+    queryKey: ['storage-links', linksParams],
     queryFn: async () => {
-      const res = await listClientLinks();
+      const res = await listClientLinks(linksParams);
       if (res.error) throw new Error(res.error.message);
-      return res.data ?? [];
+      return { rows: res.data ?? [], meta: res.meta ?? null };
     },
+    // Keep the previous page on screen while the next one loads.
+    placeholderData: keepPreviousData,
   });
+
+  const submitSearch = () => { setSearch(searchInput.trim()); setPage(1); };
+  const clearSearch = () => { setSearchInput(''); setSearch(''); setPage(1); };
+  const chooseStatus = (s: LinkStatusFilter) => { setStatusFilter(s); setPage(1); };
+
+  // Linking the last unlinked client on the final page (or shrinking the page
+  // size) can leave `page` past the end; pull it back to the last real page.
+  const linksTotal = linksQuery.data?.meta?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(linksTotal / pageSize));
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const [linkingClient, setLinkingClient] = useState<ClientLinkRow | null>(null);
   const invalidateLinks = () => qc.invalidateQueries({ queryKey: ['storage-links'] });
@@ -200,14 +229,19 @@ export function StoragePage() {
   }
 
   const s = settingsQuery.data;
-  const links = linksQuery.data ?? [];
-  const unlinkedCount = links.filter((l) => !l.link_id).length;
-  const problemCount = links.filter((l) => l.status && l.status !== 'active').length;
+  const links = linksQuery.data?.rows ?? [];
+  const counts = linksQuery.data?.meta?.counts;
+  const unlinkedCount = counts?.unlinked ?? 0;
+  const problemCount = counts?.attention ?? 0;
+  const isFiltered = search !== '' || statusFilter !== 'all';
+  const pageStart = linksTotal === 0 ? 0 : (page - 1) * pageSize + 1;
+  const pageEnd = Math.min(linksTotal, page * pageSize);
+  const countBtnCls = 'font-medium underline decoration-dotted underline-offset-2 hover:decoration-solid';
 
   return (
     <div className="p-6 max-w-5xl space-y-6">
       <div>
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Document Storage</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Document Storage<RefreshButton /></h2>
         <p className="text-sm text-gray-500 dark:text-gray-500 mt-0.5">
           Where uploaded documents, lead sheet attachments and saved workpaper packages are kept.
         </p>
@@ -435,10 +469,81 @@ export function StoragePage() {
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Client folders</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
             A client must be linked to a folder before documents can be uploaded for it.
-            {unlinkedCount > 0 && <span className="text-amber-700 dark:text-amber-400 font-medium"> {unlinkedCount} unlinked.</span>}
-            {problemCount > 0 && <span className="text-red-600 dark:text-red-400 font-medium"> {problemCount} need attention.</span>}
+            {unlinkedCount > 0 && (
+              <>
+                {' '}
+                <button type="button" onClick={() => chooseStatus('unlinked')} className={`text-amber-700 dark:text-amber-400 ${countBtnCls}`} title="Show only unlinked clients">
+                  {unlinkedCount} unlinked.
+                </button>
+              </>
+            )}
+            {problemCount > 0 && (
+              <>
+                {' '}
+                <button type="button" onClick={() => chooseStatus('attention')} className={`text-red-600 dark:text-red-400 ${countBtnCls}`} title="Show only clients whose folder needs attention">
+                  {problemCount} need attention.
+                </button>
+              </>
+            )}
           </p>
         </div>
+
+        {/* Toolbar: search (submitted on Enter / button), status filter, page size */}
+        <div className="px-5 py-2.5 border-b border-gray-100 dark:border-gray-700 flex flex-wrap items-center gap-2">
+          <form
+            onSubmit={(e) => { e.preventDefault(); submitSearch(); }}
+            className="flex items-center gap-2 flex-1 min-w-[16rem]"
+            role="search"
+          >
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search client name, code or folder…"
+              aria-label="Search client folders"
+              className={inputCls}
+            />
+            <button
+              type="submit"
+              className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 whitespace-nowrap"
+            >
+              Search
+            </button>
+            {search && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 whitespace-nowrap"
+              >
+                Clear
+              </button>
+            )}
+          </form>
+          <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+            Status
+            <select
+              value={statusFilter}
+              onChange={(e) => chooseStatus(e.target.value as LinkStatusFilter)}
+              className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm dark:bg-gray-700 dark:text-white"
+            >
+              <option value="all">All{counts ? ` (${counts.all})` : ''}</option>
+              <option value="unlinked">Unlinked{counts ? ` (${counts.unlinked})` : ''}</option>
+              <option value="attention">Needs attention{counts ? ` (${counts.attention})` : ''}</option>
+              <option value="active">Active{counts ? ` (${counts.active})` : ''}</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+            Per page
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+              className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm dark:bg-gray-700 dark:text-white"
+            >
+              {LINK_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+        </div>
+
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
@@ -450,12 +555,21 @@ export function StoragePage() {
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
             {links.length === 0 ? (
-              <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400 dark:text-gray-500">No active clients.</td></tr>
+              <tr>
+                <td colSpan={4} className="px-4 py-8 text-center text-gray-400 dark:text-gray-500">
+                  {linksQuery.isPending ? 'Loading…' : isFiltered ? 'No clients match this search or filter.' : 'No active clients.'}
+                </td>
+              </tr>
             ) : links.map((l) => {
               const status = !l.link_id ? 'unlinked' : (l.status ?? 'active');
               return (
                 <tr key={l.client_id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                  <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">{l.client_name}</td>
+                  <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">
+                    {l.client_name}
+                    {l.client_code && (
+                      <span className="ml-2 font-normal text-xs text-gray-500 dark:text-gray-400">{l.client_code}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5 font-mono text-xs text-gray-600 dark:text-gray-400">
                     {l.storage_path ?? <span className="text-gray-300 dark:text-gray-600">—</span>}
                     {l.is_legacy_layout && (
@@ -492,6 +606,38 @@ export function StoragePage() {
             })}
           </tbody>
         </table>
+
+        {/* Pagination */}
+        {linksTotal > 0 && (
+          <div className="px-5 py-2.5 border-t border-gray-100 dark:border-gray-700 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-600 dark:text-gray-400">
+            <span>
+              {pageStart}&ndash;{pageEnd} of {linksTotal} {linksTotal === 1 ? 'client' : 'clients'}
+              {isFiltered && counts ? ` (${counts.all} total)` : ''}
+              {linksQuery.isFetching && !linksQuery.isPending ? ' · refreshing…' : ''}
+            </span>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
+                >
+                  &larr; Prev
+                </button>
+                <span>page {page} of {totalPages}</span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                  className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40"
+                >
+                  Next &rarr;
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {linkingClient && (

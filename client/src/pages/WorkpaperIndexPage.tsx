@@ -7,10 +7,12 @@ import { useQuery } from '@tanstack/react-query';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listTickmarks, getTBTickmarks, TICKMARK_COLOR_CLASSES, type Tickmark, type TBTickmarkMap } from '../api/tickmarks';
 import { useUIStore, useAuthStore } from '../store/uiStore';
+import { useEngagementFilename } from '../hooks/useEngagementFilename';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsxMultiSheet } from '../utils/downloadXlsx';
 import { categoryNet } from '../lib/accounting';
 import { filterReportableRows } from '../utils/tbActivity';
+import { RefreshButton } from '../components/RefreshButton';
 
 type ColSet = 'book' | 'tax' | 'both';
 
@@ -32,6 +34,7 @@ function fmt(cents: number): string {
 
 export function WorkpaperIndexPage() {
   const { selectedPeriodId } = useUIStore();
+  const engagementFile = useEngagementFilename();
   const token = useAuthStore((s) => s.token);
   const [colSet, setColSet] = useState<ColSet>('both');
   const [pageBreakByGroup, setPageBreakByGroup] = useState(true);
@@ -56,7 +59,7 @@ export function WorkpaperIndexPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await downloadPdf(pdfReports.workpaperIndex(selectedPeriodId) + `?pageBreak=${pageBreakByGroup}`, `workpaper-index-${selectedPeriodId}.pdf`, token);
+      await downloadPdf(pdfReports.workpaperIndex(selectedPeriodId) + `?pageBreak=${pageBreakByGroup}`, `workpaper-index.pdf`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {
@@ -180,7 +183,7 @@ export function WorkpaperIndexPage() {
       sheets.push({ name: 'Workpaper Index', rows: allRows });
     }
 
-    downloadXlsxMultiSheet(`workpaper-index-${selectedPeriodId}.xlsx`, sheets);
+    downloadXlsxMultiSheet(engagementFile('workpaper-index.xlsx'), sheets);
   };
 
   if (!selectedPeriodId) {
@@ -197,7 +200,7 @@ export function WorkpaperIndexPage() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Workpaper Reference Index</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Workpaper Reference Index<RefreshButton /></h2>
         <div className="flex items-center gap-2">
           <select
             value={colSet}

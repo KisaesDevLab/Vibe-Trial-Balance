@@ -27,6 +27,7 @@ import {
   type ImportPreviewRow,
   type ListTaxCodesParams,
 } from '../api/taxCodes';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ---- Constants ----
 
@@ -725,7 +726,7 @@ export function TaxCodesPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Code Management</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Code Management<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">System-wide tax code library and software mappings</p>
         </div>
         <div className="flex items-center gap-2">

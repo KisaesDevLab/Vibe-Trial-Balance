@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
-import { apiFetch } from './client';
+import { apiFetch, type ApiResult } from './client';
 
 export type StorageProvider = 'local' | 'b2';
 
@@ -83,6 +83,7 @@ export interface ClientFolderLink {
 export interface ClientLinkRow {
   client_id: number;
   client_name: string;
+  client_code: string | null;
   link_id: number | null;
   storage_backend: StorageProvider | null;
   storage_path: string | null;
@@ -127,7 +128,46 @@ export const saveFolderTemplate = (sections: FolderSectionInput[]) =>
     body: JSON.stringify({ sections }),
   });
 
-export const listClientLinks = () => apiFetch<ClientLinkRow[]>('/storage/links');
+export type LinkStatusFilter = 'all' | 'unlinked' | 'attention' | 'active';
+
+export const LINK_PAGE_SIZES = [25, 50, 100] as const;
+export type LinkPageSize = (typeof LINK_PAGE_SIZES)[number];
+
+export interface ClientLinksParams {
+  /** 1-based. */
+  page: number;
+  limit: number;
+  search: string;
+  status: LinkStatusFilter;
+}
+
+/** Whole-firm counts, never narrowed by the search or status filter. */
+export interface LinkCounts {
+  all: number;
+  unlinked: number;
+  attention: number;
+  active: number;
+}
+
+export interface ClientLinksMeta {
+  /** Rows matching the search + status filter (across all pages). */
+  total: number;
+  page: number;
+  limit: number;
+  counts: LinkCounts;
+}
+
+export type ClientLinksResult = ApiResult<ClientLinkRow[]> & { meta?: ClientLinksMeta };
+
+export const listClientLinks = (params: ClientLinksParams): Promise<ClientLinksResult> => {
+  const qs = new URLSearchParams({
+    page: String(params.page),
+    limit: String(params.limit),
+    status: params.status,
+  });
+  if (params.search) qs.set('search', params.search);
+  return apiFetch<ClientLinkRow[]>(`/storage/links?${qs.toString()}`);
+};
 
 export const listUnboundFolders = () => apiFetch<UnboundFolder[]>('/storage/unbound-folders');
 

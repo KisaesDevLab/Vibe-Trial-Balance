@@ -16,6 +16,7 @@ import { PyPdfImportDialog } from '../components/py-tieout/PyPdfImportDialog';
 import { QboImportDialog } from '../components/QboImportDialog';
 import { useQboConnections, findQboConnection } from '../hooks/useQboConnections';
 import { useFeatures } from '../hooks/useFeatures';
+import { RefreshButton } from '../components/RefreshButton';
 
 function fmt(cents: number): string {
   return (Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -102,7 +103,7 @@ export function PyTieOutPage() {
     return (
       <div className="flex flex-col h-full">
         <div className="px-6 py-4 border-b dark:border-gray-700 bg-white dark:bg-gray-800">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">PY Tie-Out</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">PY Tie-Out<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Compare rolled-forward prior year balances against the bookkeeper's final trial balance</p>
         </div>
         <div className="flex-1 flex items-center justify-center">
@@ -178,7 +179,7 @@ export function PyTieOutPage() {
       <div className="px-6 py-4 border-b dark:border-gray-700 bg-white dark:bg-gray-800 shrink-0">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">PY Tie-Out</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">PY Tie-Out<RefreshButton /></h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
               Source: <span className="font-medium">{source.type.toUpperCase()}</span>
               {source.filename && <> &middot; {source.filename}</>}

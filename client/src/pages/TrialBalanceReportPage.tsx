@@ -8,11 +8,13 @@ import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
 import { useUIStore, useAuthStore } from '../store/uiStore';
+import { engagementFilename } from '../utils/reportFilename';
 import { getTBTickmarks, TICKMARK_COLOR_CLASSES, type TBTickmarkMap } from '../api/tickmarks';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
 import { categoryNet } from '../lib/accounting';
 import { filterReportableRows } from '../utils/tbActivity';
+import { RefreshButton } from '../components/RefreshButton';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -125,7 +127,7 @@ export function TrialBalanceReportPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await downloadPdf(pdfReports.trialBalance(selectedPeriodId) + `?columns=${colsParam}`, `trial-balance-${selectedPeriodId}.pdf`, token);
+      await downloadPdf(pdfReports.trialBalance(selectedPeriodId) + `?columns=${colsParam}`, `trial-balance.pdf`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {
@@ -192,7 +194,7 @@ export function TrialBalanceReportPage() {
       if (show('taxAdjusted'))  { const t = netSides(r, 'tax_adjusted_debit', 'tax_adjusted_credit'); row.push(String(t.dr / 100), String(t.cr / 100)); }
       return row;
     });
-    downloadXlsx(`trial-balance-report-${selectedPeriodId}.xlsx`, [header, ...dataRows]);
+    downloadXlsx(engagementFilename(period?.period_name, client?.name, 'trial-balance-report.xlsx'), [header, ...dataRows]);
   };
 
   if (!selectedPeriodId) {
@@ -212,7 +214,7 @@ export function TrialBalanceReportPage() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Trial Balance Report</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Trial Balance Report<RefreshButton /></h2>
         <div className="flex items-center gap-2">
           <button onClick={handleExport} disabled={!rows.length} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40">Export Excel</button>
           <button

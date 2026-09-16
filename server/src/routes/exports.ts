@@ -18,7 +18,7 @@ import ExcelJS from 'exceljs';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
-import { engagementFilename, pdfDisposition } from '../lib/reportFilename';
+import { engagementFilename, fileDisposition, pdfDisposition } from '../lib/reportFilename';
 import { PdfTemplateService } from '../pdf/PdfTemplateService';
 import type { Content, TableCell } from 'pdfmake/interfaces';
 import { whereHasActivity } from '../lib/tbActivity';
@@ -451,7 +451,7 @@ exportsRouter.get('/ultratax', async (req: AuthRequest, res: Response): Promise<
     ], unitOpt), data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="ultratax-export-${periodId}.xlsx"`);
+    res.setHeader('Content-Disposition', fileDisposition(engagementFilename(info.name as string, info.client_name as string, 'ultratax-export.xlsx'), false));
     res.send(buffer);
   } catch (err: unknown) {
     handleExportError(err, res);
@@ -517,7 +517,7 @@ exportsRouter.get('/cch', async (req: AuthRequest, res: Response): Promise<void>
 
     const buffer = await wb.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="cch-export-${periodId}.xlsx"`);
+    res.setHeader('Content-Disposition', fileDisposition(engagementFilename(info.name as string, info.client_name as string, 'cch-export.xlsx'), false));
     res.send(Buffer.from(buffer));
   } catch (err: unknown) {
     handleExportError(err, res);
@@ -564,7 +564,7 @@ exportsRouter.get('/lacerte', async (req: AuthRequest, res: Response): Promise<v
     ], unitOpt), data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="lacerte-export-${periodId}.xlsx"`);
+    res.setHeader('Content-Disposition', fileDisposition(engagementFilename(info.name as string, info.client_name as string, 'lacerte-export.xlsx'), false));
     res.send(buffer);
   } catch (err: unknown) {
     handleExportError(err, res);
@@ -611,7 +611,7 @@ exportsRouter.get('/gosystem', async (req: AuthRequest, res: Response): Promise<
     ], unitOpt), data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="gosystem-export-${periodId}.xlsx"`);
+    res.setHeader('Content-Disposition', fileDisposition(engagementFilename(info.name as string, info.client_name as string, 'gosystem-export.xlsx'), false));
     res.send(buffer);
   } catch (err: unknown) {
     handleExportError(err, res);
@@ -659,7 +659,7 @@ exportsRouter.get('/generic', async (req: AuthRequest, res: Response): Promise<v
     ], unitOpt), data);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="generic-export-${periodId}.xlsx"`);
+    res.setHeader('Content-Disposition', fileDisposition(engagementFilename(info.name as string, info.client_name as string, 'generic-export.xlsx'), false));
     res.send(buffer);
   } catch (err: unknown) {
     handleExportError(err, res);
@@ -830,7 +830,7 @@ exportsRouter.get('/working-tb', async (req: AuthRequest, res: Response): Promis
 
     const buffer = await wb.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="working-tb-${periodId}.xlsx"`);
+    res.setHeader('Content-Disposition', fileDisposition(engagementFilename(info.name as string, info.client_name as string, 'working-tb.xlsx'), false));
     res.send(Buffer.from(buffer));
   } catch (err: unknown) {
     sendServerError(res, err, 'exports');
@@ -959,7 +959,7 @@ exportsRouter.get('/bookkeeper-letter', async (req: AuthRequest, res: Response):
 
     const preview = req.query.preview === 'true' || req.query.preview === '1';
     // Named for the engagement, same as every report PDF.
-    const filename = engagementFilename(info.name as string, info.client_name as string, `bookkeeper-letter-${periodId}.pdf`);
+    const filename = engagementFilename(info.name as string, info.client_name as string, `bookkeeper-letter.pdf`);
     const disposition = pdfDisposition(filename, preview);
 
     res.setHeader('Content-Type', 'application/pdf');

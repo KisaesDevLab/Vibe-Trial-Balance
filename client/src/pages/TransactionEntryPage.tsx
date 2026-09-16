@@ -14,6 +14,7 @@ import { useRegisterDraftStore, draftKey } from '../store/registerDraftStore';
 import { DateInput } from '../components/DateInput';
 import { ScannedSheetImportDialog, type ImportedDraftRow } from '../components/ScannedSheetImportDialog';
 import { resolvePayeeAccount } from '../utils/matchPayee';
+import { RefreshButton } from '../components/RefreshButton';
 
 // Shared class for all register input controls — keeps height and font consistent
 const inputCls = 'w-full px-1.5 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 dark:bg-gray-700 dark:text-white';
@@ -974,7 +975,7 @@ export function TransactionEntryPage() {
       {/* Header */}
       <div className="px-6 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between shrink-0">
         <div>
-          <h1 className="text-base font-semibold text-gray-900 dark:text-white">Transaction Entry</h1>
+          <h1 className="text-base font-semibold text-gray-900 dark:text-white">Transaction Entry<RefreshButton /></h1>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Tab · Shift+Tab moves between cells &nbsp;·&nbsp; Enter moves down &nbsp;·&nbsp; ↑↓ moves between rows</p>
         </div>
         <div className="flex items-center gap-3">

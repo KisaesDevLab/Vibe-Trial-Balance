@@ -7,6 +7,7 @@ import { evalAmountExpr } from '../utils/evalAmountExpr';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import { useUIStore, useAuthStore, pushToast } from '../store/uiStore';
+import { useEngagementFilename } from '../hooks/useEngagementFilename';
 import { getTrialBalance, TBRow } from '../api/trialBalance';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { confirmAction } from '../components/ConfirmDialog';
@@ -24,6 +25,7 @@ import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
 import { filterReportableRows } from '../utils/tbActivity';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -165,6 +167,7 @@ function M1Modal({ initial, onClose, onSave }: ModalProps) {
 // ── M-1 Worksheet Tab ─────────────────────────────────────────────────────────
 
 function M1WorksheetTab({ periodId }: { periodId: number }) {
+  const engagementFile = useEngagementFilename();
   const qc = useQueryClient();
   const token = useAuthStore((s) => s.token);
   const [modalAdj, setModalAdj] = useState<M1Adjustment | null | 'new'>(null);
@@ -179,7 +182,7 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
   const handleM1Download = async () => {
     if (!token) return;
     setPdfBusy(true);
-    try { await downloadPdf(pdfReports.m1(periodId), `m1-reconciliation-${periodId}.pdf`, token); }
+    try { await downloadPdf(pdfReports.m1(periodId), `m1-reconciliation.pdf`, token); }
     catch (e) { pushToast((e as Error).message, 'error'); }
     finally { setPdfBusy(false); }
   };
@@ -266,7 +269,7 @@ function M1WorksheetTab({ periodId }: { periodId: number }) {
     ws['!cols'] = [{ wch: 40 }, { wch: 28 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'M-1 Worksheet');
-    XLSX.writeFile(wb, 'm1_worksheet.xlsx');
+    XLSX.writeFile(wb, engagementFile('m1-worksheet.xlsx'));
   }
 
   const thCls = 'px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700';
@@ -421,6 +424,7 @@ const CATEGORY_LABELS: Record<TBRow['category'], string> = {
 };
 
 function TaxBasisTab({ periodId }: { periodId: number }) {
+  const engagementFile = useEngagementFilename();
   const token = useAuthStore((s) => s.token);
   const [pdfBusy, setPdfBusy] = useState(false);
   const { data: tbData } = useQuery({
@@ -441,7 +445,7 @@ function TaxBasisTab({ periodId }: { periodId: number }) {
   const handleDownload = async () => {
     if (!token) return;
     setPdfBusy(true);
-    try { await downloadPdf(pdfReports.taxBasisSchedule(periodId), `tax-basis-schedule-${periodId}.pdf`, token); }
+    try { await downloadPdf(pdfReports.taxBasisSchedule(periodId), `tax-basis-schedule.pdf`, token); }
     catch (e) { pushToast((e as Error).message, 'error'); }
     finally { setPdfBusy(false); }
   };
@@ -457,7 +461,7 @@ function TaxBasisTab({ periodId }: { periodId: number }) {
     ws['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Tax Basis Schedule');
-    XLSX.writeFile(wb, 'tax_basis_schedule.xlsx');
+    XLSX.writeFile(wb, engagementFile('tax-basis-schedule.xlsx'));
   }
 
   const thCls = 'px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700';
@@ -591,7 +595,7 @@ export function TaxWorksheetsPage() {
     <div className="p-6 space-y-4 max-w-6xl">
       {/* Header */}
       <div className="print:mb-4">
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Worksheets</h1>
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Worksheets<RefreshButton /></h1>
         {client && period && (
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             {client.name}

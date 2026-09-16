@@ -22,6 +22,7 @@ import { DateInput } from '../components/DateInput';
 import { confirmAction } from '../components/ConfirmDialog';
 import { useJeLineEditing } from '../hooks/useJeLineEditing';
 import { invalidateAfterJournalEntry } from '../lib/queryInvalidation';
+import { RefreshButton } from '../components/RefreshButton';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -502,7 +503,7 @@ export function JournalEntriesPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Journal Entries</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Journal Entries<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             {bookCount} book · {taxCount} tax · {transCount} trans
           </p>

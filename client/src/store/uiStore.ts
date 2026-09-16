@@ -16,13 +16,22 @@ export interface AuthUser {
   email?: string | null;
   role: string;
   mustChangePassword?: boolean;
+  /** The firm requires a second factor and this user has none yet. */
+  mustEnrolTwoFactor?: boolean;
+  twoFactor?: { totpEnabled: boolean; passkeyCount: number };
 }
+
+export type AuthObligation = 'PASSWORD_CHANGE_REQUIRED' | 'TWO_FACTOR_ENROLMENT_REQUIRED';
 
 interface AuthStore {
   token: string | null;
   user: AuthUser | null;
   setAuth: (token: string, user: AuthUser) => void;
   clearAuth: () => void;
+  /** Patch the signed-in user (after a password change, an enrolment, or a 403 obligation code). */
+  updateUser: (patch: Partial<AuthUser>) => void;
+  /** The server refused a request until the user finishes a step; ProtectedRoute reads the flag. */
+  markObligation: (code: AuthObligation) => void;
 }
 
 export const useAuthStore = create<AuthStore>()(
@@ -32,6 +41,13 @@ export const useAuthStore = create<AuthStore>()(
       user: null,
       setAuth: (token, user) => set({ token, user }),
       clearAuth: () => set({ token: null, user: null }),
+      updateUser: (patch) => set((s) => (s.user ? { user: { ...s.user, ...patch } } : {})),
+      markObligation: (code) => set((s) => {
+        if (!s.user) return {};
+        return code === 'PASSWORD_CHANGE_REQUIRED'
+          ? { user: { ...s.user, mustChangePassword: true } }
+          : { user: { ...s.user, mustEnrolTwoFactor: true } };
+      }),
     }),
     { name: 'auth' },
   ),
@@ -54,6 +70,10 @@ interface UIStore {
    *  chart of accounts with no lead sheets mapped — the page hides the control. */
   fsGroupByLeadSheet: boolean;
   setFsGroupByLeadSheet: (v: boolean) => void;
+  /** Rows per page on the Storage page's Client folders table (25 / 50 / 100).
+   *  A standing preference; the search, status filter and page number are not. */
+  storageLinksPageSize: number;
+  setStorageLinksPageSize: (n: number) => void;
 }
 
 export interface TbView {
@@ -87,10 +107,12 @@ export const useUIStore = create<UIStore>()(
       setTbView: (patch) => set((s) => ({ tbView: { ...s.tbView, ...patch } })),
       fsGroupByLeadSheet: false,
       setFsGroupByLeadSheet: (v) => set({ fsGroupByLeadSheet: v }),
+      storageLinksPageSize: 25,
+      setStorageLinksPageSize: (n) => set({ storageLinksPageSize: n }),
     }),
     {
       name: 'ui-prefs',
-      partialize: (s) => ({ fontSize: s.fontSize, selectedClientId: s.selectedClientId, selectedPeriodId: s.selectedPeriodId, isDarkMode: s.isDarkMode, tbView: s.tbView, fsGroupByLeadSheet: s.fsGroupByLeadSheet }),
+      partialize: (s) => ({ fontSize: s.fontSize, selectedClientId: s.selectedClientId, selectedPeriodId: s.selectedPeriodId, isDarkMode: s.isDarkMode, tbView: s.tbView, fsGroupByLeadSheet: s.fsGroupByLeadSheet, storageLinksPageSize: s.storageLinksPageSize }),
       // A stored copy written before tbView existed has no such key; keep the
       // defaults for it. The same spread covers a copy written before
       // nonZeroOnly joined the group.

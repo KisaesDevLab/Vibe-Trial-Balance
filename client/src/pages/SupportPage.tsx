@@ -13,6 +13,7 @@ import {
   Conversation,
   SupportMessage,
 } from '../api/support';
+import { RefreshButton } from '../components/RefreshButton';
 
 interface LocalMessage {
   role: 'user' | 'assistant';
@@ -165,7 +166,7 @@ export function SupportPage() {
       {/* Left sidebar — conversation list */}
       <aside className="w-60 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col shrink-0">
         <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Support Chat</h2>
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Support Chat<RefreshButton /></h2>
         </div>
 
         <div className="px-3 py-2">

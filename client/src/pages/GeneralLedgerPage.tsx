@@ -6,9 +6,11 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getGeneralLedger, type GLAccount, type GLLine } from '../api/generalLedger';
 import { useUIStore, useAuthStore } from '../store/uiStore';
+import { useEngagementFilename } from '../hooks/useEngagementFilename';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
 import { JournalEntryEditDialog } from '../components/JournalEntryEditDialog';
+import { RefreshButton } from '../components/RefreshButton';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -133,6 +135,7 @@ function AccountSection({ acct, typeFilter, onClickLine }: { acct: GLAccount; ty
 
 export function GeneralLedgerPage() {
   const { selectedPeriodId, selectedClientId } = useUIStore();
+  const engagementFile = useEngagementFilename();
   const token = useAuthStore((s) => s.token);
   const qc = useQueryClient();
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -159,7 +162,7 @@ export function GeneralLedgerPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await downloadPdf(pdfReports.generalLedger(selectedPeriodId), `general-ledger-${selectedPeriodId}.pdf`, token);
+      await downloadPdf(pdfReports.generalLedger(selectedPeriodId), `general-ledger.pdf`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {
@@ -199,7 +202,7 @@ export function GeneralLedgerPage() {
         rows.push([acct.account_number, acct.account_name, acct.category, l.entry_date.slice(0, 10), l.entry_type, String(l.entry_number), l.description ?? '', String(l.debit / 100), String(l.credit / 100)]);
       }
     }
-    downloadXlsx(`general-ledger-${selectedPeriodId}.xlsx`, [header, ...rows]);
+    downloadXlsx(engagementFile('general-ledger.xlsx'), [header, ...rows]);
   };
 
   if (!selectedPeriodId) {
@@ -216,7 +219,7 @@ export function GeneralLedgerPage() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">General Ledger</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">General Ledger<RefreshButton /></h2>
         <div className="flex items-center gap-2">
           <select
             value={typeFilter}

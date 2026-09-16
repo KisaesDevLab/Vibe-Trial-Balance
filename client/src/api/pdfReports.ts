@@ -39,7 +39,7 @@ export async function openPdfPreview(url: string, token: string): Promise<void> 
  * response whose header the browser withheld). RFC 5987 `filename*` is read
  * first: it is the form that survives a client name with an accent in it.
  */
-function filenameFromDisposition(header: string | null): string | null {
+export function filenameFromDisposition(header: string | null): string | null {
   if (!header) return null;
   const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header);
   if (encoded) {

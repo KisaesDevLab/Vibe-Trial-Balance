@@ -17,6 +17,7 @@ import {
 } from '../api/documents';
 import { downloadExport } from '../api/exports';
 import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -296,7 +297,7 @@ export function DocumentsPage() {
   if (!selectedClientId) {
     return (
       <div className="p-6">
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Documents</h1>
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Documents<RefreshButton /></h1>
         <p className="text-sm text-gray-500 dark:text-gray-400">Please select a client to manage documents.</p>
       </div>
     );
@@ -307,7 +308,7 @@ export function DocumentsPage() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <h1 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Documents</h1>
+      <h1 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Documents<RefreshButton /></h1>
 
       <UploadZone
         clientId={selectedClientId}

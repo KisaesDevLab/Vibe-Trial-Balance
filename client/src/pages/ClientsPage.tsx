@@ -14,6 +14,7 @@ import {
 } from '../api/clients';
 import { useUIStore } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
+import { RefreshButton } from '../components/RefreshButton';
 
 const ENTITY_TYPES = ['1065', '1120', '1120S', '1040_C'] as const;
 const TAX_SOFTWARE = ['ultratax', 'cch', 'lacerte', 'drake'] as const;
@@ -209,7 +210,7 @@ export function ClientsPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Clients</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Clients<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-500 mt-0.5">
             {filteredClients.length !== allClients.length
               ? `${filteredClients.length} of ${allClients.length} client${allClients.length !== 1 ? 's' : ''}`

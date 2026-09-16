@@ -8,10 +8,12 @@ import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
 import { useUIStore, useAuthStore } from '../store/uiStore';
+import { engagementFilename } from '../utils/reportFilename';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
 import { filterReportableRows } from '../utils/tbActivity';
 import { groupByLeadSheet, hasLeadSheetMapping } from '../lib/leadSheetGrouping';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -500,7 +502,7 @@ export function FinancialStatementsPage() {
       ...(canGroupByLeadSheet ? [''] : []),
       String(netIncome / 100),
     ]);
-    downloadXlsx(`financial-statements-${colSet}.xlsx`, [header, ...dataRows]);
+    downloadXlsx(engagementFilename(period?.period_name, client?.name, `financial-statements-${colSet}.xlsx`), [header, ...dataRows]);
   };
 
   if (!selectedPeriodId || !selectedClientId) {
@@ -518,7 +520,7 @@ export function FinancialStatementsPage() {
     <div className="p-6 max-w-4xl">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Financial Statements</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Financial Statements<RefreshButton /></h2>
         <div className="flex items-center gap-2">
           <label className="text-sm text-gray-600 dark:text-gray-400 font-medium">View</label>
           <select
@@ -558,7 +560,7 @@ export function FinancialStatementsPage() {
                 {pdfLoading ? 'Generating…' : '↗ Preview PDF'}
               </button>
               <button
-                onClick={() => handleDownload(pdfUrl(selectedPeriodId), `${PDF_FILE[tab]}-${selectedPeriodId}.pdf`)}
+                onClick={() => handleDownload(pdfUrl(selectedPeriodId), `${PDF_FILE[tab]}.pdf`)}
                 disabled={pdfLoading}
                 className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
               >

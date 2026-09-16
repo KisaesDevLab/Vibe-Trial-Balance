@@ -25,6 +25,7 @@ import {
 import { openPdfPreview } from '../api/pdfReports';
 import { useAuthStore, pushToast } from '../store/uiStore';
 import { BASE_URL } from '../lib/baseConfig';
+import { RefreshButton } from '../components/RefreshButton';
 
 const inputCls =
   'w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white';
@@ -147,7 +148,7 @@ export function QuickBooksSettingsPage() {
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">QuickBooks API</h2>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">QuickBooks API<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             The Intuit developer app this server uses to read clients' QuickBooks Online data. Connect individual clients under{' '}
             <Link to="/quickbooks" className="text-blue-600 dark:text-blue-400 hover:underline">Setup → QuickBooks</Link>.

@@ -27,7 +27,12 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      staleTime: 5 * 60 * 1000,
+      // 30 s, not 5 min: this is a multi-user app whose data also moves from
+      // outside the browser (the MCP agent, QBO imports, another user's edits).
+      // A page opened inside the old window showed whatever it last saw, with
+      // nothing on screen to say so. Refetch on tab focus for the same reason.
+      staleTime: 30 * 1000,
+      refetchOnWindowFocus: true,
     },
     mutations: {
       // Suppress only by opting in via mutation.meta. Default is: surface.

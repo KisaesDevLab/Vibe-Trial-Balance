@@ -35,8 +35,10 @@ import { updateAccount, type AccountInput } from '../api/chartOfAccounts';
 import { listClients } from '../api/clients';
 import { listPeriods, type Period } from '../api/periods';
 import { useUIStore, pushToast } from '../store/uiStore';
+import { engagementFilename } from '../utils/reportFilename';
 import { TickmarkPickerModal } from '../components/TickmarkPickerModal';
-import { invalidateAfterTickmarkToggle } from '../lib/queryInvalidation';
+import { invalidateAfterBalanceChange, invalidateAfterJournalEntry, invalidateAfterTickmarkToggle } from '../lib/queryInvalidation';
+import { RefreshButton } from '../components/RefreshButton';
 import {
   listTickmarks,
   getTBTickmarks,
@@ -415,9 +417,8 @@ export function TrialBalancePage() {
       return [{ row: rowIdx, col: commentColIdx, text: parts.join('\n\n') }];
     });
 
-    const dateSuffix = currentPeriod?.end_date ? currentPeriod.end_date.slice(0, 10) : String(selectedPeriodId);
     downloadXlsx(
-      `trial-balance-${dateSuffix}.xlsx`,
+      engagementFilename(currentPeriod?.period_name, currentClient?.name, 'trial-balance.xlsx'),
       [header, ...dataRows],
       comments.length ? comments : undefined,
       colMeta,
@@ -435,7 +436,7 @@ export function TrialBalancePage() {
       const msg = parts.length > 0 ? parts.join(', ') : 'Already up to date';
       setLastSyncMsg(msg);
       setSyncedUpToDate(initialized === 0 && removed === 0);
-      qc.invalidateQueries({ queryKey });
+      invalidateAfterBalanceChange(qc);
     },
   });
 
@@ -479,7 +480,7 @@ export function TrialBalancePage() {
         );
       }
     },
-    onSettled: () => qc.invalidateQueries({ queryKey }),
+    onSettled: () => invalidateAfterBalanceChange(qc),
   });
 
   const accountMutation = useMutation({
@@ -505,7 +506,7 @@ export function TrialBalancePage() {
       return { prev };
     },
     onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(queryKey, ctx.prev); },
-    onSettled: () => qc.invalidateQueries({ queryKey }),
+    onSettled: () => invalidateAfterBalanceChange(qc),
   });
 
   const handleBalanceEdit = useCallback(
@@ -1252,7 +1253,7 @@ export function TrialBalancePage() {
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-3 border-b dark:border-gray-700 bg-white dark:bg-gray-800 shrink-0">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Trial Balance</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Trial Balance<RefreshButton /></h2>
           {data && <p className="text-xs text-gray-500 dark:text-gray-400">{data.length} accounts · click to select · double-click or F2 to edit · Tab/Enter/arrows to navigate</p>}
         </div>
         <div className="flex items-center gap-4">
@@ -1677,7 +1678,7 @@ export function TrialBalancePage() {
           periodId={selectedPeriodId}
           mode="prior-year"
           onClose={() => setShowPYImportModal(false)}
-          onSuccess={() => { setShowPYImportModal(false); qc.invalidateQueries({ queryKey }); }}
+          onSuccess={() => { setShowPYImportModal(false); invalidateAfterBalanceChange(qc); }}
         />
       )}
 
@@ -1687,7 +1688,7 @@ export function TrialBalancePage() {
           periodId={selectedPeriodId}
           clientId={selectedClientId}
           onClose={() => setShowCsvImportDialog(false)}
-          onSuccess={() => { setShowCsvImportDialog(false); qc.invalidateQueries({ queryKey }); }}
+          onSuccess={() => { setShowCsvImportDialog(false); invalidateAfterBalanceChange(qc); }}
         />
       )}
 
@@ -1697,7 +1698,7 @@ export function TrialBalancePage() {
           periodId={selectedPeriodId}
           clientId={selectedClientId}
           onClose={() => setShowPdfImportDialog(false)}
-          onSuccess={() => { setShowPdfImportDialog(false); qc.invalidateQueries({ queryKey }); }}
+          onSuccess={() => { setShowPdfImportDialog(false); invalidateAfterBalanceChange(qc); }}
         />
       )}
 
@@ -1709,7 +1710,7 @@ export function TrialBalancePage() {
           onClose={() => setShowQboImportDialog(false)}
           onSuccess={() => {
             setShowQboImportDialog(false);
-            qc.invalidateQueries({ queryKey });
+            invalidateAfterBalanceChange(qc);
             qc.invalidateQueries({ queryKey: ['accounts', selectedClientId] });
             qc.invalidateQueries({ queryKey: ['qbo-connections'] });
           }}
@@ -1723,7 +1724,7 @@ export function TrialBalancePage() {
           clientId={selectedClientId}
           periodEndDate={currentPeriod?.end_date?.slice(0, 10)}
           onClose={() => setShowJEDialog(false)}
-          onSuccess={() => { setShowJEDialog(false); qc.invalidateQueries({ queryKey }); }}
+          onSuccess={() => { setShowJEDialog(false); invalidateAfterJournalEntry(qc); }}
         />
       )}
 
@@ -1770,7 +1771,7 @@ export function TrialBalancePage() {
           journalEntryId={editJeId}
           clientId={selectedClientId}
           onClose={() => setEditJeId(null)}
-          onSaved={() => { setEditJeId(null); qc.invalidateQueries({ queryKey }); }}
+          onSaved={() => { setEditJeId(null); invalidateAfterJournalEntry(qc); }}
         />
       )}
     </div>

@@ -31,6 +31,7 @@ import { listLeadSheets } from '../api/leadSheets';
 import { useUIStore, pushToast } from '../store/uiStore';
 import { checkFileSize } from '../utils/fileLimits';
 import { confirmAction } from '../components/ConfirmDialog';
+import { RefreshButton } from '../components/RefreshButton';
 
 const CATEGORIES = ['assets', 'liabilities', 'equity', 'revenue', 'expenses'] as const;
 const CATEGORY_LABELS: Record<string, string> = {
@@ -1455,7 +1456,7 @@ export function ChartOfAccountsPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Chart of Accounts</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Chart of Accounts<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             {data ? `${data.length} account${data.length !== 1 ? 's' : ''}` : ''}
           </p>

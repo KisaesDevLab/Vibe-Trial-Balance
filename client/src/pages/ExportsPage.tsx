@@ -19,6 +19,7 @@ import {
   type UnitMode,
   type UnitOption,
 } from '../api/exports';
+import { RefreshButton } from '../components/RefreshButton';
 
 const SOFTWARE_OPTIONS: { value: TaxSoftware; label: string }[] = [
   { value: 'ultratax', label: 'UltraTax CS' },
@@ -174,7 +175,7 @@ export function ExportsPage() {
   if (!selectedPeriodId) {
     return (
       <div className="p-6">
-        <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4">Exports</h1>
+        <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4">Exports<RefreshButton /></h1>
         <p className="text-gray-500 dark:text-gray-400 text-sm">Select a client and period to begin.</p>
       </div>
     );
@@ -184,7 +185,7 @@ export function ExportsPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
-      <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Tax Exports</h1>
+      <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Tax Exports<RefreshButton /></h1>
 
       {/* Success / error banners */}
       {success && (
@@ -508,7 +509,7 @@ export function ExportsPage() {
               onClick={() =>
                 handleDownload(
                   taxSoftwareExportUrl(selectedPeriodId, software, consolidateIds.size > 0 ? Array.from(consolidateIds) : undefined, consolidateMap.size > 0 ? consolidateMap : undefined, unitOption),
-                  `${software}-export-${selectedPeriodId}.${SOFTWARE_EXT[software]}`,
+                  `${software}-export.${SOFTWARE_EXT[software]}`,
                   SOFTWARE_OPTIONS.find((o) => o.value === software)?.label ?? software,
                 )
               }

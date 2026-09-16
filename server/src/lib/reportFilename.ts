@@ -3,10 +3,15 @@
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
 /**
- * Naming for the PDFs the app hands to the browser. Report files carry the
- * engagement they belong to — "FY2024_Acme Holdings LLC_trial-balance-12.pdf" —
+ * Naming for the files the app hands to the browser. Report files carry the
+ * engagement they belong to — "FY2024_Acme Holdings LLC_trial-balance.pdf" —
  * so a folder of downloads sorts by period and client instead of by report
  * type, and a file that leaves the app still says what it is.
+ *
+ * The format is `<period>_<client>_<report>` and nothing else: the internal
+ * period id used to trail the report name ("trial-balance-12.pdf"), which
+ * meant nothing to anyone outside the database and made two firms' files for
+ * the same year look different. The period name already identifies the year.
  */
 
 /** Characters no filesystem wants, plus the whitespace runs they leave behind. */
@@ -29,12 +34,15 @@ export function engagementFilename(
 }
 
 /**
- * Content-Disposition for a PDF. A client name carries whatever a firm's
+ * Content-Disposition for a download. A client name carries whatever a firm's
  * letterhead does — accents, ampersands, commas — so the header sends both
  * forms: a plain-ASCII fallback and the RFC 5987 encoding browsers prefer.
  */
-export function pdfDisposition(filename: string, preview: boolean): string {
+export function fileDisposition(filename: string, preview: boolean): string {
   const ascii = filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
   const type = preview ? 'inline' : 'attachment';
   return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
+
+/** The PDF routes' original name for {@link fileDisposition}. */
+export const pdfDisposition = fileDisposition;

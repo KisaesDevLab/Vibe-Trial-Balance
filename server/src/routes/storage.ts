@@ -40,6 +40,14 @@ import {
   unlinkClientFolder,
   verifyClientFolder,
 } from '../lib/clientFolders';
+import {
+  LINKS_ORDER_SQL,
+  LINK_COUNTS_SQL,
+  parseClientLinksQuery,
+  whereLinkSearch,
+  whereLinkStatus,
+  type LinkCounts,
+} from '../lib/clientLinksQuery';
 
 export const storageRouter = Router();
 storageRouter.use(authMiddleware);
@@ -309,25 +317,38 @@ storageRouter.put('/folder-template', adminOnly, async (req: AuthRequest, res: R
 
 // ─── Client folder links ─────────────────────────────────────────────────────
 
-storageRouter.get('/links', adminOnly, async (_req: AuthRequest, res: Response): Promise<void> => {
+// GET /storage/links?page=1&limit=25&search=&status=all|unlinked|attention|active
+// Paged server-side: `meta.total` is the filtered count, `meta.counts` is the
+// WHOLE firm (never narrowed) so the section header stays a true health summary
+// while the operator is searching.
+storageRouter.get('/links', adminOnly, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const rows = await db('clients as c')
+    const { page, limit, search, status } = parseClientLinksQuery(req.query as Record<string, unknown>);
+    const base = () => db('clients as c')
       .leftJoin('client_folder_links as l', 'l.client_id', 'c.id')
-      .where('c.is_active', true)
-      .orderByRaw(`
-        CASE
-          WHEN l.id IS NULL THEN 0
-          WHEN l.status <> 'active' THEN 1
-          WHEN l.is_legacy_layout THEN 2
-          ELSE 3
-        END, c.name ASC
-      `)
-      .select(
-        'c.id as client_id', 'c.name as client_name',
-        'l.id as link_id', 'l.storage_backend', 'l.storage_path', 'l.sentinel_id',
-        'l.is_legacy_layout', 'l.status', 'l.last_verified_at',
-      );
-    res.json({ data: rows, error: null, meta: { count: rows.length } });
+      .where('c.is_active', true);
+    const filtered = () => base().modify(whereLinkSearch, search).modify(whereLinkStatus, status);
+
+    const [rows, totalRow, counts] = await Promise.all([
+      filtered()
+        .orderByRaw(LINKS_ORDER_SQL)
+        .select(
+          'c.id as client_id', 'c.name as client_name', 'c.client_code',
+          'l.id as link_id', 'l.storage_backend', 'l.storage_path', 'l.sentinel_id',
+          'l.is_legacy_layout', 'l.status', 'l.last_verified_at',
+        )
+        .limit(limit)
+        .offset((page - 1) * limit),
+      filtered().count<{ count: string }[]>('c.id as count').first(),
+      base().select(db.raw(LINK_COUNTS_SQL)).first<LinkCounts>(),
+    ]);
+
+    const total = Number(totalRow?.count ?? 0);
+    res.json({
+      data: rows,
+      error: null,
+      meta: { total, page, limit, search, status, counts: counts ?? { all: 0, unlinked: 0, attention: 0, active: 0 } },
+    });
   } catch (err: unknown) {
     sendServerError(res, err, 'storage/links');
   }

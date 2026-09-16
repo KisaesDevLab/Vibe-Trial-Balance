@@ -22,6 +22,7 @@ import {
   TASK_CATEGORIES,
   TASK_TEMPLATES,
 } from '../api/engagement';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ── Status helpers ────────────────────────────────────────────────────────────
 
@@ -504,7 +505,7 @@ export function EngagementPage() {
   return (
     <div className="p-6 space-y-4 max-w-5xl">
       <div>
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Engagement</h1>
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Engagement<RefreshButton /></h1>
         {tab === 'checklist' && period && (
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{period.period_name} checklist</p>
         )}

@@ -22,6 +22,7 @@ import { listPeriods } from '../api/periods';
 import { useUIStore, useAuthStore } from '../store/uiStore';
 import { DateInput } from '../components/DateInput';
 import { confirmAction } from '../components/ConfirmDialog';
+import { RefreshButton } from '../components/RefreshButton';
 
 function fmt(cents: number): string {
   const abs = Math.abs(cents);
@@ -468,7 +469,7 @@ export function ReconciliationsPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Bank Reconciliations</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Bank Reconciliations<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{recs?.length ?? 0} reconciliation{(recs?.length ?? 0) !== 1 ? 's' : ''}</p>
         </div>
         <button

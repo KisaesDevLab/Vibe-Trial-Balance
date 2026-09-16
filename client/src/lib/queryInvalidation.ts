@@ -23,12 +23,14 @@ import type { QueryClient } from '@tanstack/react-query';
  * Add a key here when a new screen reads posted balances. Over-listing costs a
  * refetch; under-listing shows a stale number to someone signing a workpaper.
  */
-const JOURNAL_ENTRY_DEPENDENTS: string[] = [
-  // The entries themselves
-  'journal-entries',
-  'journal-entry',
-  'journal-entries-zoom',
-  // Balances
+/**
+ * Every cached query that reads period balances, however they got there — a
+ * typed cell on the TB grid, a TB/CSV/PDF/QBO import, a row sync, or a posted
+ * journal entry. A typed balance used to refresh only `['trial-balance']`, so
+ * the Dashboard, General Ledger, Cash Flow, Comparison and Lead Sheets kept
+ * showing the old figure until the cache expired.
+ */
+const BALANCE_DEPENDENTS: string[] = [
   'trial-balance',
   'tb',
   'general-ledger',
@@ -37,9 +39,6 @@ const JOURNAL_ENTRY_DEPENDENTS: string[] = [
   'lead-sheets',
   'lead-sheets-period',
   'lead-sheets-unassigned',
-  // A JE and its bank transaction are kept in step server-side.
-  'bank-transactions',
-  'reconciliations',
   // Derived statements and checks
   'cash-flow',
   'm1',
@@ -47,17 +46,42 @@ const JOURNAL_ENTRY_DEPENDENTS: string[] = [
   'dashboard',
   'engagement-summary',
   'export-validation',
+  'py-comparison',
   'py-comparison-prefill',
 ];
+
+const JOURNAL_ENTRY_DEPENDENTS: string[] = [
+  // The entries themselves
+  'journal-entries',
+  'journal-entry',
+  'journal-entries-zoom',
+  ...BALANCE_DEPENDENTS,
+  // A JE and its bank transaction are kept in step server-side.
+  'bank-transactions',
+  'reconciliations',
+];
+
+function invalidatePrefixes(qc: QueryClient, keys: string[]): void {
+  for (const key of keys) {
+    void qc.invalidateQueries({ queryKey: [key] });
+  }
+}
 
 /**
  * Refresh everything that depends on posted balances. Call from every journal
  * entry create, update and delete — never hand-pick a subset at the call site.
  */
 export function invalidateAfterJournalEntry(qc: QueryClient): void {
-  for (const key of JOURNAL_ENTRY_DEPENDENTS) {
-    void qc.invalidateQueries({ queryKey: [key] });
-  }
+  invalidatePrefixes(qc, JOURNAL_ENTRY_DEPENDENTS);
+}
+
+/**
+ * Refresh everything that reads balances after a change that is NOT a journal
+ * entry: a TB grid cell edit, a balances import, a row sync. Only the queries
+ * mounted on the current page actually refetch; the rest are marked stale.
+ */
+export function invalidateAfterBalanceChange(qc: QueryClient): void {
+  invalidatePrefixes(qc, BALANCE_DEPENDENTS);
 }
 
 /**

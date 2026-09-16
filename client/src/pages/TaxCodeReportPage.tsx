@@ -7,9 +7,11 @@ import { useQuery } from '@tanstack/react-query';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
 import { listTaxCodes } from '../api/taxCodes';
 import { useUIStore, useAuthStore } from '../store/uiStore';
+import { useEngagementFilename } from '../hooks/useEngagementFilename';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { downloadXlsx } from '../utils/downloadXlsx';
 import { filterReportableRows } from '../utils/tbActivity';
+import { RefreshButton } from '../components/RefreshButton';
 
 type ColSet = 'book' | 'tax';
 
@@ -28,6 +30,7 @@ function fmt(cents: number): string {
 
 export function TaxCodeReportPage() {
   const { selectedPeriodId } = useUIStore();
+  const engagementFile = useEngagementFilename();
   const token = useAuthStore((s) => s.token);
   const [colSet, setColSet] = useState<ColSet>('tax');
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -51,7 +54,7 @@ export function TaxCodeReportPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await downloadPdf(pdfReports.taxCodeReport(selectedPeriodId) + `?columns=${colSet}`, `tax-code-report-${selectedPeriodId}.pdf`, token);
+      await downloadPdf(pdfReports.taxCodeReport(selectedPeriodId) + `?columns=${colSet}`, `tax-code-report.pdf`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {
@@ -114,7 +117,7 @@ export function TaxCodeReportPage() {
       exportRows.push([code, '', 'SUBTOTAL', '', String(subtotal / 100)]);
     }
     exportRows.push(['', '', 'GRAND TOTAL', '', String(grandTotal / 100)]);
-    downloadXlsx(`tax-code-report-${selectedPeriodId}.xlsx`, [header, ...exportRows]);
+    downloadXlsx(engagementFile('tax-code-report.xlsx'), [header, ...exportRows]);
   };
 
   if (!selectedPeriodId) {
@@ -131,7 +134,7 @@ export function TaxCodeReportPage() {
   return (
     <div className="p-6 max-w-3xl">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Code Report</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Code Report<RefreshButton /></h2>
         <div className="flex items-center gap-2">
           <select
             value={colSet}

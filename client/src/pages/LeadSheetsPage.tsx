@@ -45,6 +45,7 @@ import { listPeriods, type Period } from '../api/periods';
 import { JournalEntryDialog } from '../components/JournalEntryDialog';
 import { TickmarkPickerModal } from '../components/TickmarkPickerModal';
 import { invalidateAfterTickmarkToggle } from '../lib/queryInvalidation';
+import { RefreshButton } from '../components/RefreshButton';
 
 // pdfjs is ~1 MB; keep it out of the initial bundle.
 const LeadSheetPdfViewer = lazy(() =>
@@ -454,7 +455,7 @@ export function LeadSheetsPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Lead Sheets</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Lead Sheets<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-500 mt-0.5">
             {sheets.length} lead sheet{sheets.length === 1 ? '' : 's'}
             {unassigned.length > 0 && ` · ${unassigned.length} unassigned account${unassigned.length === 1 ? '' : 's'}`}

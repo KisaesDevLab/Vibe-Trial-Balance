@@ -10,6 +10,7 @@ import { listAccounts, updateAccount, Account } from '../api/chartOfAccounts';
 import { listClients } from '../api/clients';
 import { listPeriods } from '../api/periods';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -204,7 +205,7 @@ function StatementTab({ periodId }: { periodId: number }) {
   const handleDownload = async () => {
     if (!token) return;
     setPdfBusy(true);
-    try { await downloadPdf(pdfReports.cashFlow(periodId), `cash-flow-${periodId}.pdf`, token); }
+    try { await downloadPdf(pdfReports.cashFlow(periodId), `cash-flow.pdf`, token); }
     catch (e) { pushToast((e as Error).message, 'error'); }
     finally { setPdfBusy(false); }
   };
@@ -371,7 +372,7 @@ export function CashFlowPage() {
   return (
     <div className="p-6 space-y-4 max-w-3xl">
       <div>
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Statement of Cash Flows</h1>
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Statement of Cash Flows<RefreshButton /></h1>
         {client && period && (
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             {client.name}

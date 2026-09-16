@@ -13,6 +13,7 @@ import { listTaxCodes, type TaxCode } from '../api/taxCodes';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { categoryNet } from '../lib/accounting';
 import { hasReportableActivity } from '../utils/tbActivity';
+import { RefreshButton } from '../components/RefreshButton';
 
 const fmt = (cents: number) => {
   if (cents === 0) return '—';
@@ -173,7 +174,7 @@ export function TaxBasisPlPage() {
   const handleDownload = async () => {
     if (!selectedPeriodId) return;
     setPdfLoading(true); setPdfError(null);
-    try { await downloadPdf(pdfReports.taxBasisPl(selectedPeriodId), `tax-basis-pl-${selectedPeriodId}.pdf`, token); }
+    try { await downloadPdf(pdfReports.taxBasisPl(selectedPeriodId), `tax-basis-pl.pdf`, token); }
     catch (e) { setPdfError((e as Error).message); }
     finally { setPdfLoading(false); }
   };
@@ -193,7 +194,7 @@ export function TaxBasisPlPage() {
       <div className="shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Tax-Basis Profit & Loss</h1>
+            <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Tax-Basis Profit & Loss<RefreshButton /></h1>
             {client && period && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{client.name} — {period.period_name}</p>
             )}

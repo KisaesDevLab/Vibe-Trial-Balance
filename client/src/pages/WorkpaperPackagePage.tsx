@@ -13,6 +13,7 @@ import { listPeriods } from '../api/periods';
 import { getTBTickmarks, listTickmarks } from '../api/tickmarks';
 import { categoryNet } from '../lib/accounting';
 import { filterReportableRows } from '../utils/tbActivity';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -301,7 +302,7 @@ interface PdfReportSection {
   id: string;
   label: string;
   url: (periodId: number, fs: FsBinderOptions) => string;
-  filename: (periodId: number) => string;
+  filename: string;
 }
 
 // Order here is binder order: it drives the checkbox list AND the sequence the
@@ -309,19 +310,19 @@ interface PdfReportSection {
 // the ids and labels in step with REPORT_GENERATORS in routes/pdfReports.ts —
 // the merged PDF's table of contents prints the server-side labels.
 const PDF_REPORT_SECTIONS: PdfReportSection[] = [
-  { id: 'pdf-wp-index',     label: 'Workpaper Index (PDF)',       url: (id) => pdfReports.workpaperIndex(id),  filename: (id) => `workpaper-index-${id}.pdf` },
-  { id: 'pdf-lead-sheets',  label: 'Lead Sheets (PDF)',           url: (id) => pdfReports.leadSheets(id),      filename: (id) => `lead-sheets-${id}.pdf` },
-  { id: 'pdf-tb',           label: 'Trial Balance (PDF)',         url: (id, fs) => pdfReports.trialBalance(id, fs.basis), filename: (id) => `trial-balance-${id}.pdf` },
-  { id: 'pdf-is',           label: 'Income Statement (PDF)',      url: (id, fs) => pdfReports.incomeStatement(id, fs.basis, fs.groupByLeadSheet), filename: (id) => `income-statement-${id}.pdf` },
-  { id: 'pdf-bs',           label: 'Balance Sheet (PDF)',         url: (id, fs) => pdfReports.balanceSheet(id, fs.basis, fs.groupByLeadSheet),    filename: (id) => `balance-sheet-${id}.pdf` },
-  { id: 'pdf-equity',       label: 'Statement of Equity (PDF)',   url: (id, fs) => pdfReports.equityStatement(id, fs.basis), filename: (id) => `equity-statement-${id}.pdf` },
-  { id: 'pdf-je',           label: 'Journal Entries (PDF)',       url: (id) => pdfReports.journalEntries(id),  filename: (id) => `journal-entries-${id}.pdf` },
-  { id: 'pdf-aje',          label: 'AJE Listing (PDF)',           url: (id) => pdfReports.ajeListing(id),      filename: (id) => `aje-listing-${id}.pdf` },
-  { id: 'pdf-gl',           label: 'General Ledger (PDF)',        url: (id) => pdfReports.generalLedger(id),   filename: (id) => `general-ledger-${id}.pdf` },
-  { id: 'pdf-tax-code',     label: 'Tax Code Report (PDF)',       url: (id) => pdfReports.taxCodeReport(id),   filename: (id) => `tax-code-report-${id}.pdf` },
-  { id: 'pdf-tax-pl',       label: 'Tax-Basis P&L (PDF)',         url: (id) => pdfReports.taxBasisPl(id),      filename: (id) => `tax-basis-pl-${id}.pdf` },
-  { id: 'pdf-tax-return',   label: 'Tax Return Order (PDF)',      url: (id) => pdfReports.taxReturnOrder(id),  filename: (id) => `tax-return-order-${id}.pdf` },
-  { id: 'pdf-m1',           label: 'M-1 Worksheet (PDF)',         url: (id) => pdfReports.m1(id),              filename: (id) => `m1-worksheet-${id}.pdf` },
+  { id: 'pdf-wp-index',     label: 'Workpaper Index (PDF)',       url: (id) => pdfReports.workpaperIndex(id),  filename: 'workpaper-index.pdf' },
+  { id: 'pdf-lead-sheets',  label: 'Lead Sheets (PDF)',           url: (id) => pdfReports.leadSheets(id),      filename: 'lead-sheets.pdf' },
+  { id: 'pdf-tb',           label: 'Trial Balance (PDF)',         url: (id, fs) => pdfReports.trialBalance(id, fs.basis), filename: 'trial-balance.pdf' },
+  { id: 'pdf-is',           label: 'Income Statement (PDF)',      url: (id, fs) => pdfReports.incomeStatement(id, fs.basis, fs.groupByLeadSheet), filename: 'income-statement.pdf' },
+  { id: 'pdf-bs',           label: 'Balance Sheet (PDF)',         url: (id, fs) => pdfReports.balanceSheet(id, fs.basis, fs.groupByLeadSheet),    filename: 'balance-sheet.pdf' },
+  { id: 'pdf-equity',       label: 'Statement of Equity (PDF)',   url: (id, fs) => pdfReports.equityStatement(id, fs.basis), filename: 'equity-statement.pdf' },
+  { id: 'pdf-je',           label: 'Journal Entries (PDF)',       url: (id) => pdfReports.journalEntries(id),  filename: 'journal-entries.pdf' },
+  { id: 'pdf-aje',          label: 'AJE Listing (PDF)',           url: (id) => pdfReports.ajeListing(id),      filename: 'aje-listing.pdf' },
+  { id: 'pdf-gl',           label: 'General Ledger (PDF)',        url: (id) => pdfReports.generalLedger(id),   filename: 'general-ledger.pdf' },
+  { id: 'pdf-tax-code',     label: 'Tax Code Report (PDF)',       url: (id) => pdfReports.taxCodeReport(id),   filename: 'tax-code-report.pdf' },
+  { id: 'pdf-tax-pl',       label: 'Tax-Basis P&L (PDF)',         url: (id) => pdfReports.taxBasisPl(id),      filename: 'tax-basis-pl.pdf' },
+  { id: 'pdf-tax-return',   label: 'Tax Return Order (PDF)',      url: (id) => pdfReports.taxReturnOrder(id),  filename: 'tax-return-order.pdf' },
+  { id: 'pdf-m1',           label: 'M-1 Worksheet (PDF)',         url: (id) => pdfReports.m1(id),              filename: 'm1-worksheet.pdf' },
 ];
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -420,7 +421,7 @@ export function WorkpaperPackagePage() {
 
   return (
     <div className="p-6 max-w-2xl space-y-6">
-      <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Workpaper Package</h1>
+      <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Workpaper Package<RefreshButton /></h1>
 
       {/* Cover page config */}
       <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-3">
@@ -489,7 +490,7 @@ export function WorkpaperPackagePage() {
               const errs: string[] = [];
               for (const section of includedPdfSections) {
                 try {
-                  await downloadPdf(section.url(selectedPeriodId, fsOptions), section.filename(selectedPeriodId), token);
+                  await downloadPdf(section.url(selectedPeriodId, fsOptions), section.filename, token);
                   await new Promise(r => setTimeout(r, 400));
                 } catch (e) {
                   errs.push(`${section.label}: ${(e as Error).message}`);
@@ -513,7 +514,7 @@ export function WorkpaperPackagePage() {
               const reportIds = includedPdfSections.map(s => s.id);
               await downloadPdf(
                 pdfReports.workpaperMerged(selectedPeriodId, reportIds, includeAttachments, fsOptions),
-                `workpaper-package-${selectedPeriodId}.pdf`,
+                `workpaper-package.pdf`,
                 token,
               );
             } catch (e) {

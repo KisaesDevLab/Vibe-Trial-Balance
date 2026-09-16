@@ -20,6 +20,7 @@ import {
 } from '../api/savedReports';
 import { categoryNet } from '../lib/accounting';
 import { filterReportableRows } from '../utils/tbActivity';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -419,7 +420,7 @@ export function CustomReportPage() {
 
   return (
     <div className="p-6 space-y-4 max-w-6xl">
-      <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Custom Reports</h1>
+      <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Custom Reports<RefreshButton /></h1>
 
       <div className="border-b border-gray-200 dark:border-gray-700 flex gap-1">
         <button className={tabBtn('saved')} onClick={() => setTab('saved')}>Saved Reports</button>

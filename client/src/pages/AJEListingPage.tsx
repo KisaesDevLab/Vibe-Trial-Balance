@@ -6,9 +6,11 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listJournalEntries, type JournalEntry } from '../api/journalEntries';
 import { useUIStore, useAuthStore } from '../store/uiStore';
+import { useEngagementFilename } from '../hooks/useEngagementFilename';
 import { openPdfPreview, downloadPdf, pdfReports } from '../api/pdfReports';
 import { bookkeeperLetterUrl } from '../api/exports';
 import { downloadXlsx } from '../utils/downloadXlsx';
+import { RefreshButton } from '../components/RefreshButton';
 
 function fmt(cents: number): string {
   if (cents === 0) return '—';
@@ -78,6 +80,7 @@ function EntryCard({ entry }: { entry: JournalEntry }) {
 
 export function AJEListingPage() {
   const { selectedPeriodId } = useUIStore();
+  const engagementFile = useEngagementFilename();
   const token = useAuthStore((s) => s.token);
   const [typeFilter, setTypeFilter] = useState<'all' | 'book' | 'tax' | 'trans'>('all');
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -101,7 +104,7 @@ export function AJEListingPage() {
     setPdfLoading(true);
     setPdfError(null);
     try {
-      await downloadPdf(pdfReports.ajeListing(selectedPeriodId), `aje-listing-${selectedPeriodId}.pdf`, token);
+      await downloadPdf(pdfReports.ajeListing(selectedPeriodId), `aje-listing.pdf`, token);
     } catch (e) {
       setPdfError((e as Error).message);
     } finally {
@@ -145,7 +148,7 @@ export function AJEListingPage() {
         ]);
       }
     }
-    downloadXlsx(`aje-listing-${selectedPeriodId}.xlsx`, [header, ...rows]);
+    downloadXlsx(engagementFile('aje-listing.xlsx'), [header, ...rows]);
   };
 
   if (!selectedPeriodId) {
@@ -163,7 +166,7 @@ export function AJEListingPage() {
     <div className="p-6 max-w-3xl">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Journal Entry Listing</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Journal Entry Listing<RefreshButton /></h2>
           {!isLoading && (
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
               {bookCount} book · {taxCount} tax · {transCount} trans
@@ -216,7 +219,7 @@ export function AJEListingPage() {
               try {
                 // downloadPdf, not downloadExport: it takes the engagement-prefixed
                 // filename off the response instead of using the one passed here.
-                await downloadPdf(bookkeeperLetterUrl(selectedPeriodId, false), `bookkeeper-letter-${selectedPeriodId}.pdf`, token);
+                await downloadPdf(bookkeeperLetterUrl(selectedPeriodId, false), `bookkeeper-letter.pdf`, token);
               } catch { /* ignore */ }
             }}
             disabled={!entries.length}

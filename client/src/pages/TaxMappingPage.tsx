@@ -21,6 +21,7 @@ import { Spinner } from '../components/Spinner';
 import { mapWithConcurrency } from '../utils/concurrency';
 import { categoryNet } from '../lib/accounting';
 import { confirmAction } from '../components/ConfirmDialog';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ---- Types ----
 
@@ -812,7 +813,7 @@ export function TaxMappingPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Mapping</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Tax Mapping<RefreshButton /></h2>
           {selectedClient && (
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">{selectedClient.name}</span>

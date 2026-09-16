@@ -25,6 +25,7 @@ import {
   type RestoreResult,
   type UploadPreview,
 } from '../api/backup';
+import { RefreshButton } from '../components/RefreshButton';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -710,7 +711,7 @@ export function BackupPage() {
   return (
     <div className="p-6 space-y-6 max-w-5xl">
       <div>
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Backup &amp; Restore</h1>
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Backup &amp; Restore<RefreshButton /></h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
           Create and manage backups. Nightly full backups run automatically at 2:00 AM.
         </p>
