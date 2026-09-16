@@ -8,6 +8,7 @@ import { ClientSelector } from './ClientSelector';
 import { PeriodSelector } from './PeriodSelector';
 import { useAuthStore, useUIStore } from '../store/uiStore';
 import { useFeatures } from '../hooks/useFeatures';
+import { signOut } from '../api/auth';
 import type { FeatureFlags } from '../api/features';
 
 interface NavItem {
@@ -110,6 +111,7 @@ const ADMIN_GROUP: NavGroup = {
   title: 'Admin',
   items: [
     { to: '/users',              label: 'Users' },
+    { to: '/settings/authentication', label: 'Authentication' },
     { to: '/tax-codes',          label: 'Tax Codes' },
     { to: '/coa-templates',      label: 'COA Templates' },
     { to: '/system-tickmarks',   label: 'Default Tickmarks' },
@@ -193,7 +195,7 @@ function NavSection({ group, isAdmin, aiAvailable, features }: { group: NavGroup
 }
 
 export function Sidebar() {
-  const { user, clearAuth } = useAuthStore();
+  const { user } = useAuthStore();
   const { selectedClientId, fontSize, increaseFontSize, decreaseFontSize, isDarkMode, toggleDarkMode } = useUIStore();
   const features = useFeatures();
   const isAdmin = user?.role === 'admin';
@@ -266,7 +268,7 @@ export function Sidebar() {
           <div className="flex items-center justify-between mt-0.5">
             <span className="text-[10px] text-gray-500 capitalize">{user?.role}</span>
             <button
-              onClick={clearAuth}
+              onClick={() => void signOut()}
               className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
             >
               Sign out

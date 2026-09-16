@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@kisaesdevlab/vibe-auth": "file:../../Vibe-Auth/packages/client",
     "@simplewebauthn/browser": "^14.0.0",
     "@tanstack/react-query": "^5.56.0",
     "@tanstack/react-table": "^8.20.0",

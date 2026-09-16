@@ -50,3 +50,15 @@ export function initialStageFromStore(token: string | null, user: StageUser | nu
 export function userForStore<T extends StageUser>(stage: ServerStage, user: T): T {
   return { ...user, mustEnrolTwoFactor: stage === 'enrol' || !!user.mustEnrolTwoFactor };
 }
+
+/**
+ * Single sign-on hands the SPA its session on the fragment of the post-login
+ * redirect: `/login#sso_token=<jwt>`. Pure so the parsing is tested; the page
+ * clears the fragment as soon as it has read it.
+ */
+export function parseSsoHash(hash: string): string | null {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (!raw) return null;
+  const token = new URLSearchParams(raw).get('sso_token')?.trim();
+  return token ? token : null;
+}

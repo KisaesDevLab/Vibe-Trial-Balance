@@ -10,7 +10,10 @@
     "client": "ghcr.io/kisaesdevlab/vibe-tb-client",
     "defaultTag": "latest"
   },
-  "ports": { "server": 3001, "client": 80 },
+  "ports": {
+    "server": 3001,
+    "client": 80
+  },
   "subdomains": [
     {
       "name": "tb",
@@ -19,14 +22,30 @@
       "emergencyPort": 5172
     }
   ],
-  "depends": ["postgres"],
+  "depends": [
+    "postgres"
+  ],
   "websocket": false,
   "env": {
     "required": [
-      { "name": "JWT_SECRET", "generate": "hex32" },
-      { "name": "ENCRYPTION_KEY", "generate": "hex32" },
-      { "name": "DATABASE_URL", "from": "shared-postgres-url", "database": "vibe_tb_db", "user": "vibetb" },
-      { "name": "DB_PASSWORD", "from": "shared-postgres-password" },
+      {
+        "name": "JWT_SECRET",
+        "generate": "hex32"
+      },
+      {
+        "name": "ENCRYPTION_KEY",
+        "generate": "hex32"
+      },
+      {
+        "name": "DATABASE_URL",
+        "from": "shared-postgres-url",
+        "database": "vibe_tb_db",
+        "user": "vibetb"
+      },
+      {
+        "name": "DB_PASSWORD",
+        "from": "shared-postgres-password"
+      },
       {
         "name": "ALLOWED_ORIGIN",
         "from": "subdomain-url",
@@ -34,11 +53,21 @@
       }
     ],
     "optional": [
-      { "name": "ANTHROPIC_API_KEY", "secret": true, "doc": "Claude API key for AI support chat. AI features hidden in UI when absent; rest of app fully functional." },
-      { "name": "LOG_LEVEL", "default": "info" }
+      {
+        "name": "ANTHROPIC_API_KEY",
+        "secret": true,
+        "doc": "Claude API key for AI support chat. AI features hidden in UI when absent; rest of app fully functional."
+      },
+      {
+        "name": "LOG_LEVEL",
+        "default": "info"
+      }
     ]
   },
-  "database": { "name": "vibe_tb_db", "user": "vibetb" },
+  "database": {
+    "name": "vibe_tb_db",
+    "user": "vibetb"
+  },
   "firstLogin": {
     "type": "default-credentials-forced-reset",
     "username": "admin",
@@ -49,16 +78,59 @@
   "health": "/api/v1/health",
   "ping": "/api/v1/ping",
   "migrations": {
-    "command": ["node", "dist/migrate.js"],
+    "command": [
+      "node",
+      "dist/migrate.js"
+    ],
     "autoEnvVar": "MIGRATIONS_AUTO"
   },
   "seed": {
-    "command": ["node", "dist/seed.js"],
+    "command": [
+      "node",
+      "dist/seed.js"
+    ],
     "runOnFreshInstall": true,
     "idempotent": true
   },
   "backup": {
-    "volumes": ["vibe-tb-uploads", "vibe-tb-backups"],
-    "databases": ["vibe_tb_db"]
+    "volumes": [
+      "vibe-tb-uploads",
+      "vibe-tb-backups"
+    ],
+    "databases": [
+      "vibe_tb_db"
+    ]
+  },
+  "requires": [
+    "identity"
+  ],
+  "sso": {
+    "capable": true,
+    "redirectPaths": [
+      "/auth/oidc/callback"
+    ],
+    "logoutPaths": [
+      "/auth/oidc/backchannel"
+    ],
+    "publicPaths": [
+      "/api/v1/health",
+      "/api/v1/ping",
+      "/api/v1/features",
+      "/api/v1/public/*",
+      "/api/v1/integrations/qbo/callback",
+      "/mcp/*",
+      "/api/v1/auth/*",
+      "/api/v1/password-reset/*"
+    ],
+    "edgeGate": false,
+    "internalUrl": "http://vibe-tb-server:3001",
+    "breakglassService": "vibe-tb-server",
+    "breakglassCommand": [
+      "node",
+      "node_modules/@kisaesdevlab/vibe-auth/dist/cli.js",
+      "breakglass",
+      "ensure",
+      "--json"
+    ]
   }
 }

@@ -52,6 +52,7 @@ import { UnitsPage } from './pages/UnitsPage';
 import { PyTieOutPage } from './pages/PyTieOutPage';
 import { TBPopoutPage } from './pages/TBPopoutPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { AuthenticationSettingsPage } from './pages/AuthenticationSettingsPage';
 import { PrivacyPolicyPage, TermsPage } from './pages/LegalPage';
 import { useAuthStore } from './store/uiStore';
 import { ROUTER_BASENAME } from './lib/baseConfig';
@@ -71,6 +72,8 @@ export default function App() {
     <BrowserRouter basename={ROUTER_BASENAME}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        {/* Break-glass: the local password form even when sign-in is SSO-only (Vibe Auth). */}
+        <Route path="/login/local" element={<LoginPage breakglass />} />
         <Route path="/password-reset/request" element={<PasswordResetRequestPage />} />
         <Route path="/password-reset/confirm" element={<PasswordResetConfirmPage />} />
         {/* Invite links land here; the page reads the token's purpose and
@@ -127,6 +130,7 @@ export default function App() {
           <Route path="ai-usage-log" element={<AiUsageLogPage />} />
           <Route path="support" element={<SupportPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="settings/authentication" element={<AuthenticationSettingsPage />} />
           <Route path="coa-templates" element={<CoaTemplatesPage />} />
           <Route path="system-tickmarks" element={<SystemTickmarksPage />} />
           <Route path="transaction-entry" element={<TransactionEntryPage />} />

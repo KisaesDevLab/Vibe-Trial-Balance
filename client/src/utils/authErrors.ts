@@ -17,6 +17,7 @@ const MESSAGES: Record<string, string> = {
   PASSKEYS_UNAVAILABLE: 'Passkeys are not available on this server yet. Ask an admin to set the public app URL.',
   INVALID_CHALLENGE: 'That request expired. Please try again.',
   NETWORK_ERROR: 'Cannot reach the server. Check your connection and try again.',
+  LOCAL_LOGIN_DISABLED: 'Password sign-in is turned off for this product. Use single sign-on.',
 };
 
 /**

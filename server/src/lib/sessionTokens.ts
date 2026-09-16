@@ -69,10 +69,16 @@ export function publicUser(row: UserRow, f: UserFactors): PublicUser {
   };
 }
 
-/** The unchanged full-session token: `{userId, username, role}`, JWT_EXPIRY. */
-export function signFullToken(row: Pick<UserRow, 'id' | 'username' | 'role'>): string {
+/**
+ * The unchanged full-session token: `{userId, username, role}`, JWT_EXPIRY.
+ * `extraClaims` is for the SSO session adapter (lib/vibeAuth.ts), which adds
+ * a `sid` so the token can be tied back to its auth_sessions_oidc row; it can
+ * never set `stage` — that claim is what scopes a token, so only login mints it.
+ */
+export function signFullToken(row: Pick<UserRow, 'id' | 'username' | 'role'>, extraClaims: Record<string, unknown> = {}): string {
+  const { stage: _ignored, ...extra } = extraClaims;
   return jwt.sign(
-    { userId: row.id, username: row.username, role: row.role },
+    { ...extra, userId: row.id, username: row.username, role: row.role },
     JWT_SECRET,
     { algorithm: 'HS256', expiresIn: JWT_EXPIRY } as jwt.SignOptions,
   );
