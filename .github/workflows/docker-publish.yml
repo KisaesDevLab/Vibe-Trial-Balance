@@ -99,6 +99,12 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platform }}
+          # @kisaesdevlab/vibe-auth is served from GitHub Packages, which needs
+          # a token even for reads. GITHUB_TOKEN works once the package grants
+          # this repository Actions access (Vibe-Auth package settings ->
+          # Manage Actions access). See docs/sso.md "Building from source".
+          secrets: |
+            NODE_AUTH_TOKEN=${{ secrets.GITHUB_TOKEN }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.name }}-${{ steps.pair.outputs.pair }}

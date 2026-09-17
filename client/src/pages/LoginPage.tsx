@@ -12,13 +12,22 @@
  * starts over. The rotate / enrol stages are real (restricted) sessions and
  * DO live in the store, flagged by mustChangePassword / mustEnrolTwoFactor,
  * which is what lets a reload resume the right screen.
+ *
+ * Single sign-on (Vibe Auth) wraps the credentials form in <LoginPanel>,
+ * which adds the "Sign in with …" button when SSO is on and hides the form
+ * when the firm has gone SSO-only. The SSO flow ends with a redirect to
+ * `/login#sso_token=<jwt>`: the token is the same full session POST /login
+ * mints, so it is stored the same way. `/login/local` is the break-glass
+ * route — the password form even in SSO-only mode.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { startAuthentication } from '@simplewebauthn/browser';
+import { LoginPanel } from '@kisaesdevlab/vibe-auth/react';
 import {
   changePassword,
+  getMeWithToken,
   getMfaPasskeyOptions,
   getPasskeyLoginOptions,
   login,
@@ -32,7 +41,8 @@ import { OneTimeCodeInput } from '../components/auth/OneTimeCodeInput';
 import { TotpEnrolFlow, type EnrolResult } from '../components/auth/TotpEnrolFlow';
 import { PasskeyRegisterFlow } from '../components/auth/PasskeyRegisterFlow';
 import { useFeatures } from '../hooks/useFeatures';
-import { initialStageFromStore, stageAfterLogin, stageAfterRotate, userForStore, type LoginUiStage, type MfaMethod } from '../utils/loginFlow';
+import { initialStageFromStore, parseSsoHash, stageAfterLogin, stageAfterRotate, userForStore, type LoginUiStage, type MfaMethod } from '../utils/loginFlow';
+import { ROUTER_BASENAME, withBase } from '../lib/baseConfig';
 import { isMfaTerminal, messageForAuthError } from '../utils/authErrors';
 import { describeWebAuthnError, webauthnAvailability } from '../utils/webauthn';
 
@@ -50,7 +60,7 @@ const KeyIcon = (
   </svg>
 );
 
-export function LoginPage() {
+export function LoginPage({ breakglass = false }: { breakglass?: boolean } = {}) {
   const setAuth = useAuthStore((s) => s.setAuth);
   const updateUser = useAuthStore((s) => s.updateUser);
   const clearAuth = useAuthStore((s) => s.clearAuth);
@@ -59,7 +69,16 @@ export function LoginPage() {
   const navigate = useNavigate();
   const features = useFeatures();
 
-  const [stage, setStage] = useState<LoginUiStage>(() => initialStageFromStore(storedToken, storedUser));
+  // A token on the fragment means we are the landing page of an SSO login.
+  // Read it once and scrub the URL so it survives in neither history nor a
+  // copied link; the effect below turns it into a session.
+  const [ssoToken] = useState<string | null>(() => {
+    const t = parseSsoHash(window.location.hash);
+    if (t) window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    return t;
+  });
+  const [ssoPending, setSsoPending] = useState(!!ssoToken);
+  const [stage, setStage] = useState<LoginUiStage>(() => (ssoToken ? 'credentials' : initialStageFromStore(storedToken, storedUser)));
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -82,15 +101,41 @@ export function LoginPage() {
   });
   const passkeysOn = !!features?.passkeys;
 
-  /** A full session arrived (password-only, after a code, or by passkey): store it and move on. */
-  const finishSignIn = (data: { stage: 'ok' | 'mfa' | 'enrol'; token: string; user: AuthUser }) => {
+  /** A full session arrived (password-only, after a code, by passkey, or from SSO): store it and move on. */
+  const finishSignIn = (data: { stage: 'ok' | 'mfa' | 'enrol'; token: string; user: AuthUser }, sso = false) => {
     const next = stageAfterLogin({ stage: data.stage, user: data.user });
-    setAuth(data.token, userForStore(data.stage, data.user));
+    setAuth(data.token, userForStore(data.stage, data.user), sso);
     setMfaToken(null);
     setCode('');
     if (next === 'done') navigate('/');
     else setStage(next);
   };
+
+  // ── single sign-on landing ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!ssoToken) return;
+    let alive = true;
+    void (async () => {
+      const me = await getMeWithToken(ssoToken);
+      if (!alive) return;
+      if (me.error) {
+        setSsoPending(false);
+        setError(messageForAuthError(me.error.code, me.error.message));
+        return;
+      }
+      const { stage: _stage, ...user } = me.data;
+      // The identity provider's MFA stands in for the firm's local 2FA policy
+      // (Settings → Authentication → "Require MFA on the identity provider");
+      // the API does not gate SSO tokens on enrolment either. Nor on password
+      // rotation: that flag is about the local credential, which this session
+      // never used (the API skips that gate for SSO tokens too).
+      finishSignIn({ stage: 'ok', token: ssoToken, user: { ...user, mustEnrolTwoFactor: false, mustChangePassword: false } }, true);
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ssoToken]);
 
   // ── credentials ─────────────────────────────────────────────────────────
   const handleLogin = async (e: React.FormEvent) => {
@@ -364,52 +409,72 @@ export function LoginPage() {
   }
 
   // ── credentials screen ──────────────────────────────────────────────────
+  if (ssoPending) {
+    return shell(
+      'Vibe TB',
+      'Completing sign-in…',
+      <p className="text-sm text-gray-500 dark:text-gray-400">Signing you in with your identity provider.</p>,
+    );
+  }
+
   return shell(
     'Vibe TB',
-    'Sign in to continue',
-    <form onSubmit={handleLogin} className="space-y-4">
-      {errorBanner}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Username</label>
-        <input
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
-          required
-          autoFocus
-          autoComplete="username"
-        />
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
-        <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
-      </div>
-      <button type="submit" disabled={loading || passkeyBusy} className={btnPrimary}>{loading ? 'Signing in...' : 'Sign in'}</button>
-
-      {passkeysOn && (
-        <>
-          <div className="relative text-center text-xs text-gray-400"><span className="bg-white dark:bg-gray-800 px-2 relative z-10">or</span><div className="absolute inset-x-0 top-1/2 border-t border-gray-200 dark:border-gray-700" /></div>
-          <button
-            type="button"
-            onClick={() => void handlePasskeyLogin()}
-            disabled={passkeyBusy || loading || !browser.supported}
-            aria-busy={passkeyBusy}
-            title={browser.supported ? undefined : browser.reason}
-            className={`${btnOutline} inline-flex items-center justify-center gap-2`}
-          >
-            {KeyIcon}{passkeyBusy ? 'Waiting for your device…' : 'Sign in with a passkey'}
-          </button>
-          {!browser.supported && <p className="text-xs text-gray-500 dark:text-gray-400 text-center">{browser.reason}</p>}
-          {note && <p className="text-xs text-gray-500 dark:text-gray-400 text-center">{note}</p>}
-        </>
-      )}
-
-      {features?.passwordResetEnabled && (
-        <div className="text-center pt-1">
-          <Link to="/password-reset/request" className={linkCls}>Forgot password?</Link>
+    breakglass ? 'Break-glass sign-in with a local password' : 'Sign in to continue',
+    <LoginPanel
+      basePath={ROUTER_BASENAME}
+      returnTo={withBase('login')}
+      breakglass={breakglass}
+      classNames={{
+        root: 'space-y-4',
+        button: `${btnOutline} block text-center`,
+        divider: 'text-center text-xs text-gray-400',
+        note: 'text-xs text-gray-500 dark:text-gray-400 text-center',
+      }}
+    >
+      <form onSubmit={handleLogin} className="space-y-4">
+        {errorBanner}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Username</label>
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+            required
+            autoFocus
+            autoComplete="username"
+          />
         </div>
-      )}
-    </form>,
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
+        </div>
+        <button type="submit" disabled={loading || passkeyBusy} className={btnPrimary}>{loading ? 'Signing in...' : 'Sign in'}</button>
+
+        {passkeysOn && (
+          <>
+            <div className="relative text-center text-xs text-gray-400"><span className="bg-white dark:bg-gray-800 px-2 relative z-10">or</span><div className="absolute inset-x-0 top-1/2 border-t border-gray-200 dark:border-gray-700" /></div>
+            <button
+              type="button"
+              onClick={() => void handlePasskeyLogin()}
+              disabled={passkeyBusy || loading || !browser.supported}
+              aria-busy={passkeyBusy}
+              title={browser.supported ? undefined : browser.reason}
+              className={`${btnOutline} inline-flex items-center justify-center gap-2`}
+            >
+              {KeyIcon}{passkeyBusy ? 'Waiting for your device…' : 'Sign in with a passkey'}
+            </button>
+            {!browser.supported && <p className="text-xs text-gray-500 dark:text-gray-400 text-center">{browser.reason}</p>}
+            {note && <p className="text-xs text-gray-500 dark:text-gray-400 text-center">{note}</p>}
+          </>
+        )}
+
+        {features?.passwordResetEnabled && (
+          <div className="text-center pt-1">
+            <Link to="/password-reset/request" className={linkCls}>Forgot password?</Link>
+          </div>
+        )}
+      </form>
+    </LoginPanel>,
   );
 }

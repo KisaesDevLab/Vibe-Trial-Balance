@@ -44,6 +44,7 @@ import {
   type UserRow,
 } from '../lib/sessionTokens';
 import { rateLimitKey } from '../lib/rateLimitKey';
+import { getVibeAuth, requireLocalLoginAllowed } from '../lib/vibeAuth';
 
 const router = Router();
 
@@ -98,7 +99,9 @@ async function rememberBrowser(req: Request, res: Response, userId: number): Pro
   res.setHeader('Set-Cookie', buildTrustedBrowserCookie(raw, { secure: cookiesAreSecure() }));
 }
 
-router.post('/login', loginLimiter, async (req: Request, res: Response): Promise<void> => {
+// requireLocalLoginAllowed: in single-sign-on-only mode only the break-glass
+// account may use a password (Vibe Auth); every other username gets a 403.
+router.post('/login', loginLimiter, requireLocalLoginAllowed, async (req: Request, res: Response): Promise<void> => {
   const result = loginSchema.safeParse(req.body);
   if (!result.success) {
     res.status(400).json({
@@ -120,6 +123,9 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
       });
       return;
     }
+
+    // Audits a break-glass sign-in (no-op for everyone else).
+    await getVibeAuth().afterLocalLogin({ userId: String(user.id), username: user.username, ip: req.ip });
 
     const factors = await loadUserFactors(user.id);
     const trusted = factors.hasTotp || factors.hasPasskey ? await trustedBrowserFor(req, user.id) : null;

@@ -4,7 +4,8 @@
 
 import type { AuthenticationResponseJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
 import { apiFetch } from './client';
-import type { AuthUser } from '../store/uiStore';
+import { useAuthStore, type AuthUser } from '../store/uiStore';
+import { withBase } from '../lib/baseConfig';
 import type { MfaMethod, ServerStage } from '../utils/loginFlow';
 
 export interface LoginResponse {
@@ -29,6 +30,36 @@ export function login(username: string, password: string) {
 
 export function getMe() {
   return apiFetch<AuthUser & { stage: 'mfa' | 'enrol' | null }>('/auth/me');
+}
+
+/**
+ * Profile lookup with a token that is not (yet) the stored session: the login
+ * page uses it to turn the bearer a single-sign-on redirect hands over into a
+ * session, without letting a bad token bounce the page it is already on.
+ */
+export function getMeWithToken(token: string) {
+  return apiFetch<AuthUser & { stage: 'mfa' | 'enrol' | null }>('/auth/me', { authToken: token, ...onLoginPage });
+}
+
+/**
+ * Sign out. The session is a bearer the browser holds, so forgetting it is
+ * the logout; a session that came from single sign-on also tells the SSO
+ * layer (audit entry, identity row) — `local=1` keeps the identity provider's
+ * own session alive, which is what a shared IdP login expects.
+ */
+export async function signOut(): Promise<void> {
+  const { sso, token, clearAuth } = useAuthStore.getState();
+  if (sso && token) {
+    try {
+      await fetch(withBase('auth/oidc/logout?local=1'), {
+        headers: { Authorization: `Bearer ${token}` },
+        redirect: 'manual',
+      });
+    } catch {
+      // Best effort: the local sign-out below is what ends the session.
+    }
+  }
+  clearAuth();
 }
 
 export function changePassword(currentPassword: string, newPassword: string) {

@@ -1,20 +1,33 @@
 # Build-from-source overlay — layer on top of docker-compose.prod.yml when you
 # want to bake in a local modification instead of pulling prebuilt GHCR images.
 #
+#   export NODE_AUTH_TOKEN=<GitHub token with read:packages>
 #   docker compose -f docker-compose.prod.yml -f docker-compose.build.yml up -d --build
 #
 # `pull_policy: build` ensures Compose never tries to fetch the GHCR image when
 # both `image:` and `build:` are set on the same service.
+#
+# NODE_AUTH_TOKEN: @kisaesdevlab/vibe-auth (single sign-on) is served from
+# GitHub Packages, which requires a token even for reads. It is passed to the
+# Dockerfiles as a BuildKit secret and never stored in an image layer.
 
 services:
   api:
     build:
       context: .
       dockerfile: Dockerfile.server
+      secrets:
+        - NODE_AUTH_TOKEN
     pull_policy: build
 
   web:
     build:
       context: .
       dockerfile: Dockerfile.client
+      secrets:
+        - NODE_AUTH_TOKEN
     pull_policy: build
+
+secrets:
+  NODE_AUTH_TOKEN:
+    environment: NODE_AUTH_TOKEN

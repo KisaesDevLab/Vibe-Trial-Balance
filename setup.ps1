@@ -461,6 +461,16 @@ if (Test-Path "package.json") {
 }
 
 if (Test-Path "server\package.json") {
+    # @kisaesdevlab/vibe-auth (single sign-on) is served from GitHub Packages,
+    # which refuses anonymous reads: npm install needs a token with read:packages
+    # in the user's npmrc. Check up front so the failure names the fix.
+    $ghToken = (npm config get //npm.pkg.github.com/:_authToken 2>$null | Out-String).Trim()
+    if (-not $ghToken -or $ghToken -eq "undefined" -or $ghToken -eq "null") {
+        Write-Fail "No GitHub Packages token found. Add to $env:USERPROFILE\.npmrc:"
+        Write-Fail "  //npm.pkg.github.com/:_authToken=<GitHub token with read:packages>"
+        Write-Fail "(with the GitHub CLI signed in:  gh auth token). See docs/sso.md, 'Building from source'."
+        exit 1
+    }
     Write-Info "Installing server dependencies..."
     Push-Location server
     npm install 2>$null

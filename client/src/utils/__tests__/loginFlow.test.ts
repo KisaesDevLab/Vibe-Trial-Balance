@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialStageFromStore, stageAfterLogin, stageAfterRotate, userForStore } from '../loginFlow';
+import { initialStageFromStore, parseSsoHash, stageAfterLogin, stageAfterRotate, userForStore } from '../loginFlow';
 
 test('after login: mfa first, then rotation, then enrolment, then in', () => {
   assert.equal(stageAfterLogin({ stage: 'ok', user: {} }), 'done');
@@ -37,4 +37,15 @@ test('userForStore marks the enrolment obligation from the stage and keeps every
   assert.deepEqual(userForStore('enrol', u), { id: 1, name: 'x', mustEnrolTwoFactor: true });
   assert.deepEqual(userForStore('ok', u), { id: 1, name: 'x', mustEnrolTwoFactor: false });
   assert.deepEqual(userForStore('ok', { id: 2, mustEnrolTwoFactor: true }), { id: 2, mustEnrolTwoFactor: true });
+});
+
+test('single sign-on hands the token over on the fragment', () => {
+  assert.equal(parseSsoHash('#sso_token=abc.def.ghi'), 'abc.def.ghi');
+  assert.equal(parseSsoHash('sso_token=abc'), 'abc', 'with or without the leading #');
+  assert.equal(parseSsoHash('#sso_token=a%2Bb'), 'a+b', 'URL-decoded');
+  assert.equal(parseSsoHash('#other=1&sso_token=x'), 'x');
+  assert.equal(parseSsoHash('#sso_token='), null);
+  assert.equal(parseSsoHash('#'), null);
+  assert.equal(parseSsoHash(''), null);
+  assert.equal(parseSsoHash('#/dashboard'), null, 'an ordinary hash is not a token');
 });

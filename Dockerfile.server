@@ -1,10 +1,20 @@
+# syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
+# (the ENV below is a module PATH for the vibe-auth CLI, not a secret; the linter keys on "AUTH")
 FROM node:20-alpine AS build
 
 WORKDIR /app
 
 # Full install (including devDependencies) so we have `tsc` at build time.
-COPY server/package.json server/package-lock.json* server/
-RUN cd server && npm ci
+# @kisaesdevlab/vibe-auth comes from GitHub Packages (server/.npmrc maps the
+# scope); the registry needs a token even for reads, so it is passed as a
+# BuildKit secret and written to a throwaway user npmrc that never lands in a
+# layer:  docker build --secret id=NODE_AUTH_TOKEN,env=NODE_AUTH_TOKEN …
+COPY server/package.json server/package-lock.json* server/.npmrc server/
+RUN --mount=type=secret,id=NODE_AUTH_TOKEN,required=true \
+    printf '//npm.pkg.github.com/:_authToken=%s\n' "$(cat /run/secrets/NODE_AUTH_TOKEN)" > /root/.npmrc \
+ && cd server && npm ci \
+ && rm -f /root/.npmrc
 
 # Build TypeScript to dist/
 COPY server/ server/
@@ -33,6 +43,11 @@ COPY server/docker-entrypoint.sh            server/docker-entrypoint.sh
 RUN chmod +x server/docker-entrypoint.sh
 
 RUN mkdir -p server/uploads server/backups
+
+# The Vibe Auth break-glass CLI (`node server/node_modules/@kisaesdevlab/vibe-auth/dist/cli.js …`)
+# is exec'd by the appliance console with this WORKDIR, not server/, so it
+# cannot find the adapter through server/package.json; point it there directly.
+ENV VIBE_AUTH_ADAPTER=/app/server/dist/vibeAuthAdapter.js
 
 # Drop root. The app only needs read on its own code + rw on uploads/backups.
 # Using a fixed uid/gid so host bind-mounts (for backups) are predictable.

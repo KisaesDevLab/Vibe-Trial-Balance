@@ -36,6 +36,7 @@ import {
   signFullToken,
   type UserRow,
 } from '../lib/sessionTokens';
+import { getVibeAuth, localLoginRefusal } from '../lib/vibeAuth';
 
 export const passkeysRouter = Router();
 
@@ -240,6 +241,16 @@ passkeysRouter.post('/passkeys/login/verify', loginVerifyLimiter, async (req: Re
       res.status(401).json({ data: null, error: { code: 'INVALID_CREDENTIALS', message: 'That passkey is not registered here.' } });
       return;
     }
+    // The same sign-in policy as POST /login (Vibe Auth): a passkey IS a local
+    // sign-in, so in oidc_only mode only the break-glass user may use one.
+    // Checked here, after the ceremony, because a usernameless login only
+    // knows who it is now.
+    const refusal = localLoginRefusal(user.username);
+    if (refusal) {
+      res.status(403).json({ data: null, error: refusal });
+      return;
+    }
+    await getVibeAuth().afterLocalLogin({ userId: String(user.id), username: user.username, ip: req.ip });
     await logAudit({ userId: user.id, periodId: null, entityType: 'user', entityId: user.id, action: 'login_passkey', description: `User "${user.username}" signed in with passkey "${outcome.passkey.name}"` });
     const factors = await loadUserFactors(user.id);
     // A passkey IS two factors; the enrolment requirement is satisfied by construction.

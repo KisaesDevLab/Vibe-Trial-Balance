@@ -39,6 +39,14 @@ test('the existing forced-rotation gate is unchanged for a full token', () => {
   }
 });
 
+test('a single-sign-on token skips the forced-rotation gate — the flag is about a local password the session never used', () => {
+  assert.equal(gateForRequest({ ...full, sso: true, mustChangePassword: true, route: 'GET /api/v1/clients' }), null);
+  // …but not the stage rules: a stage claim on an SSO token is still a bad token.
+  assert.equal(gateForRequest({ ...full, sso: true, stage: 'bogus', route: 'GET /api/v1/clients' })?.status, 401);
+  // and a local token with the same flag is gated exactly as before.
+  assert.equal(gateForRequest({ ...full, sso: false, mustChangePassword: true, route: 'GET /api/v1/clients' })?.code, 'PASSWORD_CHANGE_REQUIRED');
+});
+
 test('an mfa token reaches only the challenge endpoints, and is refused with a 401 elsewhere', () => {
   for (const route of MFA_ALLOWLIST) {
     assert.equal(gateForRequest({ ...full, stage: 'mfa', route }), null);

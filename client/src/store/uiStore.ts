@@ -26,7 +26,9 @@ export type AuthObligation = 'PASSWORD_CHANGE_REQUIRED' | 'TWO_FACTOR_ENROLMENT_
 interface AuthStore {
   token: string | null;
   user: AuthUser | null;
-  setAuth: (token: string, user: AuthUser) => void;
+  /** The session came from single sign-on (token arrived on /login#sso_token); sign-out tells the SSO layer. */
+  sso: boolean;
+  setAuth: (token: string, user: AuthUser, sso?: boolean) => void;
   clearAuth: () => void;
   /** Patch the signed-in user (after a password change, an enrolment, or a 403 obligation code). */
   updateUser: (patch: Partial<AuthUser>) => void;
@@ -39,8 +41,9 @@ export const useAuthStore = create<AuthStore>()(
     (set) => ({
       token: null,
       user: null,
-      setAuth: (token, user) => set({ token, user }),
-      clearAuth: () => set({ token: null, user: null }),
+      sso: false,
+      setAuth: (token, user, sso = false) => set({ token, user, sso }),
+      clearAuth: () => set({ token: null, user: null, sso: false }),
       updateUser: (patch) => set((s) => (s.user ? { user: { ...s.user, ...patch } } : {})),
       markObligation: (code) => set((s) => {
         if (!s.user) return {};

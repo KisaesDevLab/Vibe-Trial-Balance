@@ -67,6 +67,7 @@ import { isAiConfigured } from './lib/aiClient';
 import { registerTbTaskClasses, validateAiModeEnv } from './lib/routerProvider';
 import { loadAiModeOverrides } from './lib/aiModeSettings';
 import { isMailerConfigured } from './lib/mailService';
+import { isRateLimitedAuthPath, startVibeAuth, vibeAuthMiddleware } from './lib/vibeAuth';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -146,6 +147,20 @@ app.use('/api/', rateLimit({
   legacyHeaders: false,
   keyGenerator: rateLimitKey,
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } },
+}));
+
+// Vibe Auth's browser-facing steps live outside /api/ and so outside the
+// limiter above. 100 per 15 minutes per address absorbs a sign-in storm
+// without touching the identity provider's back-channel logout, which arrives
+// from ONE address on behalf of every user (isRateLimitedAuthPath).
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKey,
+  skip: (req) => !isRateLimitedAuthPath(req.path),
+  message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many sign-in attempts. Please try again later.' } },
 }));
 
 // Stricter limits for file upload / first-pass AI endpoints — 40 per hour per
@@ -286,6 +301,14 @@ app.get('/api/v1/public/legal', async (_req, res) => {
   }
 });
 
+// Vibe Auth (single sign-on): GET /auth/status, the /auth/oidc/* flow and the
+// admin /auth/settings API, all outside /api/v1 (the package's paths are what
+// the appliance registers with the identity provider). Mounted after the
+// public probes and body parser and before every router that applies
+// authMiddleware; it only answers /auth/* and passes everything else through,
+// so /mcp and the QuickBooks callback are untouched. See lib/vibeAuth.ts.
+app.use(vibeAuthMiddleware());
+
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/auth', passwordResetRoutes);
 app.use('/api/v1/auth', totpRouter);
@@ -400,6 +423,11 @@ async function start(): Promise<void> {
   await loadAiModeOverrides();
   // Sign-in policy + public URL (passkey relying party). Failures only log.
   await loadSecuritySettings();
+  // Single sign-on: needs the public URL above for its redirect URIs. An
+  // unreachable identity provider only logs and retries; the one fatal case
+  // is VIBE_AUTH_MODE=oidc_only with no break-glass account, whose message
+  // says how to fix it — let it abort the boot.
+  await startVibeAuth();
   const server = app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/api/v1/health`);

@@ -129,6 +129,26 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
   token lives only in LoginPage state, never in `useAuthStore`; `rotate`/`enrol` obligations are flags on
   the stored user and `ProtectedRoute` bounces on them; `apiFetch` turns a 403
   `TWO_FACTOR_ENROLMENT_REQUIRED` / `PASSWORD_CHANGE_REQUIRED` into that flag. Tests: `npm run test:twofactor`.
+- **Single sign-on (Vibe Auth, `@kisaesdevlab/vibe-auth` from GitHub Packages).** Operator notes and
+  the deviations list: `docs/sso.md`. The package owns the OIDC flow (`/auth/*` on the API, outside
+  `/api/v1`, mounted in `app.ts` after the public probes and before every authenticated router); the
+  product side is `lib/vibeAuth.ts` + `lib/vibeAuthUsers.ts` (+ `vibeAuthAdapter.ts` for the CLI).
+  Sessions stay stateless JWTs: an SSO login mints the same 8 h token with a `sid` claim, hands it to
+  the SPA on `/login#sso_token=`, and parks the identity in `auth_sessions_oidc`; `authMiddleware`
+  asks `auth.isRevoked` on EVERY request ahead of its 30 s cache (back-channel logout). SSO tokens
+  carry no `stage` claim, so the local 2FA policy and the password-rotation gate do not apply to them
+  (`gateForRequest` `sso` flag). **Every local sign-in path must call `localLoginRefusal()`** —
+  password login does as middleware, passkey `login/verify` after the ceremony — or `oidc_only` has a
+  hole. The dependency is `^1.0.x` from `npm.pkg.github.com`, which refuses anonymous reads: source
+  builds need a `read:packages` token (`~/.npmrc` for dev/Pi, a BuildKit secret in the Dockerfiles,
+  `GITHUB_TOKEN` in Actions after the package grants this repo access); `.npmrc` files only map the
+  scope. The first-party scope is excluded from the license audit's denied check. `.appliance/manifest.json`
+  is a byte-for-byte vendored copy of `Vibe-Appliance/console/manifests/vibe-tb.json` (edit there, copy
+  here); its `/auth/*` matcher is load-bearing and `breakglassCommand` runs with the image `WORKDIR`
+  `/app`, hence the `server/node_modules/...` path plus `ENV VIBE_AUTH_ADAPTER` in `Dockerfile.server`.
+  Tests: `npm test` (server, includes `vibeAuthWiring.test.ts`) and `npm run test:sso-e2e` (real server +
+  scratch Postgres + fake IdP, `test/sso-e2e.mjs`; mode changes are restarts because a stored mode
+  overrides env). Never add a silent fallback from `oidc_only` to local.
 - Trial Balance Grid = editing balances ONLY, no category subtotals
 - Tax Mapping View (Plan Phase 5) = SEPARATE page: assign tax codes, read-only balances, category subtotals, net income, balance check
 - tax_line VARCHAR on chart_of_accounts: legacy field kept for compat. New system uses tax_code_id FK → tax_codes table. Dual-write: when tax_code_id assigned, also write tax_code string to tax_line.

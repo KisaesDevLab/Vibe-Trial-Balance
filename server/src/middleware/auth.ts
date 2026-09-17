@@ -33,6 +33,29 @@ export function invalidateAuthCache(userId: number): void {
   activeUserCache.delete(userId);
 }
 
+// ── Revocation list (Vibe Auth, D16) ─────────────────────────────────────────
+// Sessions are stateless JWTs, so an IdP back-channel logout can only take
+// effect through a revocation list consulted at verify time — one indexed
+// read of auth_revocations per request, deliberately NOT behind the 30 s
+// cache above: a user signed out at the identity provider must be out now.
+// lib/vibeAuth.ts registers the check at boot; until then nothing is revoked.
+// It is a hook rather than an import so this module (and its unit tests)
+// stay free of the SSO package.
+export type RevocationCheck = (key: { userId: string; sid?: string }, issuedAtMs: number) => Promise<boolean>;
+let revocationCheck: RevocationCheck | null = null;
+
+export function setRevocationCheck(fn: RevocationCheck | null): void {
+  revocationCheck = fn;
+}
+
+/** `true` when the revocation list says this token was issued before the user's last revocation moment. */
+export async function isTokenRevoked(payload: { userId: number; sid?: unknown; iat?: unknown }): Promise<boolean> {
+  if (!revocationCheck) return false;
+  const sid = typeof payload.sid === 'string' ? payload.sid : undefined;
+  const iat = typeof payload.iat === 'number' ? payload.iat : 0;
+  return revocationCheck({ userId: String(payload.userId), sid }, iat * 1000);
+}
+
 // While `must_change_password` is true, the JWT is only good for these paths:
 // reading the current user profile and rotating the password. Every other
 // request is refused — this enforces the forced-rotation flow at the API layer
@@ -76,6 +99,8 @@ export interface GateInput {
   route: string;
   mustChangePassword: boolean;
   requireTwoFactor: boolean;
+  /** Token minted by a single-sign-on login (it carries a `sid` claim). */
+  sso?: boolean;
 }
 
 export interface GateRefusal {
@@ -119,7 +144,12 @@ export function gateForRequest(input: GateInput): GateRefusal | null {
     return { status: 401, code: 'UNAUTHORIZED', message: 'Invalid or expired token' };
   }
 
-  if (input.mustChangePassword && !ROTATION_ALLOWLIST.has(route)) {
+  // must_change_password is about the LOCAL credential (the bootstrap admin,
+  // an admin-reset password). A single-sign-on session never used it, and
+  // bouncing that user to a rotate screen that asks for a password they may
+  // not know locks them out for no gain; the flag waits for their next
+  // password login.
+  if (input.mustChangePassword && !input.sso && !ROTATION_ALLOWLIST.has(route)) {
     return {
       status: 403,
       code: 'PASSWORD_CHANGE_REQUIRED',
@@ -135,6 +165,9 @@ interface TokenPayload {
   role: string;
   stage?: unknown;
   methods?: unknown;
+  /** Set on tokens minted by an SSO login (lib/vibeAuth.ts). */
+  sid?: unknown;
+  iat?: unknown;
 }
 
 export async function authMiddleware(
@@ -168,6 +201,16 @@ export async function authMiddleware(
   // Re-check is_active and current role from the DB so that deactivation or
   // role changes take effect without waiting for the JWT to expire.
   try {
+    // A back-channel logout from the identity provider revokes every token the
+    // user holds (Vibe Auth D16). Checked before the is_active cache so a
+    // revoked token never gets a cached "fine" from an earlier request.
+    if (await isTokenRevoked(payload)) {
+      res
+        .status(401)
+        .json({ data: null, error: { code: 'UNAUTHORIZED', message: 'Session ended by the identity provider. Sign in again.' } });
+      return;
+    }
+
     const now = Date.now();
     const cached = activeUserCache.get(payload.userId);
     let currentRole: string;
@@ -202,6 +245,7 @@ export async function authMiddleware(
       route: routeKey(req.method, req.originalUrl),
       mustChangePassword,
       requireTwoFactor: securitySettings().requireTwoFactor,
+      sso: typeof payload.sid === 'string',
     });
     if (refusal) {
       res.status(refusal.status).json({ data: null, error: { code: refusal.code, message: refusal.message } });

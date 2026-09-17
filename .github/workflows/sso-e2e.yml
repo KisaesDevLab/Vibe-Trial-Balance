@@ -1,0 +1,59 @@
+name: SSO end-to-end
+
+# Vibe Auth (single sign-on) exit gate: boots the real server against a
+# scratch Postgres and the fake OpenID provider in test/fake-idp.mjs and walks
+# every scenario the integration plan names (test/sso-e2e.mjs).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  sso-e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # @kisaesdevlab/vibe-auth is served from GitHub Packages; GITHUB_TOKEN
+      # can read it once the package grants this repository Actions access
+      # (Vibe-Auth package settings -> Manage Actions access).
+      packages: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vibetb
+          POSTGRES_PASSWORD: localdev123
+          POSTGRES_DB: vibe_tb_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vibetb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com
+          scope: '@kisaesdevlab'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: server
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unit tests
+        run: npm test
+        working-directory: server
+
+      - name: SSO end-to-end (fake IdP)
+        run: npm run test:sso-e2e
+        env:
+          E2E_PG_ADMIN_URL: postgres://vibetb:localdev123@127.0.0.1:5432/postgres
