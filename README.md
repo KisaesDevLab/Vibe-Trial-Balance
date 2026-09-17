@@ -99,7 +99,10 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 
 ### Manual setup
 ```bash
-# Prerequisites: Node.js 20+, Docker Desktop
+# Prerequisites: Node.js 20+, Docker Desktop, a GitHub token with read:packages
+#   (the single sign-on package @kisaesdevlab/vibe-auth is served from GitHub
+#   Packages, which refuses anonymous reads - see docs/sso.md "Building from source")
+echo "//npm.pkg.github.com/:_authToken=$(gh auth token)" >> ~/.npmrc   # once per machine
 docker compose up -d                         # Start PostgreSQL + pgAdmin
 npm install                                  # Root dependencies
 cd server && npm install && cd ..

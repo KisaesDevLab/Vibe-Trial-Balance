@@ -9,9 +9,10 @@ export default defineConfig(({ command }) => ({
   base: command === 'build' ? '/__VIBE_BASE_PATH__/' : '/',
   plugins: [react()],
   resolve: {
-    // @kisaesdevlab/vibe-auth is a `file:` link into a sibling checkout that has its
-    // own node_modules. Pin React to this project's copy so its components
-    // can never resolve a second one (two Reacts break hooks).
+    // @kisaesdevlab/vibe-auth declares React as a peer dependency; when it is
+    // installed from a `file:` link (a sibling checkout with its own
+    // node_modules) it could resolve a second copy. Pin React to this
+    // project's copy so its components never do (two Reacts break hooks).
     dedupe: ['react', 'react-dom'],
   },
   server: {

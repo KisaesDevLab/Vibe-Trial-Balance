@@ -2,135 +2,105 @@
   "schemaVersion": 1,
   "slug": "vibe-tb",
   "displayName": "Vibe Trial Balance",
-  "description": "Tax preparation and trial balance workpaper application",
-  "logo": "tb.svg",
-  "userFacing": true,
+  "description": "Tax preparation and trial balance workpaper application.",
+  "logo": "vibe-tb.svg",
+
   "image": {
-    "server": "ghcr.io/kisaesdevlab/vibe-tb-server",
-    "client": "ghcr.io/kisaesdevlab/vibe-tb-client",
+    "server":     "ghcr.io/kisaesdevlab/vibe-tb-server",
+    "client":     "ghcr.io/kisaesdevlab/vibe-tb-client",
     "defaultTag": "latest"
   },
-  "ports": {
-    "server": 3001,
-    "client": 80
+
+  "subdomain":     "tb",
+  "emergencyPort": 5172,
+  "ports":         { "server": 3001, "client": 80 },
+
+  "routing": {
+    "default_upstream": "vibe-tb-client:80",
+    "matchers": [
+      { "name": "api", "path": "/api/*", "upstream": "vibe-tb-server:3001" },
+      { "name": "auth", "path": "/auth/*", "upstream": "vibe-tb-server:3001" },
+      { "name": "mcp", "path": "/mcp/*", "upstream": "vibe-tb-server:3001", "streaming": true }
+    ]
   },
-  "subdomains": [
-    {
-      "name": "tb",
-      "target": "vibe-tb-client:80",
-      "audience": "default",
-      "emergencyPort": 5172
-    }
-  ],
-  "depends": [
-    "postgres"
-  ],
-  "websocket": false,
+
+  "depends": ["postgres", "redis"],
+
+  "requires": ["identity"],
+  "sso": {
+    "capable":       true,
+    "redirectPaths": ["/auth/oidc/callback"],
+    "logoutPaths":   ["/auth/oidc/backchannel"],
+    "publicPaths":   ["/api/v1/health", "/api/v1/ping", "/api/v1/features", "/api/v1/public/*", "/api/v1/integrations/qbo/callback", "/mcp/*", "/api/v1/auth/*", "/api/v1/password-reset/*"],
+    "edgeGate":      false,
+    "internalUrl":   "http://vibe-tb-server:3001",
+    "breakglassService": "vibe-tb-server",
+    "breakglassCommand": ["node", "server/node_modules/@kisaesdevlab/vibe-auth/dist/cli.js", "breakglass", "ensure", "--json"]
+  },
+
   "env": {
     "required": [
-      {
-        "name": "JWT_SECRET",
-        "generate": "hex32"
-      },
-      {
-        "name": "ENCRYPTION_KEY",
-        "generate": "hex32"
-      },
-      {
-        "name": "DATABASE_URL",
-        "from": "shared-postgres-url",
-        "database": "vibe_tb_db",
-        "user": "vibetb"
-      },
-      {
-        "name": "DB_PASSWORD",
-        "from": "shared-postgres-password"
-      },
-      {
-        "name": "ALLOWED_ORIGIN",
-        "from": "subdomain-url",
-        "doc": "Must be a comma-separated list including BOTH the primary subdomain (https://tb.<domain>) and the emergency origin (http://<lan-ip>:5172). The appliance enable-app.sh synthesizes this list."
-      }
+      { "name": "JWT_SECRET",      "from": "shared:JWT_SECRET" },
+      { "name": "ENCRYPTION_KEY",  "from": "shared:ENCRYPTION_KEY" },
+      { "name": "ALLOWED_ORIGIN",  "from": "subdomain-url" },
+      { "name": "DATABASE_URL",    "from": "database-url" },
+      { "name": "REDIS_URL",       "from": "redis-url" },
+      { "name": "MIGRATIONS_AUTO", "from": "static:false" }
     ],
     "optional": [
       {
-        "name": "ANTHROPIC_API_KEY",
-        "secret": true,
-        "doc": "Claude API key for AI support chat. AI features hidden in UI when absent; rest of app fully functional."
+        "name": "VIBE_APP_SUBDOMAIN",
+        "doc":  "Operator override for this app's subdomain label. Empty = the manifest default. Consumed by the appliance routing (Caddy vhost + Cloudflare Tunnel CNAME/ingress) when DOMAIN_ROUTING_MODE=subdomain-per-app; ignored in single-host mode. Single DNS label — lowercase letters, digits, dashes, no dots.",
+        "ui": {
+          "tier":        1,
+          "category":    "Network",
+          "label":       "Subdomain",
+          "helpText":    "The <subdomain> in <subdomain>.<your-domain> for this app when routing is 'subdomain per app' (see Network settings). Leave blank to use the built-in default. Lowercase letters, digits, and dashes; no dots. Saving re-renders routing and re-provisions the Cloudflare Tunnel; the app briefly restarts.",
+          "input":       "text",
+          "appliance":   "per-app",
+          "validate":    "regex:^([a-z0-9][a-z0-9-]*)?$",
+          "postSaveJob": "routing-reconcile"
+        }
       },
       {
-        "name": "LOG_LEVEL",
-        "default": "info"
+        "name":   "ANTHROPIC_API_KEY",
+        "from":   "appliance:ANTHROPIC_API_KEY",
+        "secret": true,
+        "doc":    "Claude API key for AI features. Set via the admin Settings page (AI category). Inherited from appliance.env unless overridden per-app.",
+        "ui": {
+          "tier":         1,
+          "category":     "AI",
+          "label":        "Anthropic API key",
+          "helpText":     "Powers Vibe-TB AI features. The same key is used appliance-wide unless overridden per-app.",
+          "input":        "password",
+          "appliance":    "both",
+          "validate":     "anthropic-api-key",
+          "testEndpoint": "/api/v1/admin/test/anthropic"
+        }
       }
     ]
   },
-  "database": {
-    "name": "vibe_tb_db",
-    "user": "vibetb"
-  },
+
+  "database": { "name": "vibe_tb_db", "user": "vibetb" },
+  "redis":    { "db": 0 },
+
   "firstLogin": {
-    "type": "default-credentials-forced-reset",
+    "type":     "default-credentials-forced-reset",
     "username": "admin",
-    "password": "admin",
-    "url": "/login",
-    "note": "Default admin credentials are admin/admin. The app forces a password reset on first login."
+    "password": "admin1234",
+    "note":     "Source: upstream seed server/seeds/001_default_admin.js, run automatically by enable-app.sh after migrations. App forces a password rotation on first login. If you see 'invalid credentials', re-run the seed manually: sudo docker exec vibe-tb-server node dist/seed.js",
+    "url":      "/login"
   },
+
   "health": "/api/v1/health",
-  "ping": "/api/v1/ping",
+
   "migrations": {
-    "command": [
-      "node",
-      "dist/migrate.js"
-    ],
+    "command":    ["node", "server/dist/migrate.js"],
     "autoEnvVar": "MIGRATIONS_AUTO"
   },
+
   "seed": {
-    "command": [
-      "node",
-      "dist/seed.js"
-    ],
-    "runOnFreshInstall": true,
-    "idempotent": true
-  },
-  "backup": {
-    "volumes": [
-      "vibe-tb-uploads",
-      "vibe-tb-backups"
-    ],
-    "databases": [
-      "vibe_tb_db"
-    ]
-  },
-  "requires": [
-    "identity"
-  ],
-  "sso": {
-    "capable": true,
-    "redirectPaths": [
-      "/auth/oidc/callback"
-    ],
-    "logoutPaths": [
-      "/auth/oidc/backchannel"
-    ],
-    "publicPaths": [
-      "/api/v1/health",
-      "/api/v1/ping",
-      "/api/v1/features",
-      "/api/v1/public/*",
-      "/api/v1/integrations/qbo/callback",
-      "/mcp/*",
-      "/api/v1/auth/*",
-      "/api/v1/password-reset/*"
-    ],
-    "edgeGate": false,
-    "internalUrl": "http://vibe-tb-server:3001",
-    "breakglassService": "vibe-tb-server",
-    "breakglassCommand": [
-      "node",
-      "node_modules/@kisaesdevlab/vibe-auth/dist/cli.js",
-      "breakglass",
-      "ensure",
-      "--json"
-    ]
+    "command":     ["node", "server/dist/seed.js"],
+    "description": "Inserts the default admin user (admin / admin1234). Without this step the app starts with no users and the operator can't log in. Run-once via state.apps.vibe-tb.seeded — re-runs would hit a unique-constraint violation. Paths are relative to the image's WORKDIR (/app); dist/ itself lives at /app/server/dist/ per Dockerfile.server COPY layout."
   }
 }

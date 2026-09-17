@@ -67,7 +67,7 @@ import { isAiConfigured } from './lib/aiClient';
 import { registerTbTaskClasses, validateAiModeEnv } from './lib/routerProvider';
 import { loadAiModeOverrides } from './lib/aiModeSettings';
 import { isMailerConfigured } from './lib/mailService';
-import { startVibeAuth, vibeAuthMiddleware } from './lib/vibeAuth';
+import { isRateLimitedAuthPath, startVibeAuth, vibeAuthMiddleware } from './lib/vibeAuth';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -147,6 +147,20 @@ app.use('/api/', rateLimit({
   legacyHeaders: false,
   keyGenerator: rateLimitKey,
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } },
+}));
+
+// Vibe Auth's browser-facing steps live outside /api/ and so outside the
+// limiter above. 100 per 15 minutes per address absorbs a sign-in storm
+// without touching the identity provider's back-channel logout, which arrives
+// from ONE address on behalf of every user (isRateLimitedAuthPath).
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKey,
+  skip: (req) => !isRateLimitedAuthPath(req.path),
+  message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many sign-in attempts. Please try again later.' } },
 }));
 
 // Stricter limits for file upload / first-pass AI endpoints — 40 per hour per

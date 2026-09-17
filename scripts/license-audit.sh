@@ -142,9 +142,14 @@ else
 
   # Check for denied licenses (AGPL/SSPL/etc. incompatible with PolyForm Small Business)
   DENIED_PATTERN="GPL-2.0-only|SSPL|AGPL|Commons Clause|Proprietary|Commercial|UNLICENSED"
+  # First-party packages (@kisaesdevlab/*, e.g. vibe-auth) are published
+  # UNLICENSED because they belong to the same licensor; they are not third-
+  # party dependencies and are excluded from the denied check (see
+  # license-policy.json "firstParty").
+  FIRST_PARTY_SCOPE='^"@kisaesdevlab/'
   CLIENT_DENIED=$(cd "$CLIENT_DIR" && npx license-checker \
     --excludePrivatePackages --csv 2>/dev/null \
-    | grep -E "$DENIED_PATTERN" || true)
+    | grep -Ev "$FIRST_PARTY_SCOPE" | grep -E "$DENIED_PATTERN" || true)
 
   if [[ -n "$CLIENT_DENIED" ]]; then
     fail "Denied licenses found in client dependencies:"
@@ -173,7 +178,7 @@ else
   # Check for denied licenses
   SERVER_DENIED=$(cd "$SERVER_DIR" && npx license-checker \
     --excludePrivatePackages --csv 2>/dev/null \
-    | grep -E "$DENIED_PATTERN" || true)
+    | grep -Ev "${FIRST_PARTY_SCOPE:-^\"@kisaesdevlab/}" | grep -E "$DENIED_PATTERN" || true)
 
   if [[ -n "$SERVER_DENIED" ]]; then
     fail "Denied licenses found in server dependencies:"

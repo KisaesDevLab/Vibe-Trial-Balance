@@ -126,8 +126,10 @@ export function LoginPage({ breakglass = false }: { breakglass?: boolean } = {})
       const { stage: _stage, ...user } = me.data;
       // The identity provider's MFA stands in for the firm's local 2FA policy
       // (Settings → Authentication → "Require MFA on the identity provider");
-      // the API does not gate SSO tokens on enrolment either.
-      finishSignIn({ stage: 'ok', token: ssoToken, user: { ...user, mustEnrolTwoFactor: false } }, true);
+      // the API does not gate SSO tokens on enrolment either. Nor on password
+      // rotation: that flag is about the local credential, which this session
+      // never used (the API skips that gate for SSO tokens too).
+      finishSignIn({ stage: 'ok', token: ssoToken, user: { ...user, mustEnrolTwoFactor: false, mustChangePassword: false } }, true);
     })();
     return () => {
       alive = false;

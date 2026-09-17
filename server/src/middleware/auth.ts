@@ -48,7 +48,8 @@ export function setRevocationCheck(fn: RevocationCheck | null): void {
   revocationCheck = fn;
 }
 
-async function isTokenRevoked(payload: { userId: number; sid?: unknown; iat?: unknown }): Promise<boolean> {
+/** `true` when the revocation list says this token was issued before the user's last revocation moment. */
+export async function isTokenRevoked(payload: { userId: number; sid?: unknown; iat?: unknown }): Promise<boolean> {
   if (!revocationCheck) return false;
   const sid = typeof payload.sid === 'string' ? payload.sid : undefined;
   const iat = typeof payload.iat === 'number' ? payload.iat : 0;
@@ -98,6 +99,8 @@ export interface GateInput {
   route: string;
   mustChangePassword: boolean;
   requireTwoFactor: boolean;
+  /** Token minted by a single-sign-on login (it carries a `sid` claim). */
+  sso?: boolean;
 }
 
 export interface GateRefusal {
@@ -141,7 +144,12 @@ export function gateForRequest(input: GateInput): GateRefusal | null {
     return { status: 401, code: 'UNAUTHORIZED', message: 'Invalid or expired token' };
   }
 
-  if (input.mustChangePassword && !ROTATION_ALLOWLIST.has(route)) {
+  // must_change_password is about the LOCAL credential (the bootstrap admin,
+  // an admin-reset password). A single-sign-on session never used it, and
+  // bouncing that user to a rotate screen that asks for a password they may
+  // not know locks them out for no gain; the flag waits for their next
+  // password login.
+  if (input.mustChangePassword && !input.sso && !ROTATION_ALLOWLIST.has(route)) {
     return {
       status: 403,
       code: 'PASSWORD_CHANGE_REQUIRED',
@@ -237,6 +245,7 @@ export async function authMiddleware(
       route: routeKey(req.method, req.originalUrl),
       mustChangePassword,
       requireTwoFactor: securitySettings().requireTwoFactor,
+      sso: typeof payload.sid === 'string',
     });
     if (refusal) {
       res.status(refusal.status).json({ data: null, error: { code: refusal.code, message: refusal.message } });

@@ -45,7 +45,21 @@
     "UNLICENSED"
   ],
 
+  "firstParty": {
+    "_comment": "Packages published by Kisaes LLC itself. license-checker reports them as UNLICENSED (private GitHub Packages, no SPDX field) but they are the licensor's own code, not third-party dependencies; license-audit.sh excludes this scope from the denied-license check.",
+    "scopes": ["@kisaesdevlab"]
+  },
+
   "knownIssues": [
+    {
+      "package": "@kisaesdevlab/vibe-auth",
+      "version": "^1.0.1",
+      "detectedLicense": "UNLICENSED",
+      "severity": "LOW",
+      "pulledInBy": "server + client (single sign-on engine, LoginPanel, Settings → Authentication)",
+      "action": "Acceptable. First-party package owned by Kisaes LLC and served from GitHub Packages; excluded from the denied check by scope (see firstParty).",
+      "notes": "Added 2026-09-17 with the Vibe Auth integration."
+    },
     {
       "package": "buffers",
       "version": "0.1.1",

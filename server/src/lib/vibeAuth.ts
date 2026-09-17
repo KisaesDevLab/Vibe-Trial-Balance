@@ -127,7 +127,22 @@ async function mintSsoToken(user: VibeUser, identity: SessionIdentity): Promise<
   invalidateAuthCache(id);
   const token = signFullToken({ id, username, role: user.role }, { sid });
   const exp = (jwt.decode(token) as { exp?: number } | null)?.exp;
+  // Rows are otherwise deleted only by logout or back-channel logout, so a
+  // token that simply expired would leave its row behind forever. Each SSO
+  // login sweeps rows older than one token lifetime (the table is small; no
+  // scheduler needed).
+  if (exp) await db('auth_sessions_oidc').where('created_at', '<', staleSessionCutoff(exp, Date.now())).del();
   return { token, expiresAt: exp ? new Date(exp * 1000).toISOString() : undefined };
+}
+
+/**
+ * auth_sessions_oidc rows created before this instant belong to tokens that
+ * have expired: the freshly minted token's `exp` gives the lifetime, and an
+ * hour of grace covers clock skew between the minting and verifying hosts.
+ */
+export function staleSessionCutoff(expSeconds: number, nowMs: number): Date {
+  const lifetimeMs = expSeconds * 1000 - nowMs;
+  return new Date(nowMs - lifetimeMs - 60 * 60 * 1000);
 }
 
 const sessions: SessionAdapter = {
@@ -264,19 +279,54 @@ export async function startVibeAuth(): Promise<void> {
   console.log(`[vibe-auth] mode=${s.mode} sso=${s.oidc.enabled ? s.oidc.issuer : 'off'} prefix=${spaPrefix || '/'}`);
 }
 
+export const LOCAL_LOGIN_DISABLED = {
+  code: 'LOCAL_LOGIN_DISABLED',
+  message: 'Local sign-in is disabled for this product. Use single sign-on.',
+} as const;
+
+/**
+ * The sign-in policy for EVERY local sign-in path — password AND passkey:
+ * `null` when the user may sign in locally, else the 403 error body. In
+ * oidc_only mode only the break-glass user gets through. Password login can
+ * apply it as middleware (below) because the username is in the body; passkey
+ * login only knows its user after the ceremony, so it calls this directly.
+ * A local path that skips this check is a hole in oidc_only.
+ */
+export function localLoginRefusal(username: string): { code: string; message: string } | null {
+  return getVibeAuth().localLoginAllowed(username).allowed ? null : { ...LOCAL_LOGIN_DISABLED };
+}
+
 /** The sign-in policy hook for POST /login: 403 in oidc_only unless it is the break-glass user. */
 export const requireLocalLoginAllowed: RequestHandler = (req, res, next) => {
   const username = (req.body as { username?: unknown } | undefined)?.username;
-  const v = getVibeAuth().localLoginAllowed(typeof username === 'string' ? username : '');
-  if (v.allowed) return next();
-  res.status(403).json({
-    data: null,
-    error: { code: 'LOCAL_LOGIN_DISABLED', message: 'Local sign-in is disabled for this product. Use single sign-on.' },
-  });
+  const refusal = localLoginRefusal(typeof username === 'string' ? username : '');
+  if (!refusal) return next();
+  res.status(403).json({ data: null, error: refusal });
 };
 
 function isHtml(r: HttpResponse): boolean {
   return (r.headers['content-type'] ?? '').startsWith('text/html');
+}
+
+/** The post-login hand-off: the bearer rides the redirect's fragment, replacing any fragment already there. */
+export function withSsoToken(location: string, token: string): string {
+  return `${location.split('#')[0]}#sso_token=${encodeURIComponent(token)}`;
+}
+
+/**
+ * Which /auth/* paths the app-level rate limiter covers (app.ts): the
+ * browser-driven OIDC steps and the admin test-connection popup. NOT the
+ * back-channel logout — the identity provider posts those from ONE address
+ * for every user — and not the status / me / settings reads.
+ */
+const RATE_LIMITED_AUTH_PATHS = new Set([
+  `${AUTH_PREFIX}/oidc/start`,
+  `${AUTH_PREFIX}/oidc/callback`,
+  `${AUTH_PREFIX}/oidc/exchange`,
+  `${AUTH_PREFIX}/settings/test`,
+]);
+export function isRateLimitedAuthPath(path: string): boolean {
+  return RATE_LIMITED_AUTH_PATHS.has(path.replace(/\/+$/, ''));
 }
 
 function isJsonObject(body: unknown): body is Record<string, unknown> {
@@ -298,7 +348,7 @@ async function handleAuthRequest(req: Request, res: Response): Promise<boolean> 
   // off the fragment, which never reaches a server or a log.
   const token = res.locals.vibeAuthToken as string | undefined;
   if (token && r.status >= 300 && r.status < 400 && r.headers.location) {
-    r.headers.location = `${r.headers.location.split('#')[0]}#sso_token=${encodeURIComponent(token)}`;
+    r.headers.location = withSsoToken(r.headers.location, token);
   }
 
   // Test-connection popup: hand the admin's bearer to the OIDC start path as a

@@ -1,10 +1,16 @@
+# syntax=docker/dockerfile:1
 FROM node:20-alpine AS build
 
 WORKDIR /app
 
-# Install client dependencies
-COPY client/package.json client/package-lock.json* client/
-RUN cd client && npm install
+# Install client dependencies. @kisaesdevlab/vibe-auth (the LoginPanel and
+# Settings → Authentication components) comes from GitHub Packages, which needs
+# a token even for reads; see Dockerfile.server for the secret mechanism.
+COPY client/package.json client/package-lock.json* client/.npmrc client/
+RUN --mount=type=secret,id=NODE_AUTH_TOKEN,required=true \
+    printf '//npm.pkg.github.com/:_authToken=%s\n' "$(cat /run/secrets/NODE_AUTH_TOKEN)" > /root/.npmrc \
+ && cd client && npm ci \
+ && rm -f /root/.npmrc
 
 # Copy client source and build
 COPY client/ client/
