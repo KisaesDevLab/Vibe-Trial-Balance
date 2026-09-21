@@ -59,9 +59,33 @@ every user.
 
 ## Break-glass account
 
-`vibe-breakglass` is a local admin with a password only (no second factor), the one account that may sign
-in locally while the mode is `oidc_only`; the server refuses to start in that mode without it. It signs in
-at `/login/local`. Provision or rotate it with the package CLI, which finds this app's users through
+`vibe-breakglass` is a local admin, the one account that may sign in locally while the mode is `oidc_only`;
+the server refuses to start in that mode without it (missing **or** inactive).
+
+- **Sign-in identifier: the username `vibe-breakglass`** (or whatever `VIBE_BREAKGLASS_USERNAME` is set
+  to), typed into the *Username* box at `/login/local`, with the password from the console's secret store.
+  Trial Balance signs in by username, not by email: the account's address `breakglass@vibe-tb.local` is a
+  placeholder that receives no mail and is **not** a sign-in identifier.
+- **Protected account.** In every sign-in mode (`local`, `both`, `oidc_only`) no admin can deactivate it,
+  change its role away from `admin`, or rename it: `PATCH`/`DELETE /api/v1/users/:id` answer
+  `409 { error: { code: "BREAKGLASS_PROTECTED" } }` and the attempt is audited (`breakglass_protected`).
+  Role sync from the identity provider never demotes it either. Display name, email and password remain
+  editable; an admin password set on this account does **not** set `must_change_password`, so the
+  emergency account is never trapped in a forced rotation. The account is recognised by username
+  (case-insensitive) — `server/src/lib/accountGuards.ts`. Change it the supported way: `vibe identity
+  rotate-breakglass` on the appliance, or the CLI below.
+- **Second factor.** The firm's admin policy `security.require_two_factor` (default **off**) decides. Off: break-glass is password only. On: break-glass is treated like anyone else — its first
+  password sign-in lands on the two-factor enrolment screen and it must enrol before it gets in. Enrolment
+  is local (an authenticator app needs no network), so this still works while the identity provider is
+  down, but do not leave it for the outage: **enrol TOTP at provisioning** and keep the seed with the
+  password. A lost factor is cleared with `npm run reset-2fa -- vibe-breakglass` (from `server/`).
+- **No self-service password reset** for this account (see below); rotate it instead.
+- **The appliance's "break-glass ready" pill means only that a password is stored** in the console's
+  secret store. It does not prove the account is active in this app, that the stored password still
+  matches (an admin may have changed it here), or that a second factor is enrolled. `breakglass status`
+  (below) answers the first; a test sign-in at `/login/local` answers the rest.
+
+Provision or rotate it with the package CLI, which finds this app's users through
 `server/src/vibeAuthAdapter.ts`:
 
 ```
@@ -84,6 +108,34 @@ IdP is actually asked for it). Likewise the forced password rotation (`must_chan
 for SSO tokens: the flag is about the local credential, which the session never used; it still applies to
 that user's next password login. **Every local sign-in path honours the mode**: password login, and passkey
 sign-in (a passkey is a local credential, so in `oidc_only` only the break-glass user may use one).
+
+## Accounts that only sign in through the identity provider
+
+A just-in-time provisioned user has no usable local password (a bcrypt hash of random bytes fills the
+`NOT NULL` column) and carries `app_users.sso_only_since`. **Self-service password reset ("Forgot
+password") is refused for such an account** while it has a linked identity (`auth_identities`), and for the
+break-glass account: otherwise access to the mailbox alone would mint a local password for an account
+whose only credential is the identity provider, around the provider's MFA and offboarding. The refusal is
+invisible to the caller — `POST /api/v1/auth/password-reset/request` gives the same `200` and the same body
+as for an unknown identifier, mints no token, sends no mail — and leaves an `audit_log` row
+(`entity_type = 'user'`, `action = 'password_reset_refused'`).
+
+An admin can still give such a user a local password (Users → edit → password, or an invite); that clears
+`sso_only_since` and self-service reset applies from then on. An existing local user who was later *linked*
+by verified email keeps a real password and is unaffected. Every code path that writes a real
+`password_hash` must clear `sso_only_since`; a forgotten one fails closed (reset refused, admin set works).
+
+## Role sync
+
+IdP groups map to roles through the explicit `VIBE_TB_ROLE_MAP` in `server/src/lib/vibeAuth.ts` (the table
+under `VIBE_OIDC_ROLE_MAP` above; pinned by `vibeAuthWiring.test.ts`) unless Settings or the environment
+override it, and the role is re-evaluated on every SSO sign-in. One demotion is never applied: **the last
+active admin stays an admin** — the break-glass account does not count as another admin, and is itself
+never demoted. The sign-in succeeds with the role the account holds, and `audit_log` gets a
+`vibe.auth.role.demotion_refused` row (`reason`: `last_admin` or `breakglass`). The package cannot be told
+about the refusal, so its own `vibe.auth.role.changed` row still follows it; the refusal row and
+`app_users.role` are the truth. Fix the group membership at the provider, or make someone else an admin
+first.
 
 ## Registration
 
@@ -109,6 +161,10 @@ the container network directly).
 
 - `server/migrations/20260916000001_vibe_auth.js` creates `auth_identities`, `auth_settings`,
   `auth_revocations` (the package's own SQL, verbatim) and this app's `auth_sessions_oidc`.
+- `server/migrations/20260920000001_sso_only_marker.js` adds the nullable `app_users.sso_only_since` and
+  backfills it for accounts that were already provisioned by SSO (identity linked within a minute of the
+  user row's creation, never invited, no forced rotation pending, no audit trail of a password being set).
+  Reversible: `down` drops the column.
 - Every package event is an `audit_log` row with `entity_type = 'auth'`, `action = vibe.auth.*` (login
   success/failure, user provisioned/linked, role changed, logout, mode/settings changed, break-glass
   used/rotated), the user id in `entity_id`/`user_id` and the event payload as JSON in `description`.
@@ -141,11 +197,15 @@ packages. Published GHCR images need nothing. Building yourself:
   the fake OpenID provider in `test/fake-idp.mjs` and walks status in `local`/`both`, PKCE login → JIT with
   the mapped role, email link + role sync, unverified email denied, `/auth/settings` 403/200, the
   `oidc_only` guard, break-glass provisioning + local login + audit, back-channel revocation, a fresh login
-  after revocation, RP-initiated logout, boot refusal without break-glass, and `oidc_only` itself. Needs a
+  after revocation, RP-initiated logout, boot refusal without break-glass, `oidc_only` itself, and the
+  hardening rules (H1–H4: break-glass protected from deactivate/demote/rename in mode `both`, no forced
+  rotation for it, self-service reset refused for SSO-only and break-glass accounts with the
+  unknown-account answer, last-admin demotion refused). Needs a
   Postgres the dev credentials can `CREATE DATABASE` on (`docker compose up -d db`); point
   `E2E_PG_ADMIN_URL` at it when it is not on 5432. Runs in CI (`.github/workflows/sso-e2e.yml`).
 - `cd server && npm test` includes `vibeAuthWiring.test.ts` (fragment hand-off, revocation hook, rate-limit
-  path set, local-login policy) and the SSO cases in `authGates.test.ts`.
+  path set, local-login policy, the pinned group → role map), `accountGuards.test.ts` (the break-glass,
+  self-service-reset and last-admin rules) and the SSO cases in `authGates.test.ts`.
 - Against a real provider: the Vibe-Auth repo's `test/compose.yml` stack (authentik), then Settings →
   Authentication → Test connection.
 
