@@ -20,9 +20,38 @@ process.env.VIBE_OIDC_PUBLIC_URL ??= 'http://localhost:3001';
 process.env.VIBE_AUTH_MODE = 'oidc_only';
 process.env.VIBE_BREAKGLASS_USERNAME = 'vibe-breakglass';
 
-const { LOCAL_LOGIN_DISABLED, isRateLimitedAuthPath, localLoginRefusal, staleSessionCutoff, withSsoToken } =
+const { LOCAL_LOGIN_DISABLED, VIBE_TB_ROLES, VIBE_TB_ROLE_MAP, isRateLimitedAuthPath, localLoginRefusal, staleSessionCutoff, withSsoToken } =
   require('../vibeAuth') as typeof import('../vibeAuth');
 const { isTokenRevoked, setRevocationCheck } = require('../../middleware/auth') as typeof import('../../middleware/auth');
+const { DEFAULT_VIBE_GROUPS, resolveRole } = require('@kisaesdevlab/vibe-auth') as typeof import('@kisaesdevlab/vibe-auth');
+
+test('the IdP group → role map is explicit, covers the five Vibe groups and is what the engine is given', () => {
+  // The literal mapping docs/sso.md promises. A change here is a change to who
+  // becomes an admin at every firm on the default map — make it on purpose.
+  assert.deepEqual({ ...VIBE_TB_ROLE_MAP }, {
+    'vibe-admin': 'admin',
+    'vibe-it': 'admin',
+    'vibe-partner': 'admin',
+    'vibe-manager': 'reviewer',
+    'vibe-staff': 'preparer',
+  });
+  assert.deepEqual(Object.keys(VIBE_TB_ROLE_MAP).sort(), [...DEFAULT_VIBE_GROUPS].sort());
+  // createVibeAuth() receives VIBE_TB_ROLES as product.roles; the package only
+  // falls back to its name-guessing defaultRoleMapFor() when this is absent.
+  assert.equal(VIBE_TB_ROLES.defaultRoleMap, VIBE_TB_ROLE_MAP);
+  assert.deepEqual([...VIBE_TB_ROLES.roles], ['admin', 'reviewer', 'preparer']);
+  assert.equal(VIBE_TB_ROLES.adminRole, 'admin');
+  for (const role of Object.values(VIBE_TB_ROLE_MAP)) assert.ok((VIBE_TB_ROLES.roles as readonly string[]).includes(role), role);
+});
+
+test('the package resolves each group through the map, the most privileged role winning', () => {
+  const resolve = (groups: string[]) =>
+    resolveRole({ claims: { groups }, roleClaim: 'roles', groupsClaim: 'groups', roleMap: { ...VIBE_TB_ROLE_MAP }, vocabulary: VIBE_TB_ROLES }).role;
+  for (const [group, role] of Object.entries(VIBE_TB_ROLE_MAP)) assert.equal(resolve([group]), role, group);
+  assert.equal(resolve(['vibe-staff', 'vibe-manager']), 'reviewer');
+  assert.equal(resolve(['vibe-staff', 'vibe-it']), 'admin');
+  assert.equal(resolve(['some-other-group']), null);
+});
 
 test('withSsoToken puts the bearer on the fragment and replaces any fragment already there', () => {
   assert.equal(withSsoToken('/login', 'abc'), '/login#sso_token=abc');

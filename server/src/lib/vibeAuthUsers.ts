@@ -15,6 +15,10 @@ import crypto from 'crypto';
 import type { AuditSink, CreateLocalUserInput, CreateUserInput, UserAdapter, VibeUser } from '@kisaesdevlab/vibe-auth';
 import { db } from '../db';
 import { logAudit } from './periodGuard';
+import { ADMIN_ROLE, roleSyncRefusal } from './accountGuards';
+
+/** audit_log.action for a role the identity provider pushed and this app declined to apply. */
+export const ROLE_DEMOTION_REFUSED = 'vibe.auth.role.demotion_refused';
 
 /** Same cost as routes/users.ts — one policy for every password hash. */
 const BCRYPT_COST = 12;
@@ -114,14 +118,66 @@ export function createVibeUsers(opts: VibeUsersOptions = {}): UserAdapter {
           is_active: true,
           // The IdP is the credential; there is no temporary password to rotate.
           must_change_password: false,
+          // No usable local password: self-service reset is refused until an
+          // admin sets one (lib/accountGuards.ts, routes/passwordReset.ts).
+          sso_only_since: db.fn.now(),
         })
         .returning([...USER_COLUMNS]);
       return toVibeUser(row as AppUserRow);
     },
 
+    /**
+     * Role sync from the identity provider's groups. A demotion that would
+     * leave the firm with no active admin (the break-glass account does not
+     * count), or that targets the break-glass account, is NOT applied: the
+     * role stays and the refusal is audited. It never throws — that would
+     * fail the sign-in. The package cannot be told, so its own
+     * `vibe.auth.role.changed` row still follows; the refusal row next to it
+     * is the truth, and mintSsoToken() reads the role back from the database.
+     * The active-admin rows are locked so two concurrent demotions cannot
+     * each see the other as the remaining admin.
+     */
     async setRole(id, role) {
       const n = userId(id);
-      await db('app_users').where({ id: n }).update({ role, updated_at: db.fn.now() });
+      const refused = await db.transaction(async (trx) => {
+        if (role !== ADMIN_ROLE) {
+          const target = await trx('app_users').where({ id: n }).forUpdate().first('id', 'username', 'role');
+          if (target && target.role === ADMIN_ROLE) {
+            const activeAdmins = await trx('app_users')
+              .where({ role: ADMIN_ROLE, is_active: true })
+              .orderBy('id')
+              .forUpdate()
+              .select('id', 'username');
+            const reason = roleSyncRefusal({
+              target: { id: n, username: target.username as string, role: target.role as string },
+              newRole: role,
+              activeAdmins: activeAdmins as Array<{ id: number; username: string }>,
+            });
+            if (reason) return { reason, username: target.username as string };
+          }
+        }
+        await trx('app_users').where({ id: n }).update({ role, updated_at: trx.fn.now() });
+        return null;
+      });
+      if (refused) {
+        await logAudit({
+          userId: n,
+          periodId: null,
+          entityType: 'auth',
+          entityId: n,
+          action: ROLE_DEMOTION_REFUSED,
+          description: JSON.stringify({
+            user_id: String(n),
+            username: refused.username,
+            from: ADMIN_ROLE,
+            to: role,
+            reason: refused.reason,
+            kept: ADMIN_ROLE,
+          }),
+        });
+        console.warn(`[vibe-auth] role sync refused: "${refused.username}" stays ${ADMIN_ROLE} (${refused.reason}); the identity provider asked for ${role}`);
+        return;
+      }
       changed(n);
     },
 
@@ -147,6 +203,7 @@ export function createVibeUsers(opts: VibeUsersOptions = {}): UserAdapter {
       await db('app_users').where({ id: n }).update({
         password_hash: await bcrypt.hash(password, BCRYPT_COST),
         must_change_password: false,
+        sso_only_since: null,
         updated_at: db.fn.now(),
       });
       changed(n);

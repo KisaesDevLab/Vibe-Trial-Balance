@@ -14,8 +14,12 @@ import { passwordSchema } from '../lib/passwordPolicy';
 import { logAudit } from '../lib/periodGuard';
 import { getMailer } from '../lib/mailService';
 import { actionButton, buildTokenUrl, escapeHtml, fallbackLink } from '../lib/mailTemplates';
+import { selfServiceResetRefusal } from '../lib/accountGuards';
 
 const router = Router();
+
+/** audit_log.action for a reset request that was refused by rule (see POST /password-reset/request). */
+export const PASSWORD_RESET_REFUSED = 'password_reset_refused';
 
 // Tokens are valid for 30 minutes from issue. Short enough that a leaked
 // inbox is low-impact, long enough that a user can finish the flow without
@@ -109,9 +113,32 @@ router.post('/password-reset/request', requestLimiter, async (req: Request, res:
       .whereRaw('LOWER(username) = LOWER(?)', [identifier])
       .orWhereRaw('LOWER(email) = LOWER(?)', [identifier])
       .andWhere({ is_active: true })
-      .first('id', 'username', 'display_name', 'email');
+      .first(
+        'id', 'username', 'display_name', 'email', 'sso_only_since',
+        // Same query, so a refused account costs what an unknown one does.
+        db.raw('EXISTS (SELECT 1 FROM auth_identities i WHERE i.user_id = app_users.id::text) AS has_sso_identity'),
+      );
 
-    if (user && user.email) {
+    // Refused by rule: the break-glass account (rotated from the console /
+    // CLI only) and an account that has only ever signed in through the
+    // identity provider — a reset would mint it a local password from mailbox
+    // access alone, around the IdP's MFA and offboarding. An admin can still
+    // set one (PATCH /users/:id, or an invite). The caller gets the SAME
+    // answer as for an unknown identifier: no token, no mail, and the audit
+    // row is not awaited so it adds nothing to the response time.
+    const refusal = user
+      ? selfServiceResetRefusal({ username: user.username, ssoOnlySince: user.sso_only_since, hasSsoIdentity: !!user.has_sso_identity })
+      : null;
+    if (user && refusal) {
+      void logAudit({
+        userId: null,
+        periodId: null,
+        entityType: 'user',
+        entityId: user.id,
+        action: PASSWORD_RESET_REFUSED,
+        description: `Self-service password reset refused for "${user.username}" (${refusal === 'breakglass' ? 'break-glass account' : 'single sign-on account with no local password'})`,
+      });
+    } else if (user && user.email) {
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = hashToken(rawToken);
       const expiresAt = new Date(Date.now() + TOKEN_TTL_MS);
@@ -229,16 +256,28 @@ router.post('/password-reset/confirm', verifyLimiter, async (req: Request, res: 
 
       const user = await trx('app_users')
         .where({ id: tokenRow.user_id, is_active: true })
-        .first('id', 'username');
+        .first(
+          'id', 'username', 'sso_only_since',
+          trx.raw('EXISTS (SELECT 1 FROM auth_identities i WHERE i.user_id = app_users.id::text) AS has_sso_identity'),
+        );
       if (!user) throw Object.assign(new Error('Account is no longer active.'), { status: 400, code: 'INVALID_TOKEN' });
+
+      const purpose: 'reset' | 'invite' = tokenRow.purpose === 'invite' ? 'invite' : 'reset';
+      // The request endpoint never mints a reset token for these accounts; this
+      // covers one issued before the rule existed. Invites are admin-driven and
+      // stay valid.
+      if (purpose === 'reset' && selfServiceResetRefusal({ username: user.username, ssoOnlySince: user.sso_only_since, hasSsoIdentity: !!user.has_sso_identity })) {
+        throw Object.assign(new Error('Invalid or expired reset link.'), { status: 400, code: 'INVALID_TOKEN' });
+      }
 
       userId = user.id;
       username = user.username;
-      const purpose: 'reset' | 'invite' = tokenRow.purpose === 'invite' ? 'invite' : 'reset';
 
       const updates: Record<string, unknown> = {
         password_hash: newHash,
         must_change_password: false,
+        // An invite accepted by a single-sign-on account gives it a real password.
+        sso_only_since: null,
         email_verified_at: trx.fn.now(),
         updated_at: trx.fn.now(),
       };
