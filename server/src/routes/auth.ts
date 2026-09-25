@@ -216,6 +216,8 @@ router.post('/change-password', authMiddleware, async (req: AuthRequest, res: Re
     await db('app_users').where({ id: me.id }).update({
       password_hash: hash,
       must_change_password: false,
+      // A real password now exists (see lib/accountGuards.ts).
+      sso_only_since: null,
     });
     invalidateAuthCache(me.id);
     await logAudit({ userId: me.id, periodId: null, entityType: 'user', entityId: me.id, action: 'update', description: `User "${me.username}" changed their own password` });

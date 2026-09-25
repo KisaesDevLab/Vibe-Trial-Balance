@@ -14,9 +14,33 @@ import { sendServerError } from '../lib/safeError';
 import { passwordSchema } from '../lib/passwordPolicy';
 import { sendUserInvite, type InviteFailureReason, type InviteResult } from '../lib/inviteService';
 import { resetTwoFactor } from '../lib/twoFactorReset';
+import { breakglassChangeRefusal, mustChangeAfterAdminPasswordSet, type AccountChange } from '../lib/accountGuards';
 
 export const usersRouter = Router();
 usersRouter.use(authMiddleware);
+
+/**
+ * The break-glass account may not be deactivated, demoted or renamed by any
+ * admin, in any sign-in mode (lib/accountGuards.ts). Answers 409 and audits
+ * the attempt when the change is refused; returns whether it did.
+ */
+async function refusedAsBreakglass(
+  req: AuthRequest,
+  res: Response,
+  target: { id: number; username: string },
+  change: AccountChange,
+): Promise<boolean> {
+  const refusal = breakglassChangeRefusal(target.username, change);
+  if (!refusal) return false;
+  const attempted = [
+    change.isActive === false ? 'deactivate' : null,
+    change.role !== undefined ? `role → ${change.role}` : null,
+    change.username !== undefined ? 'rename' : null,
+  ].filter(Boolean).join(', ');
+  await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: target.id, action: 'breakglass_protected', description: `Refused change to break-glass account "${target.username}" (${attempted})` });
+  res.status(409).json({ data: null, error: refusal });
+  return true;
+}
 
 function adminOnly(req: AuthRequest, res: Response, next: NextFunction): void {
   if (req.user?.role !== 'admin') {
@@ -191,20 +215,34 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
     return;
   }
 
-  const updates: Record<string, unknown> = { updated_at: db.fn.now() };
-  if (parsed.data.displayName !== undefined) updates.display_name = parsed.data.displayName;
-  if (parsed.data.email !== undefined) updates.email = parsed.data.email;
-  if (parsed.data.role !== undefined) updates.role = parsed.data.role;
-  if (parsed.data.isActive !== undefined) updates.is_active = parsed.data.isActive;
-  if (parsed.data.password) {
-    updates.password_hash = await bcrypt.hash(parsed.data.password, 12);
-    // Admin-initiated password reset: force target user to rotate on next login.
-    // Exception: if the admin is resetting their own password here, the change-password
-    // flow is a better fit — but this endpoint still requires rotation for safety.
-    updates.must_change_password = true;
-  }
-
   try {
+    const target = await db('app_users').where({ id }).first('id', 'username');
+    if (!target) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'User not found' } });
+      return;
+    }
+    // `username` is not patchable at all (the schema strips it), so a rename
+    // cannot reach this point; deactivation and demotion can.
+    if (await refusedAsBreakglass(req, res, target, { isActive: parsed.data.isActive, role: parsed.data.role })) return;
+
+    const updates: Record<string, unknown> = { updated_at: db.fn.now() };
+    if (parsed.data.displayName !== undefined) updates.display_name = parsed.data.displayName;
+    if (parsed.data.email !== undefined) updates.email = parsed.data.email;
+    if (parsed.data.role !== undefined) updates.role = parsed.data.role;
+    if (parsed.data.isActive !== undefined) updates.is_active = parsed.data.isActive;
+    if (parsed.data.password) {
+      updates.password_hash = await bcrypt.hash(parsed.data.password, 12);
+      // Admin-initiated password reset: force target user to rotate on next login.
+      // Exception: if the admin is resetting their own password here, the change-password
+      // flow is a better fit — but this endpoint still requires rotation for safety.
+      // Second exception: the break-glass account is never put into forced
+      // rotation (see mustChangeAfterAdminPasswordSet).
+      updates.must_change_password = mustChangeAfterAdminPasswordSet(target.username);
+      // An admin giving a single-sign-on account a password makes it a local
+      // account too: self-service reset applies from here on.
+      updates.sso_only_since = null;
+    }
+
     const [updated] = await db('app_users').where({ id }).update(updates)
       .returning([...USER_COLUMNS]);
     if (!updated) {
@@ -265,6 +303,8 @@ usersRouter.delete('/:id', adminOnly, async (req: AuthRequest, res: Response): P
     return;
   }
   try {
+    const target = await db('app_users').where({ id }).first('id', 'username');
+    if (target && (await refusedAsBreakglass(req, res, target, { isActive: false }))) return;
     const [updated] = await db('app_users').where({ id })
       .update({ is_active: false, updated_at: db.fn.now() })
       .returning([...USER_COLUMNS]);

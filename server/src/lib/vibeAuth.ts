@@ -53,7 +53,26 @@ import { resolvePublicUrl } from './publicUrl';
 import { invalidateAuthCache, setRevocationCheck } from '../middleware/auth';
 import { createVibeUsers, vibeAuditSink } from './vibeAuthUsers';
 
-export const VIBE_TB_ROLES = { roles: ['admin', 'reviewer', 'preparer'], adminRole: 'admin' } as const;
+/**
+ * IdP group → Trial Balance role, stated here rather than left to the
+ * package's defaultRoleMapFor(): that helper guesses from role NAMES, so a
+ * package upgrade (or a renamed role here) could silently move who becomes an
+ * admin. This is the mapping docs/sso.md promises operators; a stored or
+ * `VIBE_OIDC_ROLE_MAP` map still overrides it. Pinned by vibeAuthWiring.test.ts.
+ */
+export const VIBE_TB_ROLE_MAP = {
+  'vibe-admin': 'admin',
+  'vibe-it': 'admin',
+  'vibe-partner': 'admin',
+  'vibe-manager': 'reviewer',
+  'vibe-staff': 'preparer',
+} as const;
+
+export const VIBE_TB_ROLES = {
+  roles: ['admin', 'reviewer', 'preparer'],
+  adminRole: 'admin',
+  defaultRoleMap: VIBE_TB_ROLE_MAP,
+} as const;
 
 /** Server-side prefix of the engine's routes. Always '/auth/...' — see the header comment. */
 const AUTH_PREFIX = '/auth';
@@ -109,11 +128,13 @@ function sessionFor(req: Request): SessionClaims | null {
 
 async function mintSsoToken(user: VibeUser, identity: SessionIdentity): Promise<{ token: string; expiresAt?: string }> {
   const id = Number(user.id);
-  let username = user.username;
-  if (!username) {
-    const row = await db('app_users').where({ id }).first('username');
-    username = (row?.username as string | undefined) ?? '';
-  }
+  // The row, not the package's view of the user, is the authority for the
+  // role claim: role sync may have declined a demotion (setRole in
+  // lib/vibeAuthUsers.ts), in which case `user.role` is the role that was
+  // asked for, not the one the account holds.
+  const row = await db('app_users').where({ id }).first('username', 'role');
+  const username = (row?.username as string | undefined) ?? user.username ?? '';
+  const role = (row?.role as string | undefined) ?? user.role;
   const sid = crypto.randomBytes(16).toString('hex');
   await db('auth_sessions_oidc').insert({
     sid,
@@ -125,7 +146,7 @@ async function mintSsoToken(user: VibeUser, identity: SessionIdentity): Promise<
   });
   // The role may have just been synced from the IdP's claims.
   invalidateAuthCache(id);
-  const token = signFullToken({ id, username, role: user.role }, { sid });
+  const token = signFullToken({ id, username, role }, { sid });
   const exp = (jwt.decode(token) as { exp?: number } | null)?.exp;
   // Rows are otherwise deleted only by logout or back-channel logout, so a
   // token that simply expired would leave its row behind forever. Each SSO

@@ -149,6 +149,13 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
   Tests: `npm test` (server, includes `vibeAuthWiring.test.ts`) and `npm run test:sso-e2e` (real server +
   scratch Postgres + fake IdP, `test/sso-e2e.mjs`; mode changes are restarts because a stored mode
   overrides env). Never add a silent fallback from `oidc_only` to local.
+  **Account rules live in `lib/accountGuards.ts` (pure, `accountGuards.test.ts`):** the break-glass
+  account (username = `VIBE_BREAKGLASS_USERNAME`, case-insensitive) cannot be deactivated, demoted or
+  renamed in ANY mode (`409 BREAKGLASS_PROTECTED`) and is never given `must_change_password`; self-service
+  password reset is refused — with the unknown-account answer — for it and for SSO-only accounts
+  (`app_users.sso_only_since` set + an `auth_identities` row); role sync (`setRole`) never demotes the last
+  active admin, break-glass not counted. **Every path that writes a real `password_hash` must clear
+  `sso_only_since`.** The group → role map is the explicit `VIBE_TB_ROLE_MAP`, not the package default.
 - Trial Balance Grid = editing balances ONLY, no category subtotals
 - Tax Mapping View (Plan Phase 5) = SEPARATE page: assign tax codes, read-only balances, category subtotals, net income, balance check
 - tax_line VARCHAR on chart_of_accounts: legacy field kept for compat. New system uses tax_code_id FK → tax_codes table. Dual-write: when tax_code_id assigned, also write tax_code string to tax_line.

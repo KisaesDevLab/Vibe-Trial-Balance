@@ -6,7 +6,9 @@
 // mapped role, existing-user email link + role sync, unverified email denied,
 // /auth/settings 403/200, the oidc_only guard, break-glass local login +
 // audit, back-channel logout revokes, fresh login after revocation,
-// RP-initiated logout, boot refusal without break-glass.
+// RP-initiated logout, boot refusal without break-glass. Steps H1–H4 add the
+// hardening rules: the break-glass account is protected, SSO-only accounts
+// cannot self-service reset, role sync never demotes the last admin.
 //
 //   npm run test:sso-e2e            (from the repo root or server/)
 //
@@ -581,6 +583,151 @@ async function main() {
     const settings = await api('/auth/settings', { token: login.json.data.token });
     assert.equal(settings.status, 200, settings.text);
     assert.equal(settings.json.breakglass.exists, true);
+  });
+
+  // ── Hardening (still Boot C, mode `both` — none of these rules depend on oidc_only) ──
+  const userRow = async (where, value) =>
+    (await sql(`SELECT id, username, role, is_active, must_change_password, sso_only_since FROM app_users WHERE ${where} = $1`, [value]))[0];
+  const userAudit = async (action, entityId) =>
+    sql(`SELECT description FROM audit_log WHERE entity_type = 'user' AND action = $1 AND entity_id = $2 ORDER BY id`, [action, entityId]);
+  const openResetTokens = async (userId) =>
+    (await sql(`SELECT count(*)::int AS n FROM password_reset_tokens WHERE user_id = $1 AND consumed_at IS NULL`, [userId]))[0].n;
+  const requestReset = (identifier) => api('/api/v1/auth/password-reset/request', { method: 'POST', json: { identifier } });
+  // PATCH /users/:id treats an ABSENT `email` as "clear it" (optionalEmail maps undefined to null),
+  // so every PATCH below that must keep the address sends it along.
+  const BG_EMAIL = 'breakglass@vibe-tb.local';
+  async function waitFor(fn, ms = 3000) {
+    const until = Date.now() + ms;
+    for (;;) {
+      const v = await fn();
+      if (v || Date.now() > until) return v;
+      await sleep(50);
+    }
+  }
+
+  await step('H1. no admin can deactivate, demote or rename the break-glass account (mode: both)', async () => {
+    assert.equal((await api('/auth/status')).json.mode, 'both');
+    const bg = await userRow('username', 'vibe-breakglass');
+    for (const attempt of [
+      { method: 'PATCH', json: { isActive: false } },
+      { method: 'PATCH', json: { role: 'reviewer' } },
+      { method: 'PATCH', json: { displayName: 'x', role: 'preparer', isActive: false } },
+      { method: 'DELETE' },
+    ]) {
+      const r = await api(`/api/v1/users/${bg.id}`, { token: adminToken, ...attempt });
+      assert.equal(r.status, 409, `${attempt.method} ${JSON.stringify(attempt.json)}: ${r.text}`);
+      assert.equal(r.json.data, null);
+      assert.equal(r.json.error.code, 'BREAKGLASS_PROTECTED');
+      assert.match(r.json.error.message, /vibe identity rotate-breakglass/);
+    }
+    // The username is not patchable at all: the field is ignored, the rest applies.
+    const rename = await api(`/api/v1/users/${bg.id}`, { method: 'PATCH', token: adminToken, json: { username: 'renamed', displayName: 'Emergency access', email: BG_EMAIL } });
+    assert.equal(rename.status, 200, rename.text);
+    const after = await userRow('id', bg.id);
+    assert.equal(after.username, 'vibe-breakglass');
+    assert.equal(after.role, 'admin');
+    assert.equal(after.is_active, true);
+    assert.equal((await userAudit('breakglass_protected', bg.id)).length, 4, 'every refused attempt is audited');
+    // The guard is for this account only.
+    const other = await api(`/api/v1/users/${patId}`, { method: 'PATCH', token: adminToken, json: { isActive: false, email: PAT_IDP.email } });
+    assert.equal(other.status, 200, other.text);
+    assert.equal((await api(`/api/v1/users/${patId}`, { method: 'PATCH', token: adminToken, json: { isActive: true, email: PAT_IDP.email } })).status, 200);
+  });
+
+  await step('H2. an admin password set does not put break-glass into forced rotation (it does for everyone else)', async () => {
+    const bg = await userRow('username', 'vibe-breakglass');
+    const temp = 'E2eBreakGlassTemp!2026';
+    const set = await api(`/api/v1/users/${bg.id}`, { method: 'PATCH', token: adminToken, json: { password: temp, email: BG_EMAIL } });
+    assert.equal(set.status, 200, set.text);
+    assert.equal((await userRow('id', bg.id)).must_change_password, false);
+    const login = await localLogin('vibe-breakglass', temp);
+    assert.equal(login.status, 200, login.text);
+    assert.equal(login.json.data.stage, 'ok');
+    assert.equal(login.json.data.user.mustChangePassword ?? false, false);
+    assert.equal((await api('/api/v1/users', { token: login.json.data.token })).status, 200, 'not gated behind a rotation');
+    // Put the provisioned password back for the oidc_only boot below.
+    assert.equal((await api(`/api/v1/users/${bg.id}`, { method: 'PATCH', token: adminToken, json: { password: BREAKGLASS_PASSWORD, email: BG_EMAIL } })).status, 200);
+    assert.equal((await userRow('id', bg.id)).must_change_password, false);
+    // Contrast: the same call on an ordinary account still forces rotation.
+    assert.equal((await api(`/api/v1/users/${patId}`, { method: 'PATCH', token: adminToken, json: { password: PAT_PASSWORD, email: PAT_IDP.email } })).status, 200);
+    assert.equal((await userRow('id', patId)).must_change_password, true);
+  });
+
+  // The request endpoint allows 5 calls per hour per address and this boot
+  // makes exactly 5: unknown, kurt, break-glass, pat, kurt again. A sixth is a 429.
+  await step('H3. self-service reset is refused for SSO-only and break-glass accounts with the unknown-account answer', async () => {
+    const kurt = await userRow('id', kurtId);
+    const bg = await userRow('username', 'vibe-breakglass');
+    assert.ok(kurt.sso_only_since, 'a JIT-provisioned user must carry sso_only_since');
+    assert.equal((await userRow('id', patId)).sso_only_since, null, 'a local user linked by email keeps its local credential');
+    assert.equal(bg.sso_only_since, null);
+
+    const unknown = await requestReset('nobody-at-all@kisaes.com');
+    assert.equal(unknown.status, 200, unknown.text);
+    const same = (r, who) => {
+      assert.equal(r.status, unknown.status, who);
+      assert.equal(r.text, unknown.text, `${who}: the body must be identical to the unknown-account body`);
+    };
+
+    same(await requestReset(KURT.email), 'SSO-only account');
+    assert.equal(await openResetTokens(kurtId), 0, 'no token may be minted for an SSO-only account');
+    const refusedKurt = await waitFor(async () => (await userAudit('password_reset_refused', kurtId))[0]);
+    assert.ok(refusedKurt, 'no password_reset_refused audit row for the SSO-only account');
+    assert.match(refusedKurt.description, /single sign-on account/);
+
+    same(await requestReset('Vibe-Breakglass'), 'break-glass');
+    assert.equal(await openResetTokens(bg.id), 0, 'no token may be minted for break-glass');
+    const refusedBg = await waitFor(async () => (await userAudit('password_reset_refused', bg.id))[0]);
+    assert.ok(refusedBg, 'no password_reset_refused audit row for break-glass');
+    assert.match(refusedBg.description, /break-glass/);
+
+    // A local account that ALSO has a linked identity is not SSO-only.
+    same(await requestReset('pat@kisaes.com'), 'local account');
+    assert.equal(await openResetTokens(patId), 1, 'a local account still gets its reset token');
+    assert.equal((await userAudit('password_reset_refused', patId)).length, 0);
+
+    // An admin-driven password set still works, and makes the account a local one.
+    const set = await api(`/api/v1/users/${kurtId}`, { method: 'PATCH', token: adminToken, json: { password: 'E2eKurtLocal!2026', email: KURT.email } });
+    assert.equal(set.status, 200, set.text);
+    assert.equal((await userRow('id', kurtId)).sso_only_since, null);
+    assert.equal((await localLogin('kurt', 'E2eKurtLocal!2026')).status, 200);
+    same(await requestReset(KURT.email), 'formerly SSO-only account');
+    assert.equal(await openResetTokens(kurtId), 1, 'self-service reset applies once an admin has set a password');
+  });
+
+  await step('H4. role sync never demotes the last active admin; break-glass does not count as one', async () => {
+    idp.user = KURT;
+    let kurt = await ssoLogin();
+    assert.equal(kurt.claims.role, 'admin');
+    // Leave kurt as the only real admin: pat demoted, the seed admin deactivated, break-glass still active.
+    const seedAdmin = await userRow('username', 'admin');
+    assert.equal((await api(`/api/v1/users/${patId}`, { method: 'PATCH', token: kurt.token, json: { role: 'preparer', email: PAT_IDP.email } })).status, 200);
+    assert.equal((await api(`/api/v1/users/${seedAdmin.id}`, { method: 'PATCH', token: kurt.token, json: { isActive: false } })).status, 200);
+    const admins = (await sql(`SELECT username FROM app_users WHERE role = 'admin' AND is_active ORDER BY username`)).map((r) => r.username);
+    assert.deepEqual(admins, ['kurt', 'vibe-breakglass']);
+
+    idp.user = { ...KURT, groups: ['vibe-staff'] };
+    const refused = await ssoLogin();
+    assert.equal(refused.status, 302, 'a refused demotion must not fail the sign-in');
+    assert.ok(refused.token);
+    assert.equal(refused.claims.role, 'admin', 'the token carries the role the account holds, not the one asked for');
+    assert.equal((await userRow('id', kurtId)).role, 'admin');
+    const audit = await auditActions();
+    assert.ok(
+      hasAudit(audit, 'vibe.auth.role.demotion_refused', (a) => a.entityId === kurtId && a.detail.reason === 'last_admin' && a.detail.to === 'preparer' && a.detail.kept === 'admin'),
+      'no demotion_refused audit row',
+    );
+    assert.equal((await api('/auth/settings', { token: refused.token })).status, 200, 'still an admin');
+
+    // With another real admin back, the same sign-in IS demoted.
+    assert.equal((await api(`/api/v1/users/${patId}`, { method: 'PATCH', token: refused.token, json: { role: 'admin', email: PAT_IDP.email } })).status, 200);
+    assert.equal((await api(`/api/v1/users/${seedAdmin.id}`, { method: 'PATCH', token: refused.token, json: { isActive: true } })).status, 200);
+    kurt = await ssoLogin();
+    assert.equal(kurt.status, 302);
+    assert.equal(kurt.claims.role, 'preparer');
+    assert.equal((await userRow('id', kurtId)).role, 'preparer');
+    assert.equal((await api('/auth/settings', { token: kurt.token })).status, 403);
+    idp.user = KURT;
   });
 
   await stopServer();
