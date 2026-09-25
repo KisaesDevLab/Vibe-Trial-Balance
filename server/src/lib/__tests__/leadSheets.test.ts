@@ -94,6 +94,18 @@ test('depreciation is a fixed asset only on the asset side', () => {
   assert.equal(codeOf(acct('6700', 'Depreciation Expense', 'expenses')), 'M');
 });
 
+test('breeding stock sits with its accumulated depreciation; market livestock is inventory', () => {
+  // Farm template rows: purchased breeding/dairy/draft stock is depreciable property.
+  assert.equal(codeOf(acct('10800', 'Breeding Livestock', 'assets')), 'D');
+  assert.equal(codeOf(acct('10820', 'Dairy Herd', 'assets')), 'D');
+  assert.equal(codeOf(acct('10860', 'Horses', 'assets')), 'D');
+  assert.equal(codeOf(acct('10895', 'Accumulated Depreciation - Breeding Livestock', 'assets')), 'D');
+  assert.equal(codeOf(acct('10460', 'Market Livestock Inventory', 'assets')), 'C');
+  // The same words on the P&L side are sales and costs, not assets.
+  assert.equal(codeOf(acct('46610', 'Horses - Sales', 'revenue')), 'K');
+  assert.equal(codeOf(acct('56150', 'Beef Breeding Bull - Cost', 'expenses')), 'L');
+});
+
 test('the account-number series is read as a leading digit, not a range', () => {
   // 4-digit and 5-digit charts must behave identically.
   assert.equal(codeOf(acct('5900', 'Widget Costs', 'expenses')), 'L');
