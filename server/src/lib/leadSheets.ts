@@ -107,9 +107,11 @@ export const DEFAULT_LEAD_SHEETS: readonly DefaultLeadSheet[] = [
   {
     code: 'D', name: 'Fixed Assets', sortOrder: 30, specificity: 40, confidence: CONF_NAME,
     // The assets guard is what keeps "Depreciation Expense" (category
-    // `expenses`) out of Fixed Assets.
+    // `expenses`) out of Fixed Assets. Livestock held as an asset is breeding/
+    // dairy/draft stock — depreciable, so it sits with its accumulated
+    // depreciation; livestock *inventory* has already been taken by C.
     match: (a) => a.category === 'assets'
-      && (/fixed asset|accum|deprec|amortiz|equipment|furniture|vehicle|building|\bland\b|leasehold|machinery|property/.test(a.name)
+      && (/fixed asset|accum|deprec|amortiz|equipment|furniture|vehicle|building|\bland\b|leasehold|machinery|property|livestock|breeding|\bherd\b|\bhorses?\b/.test(a.name)
         || /fixed asset/.test(a.sub)),
   },
   {

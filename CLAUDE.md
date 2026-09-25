@@ -212,7 +212,24 @@ All planned phases complete. App is feature-complete.
 - Plan Phase 17: Backup & Restore — backup_history + restore_history migration, .tbak ZIP archives (full/settings/client/period), ID-remapping restore engine (as_new/replace/settings modes), nightly node-cron scheduler, BackupPage with history table and restore upload UI
 - Plan Phase 18: Polish & Integration — audit_log viewer page (admin only, paginated, filterable), deploy scripts (setup-pi.sh, deploy.sh, nginx.conf, ecosystem.config.js)
 - Plan Phase 23: AI Support Chat — support_conversations + support_messages tables, SSE streaming chat endpoint, knowledge base (16 .md files in server/knowledge/), ChatBubble floating widget, SupportPage with conversation history and bookmarks
-- Plan Phase 24: COA Template Management — coa_templates + coa_template_accounts + coa_template_tax_codes tables, 7 system templates seeded (General Business/Retail/Restaurant/Professional Services/Real Estate/Construction/Farm), full CRUD API (from-client, apply merge/replace, CSV import/export), CoaTemplatesPage with System/Custom tabs and apply modal
+- Plan Phase 24: COA Template Management — coa_templates + coa_template_accounts + coa_template_tax_codes tables, full CRUD API (from-client, apply merge/replace, CSV import/export), CoaTemplatesPage with System/Custom tabs and apply modal.
+  **The 32 system templates are Vibe MyBooks' `BUSINESS_TEMPLATES`** (`myBooks/packages/shared/src/constants/coa-templates.ts`),
+  minus MyBooks' Payments Clearing (10150) and Opening Balances (30000), which are bookkeeping mechanics.
+  Loaded in `20260321000005`, re-synced to MyBooks `2fb8362` by `20260925000001` (adds General Business,
+  the industry accounts and Sales Tax Payable 20900). When MyBooks' templates change again, sync with a
+  new **upsert** migration like that one: headers are locked but system-template accounts are editable,
+  so only delete numbers this app shipped, and keep `tax_line`/`unit`/`workpaper_ref`. `subcategory` is
+  the parent account's name (MyBooks' source spreadsheet hierarchy; the TS has none), so carry it
+  across by number+name, not by number alone — farm reuses numbers with other meanings — and take a
+  round-hundred neighbour as parent only when it is an existing heading (farm numbers siblings).
+  **Farm carries TB-only accounts (listed in that migration's header); a re-sync from MyBooks must
+  keep them.** So every Schedule F line has one: 42610 CCC Loans Forfeited (5b), 42510 Crop Insurance
+  Deferred from Prior Year (6d), 62530 Preproductive Period Expenses (32), 20810 CCC Loans Payable
+  (loans not elected as income). Purchased breeding/dairy/draft stock is depreciable, not a 56xxx
+  resale cost: 10810–10890 by class under 10800 Breeding Livestock, with 10895 its own accumulated
+  depreciation; lead sheet rule D takes `livestock|breeding|herd|horses` assets so cost and contra
+  share schedule D (livestock *inventory* is caught first by C). Horses and goats have the
+  sales/cost pair every other class has (46610/46620, 56610/56620).
 - Plan Phase 25: Manual Transaction Entry Register — bank_transactions.entry_source column (migration Batch 26), GET /clients/:id/payees + /search + /:payee/categories endpoints, POST /bank-transactions/manual (batch with rule upsert + JE sync), TransactionEntryPage with spreadsheet-style register, smart payee combo dropdown, smart category select (previously-used section), stat cards (debits/credits/net), unsaved row tint, duplicate/delete row actions, "Transaction Entry" added to Bookkeeping sidebar group
 - Scanned-sheet import (Transaction Entry) — `POST /import/scanned-sheet/analyze` (`server/src/routes/scannedSheetImport.ts`): renders each PDF page (poppler), one `aiComplete` per page with `TB_TASK_CLASSES.DOC_EXTRACT` (vision), returns rows with per-row confidence + `uncertain` fields plus 100-dpi JPEG page previews; falls back to OCR text / PDF text layer / 422 `SCANNED_PDF` like the bank-statement route. `POST /import/scanned-sheet/categorize` = second pass with `TB_TASK_CLASSES.CLASSIFICATION` (same COA + rules prompt shape as bank ai-classify; returns per-row account suggestions, nothing written). Client: `ScannedSheetImportDialog` (side-by-side page image + editable rows; free-text payee = the transcription verbatim (known payees only suggested, never substituted); `utils/matchPayee.ts` for payee→category, AI fills the rest and never overwrites hand-set categories), `insertImportedRows` in `TransactionEntryPage` drops accepted rows in as unsaved rows — nothing is written until the register's Save.
   **Journal-report pages:** the extractor prompt has a `JOURNAL REPORTS` rule and a page-level `layout`
