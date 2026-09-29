@@ -11,7 +11,7 @@
  * calls run back-to-back inside the challenge's 5-minute window.
  */
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import { PasswordInput } from '../PasswordInput';
 import { getPasskeyRegisterOptions, verifyPasskeyRegister } from '../../api/security';
@@ -38,6 +38,8 @@ export function PasskeyRegisterFlow({ presetPassword, passkeysAvailable, passkey
     hasPublicKeyCredential: typeof window !== 'undefined' && typeof window.PublicKeyCredential !== 'undefined',
     isSecureContext: typeof window !== 'undefined' && window.isSecureContext,
   });
+  const passwordId = useId();
+  const nameId = useId();
   const [password, setPassword] = useState('');
   const [name, setName] = useState(() => describeUserAgent(typeof navigator !== 'undefined' ? navigator.userAgent : ''));
   const [busy, setBusy] = useState(false);
@@ -101,13 +103,13 @@ export function PasskeyRegisterFlow({ presetPassword, passkeysAvailable, passkey
       {note && <p className="text-xs text-gray-500 dark:text-gray-400">{note}</p>}
       {!presetPassword && (
         <div>
-          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Current password</label>
-          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required />
+          <label htmlFor={passwordId} className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Current password</label>
+          <PasswordInput id={passwordId} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required />
         </div>
       )}
       <div>
-        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Name this passkey</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={64} className={inputCls} autoFocus={!!presetPassword} />
+        <label htmlFor={nameId} className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Name this passkey</label>
+        <input id={nameId} value={name} onChange={(e) => setName(e.target.value)} maxLength={64} className={inputCls} autoFocus={!!presetPassword} />
         <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">So you can tell your devices apart later.</p>
       </div>
       <div className="flex gap-2 justify-end">

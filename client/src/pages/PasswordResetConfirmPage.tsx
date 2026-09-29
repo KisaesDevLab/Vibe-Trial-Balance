@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { confirmPasswordReset, verifyPasswordResetToken } from '../api/auth';
 import { PasswordInput } from '../components/PasswordInput';
@@ -33,6 +33,7 @@ export function PasswordResetConfirmPage() {
   const location = useLocation();
   const token = params.get('token') ?? '';
   const navigate = useNavigate();
+  const fieldId = useId();
 
   const [purpose, setPurpose] = useState<'reset' | 'invite'>(
     location.pathname.startsWith('/invite') ? 'invite' : 'reset',
@@ -120,7 +121,7 @@ export function PasswordResetConfirmPage() {
 
         {verifyState === 'invalid' && (
           <div className="space-y-4">
-            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm">
+            <div role="alert" className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm">
               {invalidReason}
             </div>
             <div className="flex justify-between">
@@ -145,13 +146,14 @@ export function PasswordResetConfirmPage() {
         {verifyState === 'valid' && (
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm">
+              <div role="alert" className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm">
                 {error}
               </div>
             )}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{purpose === 'invite' ? 'Password' : 'New password'}</label>
+              <label htmlFor={`${fieldId}-new`} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{purpose === 'invite' ? 'Password' : 'New password'}</label>
               <PasswordInput
+                id={`${fieldId}-new`}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 minLength={8}
@@ -161,8 +163,9 @@ export function PasswordResetConfirmPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{purpose === 'invite' ? 'Confirm password' : 'Confirm new password'}</label>
+              <label htmlFor={`${fieldId}-confirm`} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{purpose === 'invite' ? 'Confirm password' : 'Confirm new password'}</label>
               <PasswordInput
+                id={`${fieldId}-confirm`}
                 value={confirmPw}
                 onChange={(e) => setConfirmPw(e.target.value)}
                 minLength={8}
