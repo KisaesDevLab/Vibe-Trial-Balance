@@ -4,7 +4,7 @@
 
 /** Step-up for a destructive account-security action: re-enter the password. */
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Modal } from '../Modal';
 import { PasswordInput } from '../PasswordInput';
 import type { ApiResult } from '../../api/client';
@@ -20,6 +20,7 @@ interface Props {
 }
 
 export function PasswordConfirmDialog({ title, message, confirmLabel, tone = 'danger', onConfirm, onClose }: Props) {
+  const passwordId = useId();
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,8 +43,8 @@ export function PasswordConfirmDialog({ title, message, confirmLabel, tone = 'da
         <p className="text-sm text-gray-600 dark:text-gray-400">{message}</p>
         {error && <div role="alert" className="px-3 py-2 rounded text-xs bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400">{error}</div>}
         <div>
-          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Current password</label>
-          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required />
+          <label htmlFor={passwordId} className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Current password</label>
+          <PasswordInput id={passwordId} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required />
         </div>
         <div className="flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700">Cancel</button>

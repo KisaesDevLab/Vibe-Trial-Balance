@@ -21,7 +21,7 @@
  * route — the password form even in SSO-only mode.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { LoginPanel } from '@kisaesdevlab/vibe-auth/react';
@@ -68,6 +68,7 @@ export function LoginPage({ breakglass = false }: { breakglass?: boolean } = {})
   const storedUser = useAuthStore((s) => s.user);
   const navigate = useNavigate();
   const features = useFeatures();
+  const fieldId = useId();
 
   // A token on the fragment means we are the landing page of an SSO login.
   // Read it once and scrub the URL so it survives in neither history nor a
@@ -312,17 +313,17 @@ export function LoginPage({ breakglass = false }: { breakglass?: boolean } = {})
       <form onSubmit={handleRotate} className="space-y-4">
         {errorBanner}
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New password</label>
-          <PasswordInput value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} autoFocus autoComplete="new-password" required />
+          <label htmlFor={`${fieldId}-new`} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New password</label>
+          <PasswordInput id={`${fieldId}-new`} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} autoFocus autoComplete="new-password" required />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Confirm new password</label>
-          <PasswordInput value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} minLength={8} autoComplete="new-password" required />
+          <label htmlFor={`${fieldId}-confirm`} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Confirm new password</label>
+          <PasswordInput id={`${fieldId}-confirm`} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} minLength={8} autoComplete="new-password" required />
         </div>
         {!password && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Current password</label>
-            <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+            <label htmlFor={`${fieldId}-current`} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Current password</label>
+            <PasswordInput id={`${fieldId}-current`} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
           </div>
         )}
         <button type="submit" disabled={loading} className={btnPrimary}>{loading ? 'Saving...' : 'Save and continue'}</button>
@@ -434,8 +435,9 @@ export function LoginPage({ breakglass = false }: { breakglass?: boolean } = {})
       <form onSubmit={handleLogin} className="space-y-4">
         {errorBanner}
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Username</label>
+          <label htmlFor={`${fieldId}-username`} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Username</label>
           <input
+            id={`${fieldId}-username`}
             type="text"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
@@ -446,8 +448,8 @@ export function LoginPage({ breakglass = false }: { breakglass?: boolean } = {})
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
-          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
+          <label htmlFor={`${fieldId}-password`} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+          <PasswordInput id={`${fieldId}-password`} value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
         </div>
         <button type="submit" disabled={loading || passkeyBusy} className={btnPrimary}>{loading ? 'Signing in...' : 'Sign in'}</button>
 

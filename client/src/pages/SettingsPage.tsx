@@ -528,8 +528,8 @@ export function SettingsPage() {
       "command": "node",
       "args": ["/path/to/trial-balance-app/server/dist/mcp-stdio.js"],
       "env": {
-        "DATABASE_URL": "postgresql://user:pass@localhost:5432/trial_balance",
-        "ANTHROPIC_API_KEY": "sk-ant-..."
+        "DATABASE_URL": "<your-postgres-connection-string>",
+        "ANTHROPIC_API_KEY": "<your-anthropic-api-key>"
       }
     }
   }

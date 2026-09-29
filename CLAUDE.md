@@ -110,6 +110,23 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
   `lib/queryInvalidation.ts`, one shared `BALANCE_DEPENDENTS` list) — a typed balance used to refresh
   only `['trial-balance']`, leaving Dashboard, GL, Cash Flow, Comparison and Lead Sheets stale.
   A new page title gets the button; a new screen that reads balances gets its key added to that list.
+- **Security headers on the SPA come from nginx, on the API from helmet.** Express never serves the
+  SPA, so `helmet()` in `app.ts` covers only `/api/`, `/auth/`, `/mcp/`; the static files get theirs
+  from `add_header` lines in `deploy/nginx.conf` AND `deploy/nginx-docker.conf`, written **twice in
+  each file**: at server level and again inside `location = /index.html`. A location with its own
+  `add_header` inherits none from the server, and every SPA route lands in that location through
+  `try_files` — so headers only at server level would miss the root document.
+  `nginxSecurityHeaders.test.ts` pins the four copies to each other. Load-bearing values: COOP is
+  `same-origin-allow-popups` (the SSO test popup crosses to the IdP and posts back — plain
+  `same-origin` breaks it); Permissions-Policy keeps `publickey-credentials-get/create=(self)` for
+  passkeys; HSTS is `$vibe_hsts`, a `map` on `X-Forwarded-Proto` that is empty (header omitted) over
+  plain HTTP. **Never add an HTTP→HTTPS redirect to these configs**: TLS ends upstream (Cloudflare /
+  Caddy talk plain HTTP to port 80, so it would loop) and the appliance's emergency port must keep
+  answering over HTTP. CSP ships as `Content-Security-Policy-Report-Only`; it needs `worker-src blob:`
+  (pdf.js worker) and `style-src 'unsafe-inline'` (Custom Report print popup). `client/public/robots.txt`
+  is `Disallow: /` and `index.html` carries `noindex` — this is a private app, so no sitemap or llms.txt.
+  Example text shown in the UI must not be credential-shaped (a `postgresql://user:pass@…` sample in
+  the MCP snippet was reported by a scanner as a leaked database password).
 - **Sign-in: password + optional second factor (TOTP or passkey).** `POST /auth/login` returns a
   `stage`: `ok` (full JWT, unchanged payload), `mfa` (5-min token with `stage:'mfa'`, good only for
   `/auth/mfa/*`) or `enrol` (15-min token with `stage:'enrol'`, good only for the enrolment endpoints

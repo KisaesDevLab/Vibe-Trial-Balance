@@ -9,7 +9,7 @@
  * passes it as `presetPassword` to skip the first step.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { PasswordInput } from '../PasswordInput';
 import { OneTimeCodeInput } from './OneTimeCodeInput';
 import { CopyButton } from './CopyButton';
@@ -32,6 +32,7 @@ interface Props {
 type Step = 'password' | 'verify' | 'done';
 
 export function TotpEnrolFlow({ presetPassword, onDone, onCancel }: Props) {
+  const passwordId = useId();
   const [step, setStep] = useState<Step>(presetPassword ? 'verify' : 'password');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -84,8 +85,8 @@ export function TotpEnrolFlow({ presetPassword, onDone, onCancel }: Props) {
         <p className="text-sm text-gray-600 dark:text-gray-400">Confirm your password to set up an authenticator app.</p>
         {error && <div role="alert" className="px-3 py-2 rounded text-xs bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400">{error}</div>}
         <div>
-          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Current password</label>
-          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required />
+          <label htmlFor={passwordId} className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Current password</label>
+          <PasswordInput id={passwordId} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required />
         </div>
         <div className="flex gap-2 justify-end">
           {onCancel && <button type="button" onClick={onCancel} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700">Cancel</button>}

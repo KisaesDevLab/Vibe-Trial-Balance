@@ -2,11 +2,12 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { requestPasswordReset } from '../api/auth';
 
 export function PasswordResetRequestPage() {
+  const identifierId = useId();
   const [identifier, setIdentifier] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,15 +53,16 @@ export function PasswordResetRequestPage() {
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm">
+              <div role="alert" className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm">
                 {error}
               </div>
             )}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label htmlFor={identifierId} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Username or email
               </label>
               <input
+                id={identifierId}
                 type="text"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
