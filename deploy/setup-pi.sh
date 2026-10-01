@@ -56,6 +56,13 @@ sudo apt-get install -y postgresql postgresql-contrib
 # Install nginx
 sudo apt-get install -y nginx
 
+# Install Chromium — prints the Statement Writer's PDFs (the server drives it
+# headless; nothing is downloaded by npm). Optional: without it the app runs
+# and only those PDFs are unavailable, so a failure here must not stop setup.
+# The package is "chromium" on Raspberry Pi OS / Debian 12+ and
+# "chromium-browser" on older releases.
+sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser \n  || echo "WARN: Chromium was not installed. Statement Writer PDFs will be unavailable until it is (Settings -> PDF engine shows the status)."
+
 # Install PM2
 sudo npm install -g pm2
 

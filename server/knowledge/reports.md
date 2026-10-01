@@ -107,6 +107,13 @@ Three statements on tabbed pages: **Income Statement**, **Balance Sheet**, and *
 
 ---
 
+### Statement Writer
+- Report-ready financial statements to issue to a client: cover, table of contents, accountant's report, balance sheet, income statement, equity, cash flows and supporting schedules, in a layout you design on top of the lead sheets
+- Finalize to freeze a version; download as PDF, Word or Excel
+- Access: **Reports > Statement Writer** (see the Statement Writer article)
+
+---
+
 ### Custom Reports
 - User-defined report layouts with custom account selection, column choices, and groupings
 - **Print / PDF** button opens a clean print window with just the report table (no app chrome)

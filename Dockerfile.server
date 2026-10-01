@@ -29,7 +29,17 @@ FROM node:20-alpine AS runtime
 WORKDIR /app
 
 # poppler-utils is needed for scanned-PDF vision support.
-RUN apk add --no-cache poppler-utils
+#
+# chromium prints the Statement Writer's PDFs (server/src/lib/fs/pdfBrowser.ts):
+# its HTML renderer is shared with the browser's live preview, so the PDF has
+# to come from a browser to match it. puppeteer-core downloads nothing — this
+# system package IS the browser, on amd64 and arm64 alike. The statement fonts
+# are embedded from server/assets, so no font packages are needed for them;
+# ttf-freefont only gives Chromium a fallback face. The path is NOT set in ENV
+# on purpose: pdfBrowser probes /usr/bin/chromium-browser and /usr/bin/chromium
+# (Alpine has shipped both names), and a configured path that does not exist
+# is reported as missing rather than silently replaced.
+RUN apk add --no-cache poppler-utils chromium nss freetype harfbuzz ttf-freefont
 
 # Copy pruned node_modules, built dist, config files, and runtime assets.
 COPY --from=build /app/server/node_modules  server/node_modules
@@ -37,6 +47,8 @@ COPY --from=build /app/server/dist          server/dist
 COPY --from=build /app/server/migrations    server/migrations
 COPY --from=build /app/server/seeds         server/seeds
 COPY --from=build /app/server/knowledge     server/knowledge
+# Statement Writer fonts (SIL OFL 1.1; licence texts ride along in fs-fonts/licenses).
+COPY --from=build /app/server/assets        server/assets
 COPY --from=build /app/server/knexfile.js   server/knexfile.js
 COPY --from=build /app/server/package.json  server/package.json
 COPY server/docker-entrypoint.sh            server/docker-entrypoint.sh
