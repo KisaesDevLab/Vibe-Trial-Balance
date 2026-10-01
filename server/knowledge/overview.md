@@ -13,9 +13,9 @@ The sidebar contains these main sections:
 - **Bookkeeping**: Bank Transactions, Transaction Entry, Journal Entries, Reconciliations
 - **Trial Balance**: TB grid editing, PY Tie-Out, Journal Entries, AJE Listing, Tickmarks
 - **Tax**: Tax Mapping, Tax-Basis P&L, Tax Return Order, Tax Worksheets, Tax Code Report, Tax Exports
-- **Reports**: Period Comparison, Financial Statements, Cash Flow, General Ledger, TB Report, Workpaper Index, Workpaper Package, Custom Reports
+- **Reports**: Period Comparison, Financial Statements, Statement Writer, Cash Flow, General Ledger, TB Report, Workpaper Index, Workpaper Package, Custom Reports
 - **Tools**: Documents, AI Diagnostics, Settings, MCP Integration
-- **Admin** (admin only): Users, Tax Codes, COA Templates, Backup & Restore, Audit Log
+- **Admin** (admin only): Users, Tax Codes, COA Templates, Statement Library, Backup & Restore, Audit Log
 
 ## User Roles
 - **Admin**: Full access including user management, tax code administration, backup/restore, audit log, period unlocking

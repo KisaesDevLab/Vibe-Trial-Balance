@@ -48,6 +48,11 @@ const BALANCE_DEPENDENTS: string[] = [
   'export-validation',
   'py-comparison',
   'py-comparison-prefill',
+  // Statement Writer: the live preview's source balances, and the "balances
+  // changed" flag on finalized statement sets (list and editor).
+  'fs-preview-data',
+  'fs-reports',
+  'fs-report',
 ];
 
 const JOURNAL_ENTRY_DEPENDENTS: string[] = [

@@ -37,6 +37,7 @@ import {
 import { TICKMARK_COLOR_CLASSES, type Tickmark, type TickmarkColor } from '../api/tickmarks';
 import { pushToast } from '../store/uiStore';
 import { confirmAction } from './ConfirmDialog';
+import { loadPdfWorkerSrc } from '../utils/pdfjsWorker';
 
 interface Props {
   attachment: LeadSheetAttachment;
@@ -45,44 +46,8 @@ interface Props {
   onStamped: () => void;
 }
 
-/**
- * The pdf.js worker, fetched once and handed to pdfjs as a blob: URL.
- *
- * Loading it by its own https URL is what kept breaking in production with
- * "Setting up fake worker failed: Failed to fetch dynamically imported
- * module". The asset is a `.mjs`, a browser refuses to execute a module script
- * unless the Content-Type says JavaScript, and any browser that fetched it
- * while the server still answered `application/octet-stream` keeps that stored
- * Content-Type indefinitely: the entry revalidates with If-Modified-Since, and
- * a 304 carries no Content-Type to replace it with. Fixing the server (nginx
- * `location ~ \.mjs$`) therefore does NOT repair a browser that already cached
- * the bad response — the file has to be fetched under a different cache key,
- * or its type has to stop mattering.
- *
- * Re-wrapping the bytes in a Blob does the latter: what the server labelled the
- * response is irrelevant, only the bytes are used, and the worker is created
- * from an origin-local blob: URL, which pdf.js treats as same-origin and uses
- * verbatim.
- */
-let workerSrcPromise: Promise<string> | null = null;
-
-function loadWorkerSrc(): Promise<string> {
-  workerSrcPromise ??= (async () => {
-    // Vite rewrites this to the emitted asset URL at build time.
-    const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
-    try {
-      const res = await fetch(workerUrl);
-      if (!res.ok) throw new Error(`worker asset responded ${res.status}`);
-      const bytes = await res.arrayBuffer();
-      return URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
-    } catch {
-      // Blob workers are blocked by a `worker-src` CSP without `blob:`; fall
-      // back to letting pdfjs load the asset by URL the ordinary way.
-      return workerUrl;
-    }
-  })();
-  return workerSrcPromise;
-}
+// The pdf.js worker is loaded through utils/pdfjsWorker.ts (a blob: URL, so a
+// browser that cached the worker with the wrong Content-Type still works).
 
 // Padding of the scroll container, so a fitted page doesn't touch the edges.
 const PAGE_GUTTER = 32;
@@ -186,7 +151,7 @@ export function LeadSheetPdfViewer({ attachment, tickmarks, onClose, onStamped }
       try {
         // Lazy so pdfjs stays out of the initial bundle.
         const pdfjs = await import('pdfjs-dist');
-        pdfjs.GlobalWorkerOptions.workerSrc = await loadWorkerSrc();
+        pdfjs.GlobalWorkerOptions.workerSrc = await loadPdfWorkerSrc();
         const bytes = await fetchAttachmentBytes(attachment.id);
         if (cancelled) return;
         task = pdfjs.getDocument({ data: bytes });

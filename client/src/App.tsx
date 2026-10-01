@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import { lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
 import { PasswordResetRequestPage } from './pages/PasswordResetRequestPage';
@@ -54,6 +55,16 @@ import { TBPopoutPage } from './pages/TBPopoutPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { AuthenticationSettingsPage } from './pages/AuthenticationSettingsPage';
 import { PrivacyPolicyPage, TermsPage } from './pages/LegalPage';
+import { Spinner } from './components/Spinner';
+
+// The Statement Writer carries its own engine (a copy of the server's, with
+// zod) — a chunk only its users should download.
+const FsReportListPage = lazy(() => import('./features/fs/FsReportListPage').then((m) => ({ default: m.FsReportListPage })));
+const FsEditorPage = lazy(() => import('./features/fs/FsEditorPage').then((m) => ({ default: m.FsEditorPage })));
+const FsLibraryPage = lazy(() => import('./features/fs/FsLibraryPage').then((m) => ({ default: m.FsLibraryPage })));
+const fsRoute = (page: ReactNode) => (
+  <Suspense fallback={<div className="flex justify-center py-16"><Spinner size="lg" /></div>}>{page}</Suspense>
+);
 import { useAuthStore } from './store/uiStore';
 import { ROUTER_BASENAME } from './lib/baseConfig';
 
@@ -112,6 +123,9 @@ export default function App() {
           <Route path="engagement" element={<EngagementPage />} />
           <Route path="cash-flow" element={<CashFlowPage />} />
           <Route path="custom-reports" element={<CustomReportPage />} />
+          <Route path="statement-writer" element={fsRoute(<FsReportListPage />)} />
+          <Route path="statement-writer/:reportId" element={fsRoute(<FsEditorPage />)} />
+          <Route path="fs-library" element={fsRoute(<FsLibraryPage />)} />
           <Route path="workpaper-package" element={<WorkpaperPackagePage />} />
           <Route path="tickmarks" element={<TickmarksPage />} />
           <Route path="lead-sheets" element={<LeadSheetsPage />} />

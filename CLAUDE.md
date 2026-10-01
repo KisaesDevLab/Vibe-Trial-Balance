@@ -374,6 +374,91 @@ All planned phases complete. App is feature-complete.
 - Tax Workpapers: M-1 Worksheet (with input validation), Tax Basis Schedule (SheetJS Excel)
 - Engagement Management: Period Checklist, All Open Items with drill-down "View Checklist →"
 - Custom Report Builder (saved_reports table)
+- **Statement Writer** (report-ready financial statements; `/statement-writer`, `/fs-library`; ported from
+  Vibe MyBooks' `FINANCIAL_STATEMENTS_V1`, commit `31d51af` + `724d488`/`fa4c0d4`). An outline editor over
+  balance sheet / income statement / equity / indirect cash flow + supplementary schedules, built on
+  **lead sheets**; style presets with 8 bundled fonts; firm library (letterhead, accountant's report
+  letters, style presets, layout templates); cover + TOC; finalize into immutable versions; PDF / DOCX / XLSX.
+  Separate from `FinancialStatementsPage` (fixed layout, pdfmake) and `CustomReportPage` — both untouched.
+  **The engine exists twice and must stay byte-identical.** Canonical: `server/src/lib/fs/engine/**`
+  (schemas, compute, HTML renderer; imports only `zod` and itself). Generated copy:
+  `client/src/lib/fsEngine/**`, written by `node scripts/sync-fs-engine.mjs` (`npm run sync:fs-engine`) —
+  never edit it by hand. `fsEngineSync.test.ts` compares file lists and SHA-256 (line endings normalised:
+  `core.autocrlf` is on). The browser computes the live preview with it, the server computes everything
+  stored or exported. Not a top-level `shared/`: server `tsconfig` has no `rootDir`, so an outside import
+  moves the output to `dist/server/src/…` and breaks PM2, `Dockerfile.server` and `VIBE_AUTH_ADAPTER`.
+  **Differences from MyBooks, all deliberate:** a statement set belongs to ONE period — column modes are
+  `single` and `cy_py` only (no month/quarter/YTD/side-by-side; `periods.ts` is the trimmed two-mode
+  planner); money is signed integer **cents** (`SCALE = 100`, MyBooks used 1/10,000 units from decimals);
+  ids are the DB integer ids carried as **decimal strings** (`fsIdSchema`; they are object keys in the
+  balances maps and layout JSON) with `FS_VIRTUAL_RE_ID = '-1'`; no `systemTag`, tags, book basis, portal
+  publish, feature flag or tenant/firm owner pair. `gaap` and `cash` both read `book_adjusted_*` (cash
+  changes wording only); `tax` reads `tax_adjusted_*`.
+  **The source loader is the whole seam** (`lib/fs/fsSource.ts`: pure `buildFsSource`, tested, + `loadFsSource`).
+  Up to three snapshots keyed by date: `periodEnd` (basis columns), `priorEnd` = the day before the period
+  starts (this period's `prior_year_*`, pre-closing — the engine's fold closes it), and the day before
+  `priorStart` (the PRIOR PERIOD's `prior_year_*`, only when that period is in the app —
+  `priorYearRange()`). **Present-but-empty and absent are different**: the prior snapshot is always
+  present, so a first-year client opens at a known zero; an absent opening makes `equity.ts` /
+  `cash-flow.ts` SKIP that range (`ctx.hasSnapshot`) and compute raise `TB_FS_PY_OPENING_UNAVAILABLE` —
+  MyBooks read a missing opening as zero, which reported all of equity as "other changes". So in
+  `cy_py` the BS and IS show two years while equity and cash flows may show one, and their titles and
+  date lines follow what they actually show. Rows are `is_active` with NO SQL dormancy filter (as
+  `loadStampRows`): dormancy needs the prior period too, so `buildFsSource` drops dormant accounts
+  itself. Signing is by **category** (`ACCOUNT_TYPE` map), never `normal_balance`. Cash-flow class
+  precedence: Statement Writer account override > `chart_of_accounts.cash_flow_category` (the existing
+  Cash Flow page's field; `non_cash` → `noncash_adjustment`) > lead-sheet override > the engine's
+  default by lead sheet code, **guarded by category** (`CODE_ACCOUNT_TYPE` — letters are user data) >
+  account-name heuristics. Equity roles: `fs_equity_roles` over `defaultEquityRole(name)`; the fold (where
+  net income closes) is the `is_fold` row, else the lowest-numbered `retained` account, else the virtual one.
+  **Tables** (`20260930000001`): firm `fs_firm_profile` (singleton via a unique index on `((true))`),
+  `fs_letters`, `fs_style_presets`, `fs_layout_templates`; client `fs_client_layouts`,
+  `fs_cash_flow_overrides`, `fs_equity_roles`; period `fs_reports` (period FK **CASCADE**),
+  `fs_report_versions`, `fs_report_version_files` (`pdf bytea`). `fs_reports.client_layout_id` has NO delete
+  action on purpose — RESTRICT is checked immediately and would abort the client-delete cascade that removes
+  both rows in one statement. The library is seeded **lazily** (`ensureFsLibrarySeeded`, idempotent by
+  `builtin_key`): the seed data is TypeScript and migrations are JS-only. Letters are deactivated, never deleted.
+  **Issuance.** Finalize renders the PDF BEFORE its transaction, then re-checks status under `FOR UPDATE`.
+  A version freezes model, layout, style, settings, letter and letterhead. Staleness is two questions:
+  `source_stamp` (SHA-256 over everything the engine reads, `fsSourceStamp`) says something moved;
+  `impact` recomputes with the FROZEN layout and compares `numbers_hash` to say whether the issued
+  numbers moved. A locked period gates nothing here. Errors block finalize unless overridden with a
+  ≥ 5-char reason (audit action `override`).
+  **PDF is Chromium, not pdfmake** — the one exception in the app, because the HTML renderer is shared
+  with the live preview. `lib/fs/pdfBrowser.ts`: `puppeteer-core` (never `puppeteer`: no download, and
+  there is no linux-arm64 Chrome for Testing); path = `fs.chromium_path` setting (Settings → PDF engine) >
+  `PUPPETEER_EXECUTABLE_PATH` > probe. **A configured path that is missing resolves to null** — it is
+  not replaced by a detected browser. Never launched at boot; lazy singleton closed after 90 s idle; one
+  job at a time, queue of 3 (`503 PDF_BUSY`), 120 s timeout; pages run with JS off and all network
+  blocked. No Chromium = `503 PDF_ENGINE_UNAVAILABLE` on preview.pdf / PDF export / finalize, nothing
+  written; DOCX, XLSX, the editor and the live preview keep working. `Dockerfile.server` installs
+  `chromium` and deliberately does NOT set the path in ENV (Alpine has shipped both
+  `/usr/bin/chromium-browser` and `/usr/bin/chromium`); `deploy/setup-pi.sh` apt-installs it, non-fatally.
+  Fonts: `server/assets/fs-fonts` (38 TTFs, SIL OFL 1.1, licence texts beside them, listed in NOTICE and
+  `license-policy.json` `bundledAssets`), embedded as data URIs in the PDF and served to the preview by the
+  PUBLIC, allowlisted, extensionless `GET /api/v1/fs-fonts/:file` (mounted above the rate limiter; no
+  `.ttf` in the URL so a proxy's static-file rule can never claim it).
+  **Reviewer accounts** are read-only at the API boundary, so everything needed to LOOK is a GET:
+  `GET …/preview-data` (saved state), `GET …/preview.pdf`, `GET …/export`, `GET …/bind-preview`. The
+  POST forms carry an unsaved draft. The editor never overwrites unsaved edits with a background refetch.
+  `['fs-preview-data']`, `['fs-reports']`, `['fs-report']` are in `BALANCE_DEPENDENTS`. The three pages are
+  `React.lazy` (the engine + zod stay out of the main bundle); pdf.js is loaded through
+  `utils/pdfjsWorker.ts`, shared with `LeadSheetPdfViewer` — in Vite **dev** it returns the worker URL,
+  because the dev server injects an `/@vite/client` import that cannot resolve from a blob: URL.
+  **Backups** (`lib/fs/fsBackup.ts`, called from `routes/backup.ts`): client/period archives carry
+  layouts, statement sets, versions and classification; settings/full carry the library (restored IN
+  PLACE by `builtin_key` / name so ids never change; letter HTML sanitized, styles/layouts schema-checked).
+  `fs_report_version_files` is never dumped — a restored version re-renders its PDF from the frozen JSON on
+  first download and is flagged `regenerated`. **Ids inside layout JSON are remapped** by
+  `remapFsLayoutIds` (`lib/fs/fsLayoutRemap.ts`, pure, tested) for the live layout AND each version's
+  frozen copy: an unmapped lead sheet id falls back to its code, an account line left with no accounts
+  is dropped and scrubbed from totals/plugs. A version restored as a NEW client keeps its old
+  `source_stamp` and so reads "balances changed" until `impact` says the numbers are unaffected —
+  recomputing the stamp on restore would assert, unchecked, that nothing moved.
+  Tests: `npm run test:fs` (server/: engine, sync, source, remap, PDF engine), `npm run test:fstree`
+  (root), `npm run test:fs-e2e` (root; real server + scratch Postgres via `E2E_PG_ADMIN_URL`; passes with
+  or without Chromium, asserting the degraded path when there is none). Knowledge base:
+  `server/knowledge/statement-writer.md`.
 - Workpaper Package + Tickmarks (tickmark_library + tb_tickmarks, TB superscripts + legend).
   PDF report options live in `PDF_REPORT_SECTIONS` (WorkpaperPackagePage) and `REPORT_GENERATORS`
   (routes/pdfReports.ts) — keep ids and labels in step. That array's order is binder order: it drives

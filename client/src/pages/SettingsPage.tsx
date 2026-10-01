@@ -12,6 +12,7 @@ import { useAuthStore } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
 import { PasswordInput } from '../components/PasswordInput';
 import { FirmIdentityCard } from '../components/FirmIdentityCard';
+import { PdfEngineCard } from '../components/PdfEngineCard';
 import { AccountSecurityCard } from '../components/security/AccountSecurityCard';
 import { SecurityPolicyCard } from '../components/security/SecurityPolicyCard';
 import { ROUTER_BASENAME } from '../lib/baseConfig';
@@ -557,6 +558,9 @@ export function SettingsPage() {
 
       {/* Firm identity: PDF headers + the public legal pages (admin) */}
       {isAdmin && <FirmIdentityCard />}
+
+      {/* Statement Writer PDFs: the server-side Chromium (admin) */}
+      {isAdmin && <PdfEngineCard />}
 
       {/* Sign-in security: public URL (passkey relying party) + require-2FA policy (admin) */}
       {isAdmin && <SecurityPolicyCard />}

@@ -38,6 +38,7 @@ import { leadSheetCollectionRouter, leadSheetItemRouter, leadSheetPeriodRouter }
 import { storageRouter } from './routes/storage';
 import { leadSheetAttachmentCollectionRouter, leadSheetAttachmentItemRouter } from './routes/leadSheetAttachments';
 import { savedReportCollectionRouter, savedReportItemRouter } from './routes/savedReports';
+import { fsClientRouter, fsFontsRouter, fsPeriodRouter, fsRouter } from './routes/fs';
 import { varianceNotesRouter } from './routes/varianceNotes';
 import { pdfReportsRouter } from './routes/pdfReports';
 import { taxCodesRouter } from './routes/taxCodes';
@@ -138,6 +139,12 @@ app.use(express.json({ limit: '10mb' }));
 
 // Rate-limit bucketing key lives in lib/rateLimitKey.ts (shared with the
 // per-account limiters on the second-factor endpoints).
+
+// Statement Writer preview fonts: public, immutable, allowlisted static bytes
+// (routes/fs.ts). Mounted ABOVE the limiter — one preview pulls up to four
+// font files, and they must not spend the request budget of whoever shares
+// the address.
+app.use('/api/v1/fs-fonts', fsFontsRouter);
 
 // Global rate limiter — 200 requests per 15 minutes per user (or per IP if unauth)
 app.use('/api/', rateLimit({
@@ -351,6 +358,9 @@ app.use('/api/v1/periods/:periodId/lead-sheet-attachments', leadSheetAttachmentC
 app.use('/api/v1/lead-sheet-attachments/:id', leadSheetAttachmentItemRouter);
 app.use('/api/v1/clients/:clientId/saved-reports', savedReportCollectionRouter);
 app.use('/api/v1/saved-reports/:id', savedReportItemRouter);
+app.use('/api/v1/fs', fsRouter);
+app.use('/api/v1/clients/:clientId/fs', fsClientRouter);
+app.use('/api/v1/periods/:periodId/fs', fsPeriodRouter);
 app.use('/api/v1/periods/:periodId/variance-notes', varianceNotesRouter);
 app.use('/api/v1/reports', pdfReportsRouter);
 app.use('/api/v1/tax-codes', taxCodesRouter);

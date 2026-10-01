@@ -1,10 +1,8 @@
 {
   "_comment": "Machine-readable license policy for vibe-tb (PolyForm Small Business License 1.0.0).",
-  "_updated": "2026-07-10",
-
+  "_updated": "2026-09-30",
   "projectLicense": "PolyForm-Small-Business-1.0.0",
   "projectLicenseUrl": "https://polyformproject.org/licenses/small-business/1.0.0",
-
   "allowed": [
     "MIT",
     "MIT/X11",
@@ -19,7 +17,6 @@
     "(MIT AND Zlib)",
     "(MIT OR GPL-3.0-or-later)"
   ],
-
   "reviewRequired": [
     "LGPL-2.0",
     "LGPL-2.1",
@@ -31,7 +28,6 @@
     "CC-BY-4.0",
     "MIT*"
   ],
-
   "denied": [
     "GPL-2.0-only",
     "GPL-2.0",
@@ -44,12 +40,12 @@
     "Commercial",
     "UNLICENSED"
   ],
-
   "firstParty": {
     "_comment": "Packages published by Kisaes LLC itself. license-checker reports them as UNLICENSED (private GitHub Packages, no SPDX field) but they are the licensor's own code, not third-party dependencies; license-audit.sh excludes this scope from the denied-license check.",
-    "scopes": ["@kisaesdevlab"]
+    "scopes": [
+      "@kisaesdevlab"
+    ]
   },
-
   "knownIssues": [
     {
       "package": "@kisaesdevlab/vibe-auth",
@@ -84,9 +80,17 @@
       "severity": "LOW",
       "action": "Elect MIT. No action required.",
       "notes": "Dual-licensed. MIT option is compatible."
+    },
+    {
+      "package": "puppeteer-core",
+      "version": "^24",
+      "detectedLicense": "Apache-2.0",
+      "severity": "INFO",
+      "pulledInBy": "server (Statement Writer PDF rendering, server/src/lib/fs/pdfBrowser.ts)",
+      "action": "Allowed licence. Recorded because of what it does NOT include: puppeteer-core downloads no browser. Chromium is a separate system package (apk add chromium in Dockerfile.server, apt install chromium in deploy/setup-pi.sh), distributed under its own BSD-style licences by the OS vendor, not by this project.",
+      "notes": "Added 2026-09-30. Do not swap for the full puppeteer package: it downloads Chrome for Testing at install, which has no linux-arm64 build."
     }
   ],
-
   "licenseRequirements": {
     "licenseFile": {
       "required": true,
@@ -114,5 +118,28 @@
       "status": "IMPLEMENTED — Source Code link in Sidebar footer (Sidebar.tsx)",
       "note": "Link points to GitHub repo."
     }
+  },
+  "bundledAssets": {
+    "_comment": "Files shipped in the repository and the server image that are not npm packages, so license-checker never sees them. Each keeps its own licence text beside it; NOTICE lists them.",
+    "items": [
+      {
+        "name": "Statement Writer fonts",
+        "path": "server/assets/fs-fonts",
+        "license": "SIL Open Font License 1.1 (OFL-1.1)",
+        "families": [
+          "Liberation Serif",
+          "Liberation Sans",
+          "Carlito",
+          "Caladea",
+          "EB Garamond",
+          "Source Serif 4",
+          "Lato",
+          "Libre Baskerville"
+        ],
+        "licenseTexts": "server/assets/fs-fonts/licenses",
+        "use": "Embedded in Statement Writer PDFs and served to the live preview by GET /api/v1/fs-fonts/:file.",
+        "notes": "OFL-1.1 permits bundling, embedding and redistribution with any software, provided the fonts are not sold by themselves and the licence text travels with them. It places no condition on the licence of the software or of documents made with the fonts. Reserved Font Names are untouched: the files are unmodified. Added 2026-09-30 with the Statement Writer (same set Vibe MyBooks ships)."
+      }
+    ]
   }
 }

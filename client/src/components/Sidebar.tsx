@@ -86,6 +86,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/multi-period',         label: 'Period Comparison' },
       { to: '/financial-statements', label: 'Financial Statements' },
+      { to: '/statement-writer',     label: 'Statement Writer' },
       { to: '/cash-flow',            label: 'Cash Flow' },
       { to: '/general-ledger',       label: 'General Ledger' },
       { to: '/trial-balance-report', label: 'TB Report' },
@@ -115,6 +116,7 @@ const ADMIN_GROUP: NavGroup = {
     { to: '/tax-codes',          label: 'Tax Codes' },
     { to: '/coa-templates',      label: 'COA Templates' },
     { to: '/system-tickmarks',   label: 'Default Tickmarks' },
+    { to: '/fs-library',         label: 'Statement Library' },
     { to: '/storage',            label: 'Document Storage' },
     { to: '/quickbooks-settings', label: 'QuickBooks API' },
     { to: '/backup',             label: 'Backup & Restore' },

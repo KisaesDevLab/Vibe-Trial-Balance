@@ -32,6 +32,7 @@ This product includes or depends on the following third-party software:
 archiver - MIT License - Copyright Chris Talkington
 bcrypt - MIT License - Copyright Nick Campbell
 cors - MIT License - Copyright Troy Goode
+docx - MIT License - Copyright Dolan Miu
 dotenv - BSD-2-Clause License - Copyright Scott Motte
 exceljs - MIT License - Copyright Guyon Roche
 express - MIT License - Copyright TJ Holowaychuk, Douglas Christopher Wilson
@@ -46,6 +47,7 @@ openai - Apache-2.0 License - Copyright OpenAI
 pdf-lib - MIT License - Copyright Andrew Dillon
 pdf-parse - MIT License - Copyright Modesty Zhang
 pdfmake - MIT License - Copyright Bartek Pampuch
+puppeteer-core - Apache-2.0 License - Copyright Google LLC
 pg - MIT License - Copyright Brian Carlson
 react - MIT License - Copyright Meta Platforms
 react-dom - MIT License - Copyright Meta Platforms
@@ -57,6 +59,25 @@ xlsx - Apache-2.0 License - Copyright SheetJS
 xlsx-js-style - Apache-2.0 License - Copyright Git Tad
 zod - MIT License - Copyright Colin McDonnell
 zustand - MIT License - Copyright Paul Henschel
+
+Bundled fonts (server/assets/fs-fonts)
+
+The Statement Writer embeds these typefaces in the PDFs it produces and serves
+them to its on-screen preview. Each is distributed, unmodified, under the SIL
+Open Font License 1.1; the licence texts are in server/assets/fs-fonts/licenses
+and must be kept with the fonts in any redistribution.
+
+Liberation Serif, Liberation Sans - Copyright Google Corporation and Red Hat, Inc.
+Carlito - Copyright the Carlito Project Authors
+Caladea - Copyright the Caladea Project Authors
+EB Garamond - Copyright the EB Garamond Project Authors
+Source Serif 4 - Copyright the Source Serif 4 Project Authors
+Lato - Copyright tyPoland Lukasz Dziedzic
+Libre Baskerville - Copyright the Libre Baskerville Project Authors
+
+The Statement Writer prints its PDFs with a Chromium browser that the operating
+system (or the Docker base image) provides. Chromium is not part of this
+software and is licensed separately by its distributor.
 
 For the complete list of dependencies and their licenses, run:
   cd client && npx license-checker --excludePrivatePackages --summary

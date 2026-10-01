@@ -28,6 +28,9 @@ import cron from 'node-cron';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import type { Knex } from 'knex';
+import {
+  deleteFsClientData, dumpFsClientTables, dumpFsLibrary, restoreFsClientTables, restoreFsLibrary, FS_USER_FK_COLUMNS,
+} from '../lib/fs/fsBackup';
 import { sendServerError } from '../lib/safeError';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,6 +173,8 @@ async function createBackup(
         if (hasSettings) {
           await dump('app_settings', await trx('app_settings').select('*'));
         }
+        // Statement Writer firm library (letterhead, letters, styles, templates).
+        for (const [t, r] of Object.entries(await dumpFsLibrary(trx))) await dump(t, r);
       } else if (level === 'settings') {
         await dump('tax_codes', await trx('tax_codes').select('*'));
         await dump('tax_code_software_maps', await trx('tax_code_software_maps').select('*'));
@@ -178,6 +183,7 @@ async function createBackup(
         if (hasSettings) {
           await dump('app_settings', await trx('app_settings').select('*'));
         }
+        for (const [t, r] of Object.entries(await dumpFsLibrary(trx))) await dump(t, r);
       } else if (level === 'client' && clientId) {
         // Tax codes MUST ride along with COA. chart_of_accounts.tax_code_id
         // has a FK into tax_codes — restoring onto a fresh DB without
@@ -231,6 +237,10 @@ async function createBackup(
         if (await trx.schema.hasTable('lead_sheet_signoffs') && periodIds.length > 0) {
           await dump('lead_sheet_signoffs', await trx('lead_sheet_signoffs').whereIn('period_id', periodIds).select('*'));
         }
+        // Statement Writer: layouts, statement sets, finalized versions and
+        // classification. The issued PDF bytes are deliberately NOT dumped
+        // (lib/fs/fsBackup.ts) — backups carry rows, not bytes.
+        for (const [t, r] of Object.entries(await dumpFsClientTables(trx, clientId))) await dump(t, r);
         if (await trx.schema.hasTable('tb_tickmarks') && periodIds.length > 0) {
           await dump('tb_tickmarks', await trx('tb_tickmarks').whereIn('period_id', periodIds).select('*'));
         }
@@ -273,6 +283,8 @@ async function createBackup(
         if (await trx.schema.hasTable('lead_sheet_signoffs')) {
           await dump('lead_sheet_signoffs', await trx('lead_sheet_signoffs').where('period_id', periodId).select('*'));
         }
+        // Statement Writer: this period's statement sets and the layouts they use.
+        if (cId) for (const [t, r] of Object.entries(await dumpFsClientTables(trx, cId, periodId))) await dump(t, r);
         await dump('client_documents', await trx('client_documents').where('period_id', periodId).select('*'));
         if (await trx.schema.hasTable('lead_sheet_notes')) {
           await dump('lead_sheet_notes', await trx('lead_sheet_notes').where('period_id', periodId).select('*'));
@@ -555,6 +567,7 @@ const USER_FK_COLUMNS: Record<string, string[]> = {
   client_documents: ['uploaded_by', 'deleted_by'],
   client_folder_links: ['created_by'],
   qbo_connections: ['connected_by'],
+  ...FS_USER_FK_COLUMNS,
 };
 
 type UserFkSanitizer = (table: string, row: Record<string, unknown>) => Record<string, unknown>;
@@ -997,6 +1010,17 @@ async function restoreAsNew(
     await insertBatched(trx, 'lead_sheet_attachments', rows);
   }
 
+  // 13. Statement Writer — last: it points at periods, accounts and lead
+  // sheets, both as columns and inside its layout JSON.
+  await restoreFsClientTables(trx, tables, {
+    clientId: newClientId,
+    period: (id) => idMap.get('periods')?.get(id),
+    account: (id) => idMap.get('chart_of_accounts')?.get(id),
+    leadSheet: (id) => idMap.get('lead_sheets')?.get(id),
+    sanitizeUserFks,
+    trustLibraryIds: trustSourceUserIds,
+  });
+
   // Build serializable id_mappings
   const idMappings: Record<string, Record<number, number>> = {};
   for (const [table, map] of idMap.entries()) {
@@ -1062,6 +1086,9 @@ async function deleteClientData(trx: Knex.Transaction, clientId: number): Promis
   // so it must go before all three.
   await trx('bank_transactions').where('client_id', clientId).delete();
   if (jeIds.length) await trx('journal_entries').whereIn('id', jeIds).delete();
+
+  // Statement Writer rows point at periods, lead sheets and accounts.
+  await deleteFsClientData(trx, clientId);
 
   // Direct children of clients that also point into chart_of_accounts.
   await trx('classification_rules').where('client_id', clientId).delete();
@@ -1390,6 +1417,16 @@ async function restoreReplace(
     })));
     await insertBatched(trx, 'lead_sheet_notes', rows);
   }
+
+  // Statement Writer — deleteClientData removed these; put the archive's back.
+  await restoreFsClientTables(trx, tables, {
+    clientId: targetClientId,
+    period: (id) => periodIdMap.get(id),
+    account: (id) => coaIdMap.get(id),
+    leadSheet: (id) => lsMap.get(id),
+    sanitizeUserFks,
+    trustLibraryIds: trustSourceUserIds,
+  });
 }
 
 interface RestoreSettingsReport {
@@ -1402,6 +1439,8 @@ interface RestoreSettingsReport {
   appSettingsReplaced: boolean;
   usersCreated: string[];
   usersSkipped: string[];
+  /** Statement Writer firm library rows updated or added. */
+  statementLibrary?: { letterhead: boolean; letters: number; presets: number; templates: number; skipped: number };
 }
 
 interface RestoreSettingsOptions {
@@ -1489,6 +1528,9 @@ async function restoreSettings(
       report.appSettingsReplaced = true;
     }
   }
+
+  // Statement Writer firm library: updated in place, never deleted.
+  report.statementLibrary = await restoreFsLibrary(trx, tables);
 
   // Users: only restored when the caller explicitly opts in. Blocks the
   // attack where an admin uploads a crafted .tbak containing an attacker's
