@@ -1453,7 +1453,7 @@ export function ChartOfAccountsPage() {
   }
 
   return (
-    <div className="p-6">
+    <div className="p-6 flex flex-col h-full">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Chart of Accounts<RefreshButton /></h2>
@@ -1564,12 +1564,13 @@ export function ChartOfAccountsPage() {
       {isLoading ? (
         <div className="flex items-center justify-center py-12 text-gray-400 dark:text-gray-500">Loading...</div>
       ) : (
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-          <div className="overflow-x-auto">
+        <div className="flex-1 min-h-0 flex flex-col bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+          {/* Own scroll container so the header row stays frozen, like the TB grid. */}
+          <div className="flex-1 min-h-0 overflow-auto">
             <table className="w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-gray-50 dark:bg-gray-800 shadow-[0_1px_0_0_theme(colors.gray.200)] dark:shadow-[0_1px_0_0_theme(colors.gray.700)]">
                 {table.getHeaderGroups().map((hg) => (
-                  <tr key={hg.id} className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
+                  <tr key={hg.id} className="bg-gray-50 dark:bg-gray-800">
                     {hg.headers.map((header) => (
                       <th
                         key={header.id}
