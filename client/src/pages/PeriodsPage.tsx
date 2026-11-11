@@ -130,11 +130,12 @@ function RollForwardModal({ source, onClose }: { source: Period; onClose: () => 
     endDate: '',
     isCurrent: false,
     copyRecurringJEs: true,
+    reverseEntries: true,
     keepWorkpaperRefs: true,
     mode: 'all_balances',
   });
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ tbCount: number; jeCopied: number } | null>(null);
+  const [result, setResult] = useState<{ tbCount: number; jeCopied: number; reversalsPosted: number } | null>(null);
 
   // Load equity accounts for retained earnings selector
   const { data: accounts } = useQuery({
@@ -154,7 +155,7 @@ function RollForwardModal({ source, onClose }: { source: Period; onClose: () => 
     mutationFn: (input: RollForwardInput) => rollForwardPeriod(source.id, input),
     onSuccess: (res) => {
       if (res.error) { setError(res.error.message); return; }
-      setResult({ tbCount: res.data!.tbCount, jeCopied: res.data!.jeCopied });
+      setResult({ tbCount: res.data!.tbCount, jeCopied: res.data!.jeCopied, reversalsPosted: res.data!.reversalsPosted ?? 0 });
       // Invalidate periods list immediately so it's fresh when modal closes
       qc.invalidateQueries({ queryKey: ['periods'] });
     },
@@ -181,7 +182,8 @@ function RollForwardModal({ source, onClose }: { source: Period; onClose: () => 
         <div className="space-y-4">
           <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded px-4 py-3 text-sm text-green-800 dark:text-green-400">
             New period created. <strong>{result.tbCount}</strong> TB accounts rolled forward
-            {result.jeCopied > 0 && <>, <strong>{result.jeCopied}</strong> recurring JE{result.jeCopied !== 1 ? 's' : ''} copied</>}.
+            {result.jeCopied > 0 && <>, <strong>{result.jeCopied}</strong> recurring JE{result.jeCopied !== 1 ? 's' : ''} copied</>}
+            {result.reversalsPosted > 0 && <>, <strong>{result.reversalsPosted}</strong> reversing entr{result.reversalsPosted !== 1 ? 'ies' : 'y'} reversed</>}.
           </div>
           <div className="flex justify-end">
             <button onClick={onClose} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
@@ -260,6 +262,11 @@ function RollForwardModal({ source, onClose }: { source: Period; onClose: () => 
               <input type="checkbox" checked={form.copyRecurringJEs ?? true} onChange={(e) => set('copyRecurringJEs', e.target.checked)}
                 className="rounded border-gray-300 dark:border-gray-600 text-blue-600" />
               Copy recurring journal entries to new period
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+              <input type="checkbox" checked={form.reverseEntries ?? true} onChange={(e) => set('reverseEntries', e.target.checked)}
+                className="rounded border-gray-300 dark:border-gray-600 text-blue-600" />
+              Reverse entries marked "Reverses next year", dated the new period's start
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
               <input type="checkbox" checked={form.keepWorkpaperRefs ?? true} onChange={(e) => set('keepWorkpaperRefs', e.target.checked)}

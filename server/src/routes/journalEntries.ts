@@ -3,6 +3,7 @@
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
 import { Router, Response } from 'express';
+import type { Knex } from 'knex';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
@@ -33,8 +34,33 @@ const jeSchema = z.object({
   /** Workpaper supporting this entry — printed on the AJE listing. */
   workpaperRef: z.string().max(20).optional(),
   isRecurring: z.boolean().optional(),
+  /** Roll forward posts this entry's reversal at the start of the next year. */
+  isReversing: z.boolean().optional(),
+  /** A mark from the client's tickmark library; null for none. */
+  tickmarkId: z.number().int().positive().nullable().optional(),
   lines: z.array(lineSchema).min(2),
 });
+
+/**
+ * A tickmark on an entry must come from the library of the client that owns
+ * the entry's period. Throws INVALID_TICKMARK (400) otherwise.
+ */
+async function assertTickmarkForPeriod(trx: Knex.Transaction, tickmarkId: number, periodId: number): Promise<void> {
+  const found = await trx('tickmark_library as tl')
+    .join('periods as p', 'p.client_id', 'tl.client_id')
+    .where({ 'tl.id': tickmarkId, 'p.id': periodId })
+    .first('tl.id');
+  if (!found) {
+    throw Object.assign(new Error("That tickmark isn't in this client's tickmark library."), { code: 'INVALID_TICKMARK', status: 400 });
+  }
+}
+
+function sendInvalidTickmark(res: Response, err: unknown): boolean {
+  const e = err as { code?: string; message?: string };
+  if (e.code !== 'INVALID_TICKMARK') return false;
+  res.status(400).json({ data: null, error: { code: 'INVALID_TICKMARK', message: e.message ?? 'Invalid tickmark.' } });
+  return true;
+}
 
 function parseBigIntLines(lines: Record<string, unknown>[]): Record<string, unknown>[] {
   return lines.map((l) => ({
@@ -100,7 +126,7 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
     return;
   }
-  const { periodId, entryType, entryDate, description, workpaperRef, isRecurring, lines } = result.data;
+  const { periodId, entryType, entryDate, description, workpaperRef, isRecurring, isReversing, tickmarkId, lines } = result.data;
 
   const totalDebit = lines.reduce((s, l) => s + l.debit, 0);
   const totalCredit = lines.reduce((s, l) => s + l.credit, 0);
@@ -115,6 +141,7 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
   try {
     await db.transaction(async (trx) => {
       await assertPeriodUnlocked(periodId, trx);
+      if (tickmarkId != null) await assertTickmarkForPeriod(trx, tickmarkId, periodId);
 
       // Lock the period row as a serialization point so concurrent JE creation
       // can't compute the same entry_number
@@ -134,6 +161,8 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
           description: description ?? null,
           workpaper_ref: workpaperRef?.trim() || null,
           is_recurring: isRecurring ?? false,
+          is_reversing: isReversing ?? false,
+          tickmark_id: tickmarkId ?? null,
           created_by: req.user!.userId,
         })
         .returning('*');
@@ -160,6 +189,7 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
       return;
     }
+    if (sendInvalidTickmark(res, err)) return;
     sendServerError(res, err, 'journal-entries');
   }
 });
@@ -280,6 +310,8 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
     entryDate: z.string().optional(),
     description: z.string().nullable().optional(),
     workpaperRef: z.string().max(20).nullable().optional(),
+    isReversing: z.boolean().optional(),
+    tickmarkId: z.number().int().positive().nullable().optional(),
     lines: z.array(lineSchema).min(2).optional(),
   });
   const result = patchSchema.safeParse(req.body);
@@ -287,7 +319,7 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } });
     return;
   }
-  const { entryType, entryDate, description, workpaperRef, lines } = result.data;
+  const { entryType, entryDate, description, workpaperRef, isReversing, tickmarkId, lines } = result.data;
 
   if (lines) {
     const totalDebit = lines.reduce((s, l) => s + l.debit, 0);
@@ -305,10 +337,14 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
     const updatedEntry = await db.transaction(async (trx) => {
       const existing2 = await trx('journal_entries').where({ id }).first('period_id');
       if (existing2) await assertPeriodUnlocked(existing2.period_id, trx);
+      if (existing2 && tickmarkId != null) await assertTickmarkForPeriod(trx, tickmarkId, existing2.period_id);
 
       const headerUpdates: Record<string, unknown> = { updated_at: trx.fn.now() };
       // Don't allow changing entry_type for trans entries
       if (entryType !== undefined && existing.entry_type !== 'trans') headerUpdates.entry_type = entryType;
+      // Only book and tax entries reverse at roll forward; a bank entry never does.
+      if (isReversing !== undefined && existing.entry_type !== 'trans') headerUpdates.is_reversing = isReversing;
+      if (tickmarkId !== undefined) headerUpdates.tickmark_id = tickmarkId;
       if (entryDate !== undefined) headerUpdates.entry_date = entryDate;
       if (description !== undefined) headerUpdates.description = description;
       if (workpaperRef !== undefined) headerUpdates.workpaper_ref = workpaperRef?.trim() || null;
@@ -365,6 +401,7 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
       res.status(409).json({ data: null, error: { code: 'PERIOD_LOCKED', message: e.message ?? 'Period is locked.' } });
       return;
     }
+    if (sendInvalidTickmark(res, err)) return;
     const internal = err instanceof Error ? err.message : '';
     if (internal === 'NOT_FOUND') {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Journal entry not found' } });

@@ -9,6 +9,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { sendServerError } from '../lib/safeError';
+import { REVERSAL_TAG, reversalDescription, reversalLines } from '../lib/jeReversal';
 
 export const rollForwardRouter = Router({ mergeParams: true });
 rollForwardRouter.use(authMiddleware);
@@ -27,6 +28,7 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
     endDate: z.string().optional(),
     isCurrent: z.boolean().optional(),
     copyRecurringJEs: z.boolean().optional().default(true),
+    reverseEntries: z.boolean().optional().default(true),
     mode: z.enum(['all_balances', 'close_income', 'zero_balances']).optional().default('all_balances'),
     retainedEarningsAccountId: z.number().int().positive().optional(),
     keepWorkpaperRefs: z.boolean().optional().default(true),
@@ -37,7 +39,7 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
     return;
   }
 
-  const { periodName, startDate, endDate, isCurrent, copyRecurringJEs, mode, retainedEarningsAccountId, keepWorkpaperRefs } = parsed.data;
+  const { periodName, startDate, endDate, isCurrent, copyRecurringJEs, reverseEntries, mode, retainedEarningsAccountId, keepWorkpaperRefs } = parsed.data;
 
   if (mode === 'close_income' && !retainedEarningsAccountId) {
     res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: 'Retained earnings account is required when closing income to equity.' } });
@@ -237,6 +239,49 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
           .update({ workpaper_ref: null, updated_at: trx.fn.now() });
       }
 
+      // Post the reversals of the source year's reversing entries, dated the
+      // new period's start. Book and tax only (a bank entry never reverses);
+      // the reversal itself is neither reversing nor recurring, carries no
+      // tickmark, and keeps the W/P ref so it ties back to its support.
+      let reversalsPosted = 0;
+      if (reverseEntries) {
+        const reversing = await trx('journal_entries')
+          .where({ period_id: sourceId, is_reversing: true })
+          .whereIn('entry_type', ['book', 'tax'])
+          .orderBy('entry_type')
+          .orderBy('entry_number');
+        const reversalDate = startDate?.trim() || new Date().toISOString().slice(0, 10);
+
+        for (const je of reversing) {
+          const lines = await trx('journal_entry_lines').where({ journal_entry_id: je.id });
+          if (lines.length === 0) continue;
+
+          const lastEntry = await trx('journal_entries')
+            .where({ period_id: period.id, entry_type: je.entry_type })
+            .max('entry_number as max').first();
+          const entryNumber = (lastEntry?.max ?? 0) + 1;
+
+          const [rev] = await trx('journal_entries').insert({
+            period_id: period.id,
+            entry_number: entryNumber,
+            entry_type: je.entry_type,
+            entry_date: reversalDate,
+            description: reversalDescription(je.entry_type, je.entry_number, je.description),
+            workpaper_ref: je.workpaper_ref ?? null,
+            is_recurring: false,
+            is_reversing: false,
+            source_tag: REVERSAL_TAG,
+            created_by: req.user!.userId,
+          }).returning('*');
+
+          await trx('journal_entry_lines').insert(
+            reversalLines(lines).map((l) => ({ journal_entry_id: rev.id, ...l })),
+          );
+          await ensureTrialBalanceRows(trx, period.id, lines.map((l: { account_id: number }) => l.account_id));
+          reversalsPosted++;
+        }
+      }
+
       // Copy recurring JEs
       let jeCopied = 0;
       if (copyRecurringJEs) {
@@ -261,6 +306,8 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
             entry_date: jeDate,
             description: je.description,
             is_recurring: true,
+            // A recurring accrual that reverses keeps reversing in the new year.
+            is_reversing: je.is_reversing ?? false,
             created_by: req.user!.userId,
           }).returning('*');
 
@@ -304,10 +351,10 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
         entityType: 'period',
         entityId: period.id,
         action: 'create',
-        description: `Rolled forward from "${sourcePeriod.period_name}" (mode: ${mode}) — ${tbRows.length} TB accounts, ${jeCopied} recurring JEs, ${tbTickmarks.length} tickmark assignments copied`,
+        description: `Rolled forward from "${sourcePeriod.period_name}" (mode: ${mode}) — ${tbRows.length} TB accounts, ${jeCopied} recurring JEs, ${tbTickmarks.length} tickmark assignments copied, ${reversalsPosted} reversing entries reversed`,
       }, trx);
 
-      return { kind: 'ok', row: { period, tbCount: tbRows.length, jeCopied } as Record<string, unknown> };
+      return { kind: 'ok', row: { period, tbCount: tbRows.length, jeCopied, reversalsPosted } as Record<string, unknown> };
     });
 
     if (result.kind === 'not_found') {

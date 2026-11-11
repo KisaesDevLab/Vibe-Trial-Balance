@@ -9,6 +9,7 @@ import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { QuickAddAccountModal } from './QuickAddAccountModal';
 import { DateInput } from './DateInput';
+import { JeReversingTickmarkFields } from './JeReversingTickmarkFields';
 import { evalAndFormatAmount } from '../utils/evalAmountExpr';
 import { validateJeLines } from '../utils/jeLines';
 import { useUnsavedGuard, confirmDiscard } from '../utils/useUnsavedGuard';
@@ -59,6 +60,8 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
   const [entryDate, setEntryDate] = useState(periodEndDate ?? localToday());
   const [description, setDescription] = useState('');
   const [workpaperRef, setWorkpaperRef] = useState('');
+  const [isReversing, setIsReversing] = useState(false);
+  const [tickmarkId, setTickmarkId] = useState<number | null>(null);
   const [lines, setLines] = useState<FormLine[]>([
     { _key: newLineKey(), accountId: '', debit: '', credit: '' },
     { _key: newLineKey(), accountId: '', debit: '', credit: '' },
@@ -86,6 +89,8 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
   const dirty =
     description !== '' ||
     workpaperRef !== '' ||
+    isReversing ||
+    tickmarkId !== null ||
     lines.some((l) => l.accountId !== '' || l.debit !== '' || l.credit !== '');
   useUnsavedGuard(dirty);
   const handleClose = async () => { if (await confirmDiscard(dirty)) onClose(); };
@@ -135,6 +140,8 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
       entryDate,
       description: description || undefined,
       workpaperRef: workpaperRef.trim() || undefined,
+      isReversing,
+      tickmarkId,
       lines: lineStatus.lines,
     });
   };
@@ -192,6 +199,15 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
                 />
               </div>
             </div>
+
+            <JeReversingTickmarkFields
+              clientId={clientId}
+              showReversing
+              isReversing={isReversing}
+              onReversingChange={setIsReversing}
+              tickmarkId={tickmarkId}
+              onTickmarkChange={setTickmarkId}
+            />
 
             <div>
               <table className="w-full text-sm">
