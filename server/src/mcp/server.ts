@@ -228,7 +228,7 @@ export function createMcpServer(rateLimitKey = 'default'): Server {
       },
       {
         name: 'list_journal_entries',
-        description: 'List journal entries for a period, optionally filtered by type',
+        description: 'List journal entries for a period, optionally filtered by type. Each entry carries is_reversing (reverses at the start of the next year), source_tag (\'reversal\' for a reversal posted by roll forward) and tickmark_symbol.',
         inputSchema: {
           type: 'object',
           properties: {

@@ -56,6 +56,8 @@ export interface RollForwardInput {
   endDate?: string;
   isCurrent?: boolean;
   copyRecurringJEs?: boolean;
+  /** Post the reversals of entries marked "Reverses next year" (default: true) */
+  reverseEntries?: boolean;
   /** How to handle balances in the new period */
   mode?: RollForwardMode;
   /** Account ID to close net income/loss into (required when mode='close_income') */
@@ -68,6 +70,7 @@ export interface RollForwardResult {
   period: Period;
   tbCount: number;
   jeCopied: number;
+  reversalsPosted: number;
 }
 
 export const rollForwardPeriod = (id: number, input: RollForwardInput) =>

@@ -29,8 +29,12 @@ export interface JournalEntry {
    * these entries' lines back to the uploaded prior year to show whether it
    * would tie, since the entry itself must be posted in the current year.
    */
-  source_tag: 'py_tieout' | string | null;
+  source_tag: 'py_tieout' | 'reversal' | string | null;
   is_recurring: boolean;
+  /** Reverses at the start of the next year: roll forward posts its reversal. */
+  is_reversing: boolean;
+  /** A mark from the client's tickmark library, or none. */
+  tickmark_id: number | null;
   created_by: number | null;
   created_at: string;
   updated_at: string;
@@ -44,6 +48,8 @@ export interface JEInput {
   description?: string;
   workpaperRef?: string;
   isRecurring?: boolean;
+  isReversing?: boolean;
+  tickmarkId?: number | null;
   lines: { accountId: number; debit: number; credit: number }[];
 }
 
@@ -80,6 +86,8 @@ export const updateJournalEntry = (
     entryDate?: string;
     description?: string | null;
     workpaperRef?: string | null;
+    isReversing?: boolean;
+    tickmarkId?: number | null;
     lines?: { accountId: number; debit: number; credit: number }[];
   },
 ) =>

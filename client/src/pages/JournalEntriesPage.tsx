@@ -563,6 +563,22 @@ export function JournalEntriesPage() {
                       PY true-up
                     </span>
                   )}
+                  {entry.is_reversing && (
+                    <span
+                      title="Reverses next year: roll forward posts its reversal, dated the first day of the new year."
+                      className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 mr-3 whitespace-nowrap"
+                    >
+                      Reversing
+                    </span>
+                  )}
+                  {entry.source_tag === 'reversal' && (
+                    <span
+                      title="Posted by roll forward to reverse last year's reversing entry."
+                      className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 mr-3 whitespace-nowrap"
+                    >
+                      Reversal
+                    </span>
+                  )}
                   {entry.workpaper_ref && (
                     <span
                       title="Supporting workpaper"

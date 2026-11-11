@@ -29,13 +29,23 @@ export interface JournalEntry {
   description: string | null;
   /** Supporting workpaper, set in the app — read-only over MCP for now. */
   workpaper_ref: string | null;
+  /** Reverses at the start of the next year (roll forward) — read-only over MCP. */
+  is_reversing: boolean;
+  /** 'reversal' when roll forward posted this entry as another entry's reversal. */
+  source_tag: string | null;
+  /** The entry's tickmark from the client's library — read-only over MCP. */
+  tickmark_id: number | null;
+  tickmark_symbol: string | null;
   lines: Array<{ account_id: number; account_number: string; account_name: string; debit: number; credit: number }>;
 }
 
 export async function getJournalEntries(periodId: number, type?: string): Promise<JournalEntry[]> {
-  let q = db('journal_entries').where({ period_id: periodId });
-  if (type) q = q.where({ entry_type: type });
-  const entries = await q.orderBy('entry_type').orderBy('entry_number');
+  let q = db('journal_entries')
+    .leftJoin('tickmark_library', 'tickmark_library.id', 'journal_entries.tickmark_id')
+    .where({ 'journal_entries.period_id': periodId })
+    .select('journal_entries.*', 'tickmark_library.symbol as tickmark_symbol');
+  if (type) q = q.where({ 'journal_entries.entry_type': type });
+  const entries = await q.orderBy('journal_entries.entry_type').orderBy('journal_entries.entry_number');
 
   const entryIds = entries.map((e: { id: number }) => e.id);
   const lines = entryIds.length > 0

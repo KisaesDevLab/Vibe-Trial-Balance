@@ -13,6 +13,7 @@ import { listAccounts, type Account } from '../api/chartOfAccounts';
 import { AccountSearchDropdown } from './AccountSearchDropdown';
 import { QuickAddAccountModal } from './QuickAddAccountModal';
 import { DateInput } from './DateInput';
+import { JeReversingTickmarkFields } from './JeReversingTickmarkFields';
 import { evalAndFormatAmount } from '../utils/evalAmountExpr';
 import { validateJeLines } from '../utils/jeLines';
 import { useUnsavedGuard, confirmDiscard } from '../utils/useUnsavedGuard';
@@ -57,6 +58,8 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
   const [entryDate, setEntryDate] = useState('');
   const [description, setDescription] = useState('');
   const [workpaperRef, setWorkpaperRef] = useState('');
+  const [isReversing, setIsReversing] = useState(false);
+  const [tickmarkId, setTickmarkId] = useState<number | null>(null);
   const [lines, setLines] = useState<FormLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isTrans, setIsTrans] = useState(false);
@@ -93,6 +96,8 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
       const initialDate = jeData.entry_date.slice(0, 10);
       const initialDesc = jeData.description ?? '';
       const initialWpRef = jeData.workpaper_ref ?? '';
+      const initialReversing = jeData.is_reversing ?? false;
+      const initialTickmark = jeData.tickmark_id ?? null;
       const initialLines = jeData.lines.map((l) => ({
         _key: newEditLineKey(),
         accountId: l.account_id,
@@ -103,11 +108,13 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
       setEntryDate(initialDate);
       setDescription(initialDesc);
       setWorkpaperRef(initialWpRef);
+      setIsReversing(initialReversing);
+      setTickmarkId(initialTickmark);
       setIsTrans(jeData.entry_type === 'trans');
       setLines(initialLines);
       setInitialSnapshot(
         JSON.stringify({ entryType: initialType, entryDate: initialDate, description: initialDesc,
-          workpaperRef: initialWpRef,
+          workpaperRef: initialWpRef, isReversing: initialReversing, tickmarkId: initialTickmark,
           lines: initialLines.map((l) => ({ accountId: l.accountId, debit: l.debit, credit: l.credit })) }),
       );
       setLoaded(true);
@@ -120,7 +127,7 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
   const { totalDebit, totalCredit, balanced } = lineStatus;
 
   const currentSnapshot = JSON.stringify({
-    entryType, entryDate, description, workpaperRef,
+    entryType, entryDate, description, workpaperRef, isReversing, tickmarkId,
     lines: lines.map((l) => ({ accountId: l.accountId, debit: l.debit, credit: l.credit })),
   });
   const dirty = loaded && currentSnapshot !== initialSnapshot;
@@ -182,6 +189,8 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
       entryDate,
       description: description || null,
       workpaperRef: workpaperRef.trim() || null,
+      ...(isTrans ? {} : { isReversing }),
+      tickmarkId,
       lines: lineStatus.lines,
     });
   };
@@ -262,6 +271,15 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
                   />
                 </div>
               </div>
+
+              <JeReversingTickmarkFields
+                clientId={clientId}
+                showReversing={!isTrans}
+                isReversing={isReversing}
+                onReversingChange={setIsReversing}
+                tickmarkId={tickmarkId}
+                onTickmarkChange={setTickmarkId}
+              />
 
               <div>
                 <table className="w-full text-sm">

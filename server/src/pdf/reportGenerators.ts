@@ -435,11 +435,13 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
   const svc  = await PdfTemplateService.fromDb(db);
   const info = await getPeriodInfo(db, periodId);
 
-  const entries = await db('journal_entries')
-    .where({ period_id: periodId })
-    .whereIn('entry_type', ['book', 'tax'])
-    .orderBy('entry_type')
-    .orderBy('entry_number');
+  const entries = await db('journal_entries as je')
+    .leftJoin('tickmark_library as tl', 'tl.id', 'je.tickmark_id')
+    .where({ 'je.period_id': periodId })
+    .whereIn('je.entry_type', ['book', 'tax'])
+    .orderBy('je.entry_type')
+    .orderBy('je.entry_number')
+    .select('je.*', 'tl.symbol as tickmark_symbol');
 
   const entryIds = entries.map((e: Record<string, unknown>) => e.id as number);
   const lines = entryIds.length > 0
@@ -462,8 +464,8 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
     linesByEntry.get(eid)!.push(l);
   }
 
-  const cols = ['AJE #', 'Date', 'W/P Ref', 'Description', 'Acct #', 'Account Name', 'Debit', 'Credit'];
-  const widths = [35, 60, 45, '*', 45, '*', 60, 60];
+  const cols = ['AJE #', 'Date', 'W/P Ref', 'Mark', 'Description', 'Acct #', 'Account Name', 'Debit', 'Credit'];
+  const widths = [35, 60, 45, 25, '*', 45, '*', 60, 60];
 
   const buildSection = (type: string): Content => {
     const sectionEntries = (entries as Record<string, unknown>[]).filter(
@@ -490,7 +492,8 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
           firstLine ? String(entry.entry_number ?? '') : '',
           firstLine ? fmtDate(entry.entry_date as string) : '',
           firstLine ? (entry.workpaper_ref as string ?? '') : '',
-          firstLine ? (entry.description as string ?? '') : '',
+          firstLine && entry.tickmark_symbol ? pdfSafeSymbol(entry.tickmark_symbol as string) : '',
+          firstLine ? `${entry.description as string ?? ''}${entry.is_reversing ? ' (Reversing)' : ''}`.trim() : '',
           line.account_number as string,
           line.account_name   as string,
           dr,
@@ -503,7 +506,7 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
     }
 
     tableBody.push(svc.dataRow(
-      ['', '', '', '', '', totalDr === totalCr ? 'SECTION TOTAL' : 'SECTION TOTAL — OUT OF BALANCE', totalDr, totalCr],
+      ['', '', '', '', '', '', totalDr === totalCr ? 'SECTION TOTAL' : 'SECTION TOTAL — OUT OF BALANCE', totalDr, totalCr],
       { bold: true, shade: true },
     ));
 

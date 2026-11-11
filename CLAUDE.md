@@ -466,6 +466,14 @@ All planned phases complete. App is feature-complete.
   prepends a generated Table of Contents (`generateWorkpaperTocPdf`) listing each selected report and
   its page range in the merged file; the TOC counts itself as page 1, so the route rebuilds it if its
   own length changes the numbers.
+- **Reversing entries + entry tickmarks** (`journal_entries.is_reversing`, `journal_entries.tickmark_id`).
+  Roll-forward (`reverseEntries`, default on) posts each book/tax reversing entry's reversal in the new
+  period: lines swapped, dated the new start, `source_tag = 'reversal'`, never itself reversing,
+  recurring or marked (`lib/jeReversal.ts`). A recurring copy keeps `is_reversing`. An entry marked
+  reversing after its year was rolled forward does not reverse; roll forward is the only trigger.
+  `tickmark_id` is ON DELETE SET NULL and must belong to the period's client (`INVALID_TICKMARK`).
+  Client restores (as new and replace) insert it as null because `tickmark_library` is not restored.
+  `npm run test:aje-e2e` walks it against a real server.
 - **Lead Sheets** (`lead_sheets` + `chart_of_accounts.lead_sheet_id` + `lead_sheet_signoffs`).
   One lead sheet per account; membership **persists across periods** because it lives on the COA row,
   so roll-forward carries it with no code and `keepWorkpaperRefs: false` must NOT clear it (a W/P ref

@@ -954,6 +954,9 @@ async function restoreAsNew(
       ...row,
       id: undefined,
       period_id: getNewId('periods', row.period_id as number),
+      // The tickmark library is not restored, so an entry's mark can't follow
+      // it: the backup's id would point at another client's mark, or none.
+      tickmark_id: null,
     }));
     const encoded = await encodeJsonColumns(trx, 'journal_entries', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
@@ -1353,6 +1356,9 @@ async function restoreReplace(
       ...row,
       id: undefined,
       period_id: periodIdMap.get(row.period_id as number) ?? row.period_id,
+      // The tickmark library is not restored, so an entry's mark can't follow
+      // it: the backup's id would point at another client's mark, or none.
+      tickmark_id: null,
     }));
     const encoded = await encodeJsonColumns(trx, 'journal_entries', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
