@@ -23,7 +23,6 @@ import rateLimit from 'express-rate-limit';
 import { db } from '../db';
 import { authMiddleware, blockReviewerWrites, type AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
-import { rateLimitKey } from '../lib/rateLimitKey';
 import { sendServerError } from '../lib/safeError';
 import {
   CODE_TTL_MS, formatCode, newDeviceToken, newPairingCode, normaliseCode, sha256, tidyDeviceName,
@@ -39,13 +38,19 @@ const bad = (res: Response, status: number, code: string, message: string): void
 
 const CODE_REFUSED = 'That code is not right or has expired. Make a new one in Vibe Trial Balance › Settings › Desktop sync.';
 
-/** Pairing is public: 10 tries per 15 minutes per address. */
+/**
+ * Pairing is public: 10 failed tries per 15 minutes per ADDRESS. Not `rateLimitKey`,
+ * which groups by an unverified JWT claim: on a public route a guesser could
+ * send a made-up token per request and get a fresh bucket each time.
+ */
 const pairLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: rateLimitKey,
+  keyGenerator: (req) => `ip:${req.ip ?? req.socket?.remoteAddress ?? 'unknown'}`,
+  // Guesses are what it is for: a code that pairs does not use up a try.
+  skipSuccessfulRequests: true,
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many pairing attempts. Wait a few minutes and try again.' } },
 });
 
@@ -141,7 +146,13 @@ desktopSyncRouter.post('/codes', async (req: AuthRequest, res: Response): Promis
   try {
     const code = newPairingCode();
     const expires = new Date(Date.now() + CODE_TTL_MS);
-    await db('sync_pairing_codes').insert({ user_id: req.user!.userId, code_hash: sha256(code), expires_at: expires });
+    await db.transaction(async (trx) => {
+      // One live code per user: a new one retires the earlier, unused ones.
+      await trx('sync_pairing_codes').where({ user_id: req.user!.userId }).whereNull('used_at').delete();
+      // Unused codes that expired a day ago are of no use to anyone.
+      await trx('sync_pairing_codes').whereNull('used_at').where('expires_at', '<', trx.raw("now() - interval '1 day'")).delete();
+      await trx('sync_pairing_codes').insert({ user_id: req.user!.userId, code_hash: sha256(code), expires_at: expires });
+    });
     await logAudit({
       userId: req.user!.userId, periodId: null, entityType: 'sync_device', action: 'pairing_code',
       description: 'Made a code to pair a desktop',

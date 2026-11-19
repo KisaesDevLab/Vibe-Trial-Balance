@@ -29,6 +29,9 @@ export function DesktopSyncCard() {
   const qc = useQueryClient();
   const [all, setAll] = useState(false);
   const [code, setCode] = useState<PairingCode | null>(null);
+  /** When the code shown was made: a device paired after it used it. */
+  const [codeMadeAt, setCodeMadeAt] = useState(0);
+  const [connected, setConnected] = useState<string | null>(null);
   const [making, setMaking] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
@@ -51,6 +54,17 @@ export function DesktopSyncCard() {
 
   const expired = code ? minutesLeft(code.expiresAt, now) === 0 : false;
 
+  // The code is spent once a desktop pairs with it: say so instead of
+  // showing it as still good.
+  useEffect(() => {
+    if (!code || !devices.data) return;
+    const fresh = devices.data.find((d) => new Date(d.createdAt).getTime() >= codeMadeAt - 5000);
+    if (fresh) {
+      setConnected(fresh.name);
+      setCode(null);
+    }
+  }, [code, codeMadeAt, devices.data]);
+
   async function connect() {
     setMaking(true);
     const res = await createPairingCode();
@@ -60,6 +74,8 @@ export function DesktopSyncCard() {
       return;
     }
     setNow(Date.now());
+    setCodeMadeAt(Date.now());
+    setConnected(null);
     setCode(res.data);
   }
 
@@ -97,6 +113,9 @@ export function DesktopSyncCard() {
         >
           {making ? 'Making a code…' : code ? 'Make a new code' : 'Connect a desktop'}
         </button>
+        {connected && !code && (
+          <p className="mt-3 text-sm text-green-700 dark:text-green-400">Connected \u201c{connected}\u201d. The code has been used.</p>
+        )}
         {code && (
           <div className="mt-3 rounded border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-3 max-w-md">
             {expired ? (

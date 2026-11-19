@@ -236,6 +236,24 @@ async function main() {
     assert.ok((await one(`SELECT last_used_at FROM sync_devices WHERE id = $1`, [laptop.deviceId])).last_used_at, 'last used is kept');
   });
 
+  await step('two desktops typing the same code at once: exactly one pairs', async () => {
+    const c = await api('/api/v1/desktop-sync/codes', { method: 'POST', token: admin });
+    const both = await Promise.all([1, 2].map((i) => api('/api/v1/sync/pair', { method: 'POST', json: { code: c.json.data.code, deviceName: `Race ${i}` } })));
+    assert.deepEqual(both.map((r) => r.status).sort(), [201, 400], both.map((r) => r.text).join(' | '));
+    assert.equal((await one(`SELECT count(*)::int AS n FROM sync_devices WHERE name LIKE 'Race %'`)).n, 1);
+  });
+
+  await step('a new code retires the earlier unused one', async () => {
+    const first = await api('/api/v1/desktop-sync/codes', { method: 'POST', token: admin });
+    const second = await api('/api/v1/desktop-sync/codes', { method: 'POST', token: admin });
+    const old = await api('/api/v1/sync/pair', { method: 'POST', json: { code: first.json.data.code, deviceName: 'Old code' } });
+    assert.equal(old.json.error.code, 'SYNC_CODE_INVALID');
+    const fresh = await api('/api/v1/sync/pair', { method: 'POST', json: { code: second.json.data.code, deviceName: 'New code' } });
+    assert.equal(fresh.status, 201, fresh.text);
+    await api(`/api/v1/desktop-sync/devices/${fresh.json.data.device.id}`, { method: 'DELETE', token: admin });
+    await sql(`DELETE FROM sync_devices WHERE name IN ('Race 1', 'Race 2', 'New code')`);
+  });
+
   await step('a code pairs once; a wrong, malformed or expired one is refused alike', async () => {
     const again = await api('/api/v1/sync/pair', { method: 'POST', json: { code: laptop.code, deviceName: 'Second' } });
     assert.equal(again.status, 400, again.text);
@@ -280,6 +298,11 @@ async function main() {
     assert.equal(w.json.error.code, 'READ_ONLY');
     const a = await api('/api/v1/sync/clients', { method: 'POST', token: laptop.token, json: {} });
     assert.equal(a.status, 404, `an admin's device gets past the gate: ${a.text}`);
+    // The reviewer gate still holds for ordinary writes; only their own
+    // account and desktops are open to them.
+    const write = await api('/api/v1/clients', { method: 'POST', token: reviewer, json: { name: 'Example' } });
+    assert.equal(write.status, 403, write.text);
+    assert.equal(write.json.error.code, 'READ_ONLY');
   });
 
   await step('each user sees their own devices; an admin everyone\'s; only the owner or an admin removes one', async () => {
@@ -316,10 +339,17 @@ async function main() {
     assert.ok(rows.some((r) => r.action === 'sync' && r.description.includes('"Example laptop"') && r.description.includes('/api/v1/sync/clients')), 'a sync call names its device');
   });
 
-  await step('pairing is rate limited', async () => {
+  await step('pairing is rate limited by address, whatever token a guesser sends', async () => {
     let limited = false;
-    for (let i = 0; i < 12 && !limited; i++) {
-      const r = await api('/api/v1/sync/pair', { method: 'POST', json: { code: 'ABCD-EFGH', deviceName: 'Guess' } });
+    for (let i = 0; i < 14 && !limited; i++) {
+      // A made-up, unsigned JWT naming a different user each time must not
+      // buy a fresh bucket.
+      const fake = `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(JSON.stringify({ userId: 1000 + i })).toString('base64url')}.`;
+      const r = await fetch(server.base + '/api/v1/sync/pair', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${fake}` },
+        body: JSON.stringify({ code: 'ABCD-EFGH', deviceName: 'Guess' }),
+      });
       limited = r.status === 429;
     }
     assert.ok(limited, 'refused after 10 tries in 15 minutes');
