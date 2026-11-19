@@ -634,6 +634,20 @@ async function main() {
     assert.equal((await api(`/api/v1/users/${patId}`, { method: 'PATCH', token: adminToken, json: { isActive: true, email: PAT_IDP.email } })).status, 200);
   });
 
+  await step('a new reviewer can finish the forced password change; their writes are still refused', async () => {
+    const created = await api('/api/v1/users', { method: 'POST', token: adminToken, json: { username: 'example.reviewer', displayName: 'Example Reviewer', password: 'E2eReviewer!2026', role: 'reviewer' } });
+    assert.equal(created.status, 201, created.text);
+    const first = await localLogin('example.reviewer', 'E2eReviewer!2026');
+    assert.equal(first.status, 200, first.text);
+    const rot = await api('/api/v1/auth/change-password', { method: 'POST', token: first.json.data.token, json: { currentPassword: 'E2eReviewer!2026', newPassword: 'E2eReviewer!2027' } });
+    assert.equal(rot.status, 200, `the reviewer gate must not block their own account: ${rot.text}`);
+    const again = await localLogin('example.reviewer', 'E2eReviewer!2027');
+    assert.equal(again.status, 200, again.text);
+    const write = await api('/api/v1/clients', { method: 'POST', token: again.json.data.token, json: { name: 'Example Reviewer Client' } });
+    assert.equal(write.status, 403, write.text);
+    assert.equal(write.json.error.code, 'READ_ONLY');
+  });
+
   await step('H2. an admin password set does not put break-glass into forced rotation (it does for everyone else)', async () => {
     const bg = await userRow('username', 'vibe-breakglass');
     const temp = 'E2eBreakGlassTemp!2026';
