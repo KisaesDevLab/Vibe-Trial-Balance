@@ -53,6 +53,8 @@ export interface SyncCheckout {
   since: string;
   days: number;
   stale: boolean;
+  /** Held by the signed-in user's own desktop. */
+  mine: boolean;
 }
 
 /** Every live check-out (an admin), or the user's own. */

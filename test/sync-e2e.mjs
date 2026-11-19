@@ -992,6 +992,7 @@ async function main() {
     assert.ok(mine, 'listed');
     assert.equal(mine.periodId, s3.period.id);
     assert.equal(mine.stale, false);
+    assert.equal(mine.mine, true, "the admin's own desktop holds it (the password form warns from this)");
     assert.equal((await api(`/api/v1/sync/checkouts/${pull.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200);
     assert.equal((await api(`/api/v1/lead-sheets/${ls.id}`, { method: 'PATCH', token: admin, json: { code: 'EXR2', name: 'Example renamed sheet' } })).status, 200, 'free again once released');
   });

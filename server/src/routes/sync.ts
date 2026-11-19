@@ -859,7 +859,7 @@ desktopSyncRouter.get('/checkouts', async (req: AuthRequest, res: Response): Pro
       .whereNull('c.released_at')
       .orderBy('c.created_at')
       .select('c.id', 'c.created_at', 'p.id as period_id', 'p.period_name', 'cl.id as client_id', 'cl.name as client_name',
-        'd.name as device', 'u.display_name', 'u.username');
+        'd.name as device', 'u.display_name', 'u.username', 'c.user_id');
     if (req.user!.role !== 'admin') q.where('c.user_id', req.user!.userId);
     const warnDays = await checkoutWarnDays();
     const rows = (await q) as Array<Record<string, unknown>>;
@@ -870,6 +870,7 @@ desktopSyncRouter.get('/checkouts', async (req: AuthRequest, res: Response): Pro
         return {
           id: r.id, periodId: r.period_id, periodName: r.period_name, clientId: r.client_id, clientName: r.client_name,
           user: (r.display_name as string | null) ?? r.username, device: r.device, since: since.toISOString(), days, stale: days >= warnDays,
+          mine: Number(r.user_id) === req.user!.userId,
         };
       }),
       error: null,
