@@ -333,10 +333,11 @@ const IGNORED_AS_NEW = {
   periods: ['sync_uid'],
   chart_of_accounts: ['sync_uid'],
   bank_transactions: ['sync_uid'],
+  fs_client_layouts: ['sync_uid'],
 };
 
 /** The tables with a sync_uid (desktop sync S1). */
-const SYNC_UID_TABLES = ['clients', 'periods', 'chart_of_accounts', 'bank_transactions'];
+const SYNC_UID_TABLES = ['clients', 'periods', 'chart_of_accounts', 'bank_transactions', 'fs_client_layouts'];
 
 /** Each table's sync_uids for client `clientId`, sorted. */
 async function syncUids(clientId) {

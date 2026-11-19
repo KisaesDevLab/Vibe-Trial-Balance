@@ -18,7 +18,7 @@
  * desktop never signs in itself.
  */
 
-import { Router, type Response } from 'express';
+import express, { Router, type Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { db } from '../db';
@@ -38,6 +38,7 @@ import { checkedOutBy } from '../lib/periodGuard';
 import { stampPeriod } from '../lib/sync/periodStampLoad';
 import { SYNC_JOB_DIR, startJob } from '../lib/sync/jobs';
 import { checkoutApi, checkoutWarnDays, daysOut, isoDate } from '../lib/sync/checkouts';
+import { MAX_UPLOAD_BYTES, UploadError, completeUpload, openUpload, partBytes, putPart, receivedParts, startUpload } from '../lib/sync/uploads';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const APP_VERSION = (require('../../package.json') as { version: string }).version;
@@ -179,8 +180,8 @@ syncRouter.get('/capabilities', async (_req: SyncRequest, res: Response): Promis
         formatVersions: [FORMAT_VERSION],
         schemaVersion: applied[applied.length - 1] ?? null,
         appVersion: APP_VERSION,
-        // Uploads (send-back) arrive in S4; 0 says this server takes none yet.
-        maxUploadBytes: 0,
+        maxUploadBytes: MAX_UPLOAD_BYTES,
+        partBytes: partBytes(),
         features: ['checkout-v1'],
         checkoutWarnDays: await checkoutWarnDays(),
       },
@@ -430,6 +431,79 @@ syncRouter.get('/jobs/:id/archive', async (req: SyncRequest, res: Response): Pro
 
 // Writes from here on: a reviewer's device has none.
 syncRouter.use(blockReviewerWrites);
+
+const uploadFail = (res: Response, err: unknown, tag: string): void => {
+  if (err instanceof UploadError) {
+    bad(res, err.status, err.code, err.message);
+    return;
+  }
+  sendServerError(res, err, tag);
+};
+
+/** Start a send-back upload: `{ size, sha256 }` → `{ uploadId, partBytes, parts }`. */
+syncRouter.post('/uploads', async (req: SyncRequest, res: Response): Promise<void> => {
+  const body = z.object({ size: z.number().int(), sha256: z.string().toLowerCase() }).safeParse(req.body ?? {});
+  if (!body.success) {
+    bad(res, 400, 'VALIDATION_ERROR', '`size` (bytes) and `sha256` (hex) are needed.');
+    return;
+  }
+  try {
+    res.status(201).json({ data: await startUpload(req.syncDevice!.id, req.user!.userId, body.data.size, body.data.sha256), error: null });
+  } catch (err: unknown) {
+    uploadFail(res, err, 'sync/uploads');
+  }
+});
+
+/** One part, as raw bytes; sending a part again replaces it. */
+syncRouter.put(
+  '/uploads/:id/parts/:n',
+  express.raw({ type: () => true, limit: partBytes() + 1024 }),
+  async (req: SyncRequest, res: Response): Promise<void> => {
+    const id = String(req.params.id);
+    if (!isUuid(id)) {
+      bad(res, 404, 'NOT_FOUND', 'No such upload from this computer.');
+      return;
+    }
+    try {
+      const row = await openUpload(id, req.syncDevice!.id);
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      const received = await putPart(row, Number(req.params.n), body);
+      res.json({ data: { received }, error: null });
+    } catch (err: unknown) {
+      uploadFail(res, err, 'sync/uploads/part');
+    }
+  },
+);
+
+/** Which parts have arrived (to resume). */
+syncRouter.get('/uploads/:id', async (req: SyncRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  if (!isUuid(id)) {
+    bad(res, 404, 'NOT_FOUND', 'No such upload from this computer.');
+    return;
+  }
+  try {
+    const row = await openUpload(id, req.syncDevice!.id, true);
+    res.json({ data: { received: receivedParts(row), complete: !!row.completed_at, partBytes: row.part_bytes, size: Number(row.size) }, error: null });
+  } catch (err: unknown) {
+    uploadFail(res, err, 'sync/uploads/status');
+  }
+});
+
+/** Join the parts and check the SHA-256. */
+syncRouter.post('/uploads/:id/complete', async (req: SyncRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  if (!isUuid(id)) {
+    bad(res, 404, 'NOT_FOUND', 'No such upload from this computer.');
+    return;
+  }
+  try {
+    const row = await openUpload(id, req.syncDevice!.id, true);
+    res.json({ data: { uploadId: id, ...(await completeUpload(row)) }, error: null });
+  } catch (err: unknown) {
+    uploadFail(res, err, 'sync/uploads/complete');
+  }
+});
 
 /** The holder gives a check-out back without sending anything. */
 syncRouter.delete('/checkouts/:id', async (req: SyncRequest, res: Response): Promise<void> => {

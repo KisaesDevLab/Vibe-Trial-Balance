@@ -136,7 +136,12 @@ let pruneTimer: NodeJS.Timeout | null = null;
 export function startSyncJobHousekeeping(): void {
   fs.mkdirSync(SYNC_JOB_DIR, { recursive: true });
   void failInterruptedJobs().catch((err: unknown) => console.error('[sync] could not mark interrupted jobs', err instanceof Error ? err.message : err));
-  const prune = () => void pruneJobFiles().catch((err: unknown) => console.error('[sync] could not prune job files', err instanceof Error ? err.message : err));
+  const prune = () => {
+    void pruneJobFiles().catch((err: unknown) => console.error('[sync] could not prune job files', err instanceof Error ? err.message : err));
+    // Imported here: uploads.ts takes its folder from this module.
+    void import('./uploads').then((m) => m.pruneUploads())
+      .catch((err: unknown) => console.error('[sync] could not prune uploads', err instanceof Error ? err.message : err));
+  };
   prune();
   if (!pruneTimer) {
     pruneTimer = setInterval(prune, 60 * 60 * 1000);

@@ -133,7 +133,7 @@ async function startServer() {
   const base = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, [...TSX_IMPORT, 'src/app.ts'], {
     cwd: SERVER,
-    env: childEnv({ ...secrets, NODE_ENV: 'development', PORT: String(port), DATABASE_URL: dbUrl, MIGRATIONS_AUTO: 'false', VIBE_AUTH_MODE: 'local' }),
+    env: childEnv({ ...secrets, NODE_ENV: 'development', PORT: String(port), DATABASE_URL: dbUrl, MIGRATIONS_AUTO: 'false', VIBE_AUTH_MODE: 'local', SYNC_PART_BYTES: String(1024 * 1024) }),
     stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   });
   child.stdout.on('data', (c) => capture('[server]', c));
@@ -883,6 +883,45 @@ async function main() {
     assert.equal(edit.status, 200, edit.text);
     assert.equal(await stampOf(), before, 'a layout edit leaves the held period stamp as it was');
     assert.equal((await api(`/api/v1/sync/checkouts/${pull.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200);
+  });
+
+  // ─────────────────────────────── S4: send back
+  await step('S4: an upload arrives in parts, resumable, and is checked whole', async () => {
+    const d = await pairWith(admin, 'Upload desktop');
+    const other = await pairWith(admin, 'Other desktop');
+    const data = randomBytes(2.5 * 1024 * 1024);
+    const sha = (await import('node:crypto')).createHash('sha256').update(data).digest('hex');
+    const start = await api('/api/v1/sync/uploads', { method: 'POST', token: d.token, json: { size: data.length, sha256: sha } });
+    assert.equal(start.status, 201, start.text);
+    const { uploadId, partBytes, parts } = start.json.data;
+    assert.equal(partBytes, 1024 * 1024);
+    assert.equal(parts, 3);
+    const part = (n) => data.subarray(n * partBytes, Math.min(data.length, (n + 1) * partBytes));
+    const put = (n, buf, token = d.token) => fetch(`${server.base}/api/v1/sync/uploads/${uploadId}/parts/${n}`, {
+      method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' }, body: buf,
+    }).then(async (r) => ({ status: r.status, json: await r.json() }));
+    assert.equal((await put(2, part(2))).status, 200);
+    const early = await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token: d.token });
+    assert.equal(early.status, 409, early.text);
+    assert.equal(early.json.error.code, 'SYNC_UPLOAD_INCOMPLETE');
+    assert.equal((await put(0, part(1).subarray(0, 10))).json.error.code, 'SYNC_PART_SIZE');
+    assert.equal((await put(0, part(0), other.token)).status, 404, "another computer's upload is not found");
+    assert.equal((await put(0, part(0))).status, 200);
+    assert.equal((await put(0, part(0))).status, 200, 'a part sent again replaces itself');
+    const status = await api(`/api/v1/sync/uploads/${uploadId}`, { token: d.token });
+    assert.deepEqual(status.json.data.received, [0, 2]);
+    assert.deepEqual((await put(1, part(1))).json.data.received, [0, 1, 2]);
+    const done = await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token: d.token });
+    assert.equal(done.status, 200, done.text);
+    assert.equal(done.json.data.sha256, sha);
+    // A file that does not match its announced hash is refused.
+    const lie = await api('/api/v1/sync/uploads', { method: 'POST', token: d.token, json: { size: 100, sha256: '0'.repeat(64) } });
+    const lieId = lie.json.data.uploadId;
+    await fetch(`${server.base}/api/v1/sync/uploads/${lieId}/parts/0`, { method: 'PUT', headers: { authorization: `Bearer ${d.token}` }, body: randomBytes(100) });
+    const bad = await api(`/api/v1/sync/uploads/${lieId}/complete`, { method: 'POST', token: d.token });
+    assert.equal(bad.status, 400, bad.text);
+    assert.equal(bad.json.error.code, 'SYNC_UPLOAD_HASH');
+    assert.equal((await api('/api/v1/sync/uploads', { method: 'POST', token: d.token, json: { size: 3 * 1024 ** 3, sha256: sha } })).json.error.code, 'SYNC_UPLOAD_TOO_LARGE');
   });
 
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {
