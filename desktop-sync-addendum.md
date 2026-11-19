@@ -1,6 +1,6 @@
 # Desktop Sync Addendum — Vibe Trial Balance
 
-**Status:** proposed 2026-11-18; owner decisions recorded the same day (marked **Decided**). S0 built on `feat/sync-s0-groundwork`; PR #13 (manifest format 2) merged 2026-11-19. Companion plan: `SYNC-ADDENDUM.md` in `KisaesDevLab/ClientLedger-Trial-Balance`.
+**Status:** proposed 2026-11-18; owner decisions recorded the same day (marked **Decided**). S0 built on `feat/sync-s0-groundwork` (PR #28); PR #13 (manifest format 2) merged 2026-11-19. S1 built on `feat/sync-s1-identity`, stacked on S0, on SQ1 as recommended (not yet confirmed by the owner). Companion plan: `SYNC-ADDENDUM.md` in `KisaesDevLab/ClientLedger-Trial-Balance`.
 **Goal:** a paired ClientLedger Trial Balance desktop can list this server's clients and periods, pull one client and period, send that period back, and send new clients and new periods here. Works on the LAN, over Tailscale and through a Cloudflare tunnel.
 
 This file is the build plan. Follow the repo's Workflow Rules and License Compliance sections in `CLAUDE.md` (file headers, dependency licences, tests after each change).

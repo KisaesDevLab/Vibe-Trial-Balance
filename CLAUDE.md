@@ -712,6 +712,21 @@ All planned phases complete. App is feature-complete.
   do not come along. `npm run test:backup-e2e` (root) walks the schema's foreign keys from `clients` and
   compares every table after restore-as-new, replace and a period restore, so a NEW client table fails it
   until the backup carries it or `NOT_COMPARED` in `test/backup-e2e.mjs` says why not.
+- **Rows a desktop sync must recognise carry `sync_uid` (S1, migration `20261001000001`).** `clients`,
+  `periods`, `chart_of_accounts` and `bank_transactions` have `sync_uid uuid NOT NULL DEFAULT
+  gen_random_uuid()` with a unique index; ids are re-keyed on every restore, the uid is not. Every
+  restore path inserts these four through `keepSyncUids` (`routes/backup.ts`): the archive's uid stays
+  unless a row here already holds it (a copy next to its original is a different client, so it gets new
+  ones); an archive from before S1 gets new ones. **Never copy a row of these tables with `...row` outside
+  that helper** — the unique index makes it a 500. Lead sheets (code), tax codes (resolver), the tickmark
+  library (symbol) and attachments (ref code) need no uid.
+  The **period stamp** (`lib/sync/periodStamp.ts`, pure; loader `periodStampLoad.ts`; `npm run sync:stamp
+  -- <periodId>`) is one SHA-256 over the period's SQ4 rows with every id replaced by its natural key
+  (uid, entry type+number, lead sheet code, tickmark symbol, attachment file SHA-256), user ids and
+  write times left out, DATE columns as calendar dates. It must not change across a restore of the same
+  period (`test:backup-e2e`) and must change when any of its rows does (`periodStamp.test.ts`, one test
+  per table). A new period-scoped table joins `STAMP_TABLES` with a spec, or the desktop's send-back
+  will not notice changes to it.
 - Variance notes (per account per period, TB Report inline editing)
 - **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
   trusts cascades; five references shipped with none (bank_transactions, document_imports,

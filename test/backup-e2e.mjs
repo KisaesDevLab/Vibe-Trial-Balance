@@ -326,9 +326,43 @@ const IGNORED_COLUMNS = {
 };
 /** Extra columns that differ only when the restore makes a NEW client. */
 const IGNORED_AS_NEW = {
-  clients: ['name'], // " (Restored)" on a name clash
+  clients: ['name', 'sync_uid'], // " (Restored)" on a name clash; a copy next to its original is a new client
   client_documents: ['object_key', 'bucket', 'file_path', 'etag'], // a copy must not share the original's file
+  periods: ['sync_uid'],
+  chart_of_accounts: ['sync_uid'],
+  bank_transactions: ['sync_uid'],
 };
+
+/** The tables with a sync_uid (desktop sync S1). */
+const SYNC_UID_TABLES = ['clients', 'periods', 'chart_of_accounts', 'bank_transactions'];
+
+/** Each table's sync_uids for client `clientId`, sorted. */
+async function syncUids(clientId) {
+  const out = {};
+  for (const t of SYNC_UID_TABLES) {
+    const col = t === 'clients' ? 'id' : 'client_id';
+    out[t] = (await sql(`SELECT sync_uid::text AS u FROM ${t} WHERE ${col} = $1 ORDER BY 1`, [clientId])).map((r) => r.u);
+  }
+  return out;
+}
+
+/** The period stamp (lib/sync/periodStamp.ts) of each period id, from the server's own script. */
+async function stamps(...periodIds) {
+  const env = childEnv({ ...secrets, NODE_ENV: 'development', DATABASE_URL: dbUrl });
+  const out = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [...TSX_IMPORT, 'src/syncStamp.ts', ...periodIds.map(String)], { cwd: SERVER, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let text = '';
+    let err = '';
+    child.stdout.on('data', (c) => { text += c; });
+    child.stderr.on('data', (c) => { err += c; });
+    child.on('exit', (code) => (code === 0 ? resolve(text) : reject(new Error(`sync:stamp failed: ${err}`))));
+  });
+  const map = Object.fromEntries(out.trim().split(/\r?\n/).map((l) => l.split(' ')));
+  return periodIds.map((id) => {
+    assert.match(map[id] ?? '', /^[0-9a-f]{64}$/, `a stamp for period ${id}`);
+    return map[id];
+  });
+}
 
 /** Id columns with no foreign key in the schema. */
 const IMPLICIT_FKS = { 'fs_reports.current_version_id': 'fs_report_versions' };
@@ -583,6 +617,8 @@ async function main() {
 
   const before = await snapshot(fx.clientId);
   const totalsBefore = await adjustedTotals(fx.clientId);
+  const uidsBefore = await syncUids(fx.clientId);
+  const [stamp25] = await stamps(fx.p25);
 
   await step('client backup → restore as a new client: every client table comes back equal apart from ids', async () => {
     const b = await api(`/api/v1/backup/client/${fx.clientId}`, { method: 'POST', token });
@@ -596,6 +632,15 @@ async function main() {
     const got = await snapshot(newId, { asNew: true });
     assertSameRows('restore as new', src.rows, got.rows);
     assert.deepEqual(await adjustedTotals(newId), totalsBefore);
+    // A copy next to its original is a different client: every sync_uid new (S1).
+    const copyUids = await syncUids(newId);
+    for (const t of SYNC_UID_TABLES) {
+      assert.equal(copyUids[t].length, uidsBefore[t].length, `${t}: one uid per row`);
+      assert.deepEqual(copyUids[t].filter((u) => uidsBefore[t].includes(u)), [], `${t}: the copy holds none of the original's uids`);
+    }
+    const copy25 = (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [newId])).id;
+    const [copyStamp] = await stamps(copy25);
+    assert.notEqual(copyStamp, stamp25, 'a copy is not the same period');
   });
 
   await step('client backup → replace into the same client: every client table comes back equal apart from ids', async () => {
@@ -606,6 +651,29 @@ async function main() {
     assert.deepEqual(await adjustedTotals(fx.clientId), totalsBefore);
     // Replace re-created the periods; re-point the fixture.
     fx.p25 = (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [fx.clientId])).id;
+    // The same client, so the same identities and the same period stamp (S1).
+    assert.deepEqual(await syncUids(fx.clientId), uidsBefore, 'replace keeps every sync_uid');
+    const [replaced] = await stamps(fx.p25);
+    assert.equal(replaced, stamp25, 'the period stamp survives a backup and restore of the same period');
+  });
+
+  await step('an archive whose sync_uids no row here holds keeps them, and its period keeps its stamp', async () => {
+    // As on another instance: the original's rows take new uids first, so
+    // nothing here holds the archive's.
+    for (const t of SYNC_UID_TABLES) {
+      const col = t === 'clients' ? 'id' : 'client_id';
+      await sql(`UPDATE ${t} SET sync_uid = gen_random_uuid() WHERE ${col} = $1`, [fx.clientId]);
+    }
+    const r = await api('/api/v1/restore/execute', { method: 'POST', token, json: { backupId: fx.clientBackupId, mode: 'as_new' } });
+    assert.equal(r.status, 200, r.text);
+    const newId = r.json.data.newClientId;
+    assert.deepEqual(await syncUids(newId), uidsBefore, 'every sync_uid as in the archive');
+    const p25 = (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [newId])).id;
+    const [s] = await stamps(p25);
+    assert.equal(s, stamp25, 'the same period, stamped the same on the instance it arrives at');
+    const src = await snapshot(fx.clientId, { asNew: true });
+    const got = await snapshot(newId, { asNew: true });
+    assertSameRows('restore as new, uids kept', src.rows, got.rows);
   });
 
   await step('period backup (FY 2025) → restore as a new client: the period and the client-level rows come back equal', async () => {
