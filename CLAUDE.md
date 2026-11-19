@@ -707,9 +707,11 @@ All planned phases complete. App is feature-complete.
   M-1 adjustments, reconciliations and their items (dumped, never re-inserted), and PY tie-out data, saved
   reports and export consolidation settings (deleted on replace, never dumped). Both restore paths now share
   `restoreClientWorkpapers` in `routes/backup.ts`; a row whose parent is not in the archive is skipped and
-  counted, never pointed at another client. A period archive carries the whole tickmark library; the prior
-  period, variance notes comparing to it and reconciliation items clearing an earlier period's transaction
-  do not come along. `npm run test:backup-e2e` (root) walks the schema's foreign keys from `clients` and
+  counted, never pointed at another client. A period archive carries the whole tickmark library, and (desktop sync, owner
+  2026-11-19) the other periods and bank transactions its own rows name, as plain rows without their data:
+  a variance note's comparison period, a reconciliation item's earlier-period transaction and its period.
+  So restoring a period archive as new also makes the prior period, empty; the manifest's `periodId` names
+  the archive's own period. `npm run test:backup-e2e` (root) walks the schema's foreign keys from `clients` and
   compares every table after restore-as-new, replace and a period restore, so a NEW client table fails it
   until the backup carries it or `NOT_COMPARED` in `test/backup-e2e.mjs` says why not.
 - **Rows a desktop sync must recognise carry `sync_uid` (S1, migration `20261001000001`).** `clients`,

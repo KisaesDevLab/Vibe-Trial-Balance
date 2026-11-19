@@ -322,17 +322,48 @@ async function createBackup(
         const cId = period?.client_id;
         const client = cId ? await trx('clients').where('id', cId).select('*') : [];
         await dump('clients', client);
-        await dump('periods', period ? [period] : []);
-        await dump('chart_of_accounts', cId ? await trx('chart_of_accounts').where('client_id', cId).select('*') : []);
         const coaRows = cId ? await trx('chart_of_accounts').where('client_id', cId).select('id') : [];
         const coaIds = coaRows.map((r: { id: number }) => r.id);
+        // References (desktop sync, owner 2026-11-19): the period's own rows
+        // name rows of other periods, a variance note its comparison period
+        // and a reconciliation item a transaction of an earlier period. They
+        // come along as plain rows (a period carries no balances by itself)
+        // so the notes and items restore and a send-back returns them; the
+        // prior period's data is still not carried (SQ7). The manifest's
+        // periodId tells the archive's own period from a reference.
+        const varianceRows = coaIds.length > 0
+          ? await trx('variance_notes').where('period_id', periodId).whereIn('account_id', coaIds).select('*')
+          : [];
+        const reconRows = (await trx.schema.hasTable('bank_reconciliations'))
+          ? await trx('bank_reconciliations').where('period_id', periodId).select('*')
+          : [];
+        const reconIds = reconRows.map((r: { id: number }) => r.id);
+        const itemRows = reconIds.length > 0 && (await trx.schema.hasTable('reconciliation_items'))
+          ? await trx('reconciliation_items').whereIn('reconciliation_id', reconIds).select('*')
+          : [];
+        const ownTxns = cId ? await trx('bank_transactions').where('client_id', cId).where('period_id', periodId).select('*') : [];
+        const ownTxnIds = new Set(ownTxns.map((t: { id: number }) => t.id));
+        const refTxnIds = [...new Set(itemRows.map((i: { transaction_id: number | null }) => i.transaction_id)
+          .filter((id: number | null): id is number => id != null && !ownTxnIds.has(id)))];
+        const refTxns = cId && refTxnIds.length > 0
+          ? await trx('bank_transactions').where('client_id', cId).whereIn('id', refTxnIds).select('*')
+          : [];
+        const refPeriodIds = [...new Set([
+          ...varianceRows.map((v: { compare_period_id: number | null }) => v.compare_period_id),
+          ...refTxns.map((t: { period_id: number | null }) => t.period_id),
+        ].filter((id): id is number => id != null && id !== periodId))];
+        const refPeriods = cId && refPeriodIds.length > 0
+          ? await trx('periods').where('client_id', cId).whereIn('id', refPeriodIds).select('*')
+          : [];
+        await dump('periods', period ? [period, ...refPeriods] : []);
+        await dump('chart_of_accounts', cId ? await trx('chart_of_accounts').where('client_id', cId).select('*') : []);
         await dump('trial_balance', await trx('trial_balance').where('period_id', periodId).select('*'));
         const jeRows = await trx('journal_entries').where('period_id', periodId).select('*');
         await dump('journal_entries', jeRows);
         const jeIds = jeRows.map((r: { id: number }) => r.id);
         await dump('journal_entry_lines', jeIds.length > 0 ? await trx('journal_entry_lines').whereIn('journal_entry_id', jeIds).select('*') : []);
-        await dump('bank_transactions', cId ? await trx('bank_transactions').where('client_id', cId).where('period_id', periodId).select('*') : []);
-        await dump('variance_notes', coaIds.length > 0 ? await trx('variance_notes').where('period_id', periodId).whereIn('account_id', coaIds).select('*') : []);
+        await dump('bank_transactions', [...ownTxns, ...refTxns]);
+        await dump('variance_notes', varianceRows);
         await dump('document_imports', await trx('document_imports').where('period_id', periodId).select('*'));
         if (await trx.schema.hasTable('lead_sheets')) {
           await dump('lead_sheets', cId ? await trx('lead_sheets').where('client_id', cId).select('*') : []);
@@ -367,11 +398,9 @@ async function createBackup(
           await dump('py_comparison_data', await trx('py_comparison_data').where('period_id', periodId).select('*'));
         }
         if (await trx.schema.hasTable('bank_reconciliations')) {
-          const reconRows = await trx('bank_reconciliations').where('period_id', periodId).select('*');
           await dump('bank_reconciliations', reconRows);
-          const reconIds = reconRows.map((r: { id: number }) => r.id);
           if (reconIds.length > 0 && await trx.schema.hasTable('reconciliation_items')) {
-            await dump('reconciliation_items', await trx('reconciliation_items').whereIn('reconciliation_id', reconIds).select('*'));
+            await dump('reconciliation_items', itemRows);
           }
         }
       }

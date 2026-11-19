@@ -23,7 +23,6 @@
  */
 
 import crypto from 'crypto';
-import { remapFsLayoutIds } from '../fs/fsLayoutRemap';
 
 type Row = Record<string, unknown>;
 
@@ -59,7 +58,7 @@ interface TableSpec {
   dates?: string[];
   /** Left out besides the common ones. */
   drop?: string[];
-  /** Statement layouts inside (their ids become index numbers). */
+  /** Statement layouts inside (their ids become the keys they name). */
   layouts?: string[];
 }
 
@@ -134,7 +133,11 @@ function canonical(v: unknown): string {
 }
 
 /** `null`, or the value a reference stands for (`?` when it names nothing known). */
-type Resolver = (kind: RefKind, id: unknown) => string | null;
+interface Resolver {
+  (kind: RefKind, id: unknown): string | null;
+  /** An id inside a statement layout, as the account's uid or the lead sheet's code. */
+  key?: (kind: 'account' | 'leadSheet', id: unknown) => string;
+}
 
 function makeResolver(input: PeriodStampInput): Resolver {
   const byId = <T extends { id: number }>(rows: T[], f: (r: T) => string | null) =>
@@ -155,7 +158,13 @@ function makeResolver(input: PeriodStampInput): Resolver {
   ]));
   const layoutsById = new Map(input.fsLayouts.map((l) => [Number(l.id), l]));
   const reports = new Map((input.rows.fs_reports ?? []).map((r) => [Number(r.id), String(r.name)]));
-  const layoutMaps = fsIndexMaps(input);
+  const refKey = (kind: 'account' | 'leadSheet', id: unknown): string => {
+    // '-1' is the virtual retained-earnings account, never a row.
+    if (kind === 'account' && (id === '-1' || Number(id) === -1)) return 'retained-earnings';
+    const n = Number(id);
+    const key = kind === 'account' ? accounts.get(n) : leadSheets.get(n);
+    return key ?? '?';
+  };
   const kinds: Record<RefKind, (id: number) => string | null | undefined> = {
     account: (id) => accounts.get(id),
     period: (id) => periods.get(id),
@@ -171,35 +180,48 @@ function makeResolver(input: PeriodStampInput): Resolver {
       if (!l) return undefined;
       return canonical({
         name: l.name,
-        layout_json: remapFsLayoutIds(l.layout_json, layoutMaps),
+        layout_json: keyedLayout(l.layout_json, refKey),
         style_json: l.style_json,
         archived_at: l.archived_at ?? null,
       });
     },
   };
-  return (kind, id) => {
+  const resolve: Resolver = (kind, id) => {
     if (id === null || id === undefined) return null;
     return kinds[kind](Number(id)) ?? '?';
   };
+  resolve.key = refKey;
+  return resolve;
 }
 
 /**
- * Layout ids as index numbers, the same on every instance: accounts in
- * `sync_uid` order, lead sheets in code order.
+ * A statement layout with every id inside replaced by the key it names (an
+ * account's uid, a lead sheet's code), so the same layout reads the same on
+ * every instance and a new account elsewhere in the client moves nothing.
+ * Ids appear as a lead sheet line's `ref.groupingId`, `accountId` in line
+ * refs and schedule lines, `accountIds` lists, and the equity statement's
+ * `columnCaptions` keys (`fsLayoutRemap.ts` lists them).
  */
-function fsIndexMaps(input: PeriodStampInput) {
-  const acc = [...input.accounts].sort((a, b) => a.sync_uid.localeCompare(b.sync_uid));
-  const accIndex = new Map(acc.map((a, i) => [Number(a.id), i + 1]));
-  const ls = [...input.leadSheets].sort((a, b) => String(a.code ?? '').localeCompare(String(b.code ?? '')) || a.id - b.id);
-  const lsIndex = new Map(ls.map((s, i) => [Number(s.id), i + 1]));
-  return {
-    account: (old: number) => accIndex.get(old),
-    leadSheet: (old: number) => lsIndex.get(old),
+function keyedLayout(layout: unknown, key: (kind: 'account' | 'leadSheet', id: unknown) => string): unknown {
+  const walk = (v: unknown, parentKey?: string): unknown => {
+    if (Array.isArray(v)) return v.map((x) => walk(x));
+    if (!v || typeof v !== 'object' || v instanceof Date) return v;
+    const out: Row = {};
+    for (const [k, x] of Object.entries(v as Row)) {
+      if (k === 'groupingId' && x != null) out[k] = key('leadSheet', x);
+      else if (k === 'accountId' && x != null) out[k] = key('account', x);
+      else if (k === 'accountIds' && Array.isArray(x)) out[k] = x.map((id) => key('account', id));
+      else if (k === 'columnCaptions' && x && typeof x === 'object' && parentKey === 'equity') {
+        out[k] = Object.fromEntries(Object.entries(x as Row).map(([ck, cv]) => [ck === 'all' ? ck : key('account', ck), cv]));
+      } else out[k] = walk(x, k);
+    }
+    return out;
   };
+  return walk(layout);
 }
 
 /** One row as text, with its references replaced. */
-function rowText(table: StampTable, row: Row, resolve: Resolver, layoutMaps: ReturnType<typeof fsIndexMaps>): string {
+function rowText(table: StampTable, row: Row, resolve: Resolver): string {
   const spec = SPECS[table];
   const dates = new Set(spec.dates ?? []);
   const drop = new Set(spec.drop ?? []);
@@ -211,7 +233,7 @@ function rowText(table: StampTable, row: Row, resolve: Resolver, layoutMaps: Ret
     const ref = spec.refs?.[k];
     if (ref) out[k] = resolve(ref, v);
     else if (dates.has(k) && v instanceof Date) out[k] = calendarDate(v);
-    else if (layouts.has(k)) out[k] = remapFsLayoutIds(v, layoutMaps);
+    else if (layouts.has(k) && resolve.key) out[k] = keyedLayout(v, resolve.key);
     else out[k] = v;
   }
   return canonical(out);
@@ -220,11 +242,11 @@ function rowText(table: StampTable, row: Row, resolve: Resolver, layoutMaps: Ret
 /** The period's stamp: hex SHA-256. */
 export function periodStamp(input: PeriodStampInput): string {
   const resolve = makeResolver(input);
-  const layoutMaps = fsIndexMaps(input);
   const h = crypto.createHash('sha256');
   h.update('vtb-period-stamp v1\n');
   for (const table of STAMP_TABLES) {
-    const lines = (input.rows[table] ?? []).map((r) => rowText(table, r, resolve, layoutMaps)).sort();
+    // Plain code-unit order: the same on every instance, whatever its ICU.
+    const lines = (input.rows[table] ?? []).map((r) => rowText(table, r, resolve)).sort();
     h.update(`${table} ${lines.length}\n`);
     for (const l of lines) h.update(`${l}\n`);
   }

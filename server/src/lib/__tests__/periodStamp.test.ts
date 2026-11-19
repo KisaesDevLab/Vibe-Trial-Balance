@@ -126,6 +126,14 @@ test('a statement layout counts, with its ids taken as the accounts and lead she
   assert.notEqual(periodStamp(q), base);
 });
 
+test('a new account or lead sheet elsewhere in the client moves nothing (layouts name keys, not positions)', () => {
+  const p = period();
+  // Sorts before every other uid and code.
+  p.accounts.push({ id: 3, sync_uid: '00000000-0000-4000-8000-000000000000' });
+  p.leadSheets.push({ id: 31, code: '0' });
+  assert.equal(periodStamp(p), base);
+});
+
 test('model_json, derived from the numbers, is left out', () => {
   const p = period();
   p.rows.fs_report_versions![0].model_json = { anything: true };

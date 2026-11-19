@@ -1,6 +1,6 @@
 # Desktop Sync Addendum — Vibe Trial Balance
 
-**Status:** proposed 2026-11-18; owner decisions recorded the same day (marked **Decided**). S0 built on `feat/sync-s0-groundwork` (PR #28); PR #13 (manifest format 2) merged 2026-11-19. S1 built on `feat/sync-s1-identity`, stacked on S0, on SQ1 as recommended (not yet confirmed by the owner). Companion plan: `SYNC-ADDENDUM.md` in `KisaesDevLab/ClientLedger-Trial-Balance`.
+**Status:** proposed 2026-11-18; owner decisions recorded the same day (marked **Decided**). S0 built on `feat/sync-s0-groundwork` (PR #28); PR #13 (manifest format 2) merged 2026-11-19. S1 built on `feat/sync-s1-identity`, stacked on S0. Companion plan: `SYNC-ADDENDUM.md` in `KisaesDevLab/ClientLedger-Trial-Balance`.
 **Goal:** a paired ClientLedger Trial Balance desktop can list this server's clients and periods, pull one client and period, send that period back, and send new clients and new periods here. Works on the LAN, over Tailscale and through a Cloudflare tunnel.
 
 This file is the build plan. Follow the repo's Workflow Rules and License Compliance sections in `CLAUDE.md` (file headers, dependency licences, tests after each change).
@@ -20,12 +20,12 @@ This file is the build plan. Follow the repo's Workflow Rules and License Compli
 
 ## Decisions this plan builds on
 
-- **SQ1 Identity.** `sync_uid uuid` on `clients`, `periods`, `chart_of_accounts` and `bank_transactions`. Lead sheets match by code, tax codes by form + activity + code (the existing resolver), tickmark library by symbol, lead sheet attachments by `ref_code` within the period. *Recommended; not yet confirmed by the owner.*
+- **SQ1 Identity.** `sync_uid uuid` on `clients`, `periods`, `chart_of_accounts` and `bank_transactions`. Lead sheets match by code, tax codes by form + activity + code (the existing resolver), tickmark library by symbol, lead sheet attachments by `ref_code` within the period. **Decided** (owner 2026-11-19).
 - **SQ2 Check-out. Decided:** on by default; the desktop user may untick it at pull. A checked-out period is read-only in the web app and over MCP until it is sent back or released by its holder or an admin. **No automatic release.** A check-out older than 14 days is flagged to admins.
 - **SQ3 Chart changes on send-back.** New accounts are added. A change to an existing account is applied only when the server's row has not changed since the pull; otherwise the server's value stays and the difference is listed in the result. Accounts are never deleted by a send-back. **Decided.**
 - **SQ4 Scope of a period.** Trial balance, journal entries and lines, the period's bank transactions, variance notes, tickmarks, M-1 adjustments, engagement tasks, lead sheet notes and sign-offs, PY comparison data, Statement Writer sets, **lead sheet attachments with their files, and bank reconciliations with their items** (**Decided**). **Not in the first release:** other client documents and the QuickBooks connection. Their server rows are left untouched by a send-back.
 - **SQ5 Who may sync. Decided:** a device acts as the user who paired it. Staff and admin may pull and send; a reviewer may pull only. No admin requirement.
-- **SQ7 Prior year. Decided:** a pull carries the period's own prior-year balances only. The prior period is not pulled.
+- **SQ7 Prior year. Decided:** a pull carries the period's own prior-year balances only. The prior period is not pulled. **Decided 2026-11-19:** the rows of the pulled period that name another period's rows come along with those rows as references, without their data: a variance note's comparison period, and a reconciliation item's transaction from an earlier period (and that transaction's period). The manifest's `periodId` tells the archive's own period from a reference; S4's merge links a reference by `sync_uid` and never replaces it. The period stamp covers the notes and items.
 - **SQ6 Licence.** Syncing by a firm's own staff is not client-facing access. Confirm `COMMERCIAL_LICENSE.md` and the desktop's `docs/ENGINE-GRANT.md` say so.
 
 ## Phases
