@@ -219,9 +219,14 @@ app.use('/api/v1/periods/:periodId/diagnostics', uploadLimiter);
 // reviewers from reaching any write handler. We deliberately don't hit the DB
 // here; if a reviewer was just promoted to staff, there is a ≤30s window
 // (matching the auth cache TTL) before writes are accepted.
+//
+// `/auth/*` is the reviewer's OWN account (password, second factors, passkeys,
+// remembered browsers, sign-out), never firm data: without this a new reviewer
+// could not finish the forced password change and was locked out for good.
 app.use('/api/v1', (req, res, next) => {
   const method = req.method.toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+  if (req.path.startsWith('/auth/')) return next();
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return next(); // let authMiddleware send 401
   try {
