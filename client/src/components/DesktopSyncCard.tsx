@@ -29,8 +29,12 @@ export function DesktopSyncCard() {
   const qc = useQueryClient();
   const [all, setAll] = useState(false);
   const [code, setCode] = useState<PairingCode | null>(null);
-  /** When the code shown was made: a device paired after it used it. */
-  const [codeMadeAt, setCodeMadeAt] = useState(0);
+  /**
+   * The devices there were when the code was made. A new one of the user's
+   * own afterwards used it; ids, not times, so the PC's clock and other
+   * users' desktops (with "Every user" on) play no part.
+   */
+  const [knownIds, setKnownIds] = useState<Set<number>>(() => new Set());
   const [connected, setConnected] = useState<string | null>(null);
   const [making, setMaking] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -58,15 +62,22 @@ export function DesktopSyncCard() {
   // showing it as still good.
   useEffect(() => {
     if (!code || !devices.data) return;
-    const fresh = devices.data.find((d) => new Date(d.createdAt).getTime() >= codeMadeAt - 5000);
+    const fresh = devices.data.find((d) => d.mine && !knownIds.has(d.id));
     if (fresh) {
       setConnected(fresh.name);
       setCode(null);
     }
-  }, [code, codeMadeAt, devices.data]);
+  }, [code, knownIds, devices.data]);
 
   async function connect() {
     setMaking(true);
+    // Which desktops are there before the code exists (see knownIds).
+    const before = await listSyncDevices(false);
+    if (before.error) {
+      setMaking(false);
+      pushToast(before.error.message, 'error');
+      return;
+    }
     const res = await createPairingCode();
     setMaking(false);
     if (res.error) {
@@ -74,7 +85,7 @@ export function DesktopSyncCard() {
       return;
     }
     setNow(Date.now());
-    setCodeMadeAt(Date.now());
+    setKnownIds(new Set(before.data.map((d) => d.id)));
     setConnected(null);
     setCode(res.data);
   }
@@ -114,7 +125,7 @@ export function DesktopSyncCard() {
           {making ? 'Making a code…' : code ? 'Make a new code' : 'Connect a desktop'}
         </button>
         {connected && !code && (
-          <p className="mt-3 text-sm text-green-700 dark:text-green-400">Connected \u201c{connected}\u201d. The code has been used.</p>
+          <p className="mt-3 text-sm text-green-700 dark:text-green-400">Connected “{connected}”. The code has been used.</p>
         )}
         {code && (
           <div className="mt-3 rounded border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-3 max-w-md">

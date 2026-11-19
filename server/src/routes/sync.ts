@@ -20,6 +20,7 @@
 
 import { Router, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
 import { db } from '../db';
 import { authMiddleware, blockReviewerWrites, type AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
@@ -146,6 +147,15 @@ desktopSyncRouter.use(authMiddleware);
 
 desktopSyncRouter.post('/codes', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    // A password reset ends the account's desktops; a session from before it
+    // must not connect one again (an emailed reset leaves sessions working).
+    const issued = (jwt.decode(req.headers.authorization?.slice(7) ?? '') as { iat?: number } | null)?.iat ?? 0;
+    const user = await db('app_users').where({ id: req.user!.userId }).first('sync_reset_at');
+    // `iat` is whole seconds: a session from the second of the reset counts as after it.
+    if (user?.sync_reset_at && issued < Math.floor(new Date(user.sync_reset_at).getTime() / 1000)) {
+      res.status(401).json({ data: null, error: { code: 'SIGN_IN_AGAIN', message: 'Your password was reset since you signed in. Sign in again to connect a desktop.' } });
+      return;
+    }
     const code = newPairingCode();
     const expires = new Date(Date.now() + CODE_TTL_MS);
     await db.transaction(async (trx) => {
@@ -172,13 +182,14 @@ desktopSyncRouter.get('/devices', async (req: AuthRequest, res: Response): Promi
       .join('app_users as u', 'u.id', 'd.user_id')
       .whereNull('d.revoked_at')
       .orderBy('d.created_at', 'desc')
-      .select('d.id', 'd.name', 'd.created_at', 'd.last_used_at', 'u.username', 'u.display_name');
+      .select('d.id', 'd.user_id', 'd.name', 'd.created_at', 'd.last_used_at', 'u.username', 'u.display_name');
     if (!all) q.where('d.user_id', req.user!.userId);
     const rows = await q;
     res.json({
       data: rows.map((r) => ({
         id: r.id, name: r.name, createdAt: r.created_at, lastUsedAt: r.last_used_at,
         user: r.display_name ?? r.username,
+        mine: r.user_id === req.user!.userId,
       })),
       error: null,
       meta: { count: rows.length, all },

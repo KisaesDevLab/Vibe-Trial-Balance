@@ -743,9 +743,13 @@ All planned phases complete. App is feature-complete.
   (`syncAuthMiddleware`, `lib/sync/syncAuth.ts`): every other route's `authMiddleware` refuses it as a bad
   JWT, and the sync routes refuse a JWT. A device acts as its user: deactivated user or revoked device →
   401 at once; a reviewer's device reads only (`blockReviewerWrites`). **A device token ends** (owner
-  2026-11-19, `lib/sync/deviceRevoke.ts`) on Remove, on deactivation, after 90 days unused
-  (`SYNC_DEVICE_EXPIRED`), and on a password RESET (admin PATCH `/users/:id`, Vibe Auth `setLocalPassword`,
-  an emailed reset link): `revokeUserDevices`. Not on a user's own password change or sign-out. Audit: every
+  2026-11-19, `lib/sync/deviceRevoke.ts`) on Remove, on deactivation (revoked then, so reactivating does
+  not revive them: Users PATCH, Vibe Auth `setActive`), after 90 days unused (`SYNC_DEVICE_EXPIRED`), and on
+  a password RESET (admin PATCH `/users/:id`, Vibe Auth `setLocalPassword`, an emailed reset or invite
+  link): `revokeUserDevices`, which also deletes unused codes and, on a reset, stamps
+  `app_users.sync_reset_at` (migration `20261002000002`) so a session issued before it gets 401
+  `SIGN_IN_AGAIN` from `POST /desktop-sync/codes` (an emailed reset leaves old sessions working). Not on a
+  user's own password change or sign-out. Audit: every
   sync write, every refusal, and a GET only when the route sets `res.locals.syncAudit = true` (it hands out
   client data); polling reads are not audited. Making a code retires the user's unused ones.
   `POST /pair` has its own limiter (10 failed tries per 15 min per ADDRESS, not `rateLimitKey`, whose JWT

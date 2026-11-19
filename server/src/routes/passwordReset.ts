@@ -286,9 +286,9 @@ router.post('/password-reset/confirm', verifyLimiter, async (req: Request, res: 
       if (purpose === 'invite') updates.invite_accepted_at = trx.fn.now();
 
       await trx('app_users').where({ id: user.id }).update(updates);
-      // A reset link means someone may have had the account: its paired
-      // desktops end (owner 2026-11-19). An invite has none yet.
-      if (purpose === 'reset') await revokeUserDevices(user.id, null, 'the password was reset from an emailed link', trx);
+      // A new password from a link (a reset, or an invite re-sent to an
+      // account in use) ends its paired desktops (owner 2026-11-19).
+      await revokeUserDevices(user.id, null, `the password was set from an emailed ${purpose} link`, { reset: true, trx });
 
       // Mark this token consumed and invalidate every other unconsumed token for this user.
       await trx('password_reset_tokens')

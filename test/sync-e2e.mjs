@@ -329,7 +329,8 @@ async function main() {
     assert.equal(off.status, 200, off.text);
     const r = await api('/api/v1/sync/me', { token: again.token });
     assert.equal(r.status, 401, r.text);
-    assert.equal(r.json.error.code, 'ACCOUNT_INACTIVE');
+    // Removed at deactivation, not merely refused while inactive.
+    assert.equal(r.json.error.code, 'SYNC_DEVICE_REVOKED');
   });
 
   await step('pairing, sync calls and removals are in the audit log, naming the device', async () => {
@@ -373,6 +374,41 @@ async function main() {
     assert.equal(reset.status, 200, reset.text);
     assert.equal((await api('/api/v1/sync/me', { token: theirs.token })).json.error.code, 'SYNC_DEVICE_REVOKED');
     assert.equal((await api('/api/v1/sync/me', { token: mine.token })).status, 200, "the admin's own desktop is untouched");
+  });
+
+  let afterReset;
+  await step('an emailed reset link ends the desktops, and a session from before it cannot pair again', async () => {
+    const u = await api('/api/v1/users', { method: 'POST', token: admin, json: { username: 'example.mailreset', displayName: 'Example Mail Reset', password: 'E2eMail!2026', role: 'preparer' } });
+    assert.equal(u.status, 201, u.text);
+    const oldSession = await signIn('example.mailreset', 'E2eMail!2026', 'E2eMail!2027');
+    const desk = await pairWith(oldSession, 'Mail reset desktop');
+    // A pending unused code from before the reset must die with it too.
+    const pending = await api('/api/v1/desktop-sync/codes', { method: 'POST', token: oldSession });
+    assert.equal(pending.status, 201, pending.text);
+    // The link the reset email would carry (the mailer is not configured here).
+    const raw = 'e2e-reset-' + Date.now();
+    await sql(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, encode(sha256($2::bytea), 'hex'), now() + interval '1 hour')`, [u.json.data.id, raw]);
+    // Past the second the old session was issued in.
+    await new Promise((r) => setTimeout(r, 1100));
+    const done = await api('/api/v1/auth/password-reset/confirm', { method: 'POST', json: { token: raw, newPassword: 'E2eMail!2028x' } });
+    assert.equal(done.status, 200, done.text);
+    assert.equal((await api('/api/v1/sync/me', { token: desk.token })).json.error.code, 'SYNC_DEVICE_REVOKED');
+    const usePending = await api('/api/v1/sync/pair', { method: 'POST', json: { code: pending.json.data.code, deviceName: 'From an old code' } });
+    assert.equal(usePending.json.error.code, 'SYNC_CODE_INVALID', 'a code made before the reset is gone');
+    const again = await api('/api/v1/desktop-sync/codes', { method: 'POST', token: oldSession });
+    assert.equal(again.status, 401, `a session from before the reset may not make a code: ${again.text}`);
+    assert.equal(again.json.error.code, 'SIGN_IN_AGAIN');
+    const fresh = await signIn('example.mailreset', 'E2eMail!2028x');
+    afterReset = { userId: u.json.data.id, desk: await pairWith(fresh, 'After reset desktop') };
+  });
+
+  await step('deactivating ends the desktops for good: reactivating does not bring them back', async () => {
+    // The user from the step above (sign-ins are limited to 10 per 15 minutes).
+    const { userId, desk } = afterReset;
+    assert.equal((await api('/api/v1/sync/me', { token: desk.token })).status, 200);
+    assert.equal((await api(`/api/v1/users/${userId}`, { method: 'PATCH', token: admin, json: { isActive: false } })).status, 200);
+    assert.equal((await api(`/api/v1/users/${userId}`, { method: 'PATCH', token: admin, json: { isActive: true } })).status, 200);
+    assert.equal((await api('/api/v1/sync/me', { token: desk.token })).json.error.code, 'SYNC_DEVICE_REVOKED');
   });
 
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {

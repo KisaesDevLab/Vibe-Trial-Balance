@@ -25,6 +25,8 @@ export interface SyncDevice {
   lastUsedAt: string | null;
   /** Who paired it. */
   user: string;
+  /** Paired by the signed-in user. */
+  mine: boolean;
 }
 
 export function createPairingCode() {

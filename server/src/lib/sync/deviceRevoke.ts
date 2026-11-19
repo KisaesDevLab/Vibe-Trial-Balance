@@ -5,7 +5,8 @@
  * Desktop sync S2: when a paired desktop stops working (owner 2026-11-19).
  *
  *   - Removed from Settings › Desktop sync (the owner or an admin).
- *   - The user is deactivated (checked on every call, `syncAuth.ts`).
+ *   - The user is deactivated: revoked at that moment (Users page, Vibe Auth
+ *     `setActive`), so reactivating the account does not bring them back.
  *   - Unused for DEVICE_IDLE_DAYS (checked on every call).
  *   - The user's password is RESET: by an admin (Users page, Vibe Auth) or
  *     through an emailed reset link. A reset means someone else may have had
@@ -26,11 +27,22 @@ export function deviceIdle(lastUsed: Date | string | null, created: Date | strin
 }
 
 /**
- * Revokes every live device the user paired; writes one audit row when any
- * were. `by` is the admin who caused it, or null (an emailed reset link).
+ * Revokes every live device the user paired and deletes their unused pairing
+ * codes; writes one audit row when any device was revoked. `by` is the admin
+ * who caused it, or null. `reset: true` (a password reset) also stamps
+ * `app_users.sync_reset_at`, so a session from before it cannot make a new
+ * code (`POST /desktop-sync/codes`).
  */
-export async function revokeUserDevices(userId: number, by: number | null, reason: string, trx?: Knex.Transaction): Promise<number> {
+export async function revokeUserDevices(
+  userId: number,
+  by: number | null,
+  reason: string,
+  opts: { reset?: boolean; trx?: Knex.Transaction } = {},
+): Promise<number> {
+  const trx = opts.trx;
   const q = trx ?? db;
+  await q('sync_pairing_codes').where({ user_id: userId }).whereNull('used_at').delete();
+  if (opts.reset) await q('app_users').where({ id: userId }).update({ sync_reset_at: q.fn.now() });
   const ids = (await q('sync_devices')
     .where({ user_id: userId })
     .whereNull('revoked_at')
