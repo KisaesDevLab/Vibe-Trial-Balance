@@ -194,8 +194,15 @@ function TemplatesModal({ onClose, onAdd }: { onClose: () => void; onAdd: (items
 
 // ── Period Checklist Tab ──────────────────────────────────────────────────────
 
-function ChecklistTab({ periodId }: { periodId: number }) {
+function ChecklistTab({ periodId, locked }: { periodId: number; locked: boolean }) {
   const qc = useQueryClient();
+  // A refusal from the server (a period locked meanwhile) is shown, not dropped.
+  const [error, setError] = useState<string | null>(null);
+  const done = (res: { error?: { message: string } | null } | void, after: () => void) => {
+    if (res && res.error) { setError(res.error.message); return; }
+    setError(null);
+    after();
+  };
   const [modal, setModal]             = useState<EngagementTask | null | 'new'>(null);
   const [showTemplates, setShowTemplates] = useState(false);
   const [filterStatus, setFilterStatus]   = useState<TaskStatus | 'all'>('all');
@@ -227,24 +234,28 @@ function ChecklistTab({ periodId }: { periodId: number }) {
 
   const createMut = useMutation({
     mutationFn: (input: TaskInput) => createTask(periodId, input),
-    onSuccess: () => { invalidate(); setModal(null); },
+    onSuccess: (res) => done(res, () => { invalidate(); setModal(null); }),
   });
 
   const createManyMut = useMutation({
     mutationFn: async (inputs: TaskInput[]) => {
-      for (const input of inputs) await createTask(periodId, input);
+      for (const input of inputs) {
+        const r = await createTask(periodId, input);
+        if (r.error) return r;
+      }
+      return undefined;
     },
-    onSuccess: () => { invalidate(); setShowTemplates(false); },
+    onSuccess: (res) => { invalidate(); done(res, () => setShowTemplates(false)); },
   });
 
   const updateMut = useMutation({
     mutationFn: ({ id, input }: { id: number; input: Partial<TaskInput> }) => updateTask(id, input),
-    onSuccess: () => { invalidate(); setModal(null); },
+    onSuccess: (res) => done(res, () => { invalidate(); setModal(null); }),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => deleteTask(id),
-    onSuccess: () => invalidate(),
+    onSuccess: (res) => done(res, invalidate),
   });
 
   const thCls = 'px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700';
@@ -259,6 +270,14 @@ function ChecklistTab({ periodId }: { periodId: number }) {
 
   return (
     <div className="space-y-4">
+      {locked && (
+        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
+          This period is locked, so its checklist is read-only. Unlock the period to change tasks.
+        </div>
+      )}
+      {error && (
+        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-200">{error}</div>
+      )}
       {/* Toolbar */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex gap-1.5">
@@ -274,12 +293,12 @@ function ChecklistTab({ periodId }: { periodId: number }) {
           ))}
         </div>
         <div className="flex gap-2">
-          <button onClick={() => setShowTemplates(true)}
-            className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
+          <button onClick={() => setShowTemplates(true)} disabled={locked}
+            className="disabled:opacity-40 px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 font-medium">
             From Templates
           </button>
-          <button onClick={() => setModal('new')}
-            className="px-3 py-1.5 text-xs bg-teal-600 text-white rounded hover:bg-teal-700 font-medium">
+          <button onClick={() => setModal('new')} disabled={locked}
+            className="disabled:opacity-40 px-3 py-1.5 text-xs bg-teal-600 text-white rounded hover:bg-teal-700 font-medium">
             + Add Task
           </button>
         </div>
@@ -522,7 +541,7 @@ export function EngagementPage() {
 
       {tab === 'checklist' && (
         selectedPeriodId
-          ? <ChecklistTab periodId={selectedPeriodId} />
+          ? <ChecklistTab periodId={selectedPeriodId} locked={!!period?.locked_at} />
           : <div className="py-8 text-center text-gray-400 dark:text-gray-500 text-sm">Select a client and period to view the checklist.</div>
       )}
       {tab === 'open-items' && <OpenItemsTab onViewChecklist={handleViewChecklist} />}

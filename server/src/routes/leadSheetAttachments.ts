@@ -346,6 +346,7 @@ leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res:
       // never orphans what was actually stamped.
       const tm = await db('tickmark_library')
         .where({ id: input.tickmarkId, client_id: att.row.client_id })
+        .whereNull('retired_at')
         .first('id', 'symbol', 'color', 'description');
       if (!tm) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tickmark not found for this client.' } }); return; }
       annotation = {
@@ -370,7 +371,8 @@ leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res:
 
     await db.transaction(async (trx) => {
       await trx('lead_sheet_attachments').where({ id }).forUpdate().first('id');
-      // Again under the period row lock: the stamp was burned in meanwhile.
+      // Again under the period row lock, held until the stamped bytes and
+      // the row are written: the check at the top ran before the work above.
       await assertPeriodsOpen(trx, [att.row.period_id as number]);
 
       // Re-read inside the lock: a concurrent stamp may have replaced the bytes
@@ -426,13 +428,24 @@ leadSheetAttachmentItemRouter.delete('/', async (req: AuthRequest, res: Response
 
     // Remove the bytes and the document row, but keep this row as a tombstone
     // so its ref code stays reserved. document_id is SET NULL by the FK.
-    // Checked again before the storage delete, which no transaction can undo.
-    await db.transaction(async (trx) => assertPeriodsOpen(trx, [att.row.period_id as number]));
-    await removeDocument(att.doc);
-    await db('lead_sheet_attachments').where({ id }).update({
-      deleted_at: db.fn.now(),
-      deleted_by: req.user?.userId ?? null,
+    // The row changes under the period row lock, so a lock cannot land
+    // between the check and the change; the storage delete, which no
+    // transaction can undo, follows. If it fails the row is put back, so
+    // nothing is hidden while its file still exists.
+    await db.transaction(async (trx) => {
+      await assertPeriodsOpen(trx, [att.row.period_id as number]);
+      await trx('lead_sheet_attachments').where({ id }).update({
+        deleted_at: trx.fn.now(),
+        deleted_by: req.user?.userId ?? null,
+        document_id: null,
+      });
     });
+    try {
+      await removeDocument(att.doc);
+    } catch (err) {
+      await db('lead_sheet_attachments').where({ id }).update({ deleted_at: null, deleted_by: null, document_id: att.doc.id });
+      throw err;
+    }
     await logAudit({
       userId: req.user?.userId ?? null, periodId: att.row.period_id as number, clientId: att.row.client_id as number,
       entityType: 'lead_sheet_attachment', entityId: id, action: 'delete',

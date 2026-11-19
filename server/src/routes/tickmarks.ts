@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
-import { assertPeriodsOpen } from '../lib/periodGuard';
+import { assertPeriodsOpen, lockAndListClosed } from '../lib/periodGuard';
 
 // Tickmark library (per client)
 export const tickmarkLibraryCollectionRouter = Router({ mergeParams: true });
@@ -34,7 +34,7 @@ tickmarkLibraryCollectionRouter.get('/', async (req: AuthRequest, res: Response)
   const clientId = Number(req.params.clientId);
   if (isNaN(clientId)) { res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } }); return; }
   try {
-    const rows = await db('tickmark_library').where({ client_id: clientId })
+    const rows = await db('tickmark_library').where({ client_id: clientId }).whereNull('retired_at')
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'id', order: 'asc' }]);
     res.json({ data: rows, error: null });
   } catch (err: unknown) {
@@ -90,15 +90,21 @@ tickmarkLibraryItemRouter.delete('/', async (req: AuthRequest, res: Response): P
   const id = Number(req.params.id);
   if (isNaN(id)) { res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid ID' } }); return; }
   try {
-    const deleted = await db.transaction(async (trx): Promise<number> => {
-      // The delete cascades to the tickmarks placed in every period; not
-      // while one of those periods is closed.
-      await assertPeriodsOpen(trx, await trx('tb_tickmarks').where({ tickmark_id: id }).distinct().pluck('period_id'));
+    const outcome = await db.transaction(async (trx): Promise<'deleted' | 'retired' | null> => {
+      // A delete cascades to the tickmarks placed in every period. When any
+      // sits in a closed period the tickmark is retired instead: hidden from
+      // the library, its placements in closed periods kept, the rest removed.
+      const closed = await lockAndListClosed(trx, await trx('tb_tickmarks').where({ tickmark_id: id }).distinct().pluck('period_id'));
+      if (closed.size > 0) {
+        await trx('tb_tickmarks').where({ tickmark_id: id }).whereNotIn('period_id', [...closed]).delete();
+        const n: number = await trx('tickmark_library').where({ id }).whereNull('retired_at').update({ retired_at: trx.fn.now() });
+        return n ? 'retired' : null;
+      }
       const n: number = await trx('tickmark_library').where({ id }).delete();
-      return n;
+      return n ? 'deleted' : null;
     });
-    if (!deleted) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tickmark not found' } }); return; }
-    res.json({ data: { id }, error: null });
+    if (!outcome) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tickmark not found' } }); return; }
+    res.json({ data: { id, retired: outcome === 'retired' }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'tickmarks');
   }
@@ -259,6 +265,8 @@ tbTickmarkRouter.post('/toggle', async (req: AuthRequest, res: Response): Promis
         await trx('tb_tickmarks').where({ id: existing.id }).delete();
         return 'removed';
       }
+      const live = await trx('tickmark_library').where({ id: tickmarkId }).whereNull('retired_at').first('id');
+      if (!live) throw Object.assign(new Error('That tickmark was retired and cannot be placed.'), { status: 409, code: 'TICKMARK_RETIRED', expose: true });
       await trx('tb_tickmarks').insert({ period_id: periodId, account_id: accountId, tickmark_id: tickmarkId, created_by: req.user!.userId });
       return 'assigned';
     });

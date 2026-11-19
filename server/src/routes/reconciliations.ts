@@ -15,11 +15,6 @@ export const reconciliationCollectionRouter = Router({ mergeParams: true });
 reconciliationCollectionRouter.use(authMiddleware);
 
 /**
- * Reject mutations against a reconciliation whose period is locked. Returns
- * true iff the caller should abort (already replied 409). Locked reconciliations
- * must remain read-only once their period is closed.
- */
-/**
  * Refuses (PERIOD_LOCKED) a write to a reconciliation whose period is
  * closed. Inside the write's transaction, so it orders against a lock.
  */
@@ -28,6 +23,11 @@ async function assertReconPeriodOpen(trx: Knex.Transaction, recId: number): Prom
   await assertPeriodsOpen(trx, [r?.period_id as number | null | undefined]);
 }
 
+/**
+ * Reject mutations against a reconciliation whose period is locked. Returns
+ * true iff the caller should abort (already replied 409). Locked reconciliations
+ * must remain read-only once their period is closed.
+ */
 async function reconciliationPeriodLocked(recId: number, res: Response): Promise<boolean> {
   const row = await db('bank_reconciliations as br')
     .leftJoin('periods as p', 'p.id', 'br.period_id')

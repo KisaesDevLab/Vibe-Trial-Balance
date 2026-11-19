@@ -51,7 +51,7 @@ export const updateTickmark = (id: number, input: Partial<TickmarkInput>) =>
   });
 
 export const deleteTickmark = (id: number) =>
-  apiFetch<{ id: number }>(`/tickmarks/${id}`, { method: 'DELETE' });
+  apiFetch<{ id: number; retired?: boolean }>(`/tickmarks/${id}`, { method: 'DELETE' });
 
 export const getTBTickmarks = (periodId: number) =>
   apiFetch<TBTickmarkMap>(`/periods/${periodId}/tb-tickmarks`);

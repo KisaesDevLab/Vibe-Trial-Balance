@@ -148,7 +148,12 @@ export function TickmarksPage() {
 
   const deleteMut = useMutation({
     mutationFn: deleteTickmark,
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: qk });
+      // A refusal used to vanish silently; a retire (placed in a closed period) is said.
+      const msg = res.error ? res.error.message : res.data?.retired ? 'Tickmark retired: it stays on the closed periods it was placed in, and is removed everywhere else.' : null;
+      if (msg) { setApplyMsg(msg); setTimeout(() => setApplyMsg(null), 6000); }
+    },
   });
 
   const applyMut = useMutation({
@@ -266,7 +271,7 @@ export function TickmarksPage() {
                         Edit
                       </button>
                       <button
-                        onClick={async () => { if (await confirmAction({ message: 'Delete this tickmark? The symbol will no longer be available in the library, but any existing annotations on trial balance rows will remain.', tone: 'danger' })) deleteMut.mutate(tm.id); }}
+                        onClick={async () => { if (await confirmAction({ message: 'Delete this tickmark? It leaves the library and the trial balance rows it is placed on. If it is placed in a closed period, it is retired instead and stays on those rows. Stamps already burned into attachments are not affected.', tone: 'danger' })) deleteMut.mutate(tm.id); }}
                         className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                       >
                         Delete

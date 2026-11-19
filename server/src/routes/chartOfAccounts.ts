@@ -48,7 +48,7 @@ async function leadSheetBelongsToClient(
   leadSheetId: number,
   q: Knex | Knex.Transaction = db,
 ): Promise<boolean> {
-  const row = await q('lead_sheets').where({ id: leadSheetId, client_id: clientId }).first('id');
+  const row = await q('lead_sheets').where({ id: leadSheetId, client_id: clientId }).whereNull('retired_at').first('id');
   return !!row;
 }
 
@@ -193,7 +193,7 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
 
     // Case-insensitive code -> id for this client only. An unknown code imports
     // as "no lead sheet" rather than failing the row.
-    const clientLeadSheets = await db('lead_sheets').where({ client_id: clientId }).select('id', 'code');
+    const clientLeadSheets = await db('lead_sheets').where({ client_id: clientId }).whereNull('retired_at').select('id', 'code');
     const leadSheetLookup = new Map<string, number>(
       (clientLeadSheets as { id: number; code: string | null }[])
         .filter((l) => !!l.code)
@@ -427,7 +427,7 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
     // target simply arrives unassigned.
     const [sourceSheets, targetSheets] = await Promise.all([
       db('lead_sheets').where({ client_id: sourceClientId }).select('id', 'code'),
-      db('lead_sheets').where({ client_id: clientId }).select('id', 'code'),
+      db('lead_sheets').where({ client_id: clientId }).whereNull('retired_at').select('id', 'code'),
     ]);
     const codeById = new Map<number, string>(
       (sourceSheets as { id: number; code: string | null }[])

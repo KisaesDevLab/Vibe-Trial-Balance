@@ -708,7 +708,7 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       seenMatch.add(r.matchedAccountId!);
     }
 
-    const leadSheets = (await db('lead_sheets').where({ client_id: clientId }).select('id', 'code')) as Array<{ id: number; code: string | null }>;
+    const leadSheets = (await db('lead_sheets').where({ client_id: clientId }).whereNull('retired_at').select('id', 'code')) as Array<{ id: number; code: string | null }>;
     const leadSheetByCode = new Map<string, number>(
       leadSheets.filter((s) => !!s.code).map((s) => [s.code!.trim().toUpperCase(), s.id]),
     );

@@ -21,6 +21,7 @@ import {
   type CsvMapping,
 } from '../api/bankTransactions';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
+import { listPeriods } from '../api/periods';
 import { useUIStore } from '../store/uiStore';
 import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 import { downloadXlsx } from '../utils/downloadXlsx';
@@ -69,6 +70,21 @@ function StatusBadge({ status }: { status: ClassificationStatus }) {
 export function BankTransactionsPage() {
   const { selectedClientId, selectedPeriodId } = useUIStore();
   const qc = useQueryClient();
+  // A locked period refuses changes to its bank rows; say so up front.
+  const { data: periodsForLock } = useQuery({
+    queryKey: ['periods', selectedClientId],
+    queryFn: async () => { const r = await listPeriods(selectedClientId!); return r.data ?? []; },
+    enabled: !!selectedClientId,
+  });
+  const selectedPeriodLocked = !!periodsForLock?.find((p) => p.id === selectedPeriodId)?.locked_at;
+  const [actionError, setActionError] = useState<string | null>(null);
+  /** True when the server refused (the message is shown); false to carry on. */
+  const refused = (res: unknown): boolean => {
+    const msg = (res as { error?: { message?: string } | null } | undefined)?.error?.message;
+    if (msg) { setActionError(msg); return true; }
+    setActionError(null);
+    return false;
+  };
 
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterPeriod, setFilterPeriod] = useState(false);
@@ -218,7 +234,7 @@ export function BankTransactionsPage() {
   const classifyMutation = useMutation({
     mutationFn: ({ id, accountId }: { id: number; accountId: number }) =>
       classifyTransaction(clientId!, id, { accountId, classificationStatus: 'manual' }),
-    onSuccess: () => invalidate(),
+    onSuccess: (res) => { refused(res); invalidate(); },
   });
 
   const confirmMutation = useMutation({
@@ -227,12 +243,12 @@ export function BankTransactionsPage() {
         accountId: tx.ai_suggested_account_id ?? tx.account_id,
         classificationStatus: 'confirmed',
       }),
-    onSuccess: () => invalidate(),
+    onSuccess: (res) => { refused(res); invalidate(); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteBankTransaction(clientId!, id),
-    onSuccess: () => invalidate(),
+    onSuccess: (res) => { refused(res); invalidate(); },
   });
 
   const showBatchMessage = (msg: string) => {
@@ -242,8 +258,9 @@ export function BankTransactionsPage() {
 
   const batchDeleteMutation = useMutation({
     mutationFn: (ids: number[]) => batchDeleteTransactions(clientId!, ids),
-    onSuccess: (_res, ids) => {
+    onSuccess: (res, ids) => {
       invalidate();
+      if (refused(res)) return;
       setSelected(new Set());
       showBatchMessage(`Deleted ${ids.length} transaction(s) successfully.`);
     },
@@ -252,8 +269,9 @@ export function BankTransactionsPage() {
   const batchClassifyMutation = useMutation({
     mutationFn: ({ ids, accountId }: { ids: number[]; accountId: number }) =>
       batchClassifyTransactions(clientId!, ids, accountId),
-    onSuccess: (_res, { ids }) => {
+    onSuccess: (res, { ids }) => {
       invalidate();
+      if (refused(res)) return;
       setSelected(new Set());
       setBatchAccountId('');
       showBatchMessage(`Classified ${ids.length} transaction(s) successfully.`);
@@ -263,8 +281,9 @@ export function BankTransactionsPage() {
   const batchSourceMutation = useMutation({
     mutationFn: ({ ids, sourceAccountId }: { ids: number[]; sourceAccountId: number | null }) =>
       batchUpdateSourceAccount(clientId!, ids, sourceAccountId),
-    onSuccess: (_res, { ids }) => {
+    onSuccess: (res, { ids }) => {
       invalidate();
+      if (refused(res)) return;
       setSelected(new Set());
       setBatchSourceAccountId('');
       showBatchMessage(`Updated source account on ${ids.length} transaction(s).`);
@@ -294,6 +313,7 @@ export function BankTransactionsPage() {
     mutationFn: (ids: number[]) => batchConfirmAiSuggestions(clientId!, ids),
     onSuccess: (res) => {
       invalidate();
+      if (refused(res)) return;
       const n = (res as { data?: { confirmed?: number } })?.data?.confirmed ?? 0;
       showBatchMessage(`Confirmed ${n} AI suggestion(s) — journal entries created.`);
       setSelected(new Set());
@@ -303,7 +323,7 @@ export function BankTransactionsPage() {
   const updateDescMutation = useMutation({
     mutationFn: ({ id, description }: { id: number; description: string | null }) =>
       classifyTransaction(clientId!, id, { description }),
-    onSuccess: () => { invalidate(); setEditingDescId(null); },
+    onSuccess: (res) => { invalidate(); if (!refused(res)) setEditingDescId(null); },
   });
 
   const deleteRuleMutation = useMutation({
@@ -545,6 +565,17 @@ export function BankTransactionsPage() {
       </div>
 
       {/* Batch operation messages */}
+      {selectedPeriodLocked && (
+        <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-sm px-4 py-2 rounded mb-3">
+          The selected period is locked: its bank transactions cannot be added, changed or deleted until it is unlocked.
+        </div>
+      )}
+      {actionError && (
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-300 text-sm px-4 py-2 rounded mb-3 flex justify-between">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} aria-label="Dismiss" className="ml-3">&times;</button>
+        </div>
+      )}
       {batchMessage && (
         <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 text-green-700 dark:text-green-400 text-sm px-4 py-2 rounded mb-3">{batchMessage}</div>
       )}
