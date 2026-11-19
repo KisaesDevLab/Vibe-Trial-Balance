@@ -34,8 +34,10 @@ periodCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise
     return;
   }
   try {
+    // A period that came along only as a reference (desktop sync) is not
+    // one to open.
     const periods = await db('periods')
-      .where({ client_id: clientId })
+      .where({ client_id: clientId, is_reference: false })
       .orderBy('end_date', 'desc');
     res.json({ data: periods, error: null, meta: { count: periods.length } });
   } catch (err: unknown) {

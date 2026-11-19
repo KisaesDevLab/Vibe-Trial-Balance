@@ -710,8 +710,13 @@ All planned phases complete. App is feature-complete.
   counted, never pointed at another client. A period archive carries the whole tickmark library, and (desktop sync, owner
   2026-11-19) the other periods and bank transactions its own rows name, as plain rows without their data:
   a variance note's comparison period, a reconciliation item's earlier-period transaction and its period.
-  So restoring a period archive as new also makes the prior period, empty; the manifest's `periodId` names
-  the archive's own period. `npm run test:backup-e2e` (root) walks the schema's foreign keys from `clients` and
+  So restoring a period archive as new also makes the prior period, empty and marked `periods.is_reference`
+  (migration `20261001000003`); the manifest's `periodId` names the archive's own period. **A reference
+  period is not a period to work in:** it is left out of `GET /clients/:id/periods`, the MCP period list
+  and every prior-period lookup (`fsSource.ts`, the QuickBooks prior range), so statements read as if there
+  were no prior period; `assertPeriodUnlocked` (and the bank-transaction and reconciliation lock checks)
+  refuse writes into it as `PERIOD_LOCKED` with their own message. A new query that lists a client's
+  periods or looks for "the prior one" must add `is_reference: false`. `npm run test:backup-e2e` (root) walks the schema's foreign keys from `clients` and
   compares every table after restore-as-new, replace and a period restore, so a NEW client table fails it
   until the backup carries it or `NOT_COMPARED` in `test/backup-e2e.mjs` says why not.
 - **Rows a desktop sync must recognise carry `sync_uid` (S1, migration `20261001000001`).** `clients`,

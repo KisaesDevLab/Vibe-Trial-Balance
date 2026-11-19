@@ -701,8 +701,8 @@ async function main() {
     assert.equal(r.status, 200, r.text);
     const newId = r.json.data.newClientId;
     // The prior period comes only as a reference (no data, SQ7), so it
-    // cannot say which period IT was rolled forward from.
-    const ignore = { periods: ['rolled_forward_from'] };
+    // cannot say which period IT was rolled forward from, and is marked.
+    const ignore = { periods: ['rolled_forward_from', 'is_reference'] };
     const src = await snapshot(fx.clientId, { periodId: fx.p25, asNew: true, ignore });
     const got = await snapshot(newId, { asNew: true, ignore });
     const fy24 = await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2024'`, [newId]);
@@ -710,6 +710,38 @@ async function main() {
     assert.equal((await one(`SELECT rolled_forward_from FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [newId])).rolled_forward_from, fy24.id,
       'so FY 2025 still says it was rolled forward from it');
     assert.equal((await one(`SELECT count(*)::int AS n FROM trial_balance WHERE period_id = $1`, [fy24.id])).n, 0, 'a reference carries no balances');
+    // Marked as a reference: not listed, not writable (owner 2026-11-19).
+    assert.equal((await one(`SELECT is_reference FROM periods WHERE id = $1`, [fy24.id])).is_reference, true);
+    assert.equal((await one(`SELECT is_reference FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [newId])).is_reference, false);
+    const listed = await api(`/api/v1/clients/${newId}/periods`, { token });
+    assert.deepEqual(listed.json.data.map((p) => p.period_name), ['FY 2025'], 'the reference is not in the period list');
+    const [acA, acB] = (await sql(`SELECT id FROM chart_of_accounts WHERE client_id = $1 ORDER BY account_number LIMIT 2`, [newId])).map((r) => r.id);
+    const write = await api('/api/v1/journal-entries', {
+      method: 'POST', token,
+      json: {
+        periodId: fy24.id, entryType: 'book', entryDate: '2024-12-31', description: 'Into a reference',
+        lines: [{ accountId: acA, debit: 100, credit: 0 }, { accountId: acB, debit: 0, credit: 100 }],
+      },
+    });
+    assert.equal(write.status, 409, write.text);
+    assert.equal(write.json.error.code, 'PERIOD_LOCKED');
+    assert.match(write.json.error.message, /reference/);
+    // The statements read it as no prior period at all: one year of cash
+    // flows and the "no opening" check, as before references existed; the
+    // balance sheet's two years come from FY 2025's own rows, as on the original.
+    const stmtOf = (model, kind) => model.statements.find((x) => x.kind === kind);
+    const compute = async (clientId) => {
+      const rep25 = await one(`SELECT r.id FROM fs_reports r JOIN periods p ON p.id = r.period_id WHERE r.client_id = $1 AND p.period_name = 'FY 2025' ORDER BY r.id LIMIT 1`, [clientId]);
+      const c = await api(`/api/v1/fs/reports/${rep25.id}/compute`, { method: 'POST', token, json: {} });
+      assert.equal(c.status, 200, c.text);
+      return c.json.data.model;
+    };
+    const copyModel = await compute(newId);
+    assert.equal(stmtOf(copyModel, 'cash_flows').columns.length, 1, 'no prior-year cash flows from an empty opening');
+    assert.ok(copyModel.checks.find((x) => x.code === 'TB_FS_PY_OPENING_UNAVAILABLE'), 'the prior year has no opening, as without a prior period');
+    const origModel = await compute(fx.clientId);
+    const rowsOf = (m) => stmtOf(m, 'balance_sheet').rows.map((r) => [r.label, r.values]);
+    assert.deepEqual(rowsOf(copyModel), rowsOf(origModel), 'the balance sheet, both years, as on the original');
     const tables = schema.scoped.filter((t) => !PERIOD_NOT_CARRIED.includes(t));
     const pick = (rows) => Object.fromEntries(tables.map((t) => [t, rows[t]]));
     assertSameRows('period restore as new', pick(src.rows), pick(got.rows));
