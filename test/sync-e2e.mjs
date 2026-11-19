@@ -529,6 +529,13 @@ async function main() {
     const staffId = u.json.data.id;
     const staff = await signIn('example.staff', 'E2eStaff!2026', 'E2eStaff!2027');
     const mine = await pairWith(admin, 'Admin desktop');
+    // Owner 2026-11-19: changing your own password signs out your desktops;
+    // the same session may pair again straight away.
+    const laptop = await pairWith(staff, 'Staff laptop');
+    const own = await api('/api/v1/auth/change-password', { method: 'POST', token: staff, json: { currentPassword: 'E2eStaff!2027', newPassword: 'E2eStaff!2028' } });
+    assert.equal(own.status, 200, own.text);
+    assert.equal((await api('/api/v1/sync/me', { token: laptop.token })).json.error.code, 'SYNC_DEVICE_REVOKED');
+    assert.equal((await api('/api/v1/sync/me', { token: mine.token })).status, 200, "another user's desktop is untouched");
     const theirs = await pairWith(staff, 'Staff desktop');
     const reset = await api(`/api/v1/users/${staffId}`, { method: 'PATCH', token: admin, json: { password: 'Another-Example-Pass-91!' } });
     assert.equal(reset.status, 200, reset.text);
@@ -848,6 +855,8 @@ async function main() {
         ['fs.ts fsRouter POST /reports/:reportId/finalize', 'POST', `/api/v1/fs/reports/${reportId}/finalize`, { json: { overrideValidation: true, reason: 'Example override reason' } }],
         ['fs.ts fsRouter POST /reports/:reportId/reopen', 'POST', `/api/v1/fs/reports/${finalReportId}/reopen`, { json: {}, still: exists('fs_reports', finalReportId, `AND status = 'final'`) }],
         ['fs.ts fsPeriodRouter POST /reports', 'POST', `/api/v1/periods/${pid}/fs/reports`, { json: { ...fsBody, name: 'Example FS second' } }],
+        // Owner 2026-11-19: a held period is not rolled forward.
+        ['rollForward.ts rollForwardRouter POST /', 'POST', `/api/v1/periods/${pid}/roll-forward`, { json: { periodName: 'Example rolled from held', startDate: '2025-01-01', endDate: '2025-12-31' } }],
         ['journalEntries.ts jeItemRouter POST /', 'POST', '/api/v1/journal-entries', { json: { ...s3.je, description: 'Example walk entry two', lines: jeLines } }],
         ['journalEntries.ts jeItemRouter PUT /:id/lines', 'PUT', `/api/v1/journal-entries/${jeId}/lines`, { json: { lines: [{ accountId: a1, debit: 3000, credit: 0 }, { accountId: a2, debit: 0, credit: 3000 }] } }],
         ['journalEntries.ts jeItemRouter PATCH /:id', 'PATCH', `/api/v1/journal-entries/${jeId}`, { json: { description: 'Example walk entry edited' } }],

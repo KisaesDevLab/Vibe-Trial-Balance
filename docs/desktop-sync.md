@@ -52,7 +52,7 @@ The desktop requires **HTTPS**, except for `http://localhost` (a server on the s
 - **Rate limits:** each device has its own bucket (1200 calls per 15 minutes), so many desktops behind one office
   address do not share one; calls with an unknown token are limited per address (100 per 15 minutes).
 - **A device stops working** when it is removed (Settings › Desktop sync), its user is deactivated, its user's
-  password is reset, or it has not synced for 90 days.
+  password is reset or changed, or it has not synced for 90 days. A held period cannot be rolled forward.
 - **Check-outs:** a period pulled with check-out is read-only in the web app and over MCP until it is sent back or
   an admin releases it on the Periods page (with a reason). Nothing is released automatically; one older than 14
   days (`settings` key `sync.checkout_warn_days`) is flagged on the Periods page and the admin dashboard.
