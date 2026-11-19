@@ -108,7 +108,17 @@ function pick(row: Row, cols: Set<string>): Row {
   return out;
 }
 
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+/** JSON with sorted keys: a layout written by the desktop compares equal regardless of key order. */
+function canon(v: unknown): string {
+  if (v instanceof Date) return JSON.stringify(v.toISOString());
+  if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
+  if (v && typeof v === 'object') {
+    const o = v as Row;
+    return `{${Object.keys(o).sort().filter((k) => o[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canon(o[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+const same = (a: unknown, b: unknown): boolean => canon(a) === canon(b);
 
 /** Reads and checks everything that can be checked before touching the database. */
 export async function readSendBack(filePath: string, target: MergeTarget): Promise<{ tables: Record<string, unknown[]>; manifest: Row; files: Map<number, Buffer> }> {
@@ -172,20 +182,29 @@ export async function readSendBack(filePath: string, target: MergeTarget): Promi
 }
 
 /** The stamp of the archive's own rows (`periodStamp` is pure). */
-export function archiveStamp(tables: Record<string, unknown[]>): string {
-  return periodStamp(archiveStampInput(tables));
+export function archiveStamp(tables: Record<string, unknown[]>, ownPeriodId: number, accountUid?: Map<number, string>): string {
+  return periodStamp(archiveStampInput(tables, ownPeriodId, accountUid));
 }
 
-function archiveStampInput(tables: Record<string, unknown[]>): PeriodStampInput {
+/**
+ * `accountUid`: archive account id → the uid of the server account it was
+ * matched to (an account matched by NUMBER keeps the server's uid, so the
+ * archive is stamped with it).
+ */
+function archiveStampInput(tables: Record<string, unknown[]>, ownPeriodId: number, accountUid?: Map<number, string>): PeriodStampInput {
   return {
-    accounts: rowsOf(tables, 'chart_of_accounts').map((r) => ({ id: Number(r.id), sync_uid: String(r.sync_uid) })),
+    accounts: rowsOf(tables, 'chart_of_accounts').map((r) => ({ id: Number(r.id), sync_uid: accountUid?.get(Number(r.id)) ?? String(r.sync_uid) })),
     periods: rowsOf(tables, 'periods').map((r) => ({ id: Number(r.id), sync_uid: String(r.sync_uid) })),
     leadSheets: rowsOf(tables, 'lead_sheets').map((r) => ({ id: Number(r.id), code: (r.code as string | null) ?? null })),
     tickmarks: rowsOf(tables, 'tickmark_library').map((r) => ({ id: Number(r.id), symbol: String(r.symbol) })),
     documents: rowsOf(tables, 'client_documents').map((r) => ({ id: Number(r.id), sha256: (r.sha256 as string | null) ?? null })),
     bankTransactions: rowsOf(tables, 'bank_transactions').map((r) => ({ id: Number(r.id), sync_uid: String(r.sync_uid) })),
     fsLayouts: rowsOf(tables, 'fs_client_layouts'),
-    rows: Object.fromEntries(STAMP_TABLES.map((t) => [t, rowsOf(tables, t)])),
+    // The period's own rows: the bank transactions an archive carries as
+    // references (an earlier period's, a reconciliation clears) are lookups only.
+    rows: Object.fromEntries(STAMP_TABLES.map((t) => [t, t === 'bank_transactions'
+      ? rowsOf(tables, t).filter((r) => num(r.period_id) === ownPeriodId)
+      : rowsOf(tables, t)])),
   };
 }
 
@@ -216,7 +235,7 @@ export async function stageAttachmentFiles(
   try {
     for (const att of rowsOf(tables, 'lead_sheet_attachments')) {
       const docId = num(att.document_id);
-      if (docId === null || att.deleted_at) continue;
+      if (docId === null) continue;
       const doc = archiveDocs.get(docId);
       const here = byRef.get(String(att.ref_code));
       if (here?.document_id && doc && here.sha256 && here.sha256 === doc.sha256) {
@@ -224,6 +243,8 @@ export async function stageAttachmentFiles(
         continue;
       }
       const bytes = files.get(docId);
+      // A removed attachment's file may be gone: it keeps no document then.
+      if (!bytes && att.deleted_at) continue;
       if (!bytes) throw fail('SYNC_ARCHIVE_INVALID', `The archive lacks the file of attachment ${String(att.ref_code)}.`);
       const stored = await storeDocument({
         clientId: target.clientId,
@@ -336,7 +357,10 @@ export async function mergePeriod(
 
   // ── Lead sheets by code, tickmarks by symbol: matched, or added.
   for (const ls of rowsOf(tables, 'lead_sheets')) {
-    const here = ls.code ? await trx('lead_sheets').where({ client_id: C, code: ls.code }).first('id') : undefined;
+    // By code; a lead sheet without one, by name (else it would be added again on every send-back).
+    const here = ls.code
+      ? await trx('lead_sheets').where({ client_id: C, code: ls.code }).first('id')
+      : await trx('lead_sheets').where({ client_id: C, name: ls.name }).whereNull('code').first('id');
     if (here) { maps.leadSheet.set(Number(ls.id), Number(here.id)); continue; }
     const cols = await columnsOf(trx, 'lead_sheets');
     const [ins] = await trx('lead_sheets').insert(await enc('lead_sheets', { ...sanitize('lead_sheets', pick(ls, cols)), client_id: C })).returning('id');
@@ -361,18 +385,21 @@ export async function mergePeriod(
     delete out.sync_uid;
     return out;
   };
+  const accountUid = new Map<number, string>();
   for (const a of rowsOf(tables, 'chart_of_accounts')) {
     const here = (await trx('chart_of_accounts').where({ client_id: C, sync_uid: a.sync_uid }).first())
       ?? (await trx('chart_of_accounts').where({ client_id: C, account_number: a.account_number }).first());
     const want = fixAccount(a);
     if (!here) {
       const uidFree = !(await trx('chart_of_accounts').where({ sync_uid: a.sync_uid }).first('id'));
-      const [ins] = await trx('chart_of_accounts').insert(await enc('chart_of_accounts', { ...want, client_id: C, ...(uidFree ? { sync_uid: a.sync_uid } : {}) })).returning('id');
+      const [ins] = await trx('chart_of_accounts').insert(await enc('chart_of_accounts', { ...want, client_id: C, ...(uidFree ? { sync_uid: a.sync_uid } : {}) })).returning(['id', 'sync_uid']);
       maps.account.set(Number(a.id), Number((ins as { id: number }).id));
+      accountUid.set(Number(a.id), String((ins as { sync_uid: string }).sync_uid));
       result.accountsAdded.push(String(a.account_number));
       continue;
     }
     maps.account.set(Number(a.id), Number(here.id));
+    accountUid.set(Number(a.id), String(here.sync_uid));
     const changes: Row = {};
     for (const [k, v] of Object.entries(want)) {
       if (NOT_COMPARED.has(k) || same(here[k], v)) continue;
@@ -420,10 +447,13 @@ export async function mergePeriod(
 
   // ── Journal entries: what points at the period's entries from outside is linked again by type + number.
   const oldJes = (await trx('journal_entries').where({ period_id: P }).select('id', 'entry_type', 'entry_number')) as Array<{ id: number; entry_type: string; entry_number: number }>;
+  const serverLineAccounts = new Set(((await trx('journal_entry_lines as l').join('journal_entries as j', 'j.id', 'l.journal_entry_id')
+    .where('j.period_id', P).distinct().pluck('l.account_id')) as number[]).map(Number));
+  const serverHadLineOn = (id: number | undefined): boolean => id !== undefined && serverLineAccounts.has(id);
   const keyOfJe = new Map(oldJes.map((j) => [j.id, `${j.entry_type}#${j.entry_number}`]));
   const oldJeIds = oldJes.map((j) => j.id);
   const docLinks = oldJeIds.length ? (await trx('client_documents').whereIn('linked_journal_entry_id', oldJeIds).select('id', 'linked_journal_entry_id')) as Array<{ id: number; linked_journal_entry_id: number }> : [];
-  const btLinks = oldJeIds.length ? (await trx('bank_transactions').whereIn('journal_entry_id', oldJeIds).whereNot('period_id', P).select('id', 'journal_entry_id')) as Array<{ id: number; journal_entry_id: number }> : [];
+  const btLinks = oldJeIds.length ? (await trx('bank_transactions').whereIn('journal_entry_id', oldJeIds).where((w) => w.whereNull('period_id').orWhereNot('period_id', P)).select('id', 'journal_entry_id')) as Array<{ id: number; journal_entry_id: number }> : [];
   if (oldJeIds.length) {
     await trx('bank_transactions').whereIn('journal_entry_id', oldJeIds).update({ journal_entry_id: null });
     await trx('journal_entries').whereIn('id', oldJeIds).delete();
@@ -435,6 +465,18 @@ export async function mergePeriod(
     const id = Number((ins as { id: number }).id);
     maps.journal.set(Number(je.id), id);
     newKeyToId.set(`${je.entry_type}#${je.entry_number}`, id);
+  }
+  // The adjusted trial balance shows an entry only on accounts with a trial
+  // balance row (the web makes one, ensureTrialBalanceRows); an archive must too.
+  // Lines already like that on the server (older data) are taken as they are.
+  const tbAccounts = new Set(rowsOf(tables, 'trial_balance').map((r) => Number(r.account_id)));
+  const serverTbAccounts = new Set(((await trx('trial_balance').where({ period_id: P }).pluck('account_id')) as number[]).map(Number));
+  for (const l of rowsOf(tables, 'journal_entry_lines')) {
+    const old = Number(l.account_id);
+    const mapped = maps.account.get(old);
+    if (!tbAccounts.has(old) && (mapped === undefined || !serverTbAccounts.has(mapped)) && !serverHadLineOn(mapped)) {
+      throw fail('SYNC_ARCHIVE_INVALID', 'A journal entry line names an account with no trial balance row in the archive.');
+    }
   }
   const jelCols = await columnsOf(trx, 'journal_entry_lines');
   await insertBatched(trx, 'journal_entry_lines', rowsOf(tables, 'journal_entry_lines').map((l) => pick(remapRow('journal_entry_lines', l), jelCols)));
@@ -506,7 +548,7 @@ export async function mergePeriod(
     const row: Row = { ...sanitize('lead_sheet_attachments', pick(a, attCols)), client_id: C, period_id: P };
     row.lead_sheet_id = a.lead_sheet_id == null ? null : mapRef('leadSheet', a.lead_sheet_id, 'lead_sheet_attachments', 'lead_sheet_id');
     row.account_id = a.account_id == null ? null : mapRef('account', a.account_id, 'lead_sheet_attachments', 'account_id');
-    row.document_id = docOld === null || a.deleted_at ? null : mapRef('document', docOld, 'lead_sheet_attachments', 'document_id');
+    row.document_id = docOld === null ? null : a.deleted_at ? (maps.document.get(docOld) ?? null) : mapRef('document', docOld, 'lead_sheet_attachments', 'document_id');
     const here = await trx('lead_sheet_attachments').where({ period_id: P, ref_code: a.ref_code }).first('id', 'document_id');
     if (here) {
       if (here.document_id && Number(here.document_id) !== row.document_id) replacedDocs.push(Number(here.document_id));
@@ -525,13 +567,16 @@ export async function mergePeriod(
   // ── Statement Writer: sets by name, versions kept by number (their PDFs live here).
   const repCols = await columnsOf(trx, 'fs_reports');
   const verCols = await columnsOf(trx, 'fs_report_versions');
-  const archiveReportNames = new Set<string>();
   const currentOld = new Map<number, number | null>();
+  const usedReports = new Set<number>();
   for (const r of rowsOf(tables, 'fs_reports')) {
-    archiveReportNames.add(String(r.name));
     const row: Row = { ...sanitize('fs_reports', pick(r, repCols)), client_id: C, period_id: P, current_version_id: null };
     row.client_layout_id = mapRef('fsLayout', r.client_layout_id, 'fs_reports', 'client_layout_id');
-    const here = await trx('fs_reports').where({ period_id: P, name: r.name }).first('id');
+    // By name, preferring the same archived state; each server set matched once.
+    const cands = (await trx('fs_reports').where({ period_id: P, name: r.name }).select('id', 'archived_at')) as Array<{ id: number; archived_at: unknown }>;
+    const free = cands.filter((c) => !usedReports.has(Number(c.id)));
+    const here = free.find((c) => !!c.archived_at === !!r.archived_at) ?? free[0];
+    if (here) usedReports.add(Number(here.id));
     let id: number;
     if (here) {
       id = Number(here.id);
@@ -560,16 +605,16 @@ export async function mergePeriod(
     await trx('fs_reports').where({ id: reportId }).update({ current_version_id: oldCurrent === null ? null : versionMap.get(oldCurrent) ?? null });
   }
   // A set the desktop no longer has is archived, not deleted (its issued versions stay).
-  await trx('fs_reports').where({ period_id: P }).whereNull('archived_at').whereNotIn('name', [...archiveReportNames])
+  await trx('fs_reports').where({ period_id: P }).whereNull('archived_at').whereNotIn('id', [...usedReports, ...maps.fsReport.values()])
     .update({ archived_at: trx.fn.now() });
   result.counts.fs_reports = maps.fsReport.size;
 
   // ── Acceptance.
   const stamp = await stampOf(trx, P);
-  const expected = archiveStamp(tables);
+  const expected = archiveStamp(tables, ownOld, accountUid);
   if (stamp !== expected) {
     const here = await loadPeriodStampInput(trx as unknown as Knex, P);
-    console.error('[sync] merge stamp mismatch, period', P, 'tables:', here ? differingTables(here, archiveStampInput(tables)).join(', ') : '(period gone)');
+    console.error('[sync] merge stamp mismatch, period', P, 'tables:', here ? differingTables(here, archiveStampInput(tables, ownOld, accountUid)).join(', ') : '(period gone)');
     throw fail('SYNC_MERGE_MISMATCH', 'The period on the server would not match what the desktop sent, so nothing was changed. Tell your administrator (the server log has the detail).');
   }
   for (const [id, before] of othersBefore) {
@@ -580,6 +625,7 @@ export async function mergePeriod(
   result.stamp = stamp!;
   result.totalsAfter = await totals(trx, P);
   const wanted = (manifest.sync as Row | undefined)?.totals as Totals | undefined;
+  if (!wanted) throw fail('SYNC_ARCHIVE_INVALID', "The archive must carry the period's adjusted trial balance totals (sync.totals).");
   if (wanted && (String(wanted.bookDebit) !== result.totalsAfter.bookDebit || String(wanted.bookCredit) !== result.totalsAfter.bookCredit)) {
     throw fail('SYNC_TOTALS_MISMATCH', 'The trial balance totals on the server would not equal the desktop\'s, so nothing was changed.');
   }

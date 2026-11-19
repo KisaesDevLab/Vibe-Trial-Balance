@@ -165,7 +165,9 @@ syncRouter.get('/me', (req: SyncRequest, res: Response): void => {
   res.json({
     data: {
       device: req.syncDevice,
-      user: { username: req.user!.username, role: req.user!.role },
+      // The id a desktop writes into the user columns of rows it makes (a
+      // send-back keeps user ids this server has; the desktop's own mean nothing here).
+      user: { id: req.user!.userId, username: req.user!.username, role: req.user!.role },
       server: { appVersion: APP_VERSION },
     },
     error: null,

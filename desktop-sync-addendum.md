@@ -100,6 +100,8 @@ Each phase ends with tests passing and a summary. Phases S1–S3 change upstream
 - The archive is untrusted: read only the SQ4 and lookup tables; `manifest.sync` must name the live check-out held by this device and both uids; a row whose period is neither the manifest's nor a reference refuses the send-back.
 - Acceptance inside the transaction: the server period's stamp after the merge equals the stamp computed from the archive's own tables (`periodStamp` is pure), every other period's stamp is unchanged, and totals tie; otherwise roll back.
 
+**What a send-back archive must be (for the desktop, D-phases):** the server's own period `.tbak` format (manifest format 2, every entry's checksum, `schemaVersion` equal to the server's); whole rows as the server writes them (every column; DATE columns as `YYYY-MM-DD` or the ISO text of a local-midnight date); `manifest.sync` with `periodUid`, `clientUid`, `checkoutId` (or `stampAtPull` when sent without a check-out) and `totals { bookDebit, bookCredit }` (the adjusted trial balance as `v_adjusted_trial_balance` sums it: trial balance rows plus book and transfer entries on accounts that have a row); a journal line only on an account with a trial balance row in the archive. User columns: a row the desktop made carries the server id of the user who paired it (`GET /sync/me` → `user.id`); the server keeps ids it has and blanks the rest, so a desktop's own user numbers must never be sent. While a period is out, a lead sheet's code and a tickmark's symbol do not change on the desktop either.
+
 ### S5 — Proxy and tunnel hardening
 
 1. No sync request holds a connection for more than a few seconds apart from upload and download; everything else is job + poll. (Cloudflare returns 524 near 100 s.)

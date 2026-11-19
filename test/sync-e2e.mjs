@@ -256,6 +256,20 @@ async function rewriteArchive(buf, mutate, afterEntries) {
   });
 }
 
+/** The adjusted trial balance totals a desktop sends (`sync.totals`): TB rows plus book and transfer entries. */
+function totalsOf(t) {
+  const types = new Map(t.journal_entries.map((j) => [j.id, j.entry_type]));
+  // As the view: entries count only on accounts with a trial balance row.
+  const tbAccounts = new Set(t.trial_balance.map((r) => r.account_id));
+  let d = 0n, c = 0n;
+  for (const r of t.trial_balance) { d += BigInt(r.unadjusted_debit ?? 0); c += BigInt(r.unadjusted_credit ?? 0); }
+  for (const l of t.journal_entry_lines) {
+    if (!['book', 'trans'].includes(types.get(l.journal_entry_id)) || !tbAccounts.has(l.account_id)) continue;
+    d += BigInt(l.debit ?? 0); c += BigInt(l.credit ?? 0);
+  }
+  return { bookDebit: String(d), bookCredit: String(c) };
+}
+
 /** Uploads a buffer in parts and completes it; returns the upload id. */
 async function uploadBuf(token, buf) {
   const start = await api('/api/v1/sync/uploads', { method: 'POST', token, json: { size: buf.length, sha256: sha256Hex(buf) } });
@@ -1015,6 +1029,7 @@ async function main() {
         { ...t.journal_entry_lines[0], id: lineId, journal_entry_id: jeId, account_id: maxId + 1, debit: '500', credit: '0' },
         { ...t.journal_entry_lines[0], id: lineId + 1, journal_entry_id: jeId, account_id: base.id, debit: '0', credit: '500' },
       );
+      t.trial_balance.push({ ...t.trial_balance[0], id: 900000, account_id: maxId + 1, unadjusted_debit: '0', unadjusted_credit: '0' });
       // 4. A tickmark, new to the library, placed on the changed account.
       const tmId = Math.max(0, ...(t.tickmark_library ?? []).map((x) => x.id)) + 1;
       t.tickmark_library = [...(t.tickmark_library ?? []), { id: tmId, client_id: m.clientId, symbol: 'DX', description: 'Example desktop mark', color: 'blue', sort_order: 99 }];
@@ -1026,6 +1041,7 @@ async function main() {
         assignee_id: null, sort_order: 0, notes: null, completed_by: null, completed_at: null, created_by: null,
         created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       }];
+      m.sync.totals = totalsOf(t);
     });
     const uploadId = await uploadBuf(d.token, sent);
     const push = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId, checkoutId } });
@@ -1082,8 +1098,81 @@ async function main() {
     const tb = await one(`SELECT account_id FROM trial_balance WHERE period_id = $1 ORDER BY account_id LIMIT 1`, [P]);
     assert.equal((await api(`/api/v1/periods/${P}/trial-balance/${tb.account_id}`, { method: 'PUT', token: admin, json: { unadjustedDebit: 777, unadjustedCredit: 0 } })).status, 200);
     assert.equal((await pushJob(archive, { checkoutId })).refused, 'SYNC_NOT_HELD');
-    const noHold = await rewriteArchive(archive, async (t, m) => { m.sync.stampAtPull = m.sync.stamp; });
+    const noHold = await rewriteArchive(archive, async (t, m) => { m.sync.stampAtPull = m.sync.stamp; m.sync.totals = totalsOf(t); });
     assert.equal((await pushJob(noHold, { checkoutId: null })).refused, 'PERIOD_CHANGED');
+  });
+
+  await step('S4: SQ3: a web edit after the pull wins and is listed; an account added on both sides matches by number', async () => {
+    const d = s4.desk;
+    const P = s3.period.id;
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    const checkoutId = pull.json.data.checkoutId;
+    await waitJob(d.token, pull.json.data.jobId);
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    const acct = await one(`SELECT id, account_number, account_name FROM chart_of_accounts WHERE client_id = $1 ORDER BY account_number LIMIT 1`, [s3.client.id]);
+    await new Promise((r) => setTimeout(r, 50));
+    // On the web, after the pull: the account is renamed, and a new account is added.
+    const ren = await api(`/api/v1/chart-of-accounts/${acct.id}`, { method: 'PUT', token: admin, json: { accountName: 'Example renamed on the web' } });
+    if (ren.status >= 400) await sql(`UPDATE chart_of_accounts SET account_name = 'Example renamed on the web' WHERE id = $1`, [acct.id]);
+    const both = `8${String(Date.now()).slice(-5)}`;
+    await sql(`INSERT INTO chart_of_accounts (client_id, account_number, account_name, category, normal_balance) SELECT client_id, $2, 'Example both sides', category, normal_balance FROM chart_of_accounts WHERE id = $1`, [acct.id, both]);
+    const sent = await rewriteArchive(archive, async (t, m) => {
+      const a = t.chart_of_accounts.find((x) => x.id === acct.id) ?? t.chart_of_accounts.find((x) => x.account_number === acct.account_number);
+      a.account_name = 'Example renamed on the desktop';
+      const maxId = Math.max(...t.chart_of_accounts.map((x) => x.id));
+      t.chart_of_accounts.push({ ...a, id: maxId + 1, sync_uid: randomUUID(), account_number: both, account_name: 'Example both sides' });
+      m.sync.totals = totalsOf(t);
+    });
+    const uploadId = await uploadBuf(d.token, sent);
+    const push = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId, checkoutId } });
+    const j = await waitJob(d.token, push.json.data.jobId);
+    assert.equal(j.state, 'done', JSON.stringify(j.error));
+    assert.deepEqual(j.result.accountsAdded, [], 'the account added on both sides matched by number');
+    const diff = j.result.differences.find((x) => x.kind === 'account' && x.field === 'account_name');
+    assert.ok(diff, JSON.stringify(j.result.differences));
+    assert.equal(diff.desktop, 'Example renamed on the desktop');
+    assert.equal((await one(`SELECT account_name FROM chart_of_accounts WHERE id = $1`, [acct.id])).account_name, 'Example renamed on the web', "the server's change stays");
+    assert.equal((await one(`SELECT count(*)::int AS n FROM chart_of_accounts WHERE client_id = $1 AND account_number = $2`, [s3.client.id, both])).n, 1);
+    // And a journal line on an account with no trial balance row is refused.
+    const p2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    await waitJob(d.token, p2.json.data.jobId);
+    const a2 = (await api(`/api/v1/sync/jobs/${p2.json.data.jobId}/archive`, { token: d.token })).buf;
+    const orphan = await rewriteArchive(a2, async (t, m) => {
+      // An account with no trial balance row and no entries yet (the web would add a row first).
+      const noTb = t.chart_of_accounts.find((x) => !t.trial_balance.some((r) => r.account_id === x.id) && !t.journal_entry_lines.some((l) => l.account_id === x.id));
+      assert.ok(noTb, 'the fixture has an account with no trial balance row');
+      const je = Math.max(0, ...t.journal_entries.map((x) => x.id)) + 5000;
+      t.journal_entries.push({ ...t.journal_entries[0], id: je, entry_type: 'book', entry_number: 99999, description: 'Example orphan' });
+      t.journal_entry_lines.push({ ...t.journal_entry_lines[0], id: 990001, journal_entry_id: je, account_id: noTb.id, debit: '1', credit: '0' });
+      t.journal_entry_lines.push({ ...t.journal_entry_lines[0], id: 990002, journal_entry_id: je, account_id: t.trial_balance[0].account_id, debit: '0', credit: '1' });
+      m.sync.totals = totalsOf(t);
+    });
+    const up2 = await uploadBuf(d.token, orphan);
+    const r2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: up2, checkoutId: p2.json.data.checkoutId } });
+    const j2 = await waitJob(d.token, r2.json.data.jobId);
+    assert.equal(j2.error?.code, 'SYNC_ARCHIVE_INVALID');
+    assert.equal((await api(`/api/v1/sync/checkouts/${p2.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200, 'a refused send-back keeps the hold');
+  });
+
+  await step('S4: every foreign key into a period table from outside it is one the merge handles', async () => {
+    const PERIOD_TABLES = ['trial_balance', 'journal_entries', 'journal_entry_lines', 'bank_transactions', 'variance_notes', 'tb_tickmarks', 'm1_adjustments',
+      'engagement_tasks', 'lead_sheet_notes', 'lead_sheet_signoffs', 'py_comparison_data', 'lead_sheet_attachments', 'bank_reconciliations',
+      'reconciliation_items', 'fs_reports', 'fs_report_versions'];
+    // Handled: relinked by type + number, kept in place, or a period table's own child.
+    const HANDLED = new Set([
+      'client_documents.linked_journal_entry_id', // relinked by entry type + number
+      'bank_transactions.journal_entry_id', // updated in place by uid; other periods' rows relinked
+      'journal_entry_lines.journal_entry_id', 'reconciliation_items.reconciliation_id', 'reconciliation_items.transaction_id',
+      'fs_report_versions.report_id', // kept by version number
+      'fs_report_version_files.version_id', // versions are kept, so their PDFs stay
+      'period_checkouts.period_id', 'sync_jobs.period_id', // not period tables (released by the merge / job state)
+    ]);
+    const rows = await sql(`
+      SELECT c.conrelid::regclass::text AS from_table, a.attname AS from_col, c.confrelid::regclass::text AS to_table
+      FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+      WHERE c.contype = 'f' AND c.confrelid::regclass::text = ANY ($1)`, [PERIOD_TABLES]);
+    const unhandled = rows.filter((r) => !HANDLED.has(`${r.from_table}.${r.from_col}`)).map((r) => `${r.from_table}.${r.from_col} -> ${r.to_table}`);
+    assert.deepEqual(unhandled, [], 'classify a new foreign key into a period table here and in mergePeriod.ts');
   });
 
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {

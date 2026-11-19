@@ -1022,6 +1022,8 @@ async function restoreAsNew(
   /** Nullable FK links nulled because the archive didn't carry the parent row. */
   droppedLinks: number;
 }> {
+  // Rows keep the archive's updated_at (migration 20261004000002's trigger).
+  await trx.raw("SET LOCAL vtb.keep_updated_at = 'on'");
   const idMap: IdMap = new Map();
   const sanitizeUserFks = await makeUserFkSanitizer(trx, trustSourceUserIds);
 
@@ -1513,6 +1515,8 @@ async function restoreReplace(
   // client serialize. Any other session holding the lock (e.g. another
   // restore) blocks here until the current txn ends.
   await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, targetClientId]);
+  // Rows keep the archive's updated_at (migration 20261004000002's trigger).
+  await trx.raw("SET LOCAL vtb.keep_updated_at = 'on'");
   // Desktop sync: replacing the client would erase a desktop's check-out
   // with its period. Release it (or let it be sent back) first.
   await assertClientNotCheckedOut(trx, targetClientId);
