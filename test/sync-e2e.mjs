@@ -309,6 +309,8 @@ async function uploadBuf(token, buf) {
  */
 const PROXY_BODY_CAP = 1.5 * 1024 * 1024;
 const PROXY_RESPONSE_MS = 15_000;
+/** Other routes (a web finalize renders a PDF) get Cloudflare's own ~100 s. */
+const PROXY_RESPONSE_MS_WEB = 100_000;
 let proxyCuts = 0;
 async function startProxy(target) {
   const http = await import('node:http');
@@ -338,7 +340,7 @@ async function startProxy(target) {
         proxyCuts++;
         fwd.destroy();
         if (!res.headersSent) { res.writeHead(524); res.end('proxy timeout'); }
-      }, PROXY_RESPONSE_MS);
+      }, req.url.startsWith('/api/v1/sync/') ? PROXY_RESPONSE_MS : PROXY_RESPONSE_MS_WEB);
       fwd.on('error', () => { if (!res.headersSent) { res.writeHead(502); res.end(); } });
       fwd.end(Buffer.concat(chunks));
     });
@@ -1540,7 +1542,7 @@ async function main() {
     await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
   });
 
-  await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and responses after 15 s, and nothing was cut', async () => {
+  await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and sync responses after 15 s, and nothing was cut', async () => {
     assert.equal(proxyCuts, 0);
     // The proxy does cut: a body over the cap is refused before the server sees it.
     const big = await fetch(`${server.base}/api/v1/sync/uploads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'x'.repeat(PROXY_BODY_CAP + 10) }).catch(() => null);
