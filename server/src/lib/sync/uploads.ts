@@ -102,6 +102,42 @@ export async function putPart(row: UploadRow, n: number, body: Buffer): Promise<
   return receivedParts(row);
 }
 
+/** Uploads being joined now, and the last join error of each (this process only). */
+const joining = new Set<string>();
+const joinErrors = new Map<string, UploadError>();
+
+export function joinState(id: string): { joining: boolean; error: { code: string; message: string } | null } {
+  const e = joinErrors.get(id);
+  return { joining: joining.has(id), error: e ? { code: e.code, message: e.message } : null };
+}
+
+/**
+ * Starts joining the parts (a background task: up to 2 GiB is read and
+ * hashed, longer than a proxy waits). Refuses at once when parts are
+ * missing. The desktop polls `GET /uploads/:id` until `complete` (or an
+ * error). Calling it again while it runs, or after, is harmless.
+ */
+export function startCompleteUpload(row: UploadRow): { complete: boolean; joining: boolean } {
+  if (row.completed_at && row.file_path && fs.existsSync(row.file_path)) return { complete: true, joining: false };
+  if (joining.has(row.id)) return { complete: false, joining: true };
+  const size = Number(row.size);
+  const count = partCount(size, row.part_bytes);
+  const have = receivedParts(row);
+  if (have.length !== count) {
+    const missing = [...Array(count).keys()].filter((n) => !have.includes(n));
+    throw new UploadError(409, 'SYNC_UPLOAD_INCOMPLETE', `Parts still to send: ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? '…' : ''}.`);
+  }
+  joining.add(row.id);
+  joinErrors.delete(row.id);
+  void completeUpload(row)
+    .catch((err: unknown) => {
+      joinErrors.set(row.id, err instanceof UploadError ? err : new UploadError(500, 'SYNC_UPLOAD_FAILED', 'The server could not join the upload. Send it again.'));
+      if (!(err instanceof UploadError)) console.error('[sync] upload join failed', row.id, err instanceof Error ? err.message : err);
+    })
+    .finally(() => joining.delete(row.id));
+  return { complete: false, joining: true };
+}
+
 /** Joins the parts, checks size and SHA-256, and records the file. */
 export async function completeUpload(row: UploadRow): Promise<{ size: number; sha256: string }> {
   if (row.completed_at && row.file_path && fs.existsSync(row.file_path)) return { size: Number(row.size), sha256: row.sha256 };
@@ -113,8 +149,10 @@ export async function completeUpload(row: UploadRow): Promise<{ size: number; sh
     throw new UploadError(409, 'SYNC_UPLOAD_INCOMPLETE', `Parts still to send: ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? '…' : ''}.`);
   }
   const out = path.join(dirOf(row.id), 'archive.tbak');
+  // Written beside, then renamed: a finished archive is never truncated.
+  const tmp = `${out}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   const hash = crypto.createHash('sha256');
-  const fd = await fs.promises.open(out, 'w');
+  const fd = await fs.promises.open(tmp, 'w');
   try {
     for (let n = 0; n < count; n++) {
       const buf = await fs.promises.readFile(partPath(row.id, n));
@@ -127,9 +165,10 @@ export async function completeUpload(row: UploadRow): Promise<{ size: number; sh
   }
   const got = hash.digest('hex');
   if (got !== row.sha256) {
-    fs.rmSync(out, { force: true });
+    fs.rmSync(tmp, { force: true });
     throw new UploadError(400, 'SYNC_UPLOAD_HASH', 'The parts do not add up to the file announced (its SHA-256 differs). Send it again.');
   }
+  await fs.promises.rename(tmp, out);
   for (let n = 0; n < count; n++) fs.rmSync(partPath(row.id, n), { force: true });
   await db('sync_uploads').where({ id: row.id }).update({ file_path: out, completed_at: db.fn.now() });
   return { size, sha256: got };

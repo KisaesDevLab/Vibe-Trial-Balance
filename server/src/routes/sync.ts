@@ -26,7 +26,7 @@ import { authMiddleware, blockReviewerWrites, type AuthRequest } from '../middle
 import { logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
 import {
-  CODE_TTL_MS, formatCode, newDeviceToken, newPairingCode, normaliseCode, sha256, tidyDeviceName,
+  CODE_TTL_MS, formatCode, isDeviceToken, newDeviceToken, newPairingCode, normaliseCode, sha256, tidyDeviceName,
 } from '../lib/sync/deviceTokens';
 import { syncAuthMiddleware, type SyncRequest } from '../lib/sync/syncAuth';
 import fs from 'fs';
@@ -38,7 +38,7 @@ import { checkedOutBy } from '../lib/periodGuard';
 import { stampPeriod } from '../lib/sync/periodStampLoad';
 import { SYNC_JOB_DIR, SyncJobError, startJob } from '../lib/sync/jobs';
 import { checkoutApi, checkoutWarnDays, daysOut, isoDate } from '../lib/sync/checkouts';
-import { MAX_UPLOAD_BYTES, UploadError, completeUpload, openUpload, partBytes, putPart, receivedParts, startUpload } from '../lib/sync/uploads';
+import { MAX_UPLOAD_BYTES, UploadError, joinState, openUpload, partBytes, putPart, receivedParts, startCompleteUpload, startUpload } from '../lib/sync/uploads';
 import { dropReplacedDocuments, mergePeriod, readSendBack, removeDocuments, stageAttachmentFiles } from '../lib/sync/mergePeriod';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -141,6 +141,13 @@ syncRouter.use(rateLimit({
   keyGenerator: (req) => `sync-fail:${ipKeyGenerator(req.ip ?? req.socket?.remoteAddress ?? 'unknown')}`,
   requestWasSuccessful: (_req, res) => res.locals.syncUnknownToken !== true,
   skipSuccessfulRequests: true,
+  // A token this server knows (a live, revoked or expired desktop) is never
+  // held back by the made-up ones counted from the same address.
+  skip: async (req) => {
+    const h = req.headers.authorization;
+    const token = h?.startsWith('Bearer ') ? h.slice(7).trim() : '';
+    return isDeviceToken(token) && !!(await db('sync_devices').where({ token_hash: sha256(token) }).first('id'));
+  },
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many refused calls from this address. Wait a few minutes.' } },
 }));
 
@@ -341,6 +348,7 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
         fs.mkdirSync(dir, { recursive: true });
         // Set inside the archive's snapshot (manifestExtra); widened so TS does not narrow it to null.
         let stamp = null as string | null;
+        let pulledAt = new Date();
         const made = await createBackup('period', {
           clientId: period.client_id,
           periodId: period.id,
@@ -348,11 +356,13 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
           outDir: dir,
           recordHistory: false,
           manifestExtra: async (trx) => {
+            pulledAt = new Date((await trx.raw('SELECT now() AS t')).rows[0].t);
             stamp = await stampPeriod(trx, period.id);
             return { sync: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, pulledAt: new Date().toISOString(), deviceId: device.id } };
           },
         }, req.user!.userId);
-        if (checkoutId) await db('period_checkouts').where({ id: checkoutId }).update({ stamp_at_pull: stamp });
+        // Read inside the archive's snapshot: what the desktop now has, and when.
+        if (checkoutId) await db('period_checkouts').where({ id: checkoutId }).update({ stamp_at_pull: stamp, pulled_at: pulledAt });
         return {
           result: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, size: made.file_size, checksum: made.checksum },
           filePath: made.storage_local ?? undefined,
@@ -487,13 +497,20 @@ syncRouter.get('/uploads/:id', async (req: SyncRequest, res: Response): Promise<
   }
   try {
     const row = await openUpload(id, req.syncDevice!.id, true);
-    res.json({ data: { received: receivedParts(row), complete: !!row.completed_at, partBytes: row.part_bytes, size: Number(row.size) }, error: null });
+    const join = joinState(id);
+    res.json({
+      data: { received: receivedParts(row), complete: !!row.completed_at, joining: join.joining, joinError: join.error, partBytes: row.part_bytes, size: Number(row.size) },
+      error: null,
+    });
   } catch (err: unknown) {
     uploadFail(res, err, 'sync/uploads/status');
   }
 });
 
-/** Join the parts and check the SHA-256. */
+/**
+ * Join the parts and check the SHA-256: 202, then poll `GET /uploads/:id`
+ * until `complete` (or `joinError`). 200 when it is complete already.
+ */
 syncRouter.post('/uploads/:id/complete', async (req: SyncRequest, res: Response): Promise<void> => {
   const id = String(req.params.id);
   if (!isUuid(id)) {
@@ -502,7 +519,8 @@ syncRouter.post('/uploads/:id/complete', async (req: SyncRequest, res: Response)
   }
   try {
     const row = await openUpload(id, req.syncDevice!.id, true);
-    res.json({ data: { uploadId: id, ...(await completeUpload(row)) }, error: null });
+    const state = startCompleteUpload(row);
+    res.status(state.complete ? 200 : 202).json({ data: { uploadId: id, ...state }, error: null });
   } catch (err: unknown) {
     uploadFail(res, err, 'sync/uploads/complete');
   }
@@ -669,40 +687,47 @@ syncRouter.post('/clients/push', async (req: SyncRequest, res: Response): Promis
       return;
     }
     const filePath = upload.file_path;
-    const manifest = await readManifest(filePath).catch(() => null);
-    const problem = manifest ? syncManifestProblem(manifest) : 'The file sent is not a Vibe Trial Balance archive.';
-    if (problem || !manifest) {
-      bad(res, 400, 'SYNC_ARCHIVE_INVALID', problem ?? 'Not an archive.');
-      return;
-    }
-    const tables = await readZipContents(filePath, 5000);
-    const clientRow = ((tables.clients ?? []) as Array<Record<string, unknown>>)[0];
-    if (manifest.backupLevel !== 'client' || !clientRow || typeof clientRow.sync_uid !== 'string') {
-      bad(res, 400, 'SYNC_ARCHIVE_INVALID', 'The file sent is not a client archive.');
-      return;
-    }
-    if (await db('clients').where({ sync_uid: clientRow.sync_uid }).first('id')) {
-      bad(res, 409, 'CLIENT_EXISTS', 'This client is on the server already: send its periods back to it instead.');
-      return;
-    }
-    const applied = await appliedMigrations(db);
-    if (manifest.schemaVersion !== applied[applied.length - 1]) {
-      bad(res, 409, 'SYNC_SCHEMA_MISMATCH', 'This archive was made for a different version of the server. Update the desktop (or the server) so both match, then send it again.');
-      return;
-    }
     const device = req.syncDevice!;
+    const userId = req.user!.userId;
+    // Everything that reads the archive runs in the job (it may be large).
     const jobId = await startJob(
-      { kind: 'push', deviceId: device.id, userId: req.user!.userId, clientId: null },
+      { kind: 'push', deviceId: device.id, userId, clientId: null },
       async () => {
+        const manifest = await readManifest(filePath).catch(() => null);
+        const problem = manifest ? syncManifestProblem(manifest) : 'The file sent is not a Vibe Trial Balance archive.';
+        if (problem || !manifest) throw new SyncJobError('SYNC_ARCHIVE_INVALID', problem ?? 'Not an archive.');
         try {
           await checkArchive(filePath, manifest, db);
         } catch (err: unknown) {
           if (err instanceof BackupRefusal) throw new SyncJobError('SYNC_ARCHIVE_DAMAGED', err.message);
           throw err;
         }
+        const applied = await appliedMigrations(db);
+        if (manifest.schemaVersion !== applied[applied.length - 1]) {
+          throw new SyncJobError('SYNC_SCHEMA_MISMATCH', 'This archive was made for a different version of the server. Update the desktop (or the server) so both match, then send it again.');
+        }
+        const tables = await readZipContents(filePath, 5000);
+        const clientRow = ((tables.clients ?? []) as Array<Record<string, unknown>>)[0];
+        if (manifest.backupLevel !== 'client' || !clientRow || typeof clientRow.sync_uid !== 'string') {
+          throw new SyncJobError('SYNC_ARCHIVE_INVALID', 'The file sent is not a client archive.');
+        }
         const out = await db.transaction(async (trx) => {
+          // Two sends of one client wait for each other; the second finds the first.
+          await trx.raw('SELECT pg_advisory_xact_lock(44, hashtext(?))', [String(clientRow.sync_uid)]);
+          if (await trx('clients').where({ sync_uid: clientRow.sync_uid }).first('id')) {
+            throw new SyncJobError('CLIENT_EXISTS', 'This client is on the server already: send its periods back to it instead.');
+          }
+          // A restore would quietly give a held uid a new one; a desktop's new client must not.
+          for (const t of ['periods', 'chart_of_accounts', 'bank_transactions', 'fs_client_layouts']) {
+            const uids = ((tables[t] ?? []) as Array<Record<string, unknown>>).map((r) => r.sync_uid).filter((u): u is string => typeof u === 'string');
+            for (let k = 0; k < uids.length; k += 1000) {
+              if (await trx(t).whereIn('sync_uid', uids.slice(k, k + 1000)).first('id')) {
+                throw new SyncJobError('SYNC_UID_EXISTS', `Some of this client's ${t.replace(/_/g, ' ')} are on the server already under another client.`);
+              }
+            }
+          }
           const r = await restoreAsNew(tables, trx, true, { keepName: true });
-          await logAudit({ userId: req.user!.userId, periodId: null, clientId: r.newClientId, entityType: 'client', entityId: r.newClientId, action: 'sync_create', description: `Client "${String(clientRow.name)}" sent from desktop "${device.name}"` }, trx);
+          await logAudit({ userId, periodId: null, clientId: r.newClientId, entityType: 'client', entityId: r.newClientId, action: 'sync_create', description: `Client "${String(clientRow.name)}" sent from desktop "${device.name}"` }, trx);
           return r;
         });
         const files = Array.isArray(manifest.files) ? manifest.files.length : 0;

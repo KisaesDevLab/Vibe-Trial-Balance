@@ -237,7 +237,8 @@ async function rewriteArchive(buf, mutate, afterEntries) {
   const manifest = JSON.parse(entries.get('manifest.json').toString('utf8'));
   const tables = {};
   for (const [name, b] of entries) if (name.startsWith('tables/')) tables[name.slice(7, -5)] = JSON.parse(b.toString('utf8'));
-  await mutate(tables, manifest);
+  // Other entries (files/<document id>) can be changed too.
+  await mutate(tables, manifest, entries);
   manifest.entries = {};
   const out = new Map();
   for (const [t, rows] of Object.entries(tables)) out.set(`tables/${t}.json`, Buffer.from(JSON.stringify(rows, null, 2), 'utf8'));
@@ -270,6 +271,18 @@ function totalsOf(t) {
   return { bookDebit: String(d), bookCredit: String(c) };
 }
 
+/** Asks for the parts to be joined and polls until done; returns { complete, joinError }. */
+async function completeAndWait(token, uploadId) {
+  const c = await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token });
+  if (c.status !== 200 && c.status !== 202) return { status: c.status, error: c.json?.error };
+  for (let i = 0; i < 200; i++) {
+    const st = await api(`/api/v1/sync/uploads/${uploadId}`, { token });
+    if (st.json.data.complete || st.json.data.joinError) return { complete: st.json.data.complete, joinError: st.json.data.joinError };
+    await sleep(100);
+  }
+  throw new Error('join did not finish');
+}
+
 /** Uploads a buffer in parts and completes it; returns the upload id. */
 async function uploadBuf(token, buf) {
   const start = await api('/api/v1/sync/uploads', { method: 'POST', token, json: { size: buf.length, sha256: sha256Hex(buf) } });
@@ -282,8 +295,8 @@ async function uploadBuf(token, buf) {
     });
     assert.equal(r.status, 200, await r.text());
   }
-  const done = await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token });
-  assert.equal(done.status, 200, done.text);
+  const done = await completeAndWait(token, uploadId);
+  assert.equal(done.complete, true, JSON.stringify(done));
   return uploadId;
 }
 
@@ -1034,20 +1047,26 @@ async function main() {
     const status = await api(`/api/v1/sync/uploads/${uploadId}`, { token: d.token });
     assert.deepEqual(status.json.data.received, [0, 2]);
     assert.deepEqual((await put(1, part(1))).json.data.received, [0, 1, 2]);
-    const done = await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token: d.token });
-    assert.equal(done.status, 200, done.text);
-    assert.equal(done.json.data.sha256, sha);
+    const done = await completeAndWait(d.token, uploadId);
+    assert.equal(done.complete, true, JSON.stringify(done));
+    assert.equal((await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token: d.token })).status, 200, 'complete again: already done');
     // A file that does not match its announced hash is refused.
     const lie = await api('/api/v1/sync/uploads', { method: 'POST', token: d.token, json: { size: 100, sha256: '0'.repeat(64) } });
     const lieId = lie.json.data.uploadId;
     await fetch(`${server.base}/api/v1/sync/uploads/${lieId}/parts/0`, { method: 'PUT', headers: { authorization: `Bearer ${d.token}` }, body: randomBytes(100) });
-    const bad = await api(`/api/v1/sync/uploads/${lieId}/complete`, { method: 'POST', token: d.token });
-    assert.equal(bad.status, 400, bad.text);
-    assert.equal(bad.json.error.code, 'SYNC_UPLOAD_HASH');
+    const bad = await completeAndWait(d.token, lieId);
+    assert.equal(bad.complete, false);
+    assert.equal(bad.joinError?.code, 'SYNC_UPLOAD_HASH');
     assert.equal((await api('/api/v1/sync/uploads', { method: 'POST', token: d.token, json: { size: 3 * 1024 ** 3, sha256: sha } })).json.error.code, 'SYNC_UPLOAD_TOO_LARGE');
   });
 
   let s4;
+  // The demo seed has entries on accounts without a trial balance row; the
+  // web makes one first (ensureTrialBalanceRows), and so does this fixture.
+  await sql(`INSERT INTO trial_balance (period_id, account_id, unadjusted_debit, unadjusted_credit)
+             SELECT DISTINCT j.period_id, l.account_id, 0, 0 FROM journal_entry_lines l JOIN journal_entries j ON j.id = l.journal_entry_id
+             WHERE NOT EXISTS (SELECT 1 FROM trial_balance t WHERE t.period_id = j.period_id AND t.account_id = l.account_id)
+             ON CONFLICT DO NOTHING`);
   await step('S4: pull, change on the desktop, send back: the period matches, other periods are untouched, the hold ends', async () => {
     const d = await pairWith(admin, 'Roundtrip desktop');
     const P = s3.period.id;
@@ -1183,7 +1202,7 @@ async function main() {
     assert.equal(diff.desktop, 'Example renamed on the desktop');
     assert.equal((await one(`SELECT account_name FROM chart_of_accounts WHERE id = $1`, [acct.id])).account_name, 'Example renamed on the web', "the server's change stays");
     assert.equal((await one(`SELECT count(*)::int AS n FROM chart_of_accounts WHERE client_id = $1 AND account_number = $2`, [s3.client.id, both])).n, 1);
-    // And a journal line on an account with no trial balance row: the totals differ, refused.
+    // And a new journal line on an account with no trial balance row is refused.
     const p2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
     await waitJob(d.token, p2.json.data.jobId);
     const a2 = (await api(`/api/v1/sync/jobs/${p2.json.data.jobId}/archive`, { token: d.token })).buf;
@@ -1195,14 +1214,12 @@ async function main() {
       t.journal_entries.push({ ...t.journal_entries[0], id: je, entry_type: 'book', entry_number: 99999, description: 'Example orphan' });
       t.journal_entry_lines.push({ ...t.journal_entry_lines[0], id: 990001, journal_entry_id: je, account_id: noTb.id, debit: '1', credit: '0' });
       t.journal_entry_lines.push({ ...t.journal_entry_lines[0], id: 990002, journal_entry_id: je, account_id: t.trial_balance[0].account_id, debit: '0', credit: '1' });
-      // A desktop that counts every line, as if the account had a row.
-      const right = totalsOf(t);
-      m.sync.totals = { bookDebit: String(BigInt(right.bookDebit) + 1n), bookCredit: right.bookCredit };
+      m.sync.totals = totalsOf(t);
     });
     const up2 = await uploadBuf(d.token, orphan);
     const r2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: up2, checkoutId: p2.json.data.checkoutId } });
     const j2 = await waitJob(d.token, r2.json.data.jobId);
-    assert.equal(j2.error?.code, 'SYNC_TOTALS_MISMATCH', 'an entry on an account with no trial balance row is caught by the totals');
+    assert.equal(j2.error?.code, 'SYNC_ARCHIVE_INVALID', 'a new entry on an account with no trial balance row is refused (both sides would leave it out of the totals)');
     assert.equal((await api(`/api/v1/sync/checkouts/${p2.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200, 'a refused send-back keeps the hold');
   });
 
@@ -1263,6 +1280,22 @@ async function main() {
     assert.equal((await tbN(made.id)).n, (await tbN(s3.period.id)).n, 'its trial balance arrived');
     const again = await send(await asNewPeriod('2031-01-01', '2031-12-31'), periodsUrl);
     assert.equal(again.refused, 'SYNC_PERIOD_EXISTS');
+    // A period that came along only as a reference is filled in (SQ7).
+    const refUid = randomUUID();
+    const ref = await one(`INSERT INTO periods (client_id, sync_uid, period_name, start_date, end_date, is_reference) VALUES ($1, $2, 'Example FY 2032', '2032-01-01', '2032-12-31', true) RETURNING id`, [s3.client.id, refUid]);
+    const filled = await send(await rewriteArchive(archive, async (t, m) => {
+      const own = t.periods.find((p) => p.id === m.periodId);
+      Object.assign(own, { sync_uid: refUid, period_name: 'Example FY 2032', start_date: '2032-01-01', end_date: '2032-12-31', is_current: false, locked_at: null });
+      for (const b of t.bank_transactions) if (b.period_id === m.periodId) b.sync_uid = randomUUID();
+      t.lead_sheet_attachments = [];
+      m.sync.periodUid = refUid;
+      m.sync.totals = totalsOf(t);
+    }), periodsUrl);
+    assert.ok(filled.done, JSON.stringify(filled));
+    const r2 = await one(`SELECT id, is_reference FROM periods WHERE sync_uid = $1`, [refUid]);
+    assert.equal(r2.id, ref.id, 'the same row');
+    assert.equal(r2.is_reference, false, 'no longer a reference');
+    assert.ok((await tbN(ref.id)).n > 0);
 
     // A whole client made on the desktop.
     const b = await api(`/api/v1/backup/client/${s3.client.id}`, { method: 'POST', token: admin, json: {} });
@@ -1277,6 +1310,12 @@ async function main() {
       t.clients[0].name = (await one(`SELECT name FROM clients WHERE id = $1`, [s3.client.id])).name; // the same name: allowed, no suffix
       for (const tb of ['periods', 'chart_of_accounts', 'bank_transactions', 'fs_client_layouts']) for (const r of t[tb] ?? []) r.sync_uid = randomUUID();
     });
+    // A new client whose accounts' uids are held here already is refused.
+    const heldUids = await rewriteArchive(clientArchive, async (t) => {
+      t.clients[0].sync_uid = randomUUID();
+      for (const tb of ['periods', 'bank_transactions', 'fs_client_layouts']) for (const r of t[tb] ?? []) r.sync_uid = randomUUID();
+    });
+    assert.equal((await send(heldUids, '/api/v1/sync/clients/push')).refused, 'SYNC_UID_EXISTS');
     const nc = await send(fresh, '/api/v1/sync/clients/push');
     assert.ok(nc.done, JSON.stringify(nc));
     const c = await one(`SELECT id, name FROM clients WHERE sync_uid = $1`, [clientUid]);
@@ -1284,6 +1323,70 @@ async function main() {
     assert.ok(!c.name.includes('(Restored)'), 'and its name');
     assert.equal(nc.done.clientId, c.id);
     await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
+  });
+
+  await step('S4: an attachment changed on the desktop (a stamp burned in) replaces its file; a refused send-back leaves no file behind', async () => {
+    const { PDFDocument, StandardFonts } = require('pdf-lib');
+    const pdf = async (text) => {
+      const doc = await PDFDocument.create();
+      const page = doc.addPage([300, 200]);
+      page.drawText(text, { x: 20, y: 100, size: 12, font: await doc.embedFont(StandardFonts.Helvetica) });
+      return Buffer.from(await doc.save());
+    };
+    const d = s4.desk;
+    const P = s3.period.id;
+    const folder = `Example sync attachments ${Date.now()}`;
+    const link = await api(`/api/v1/storage/links/${s3.client.id}/create`, { method: 'POST', token: admin, json: { folderName: folder } });
+    assert.equal(link.status, 201, link.text);
+    try {
+      const form = new FormData();
+      form.append('file', new Blob([await pdf('Example original')], { type: 'application/pdf' }), 'example.pdf');
+      const att = await api(`/api/v1/periods/${P}/lead-sheet-attachments`, { method: 'POST', token: admin, form });
+      assert.equal(att.status, 201, att.text);
+      const ref = att.json.data.ref_code;
+      const oldDoc = att.json.data.document_id;
+      const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+      const checkoutId = pull.json.data.checkoutId;
+      await waitJob(d.token, pull.json.data.jobId);
+      const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+      const stamped = await pdf('Example original - reviewed');
+      const withStamp = (totalsDelta) => rewriteArchive(archive, async (t, m, entries) => {
+        const a = t.lead_sheet_attachments.find((x) => x.ref_code === ref);
+        const doc = t.client_documents.find((x) => x.id === a.document_id);
+        assert.ok(entries.has(`files/${doc.id}`), 'the pull carried the file');
+        entries.set(`files/${doc.id}`, stamped);
+        doc.sha256 = sha256Hex(stamped);
+        doc.file_size = stamped.length;
+        const tt = totalsOf(t);
+        m.sync.totals = { bookDebit: String(BigInt(tt.bookDebit) + totalsDelta), bookCredit: tt.bookCredit };
+      });
+      const docsBefore = (await one(`SELECT count(*)::int AS n FROM client_documents WHERE client_id = $1`, [s3.client.id])).n;
+      // Refused (the totals are off): the file stored for it is removed again.
+      const up1 = await uploadBuf(d.token, await withStamp(1n));
+      const r1 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: up1, checkoutId } });
+      const j1 = await waitJob(d.token, r1.json.data.jobId);
+      assert.equal(j1.error?.code, 'SYNC_TOTALS_MISMATCH');
+      assert.equal((await one(`SELECT count(*)::int AS n FROM client_documents WHERE client_id = $1`, [s3.client.id])).n, docsBefore, 'no document left behind');
+      assert.equal((await one(`SELECT document_id FROM lead_sheet_attachments WHERE period_id = $1 AND ref_code = $2`, [P, ref])).document_id, oldDoc);
+      // Accepted: the attachment points at the new file; the old one is gone.
+      const up2 = await uploadBuf(d.token, await withStamp(0n));
+      const r2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: up2, checkoutId } });
+      const j2 = await waitJob(d.token, r2.json.data.jobId);
+      assert.equal(j2.state, 'done', JSON.stringify(j2.error));
+      const now = await one(`SELECT a.document_id, d.sha256 FROM lead_sheet_attachments a JOIN client_documents d ON d.id = a.document_id WHERE a.period_id = $1 AND a.ref_code = $2`, [P, ref]);
+      assert.notEqual(now.document_id, oldDoc);
+      assert.equal(now.sha256, sha256Hex(stamped));
+      assert.equal((await one(`SELECT count(*)::int AS n FROM client_documents WHERE id = $1`, [oldDoc])).n, 0, 'the old document is removed');
+      const file = await api(`/api/v1/documents/${now.document_id}/download`, { token: admin });
+      if (file.status === 200) assert.equal(sha256Hex(file.buf), sha256Hex(stamped), 'the stored bytes are the stamped ones');
+    } finally {
+      const l = await one(`SELECT storage_path FROM client_folder_links WHERE client_id = $1`, [s3.client.id]);
+      await sql(`DELETE FROM client_folder_links WHERE client_id = $1`, [s3.client.id]);
+      if (l?.storage_path) {
+        const fsm = await import('node:fs');
+        fsm.rmSync(path.join(SERVER, 'uploads', l.storage_path), { recursive: true, force: true });
+      }
+    }
   });
 
   await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and responses after 15 s, and nothing was cut', async () => {

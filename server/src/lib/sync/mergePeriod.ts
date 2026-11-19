@@ -84,6 +84,8 @@ interface Totals {
 const LOOKUP_TABLES = ['clients', 'periods', 'chart_of_accounts', 'lead_sheets', 'tickmark_library', 'tax_codes', 'client_documents', 'fs_client_layouts'];
 /** Period tables replaced as a whole: nothing outside the period points at their rows. */
 const REPLACED: StampTable[] = ['trial_balance', 'variance_notes', 'tb_tickmarks', 'm1_adjustments', 'engagement_tasks', 'lead_sheet_notes', 'lead_sheet_signoffs', 'py_comparison_data'];
+/** The columns of an issued Statement Writer version that may change after it is issued. */
+const VERSION_MUTABLE = new Set(['report_id', 'status', 'superseded_at', 'reopened_by', 'reopened_at']);
 /** Columns never copied from an archive row. */
 const NEVER = new Set(['id', 'client_id', 'period_id']);
 /** Columns an SQ3 comparison leaves out. */
@@ -301,8 +303,8 @@ export async function mergePeriod(
     if (!holder || holder.id !== target.checkoutId || holder.deviceId !== target.deviceId) {
       throw fail('SYNC_NOT_HELD', 'This computer no longer holds the period (it was released). Pull it again to carry on.');
     }
-    const co = await trx('period_checkouts').where({ id: target.checkoutId }).first('created_at', 'stamp_at_pull');
-    since = new Date(co.created_at);
+    const co = await trx('period_checkouts').where({ id: target.checkoutId }).first('created_at', 'pulled_at', 'stamp_at_pull');
+    since = new Date(co.pulled_at ?? co.created_at);
     stampAtPull = (co.stamp_at_pull as string | null) ?? null;
   } else if (target.fresh) {
     since = new Date(String(((manifest.sync ?? {}) as Row).pulledAt ?? 0));
@@ -453,6 +455,11 @@ export async function mergePeriod(
 
   // ── Journal entries: what points at the period's entries from outside is linked again by type + number.
   const oldJes = (await trx('journal_entries').where({ period_id: P }).select('id', 'entry_type', 'entry_number')) as Array<{ id: number; entry_type: string; entry_number: number }>;
+  // Lines the server has now, as entry type#number|account: older data may
+  // have entries on accounts without a trial balance row, taken as they are.
+  const serverLines = new Set(((await trx('journal_entry_lines as l').join('journal_entries as j', 'j.id', 'l.journal_entry_id')
+    .where('j.period_id', P).select('j.entry_type', 'j.entry_number', 'l.account_id')) as Array<{ entry_type: string; entry_number: number; account_id: number }>)
+    .map((r) => `${r.entry_type}#${r.entry_number}|${r.account_id}`));
   const keyOfJe = new Map(oldJes.map((j) => [j.id, `${j.entry_type}#${j.entry_number}`]));
   const oldJeIds = oldJes.map((j) => j.id);
   const docLinks = oldJeIds.length ? (await trx('client_documents').whereIn('linked_journal_entry_id', oldJeIds).select('id', 'linked_journal_entry_id')) as Array<{ id: number; linked_journal_entry_id: number }> : [];
@@ -470,9 +477,17 @@ export async function mergePeriod(
     newKeyToId.set(`${je.entry_type}#${je.entry_number}`, id);
   }
   // The adjusted trial balance counts an entry only on an account with a trial
-  // balance row (the web makes one, ensureTrialBalanceRows). An archive that
-  // forgot it is caught by the totals check below: the desktop's totals then
-  // differ from the server's.
+  // balance row (the web makes one, ensureTrialBalanceRows): a NEW line on an
+  // account with no row in the archive is refused (both sides would leave it
+  // out of the totals, so they would still tie).
+  const tbAccounts = new Set(rowsOf(tables, 'trial_balance').map((r) => Number(r.account_id)));
+  const jeKeyOld = new Map(rowsOf(tables, 'journal_entries').map((j) => [Number(j.id), `${j.entry_type}#${j.entry_number}`]));
+  for (const l of rowsOf(tables, 'journal_entry_lines')) {
+    const old = Number(l.account_id);
+    if (tbAccounts.has(old)) continue;
+    const pair = `${jeKeyOld.get(Number(l.journal_entry_id))}|${maps.account.get(old)}`;
+    if (!serverLines.has(pair)) throw fail('SYNC_ARCHIVE_INVALID', 'A journal entry line names an account with no trial balance row in the archive.');
+  }
   const jelCols = await columnsOf(trx, 'journal_entry_lines');
   await insertBatched(trx, 'journal_entry_lines', rowsOf(tables, 'journal_entry_lines').map((l) => pick(remapRow('journal_entry_lines', l), jelCols)));
   for (const d of docLinks) {
@@ -587,8 +602,12 @@ export async function mergePeriod(
   for (const v of rowsOf(tables, 'fs_report_versions')) {
     const reportId = mapRef('fsReport', v.report_id, 'fs_report_versions', 'report_id')!;
     const row: Row = { ...sanitize('fs_report_versions', pick(v, verCols)), report_id: reportId };
-    const here = await trx('fs_report_versions').where({ report_id: reportId, version_no: v.version_no }).first('id');
+    const here = await trx('fs_report_versions').where({ report_id: reportId, version_no: v.version_no }).first();
     if (here) {
+      // An issued version is frozen (its PDF stays here): only what reopening
+      // or superseding it changes may differ.
+      const changed = Object.keys(row).filter((k) => !VERSION_MUTABLE.has(k) && k in here && !same(here[k], row[k]));
+      if (changed.length) throw fail('SYNC_ARCHIVE_INVALID', `An issued version of the statements "${String(v.version_no)}" differs from the server's (${changed.join(', ')}); issued statements cannot be changed.`);
       await trx('fs_report_versions').where({ id: here.id }).update(await enc('fs_report_versions', row));
       versionMap.set(Number(v.id), Number(here.id));
     } else {

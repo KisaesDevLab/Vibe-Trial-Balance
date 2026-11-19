@@ -38,9 +38,13 @@ The desktop requires **HTTPS**, except for `http://localhost` (a server on the s
      desktop (in its Firm server settings). The desktop sends it as the
      `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on every call; add an Access policy with the action
      **Service Auth** that includes that token. A person still signs in to the browser app as before.
-  2. **WAF.** Bot Fight Mode and managed challenges answer a desktop with a page it cannot solve. Add a custom rule
+  2. **WAF and bots.** Challenges answer a desktop with a page it cannot solve. Add a custom rule with the action
      **Skip** (all remaining custom rules, rate limiting, managed rules, Super Bot Fight Mode) for
      `http.request.uri.path starts_with "/api/v1/sync/"`. The server checks the device token on each of these calls.
+     **Bot Fight Mode (the free plan's) cannot be skipped by any rule**: it runs outside the rules engine
+     ([Cloudflare: Bot Fight Mode](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/)). With it on, a
+     desktop may be challenged; turn Bot Fight Mode off for the zone, or use Super Bot Fight Mode (Pro and up), which
+     the Skip rule above covers.
 
 ## What the server enforces
 

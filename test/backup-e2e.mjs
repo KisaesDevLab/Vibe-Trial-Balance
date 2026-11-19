@@ -843,7 +843,8 @@ async function main() {
       const r = await fetch(`${server.base}/api/v1/sync/uploads/${uploadId}/parts/${n}`, { method: 'PUT', headers: { authorization: `Bearer ${dt}` }, body: sent.subarray(n * partBytes, (n + 1) * partBytes) });
       assert.equal(r.status, 200, await r.text());
     }
-    assert.equal((await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token: dt })).status, 200);
+    assert.ok([200, 202].includes((await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token: dt })).status));
+    for (let i = 0; i < 200 && !(await api(`/api/v1/sync/uploads/${uploadId}`, { token: dt })).json.data.complete; i++) await new Promise((r) => setTimeout(r, 100));
     const push = await api(`/api/v1/sync/periods/${uid25}/push`, { method: 'POST', token: dt, json: { uploadId, checkoutId: pull.json.data.checkoutId } });
     assert.equal(push.status, 202, push.text);
     const pj = await job(push.json.data.jobId);
