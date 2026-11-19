@@ -32,13 +32,17 @@ varianceNotesRouter.put('/:accountId', async (req: AuthRequest, res: Response): 
   const result = schema.safeParse(req.body);
   if (!result.success) { res.status(400).json({ data: null, error: { code: 'VALIDATION_ERROR', message: result.error.message } }); return; }
   try {
+    // A note with no comparison period is kept against the period itself:
+    // compare_period_id is NOT NULL and a foreign key into periods, so the 0
+    // this used to write was refused on every save (500).
     if (!result.data.note.trim()) {
-      await db('variance_notes').where({ period_id: periodId, account_id: accountId }).delete();
+      // Only this note: the account's notes against other periods stay.
+      await db('variance_notes').where({ period_id: periodId, account_id: accountId, compare_period_id: periodId }).delete();
       res.json({ data: { deleted: true }, error: null });
       return;
     }
     const [row] = await db('variance_notes')
-      .insert({ period_id: periodId, account_id: accountId, compare_period_id: 0, note: result.data.note.trim(), created_by: req.user!.userId })
+      .insert({ period_id: periodId, account_id: accountId, compare_period_id: periodId, note: result.data.note.trim(), created_by: req.user!.userId })
       .onConflict(['period_id', 'account_id', 'compare_period_id'])
       .merge({ note: result.data.note.trim() })
       .returning('*');
