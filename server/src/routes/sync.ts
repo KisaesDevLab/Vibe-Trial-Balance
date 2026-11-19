@@ -127,6 +127,8 @@ syncRouter.get('/me', (req: SyncRequest, res: Response): void => {
 });
 
 syncRouter.get('/clients', async (_req: SyncRequest, res: Response): Promise<void> => {
+  // Client names leave the server: audited (syncAuth.ts).
+  res.locals.syncAudit = true;
   try {
     const rows = await db('clients')
       .orderBy('name')

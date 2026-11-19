@@ -13,13 +13,15 @@
  * The device acts as the user who paired it (SQ5): a deactivated user's
  * devices stop at once, a revoked device too. A reviewer may read (pull);
  * `blockReviewerWrites` after this stops their writes. Every call writes an
- * audit row naming the device, once the answer is sent.
+ * audit row naming the device, once the answer is sent, apart from polling
+ * reads (see below). A device unused for 90 days is retired here (`deviceRevoke.ts`).
  */
 
 import type { NextFunction, Response } from 'express';
 import { db } from '../../db';
 import type { AuthRequest } from '../../middleware/auth';
 import { logAudit } from '../periodGuard';
+import { deviceIdle, DEVICE_IDLE_DAYS } from './deviceRevoke';
 import { isDeviceToken, sha256 } from './deviceTokens';
 
 export interface SyncRequest extends AuthRequest {
@@ -44,13 +46,19 @@ export async function syncAuthMiddleware(req: SyncRequest, res: Response, next: 
     const row = await db('sync_devices as d')
       .join('app_users as u', 'u.id', 'd.user_id')
       .where('d.token_hash', sha256(token))
-      .first('d.id', 'd.name', 'd.revoked_at', 'd.last_used_at', 'u.id as user_id', 'u.username', 'u.role', 'u.is_active');
+      .first('d.id', 'd.name', 'd.revoked_at', 'd.last_used_at', 'd.created_at', 'u.id as user_id', 'u.username', 'u.role', 'u.is_active');
     if (!row) {
       refuse(res, 'SYNC_NOT_PAIRED', 'This computer is not connected to this server. Pair it again from Settings › Desktop sync.');
       return;
     }
     if (row.revoked_at) {
       refuse(res, 'SYNC_DEVICE_REVOKED', 'This computer\'s connection to the server was removed. Pair it again from Settings › Desktop sync.');
+      return;
+    }
+    if (deviceIdle(row.last_used_at, row.created_at)) {
+      await db('sync_devices').where({ id: row.id }).whereNull('revoked_at').update({ revoked_at: db.fn.now() });
+      void logAudit({ userId: row.user_id, periodId: null, entityType: 'sync_device', entityId: row.id, action: 'revoke', description: `Desktop "${row.name}" removed: unused for ${DEVICE_IDLE_DAYS} days` });
+      refuse(res, 'SYNC_DEVICE_EXPIRED', `This computer had not synced for ${DEVICE_IDLE_DAYS} days, so its connection ended. Pair it again from Settings › Desktop sync.`);
       return;
     }
     if (!row.is_active) {
@@ -63,7 +71,11 @@ export async function syncAuthMiddleware(req: SyncRequest, res: Response, next: 
     if (Date.now() - last > TOUCH_MS) {
       await db('sync_devices').where({ id: row.id }).update({ last_used_at: db.fn.now() });
     }
+    // Audited: every write, every refusal, and any read a route marks as
+    // handing out client data (`res.locals.syncAudit = true`). Not the
+    // polling (who am I, job status), which would flood the append-only log.
     res.on('finish', () => {
+      if (req.method === 'GET' && res.statusCode < 400 && !res.locals.syncAudit) return;
       void logAudit({
         userId: row.user_id,
         periodId: null,

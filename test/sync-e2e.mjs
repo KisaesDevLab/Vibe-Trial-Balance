@@ -339,6 +339,42 @@ async function main() {
     assert.ok(rows.some((r) => r.action === 'sync' && r.description.includes('"Example laptop"') && r.description.includes('/api/v1/sync/clients')), 'a sync call names its device');
   });
 
+  await step('polling reads are not audited; client data and refusals are', async () => {
+    const d = await pairWith(admin, 'Audit probe');
+    const before = (await one(`SELECT count(*)::int AS n FROM audit_log WHERE entity_type = 'sync_device' AND action = 'sync'`)).n;
+    for (let i = 0; i < 3; i++) assert.equal((await api('/api/v1/sync/me', { token: d.token })).status, 200);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal((await one(`SELECT count(*)::int AS n FROM audit_log WHERE entity_type = 'sync_device' AND action = 'sync'`)).n, before, '/me is not audited');
+    await api('/api/v1/sync/clients', { token: d.token });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal((await one(`SELECT count(*)::int AS n FROM audit_log WHERE entity_type = 'sync_device' AND action = 'sync'`)).n, before + 1, 'the client list is');
+  });
+
+  await step('a device unused for 90 days ends; one used inside that keeps working', async () => {
+    const old = await pairWith(admin, 'Idle desktop');
+    await sql(`UPDATE sync_devices SET last_used_at = now() - interval '91 days', created_at = now() - interval '200 days' WHERE id = $1`, [old.deviceId]);
+    const r = await api('/api/v1/sync/me', { token: old.token });
+    assert.equal(r.status, 401, r.text);
+    assert.equal(r.json.error.code, 'SYNC_DEVICE_EXPIRED');
+    assert.ok((await one(`SELECT revoked_at FROM sync_devices WHERE id = $1`, [old.deviceId])).revoked_at, 'and it is marked removed');
+    const recent = await pairWith(admin, 'Busy desktop');
+    await sql(`UPDATE sync_devices SET last_used_at = now() - interval '89 days' WHERE id = $1`, [recent.deviceId]);
+    assert.equal((await api('/api/v1/sync/me', { token: recent.token })).status, 200);
+  });
+
+  await step("an admin resetting a user's password ends that user's desktops, and only theirs", async () => {
+    const u = await api('/api/v1/users', { method: 'POST', token: admin, json: { username: 'example.staff', displayName: 'Example Staff', password: 'E2eStaff!2026', role: 'preparer' } });
+    assert.equal(u.status, 201, u.text);
+    const staffId = u.json.data.id;
+    const staff = await signIn('example.staff', 'E2eStaff!2026', 'E2eStaff!2027');
+    const mine = await pairWith(admin, 'Admin desktop');
+    const theirs = await pairWith(staff, 'Staff desktop');
+    const reset = await api(`/api/v1/users/${staffId}`, { method: 'PATCH', token: admin, json: { password: 'Another-Example-Pass-91!' } });
+    assert.equal(reset.status, 200, reset.text);
+    assert.equal((await api('/api/v1/sync/me', { token: theirs.token })).json.error.code, 'SYNC_DEVICE_REVOKED');
+    assert.equal((await api('/api/v1/sync/me', { token: mine.token })).status, 200, "the admin's own desktop is untouched");
+  });
+
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {
     let limited = false;
     for (let i = 0; i < 14 && !limited; i++) {

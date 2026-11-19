@@ -12,6 +12,7 @@ import { invalidateAuthCache } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
 import { passwordSchema } from '../lib/passwordPolicy';
 import { logAudit } from '../lib/periodGuard';
+import { revokeUserDevices } from '../lib/sync/deviceRevoke';
 import { getMailer } from '../lib/mailService';
 import { actionButton, buildTokenUrl, escapeHtml, fallbackLink } from '../lib/mailTemplates';
 import { selfServiceResetRefusal } from '../lib/accountGuards';
@@ -285,6 +286,9 @@ router.post('/password-reset/confirm', verifyLimiter, async (req: Request, res: 
       if (purpose === 'invite') updates.invite_accepted_at = trx.fn.now();
 
       await trx('app_users').where({ id: user.id }).update(updates);
+      // A reset link means someone may have had the account: its paired
+      // desktops end (owner 2026-11-19). An invite has none yet.
+      if (purpose === 'reset') await revokeUserDevices(user.id, null, 'the password was reset from an emailed link', trx);
 
       // Mark this token consumed and invalidate every other unconsumed token for this user.
       await trx('password_reset_tokens')

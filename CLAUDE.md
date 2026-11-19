@@ -742,8 +742,14 @@ All planned phases complete. App is feature-complete.
   local sign-in path (no `localLoginRefusal`). **The device token works ONLY on `/api/v1/sync/*`**
   (`syncAuthMiddleware`, `lib/sync/syncAuth.ts`): every other route's `authMiddleware` refuses it as a bad
   JWT, and the sync routes refuse a JWT. A device acts as its user: deactivated user or revoked device →
-  401 at once; a reviewer's device reads only (`blockReviewerWrites`). Every sync call writes an audit row
-  naming the device. `POST /pair` has its own limiter (10 per 15 min per address). `npm run test:sync-e2e`;
+  401 at once; a reviewer's device reads only (`blockReviewerWrites`). **A device token ends** (owner
+  2026-11-19, `lib/sync/deviceRevoke.ts`) on Remove, on deactivation, after 90 days unused
+  (`SYNC_DEVICE_EXPIRED`), and on a password RESET (admin PATCH `/users/:id`, Vibe Auth `setLocalPassword`,
+  an emailed reset link): `revokeUserDevices`. Not on a user's own password change or sign-out. Audit: every
+  sync write, every refusal, and a GET only when the route sets `res.locals.syncAudit = true` (it hands out
+  client data); polling reads are not audited. Making a code retires the user's unused ones.
+  `POST /pair` has its own limiter (10 failed tries per 15 min per ADDRESS, not `rateLimitKey`, whose JWT
+  claim is unverified). `npm run test:sync-e2e`;
   the `oidc_only` pairing step is in `sso-e2e.mjs`. The global reviewer gate in `app.ts` lets reviewers write
   to `/auth/*` (their own password, factors, passkeys, browsers) and `/desktop-sync/*` (their own desktops):
   without it a new reviewer could never finish the forced password change.
