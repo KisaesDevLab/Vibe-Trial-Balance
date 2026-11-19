@@ -184,3 +184,24 @@ export async function checkArchive(filePath: string, manifest: Record<string, un
     throw new BackupRefusal(TOO_NEW_MESSAGE, 'BACKUP_SCHEMA_TOO_NEW');
   }
 }
+
+// ─── Desktop sync (S0) ───────────────────────────────────────────────────
+
+export const SYNC_FORMAT_MESSAGE =
+  'This backup was made by an older version and cannot be sent between the desktop and the server. Make a new backup with both on the current version and try again.';
+
+/**
+ * Sync accepts only archives that say what they are: format 2 or later, with
+ * the schema version that wrote them and a checksum for every entry. Unlike a
+ * restore, which still takes a format-1 archive, sync compares schema versions
+ * and checksums before it merges anything, so an archive without them is
+ * refused outright. Returns null when the archive may be synced.
+ */
+export function syncManifestProblem(manifest: Record<string, unknown>): string | null {
+  const format = manifest.formatVersion;
+  if (typeof format !== 'number' || !Number.isInteger(format) || format < FORMAT_VERSION) return SYNC_FORMAT_MESSAGE;
+  if (typeof manifest.schemaVersion !== 'string' || manifest.schemaVersion === '') return SYNC_FORMAT_MESSAGE;
+  const entries = manifest.entries;
+  if (!entries || typeof entries !== 'object' || Array.isArray(entries) || Object.keys(entries).length === 0) return SYNC_FORMAT_MESSAGE;
+  return null;
+}

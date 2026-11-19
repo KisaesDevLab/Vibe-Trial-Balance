@@ -294,8 +294,21 @@ async function createBackup(
         if (await trx.schema.hasTable('m1_adjustments') && periodIds.length > 0) {
           await dump('m1_adjustments', await trx('m1_adjustments').whereIn('period_id', periodIds).select('*'));
         }
-        if (await trx.schema.hasTable('bank_reconciliations') && periodIds.length > 0) {
-          const reconRows = await trx('bank_reconciliations').whereIn('period_id', periodIds).select('*');
+        if (await trx.schema.hasTable('py_comparison_data') && periodIds.length > 0) {
+          await dump('py_comparison_data', await trx('py_comparison_data').whereIn('period_id', periodIds).select('*'));
+        }
+        // Client-level rows that deleteClientData removes on a replace, so
+        // they must ride along or a replace loses them.
+        if (await trx.schema.hasTable('saved_reports')) {
+          await dump('saved_reports', await trx('saved_reports').where('client_id', clientId).select('*'));
+        }
+        if (await trx.schema.hasTable('export_consolidation_settings')) {
+          await dump('export_consolidation_settings', await trx('export_consolidation_settings').where('client_id', clientId).select('*'));
+        }
+        // By client, not by period: a reconciliation need not name a period,
+        // and deleteClientData removes them by client.
+        if (await trx.schema.hasTable('bank_reconciliations')) {
+          const reconRows = await trx('bank_reconciliations').where('client_id', clientId).select('*');
           await dump('bank_reconciliations', reconRows);
           const reconIds = reconRows.map((r: { id: number }) => r.id);
           if (reconIds.length > 0 && await trx.schema.hasTable('reconciliation_items')) {
@@ -336,6 +349,11 @@ async function createBackup(
         if (await trx.schema.hasTable('lead_sheet_attachments')) {
           await dump('lead_sheet_attachments', await trx('lead_sheet_attachments').where('period_id', periodId).select('*'));
         }
+        // The period's marks point into the client's library, so the library
+        // comes along whole (it is small).
+        if (await trx.schema.hasTable('tickmark_library')) {
+          await dump('tickmark_library', cId ? await trx('tickmark_library').where('client_id', cId).select('*') : []);
+        }
         if (await trx.schema.hasTable('tb_tickmarks')) {
           await dump('tb_tickmarks', await trx('tb_tickmarks').where('period_id', periodId).select('*'));
         }
@@ -344,6 +362,9 @@ async function createBackup(
         }
         if (await trx.schema.hasTable('m1_adjustments')) {
           await dump('m1_adjustments', await trx('m1_adjustments').where('period_id', periodId).select('*'));
+        }
+        if (await trx.schema.hasTable('py_comparison_data')) {
+          await dump('py_comparison_data', await trx('py_comparison_data').where('period_id', periodId).select('*'));
         }
         if (await trx.schema.hasTable('bank_reconciliations')) {
           const reconRows = await trx('bank_reconciliations').where('period_id', periodId).select('*');
@@ -701,6 +722,13 @@ const USER_FK_COLUMNS: Record<string, string[]> = {
   lead_sheet_signoffs: ['user_id', 'invalidated_by'],
   lead_sheet_attachments: ['created_by', 'deleted_by'],
   lead_sheet_notes: ['author_id', 'resolved_by'],
+  tickmark_library: ['created_by'],
+  tb_tickmarks: ['created_by'],
+  engagement_tasks: ['assignee_id', 'completed_by', 'created_by'],
+  m1_adjustments: ['created_by'],
+  py_comparison_data: ['uploaded_by'],
+  bank_reconciliations: ['created_by', 'completed_by'],
+  saved_reports: ['created_by'],
   client_documents: ['uploaded_by', 'deleted_by'],
   client_folder_links: ['created_by'],
   qbo_connections: ['connected_by'],
@@ -771,6 +799,130 @@ async function makeTaxCodeResolver(
     const key = archiveById.get(id);
     return key !== undefined ? liveByKey.get(key) ?? null : null;
   };
+}
+
+/** Insert rows and return old id → new id, in input order. */
+async function insertMapped(
+  trx: Knex.Transaction,
+  table: string,
+  rows: Array<{ oldId: number; row: Record<string, unknown> }>,
+): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  const encoded = await encodeJsonColumns(trx, table, rows.map((r) => r.row));
+  for (let start = 0; start < encoded.length; start += BATCH_SIZE) {
+    const inserted = await trx(table).insert(encoded.slice(start, start + BATCH_SIZE)).returning('id');
+    inserted.forEach((r, i) => map.set(rows[start + i].oldId, (r as { id: number }).id));
+  }
+  return map;
+}
+
+interface WorkpaperRestoreContext {
+  clientId: number;
+  period: (oldId: number) => number | undefined;
+  account: (oldId: number) => number | undefined;
+  bankTransaction: (oldId: number) => number | undefined;
+  resolveTaxCode: (oldId: unknown) => number | null;
+  sanitizeUserFks: UserFkSanitizer;
+}
+
+/**
+ * Workpaper tables that both client restore paths share: the tickmark
+ * library and the marks on trial balance rows (issue #18), engagement tasks,
+ * M-1 adjustments, prior-year tie-out data, bank reconciliations and their
+ * cleared items, saved custom reports and tax export consolidation settings.
+ *
+ * Each table is optional in the archive (older archives lack some) and in
+ * the schema. A row whose required parent is not in the archive is skipped
+ * and counted, never pointed at another client's rows: a period archive, for
+ * one, carries only its own period, so a reconciliation item clearing an
+ * earlier period's check has no transaction to attach to.
+ */
+async function restoreClientWorkpapers(
+  trx: Knex.Transaction,
+  tables: Record<string, unknown[]>,
+  ctx: WorkpaperRestoreContext,
+): Promise<{ skipped: number }> {
+  let skipped = 0;
+  const data = (t: string) => (tables[t] as Array<Record<string, unknown>> | undefined) ?? [];
+  const has = async (t: string) => data(t).length > 0 && (await trx.schema.hasTable(t));
+  const req = (map: (id: number) => number | undefined, id: unknown) =>
+    (id === null || id === undefined ? undefined : map(id as number));
+  const opt = (map: (id: number) => number | undefined, id: unknown): number | null | undefined =>
+    (id === null || id === undefined ? null : map(id as number));
+
+  // Rows built by `build`; `null` from build means "parent missing, skip".
+  async function restore(
+    table: string,
+    build: (row: Record<string, unknown>) => Record<string, unknown> | null,
+  ): Promise<Map<number, number>> {
+    if (!(await has(table))) return new Map();
+    const rows: Array<{ oldId: number; row: Record<string, unknown> }> = [];
+    for (const row of data(table)) {
+      const built = build(row);
+      if (built === null) { skipped++; continue; }
+      rows.push({ oldId: row.id as number, row: ctx.sanitizeUserFks(table, { ...built, id: undefined }) });
+    }
+    return insertMapped(trx, table, rows);
+  }
+
+  const libraryMap = await restore('tickmark_library', (row) => ({ ...row, client_id: ctx.clientId }));
+
+  await restore('tb_tickmarks', (row) => {
+    const period = req(ctx.period, row.period_id);
+    const account = req(ctx.account, row.account_id);
+    const tickmark = req((id) => libraryMap.get(id), row.tickmark_id);
+    if (period === undefined || account === undefined || tickmark === undefined) return null;
+    return { ...row, period_id: period, account_id: account, tickmark_id: tickmark };
+  });
+
+  for (const table of ['engagement_tasks', 'm1_adjustments']) {
+    await restore(table, (row) => {
+      const period = req(ctx.period, row.period_id);
+      return period === undefined ? null : { ...row, period_id: period };
+    });
+  }
+
+  await restore('py_comparison_data', (row) => {
+    const period = req(ctx.period, row.period_id);
+    const account = req(ctx.account, row.account_id);
+    if (period === undefined || account === undefined) return null;
+    return { ...row, period_id: period, account_id: account };
+  });
+
+  const reconMap = await restore('bank_reconciliations', (row) => {
+    const account = req(ctx.account, row.source_account_id);
+    const period = opt(ctx.period, row.period_id);
+    if (account === undefined || period === undefined) return null;
+    return { ...row, client_id: ctx.clientId, source_account_id: account, period_id: period };
+  });
+
+  await restore('reconciliation_items', (row) => {
+    const recon = req((id) => reconMap.get(id), row.reconciliation_id);
+    const tx = req(ctx.bankTransaction, row.transaction_id);
+    if (recon === undefined || tx === undefined) return null;
+    return { ...row, reconciliation_id: recon, transaction_id: tx };
+  });
+
+  // A saved report names accounts by id inside its config.
+  await restore('saved_reports', (row) => {
+    const config = row.config as { sections?: Array<Record<string, unknown>> } | null;
+    const sections = Array.isArray(config?.sections)
+      ? config!.sections.map((s) => ({
+          ...s,
+          accountIds: Array.isArray(s.accountIds)
+            ? (s.accountIds as unknown[]).map((id) => ctx.account(id as number)).filter((id): id is number => id !== undefined)
+            : s.accountIds,
+        }))
+      : undefined;
+    return { ...row, client_id: ctx.clientId, config: sections ? { ...config, sections } : config };
+  });
+
+  await restore('export_consolidation_settings', (row) => {
+    const taxCode = ctx.resolveTaxCode(row.tax_code_id);
+    return taxCode === null ? null : { ...row, client_id: ctx.clientId, tax_code_id: taxCode };
+  });
+
+  return { skipped };
 }
 
 async function restoreAsNew(
@@ -986,17 +1138,21 @@ async function restoreAsNew(
   // the original client's period and accounts.
   const btData = tables['bank_transactions'] as Array<Record<string, unknown>> | undefined;
   if (btData && btData.length > 0) {
-    const rows = btData.map((row) => sanitizeUserFks('bank_transactions', {
-      ...row,
-      id: undefined,
-      client_id: getNewId('clients', row.client_id as number),
-      account_id: row.account_id ? getNewId('chart_of_accounts', row.account_id as number) : null,
-      period_id: mapOptional('periods', row.period_id),
-      source_account_id: mapOptional('chart_of_accounts', row.source_account_id),
-      ai_suggested_account_id: mapOptional('chart_of_accounts', row.ai_suggested_account_id),
-      journal_entry_id: mapOptional('journal_entries', row.journal_entry_id),
+    // Mapped: reconciliation items point at these rows.
+    const rows = btData.map((row) => ({
+      oldId: row.id as number,
+      row: sanitizeUserFks('bank_transactions', {
+        ...row,
+        id: undefined,
+        client_id: getNewId('clients', row.client_id as number),
+        account_id: row.account_id ? getNewId('chart_of_accounts', row.account_id as number) : null,
+        period_id: mapOptional('periods', row.period_id),
+        source_account_id: mapOptional('chart_of_accounts', row.source_account_id),
+        ai_suggested_account_id: mapOptional('chart_of_accounts', row.ai_suggested_account_id),
+        journal_entry_id: mapOptional('journal_entries', row.journal_entry_id),
+      }),
     }));
-    await insertBatched(trx, 'bank_transactions', rows);
+    idMap.set('bank_transactions', await insertMapped(trx, 'bank_transactions', rows));
   }
 
   // 8. classification_rules — bulk insert
@@ -1146,6 +1302,18 @@ async function restoreAsNew(
       }));
     await insertBatched(trx, 'lead_sheet_attachments', rows);
   }
+
+  // 12.5 Tickmarks, engagement tasks, M-1, PY tie-out, reconciliations, saved
+  // reports and export consolidation settings.
+  const workpapers = await restoreClientWorkpapers(trx, tables, {
+    clientId: newClientId,
+    period: (id) => idMap.get('periods')?.get(id),
+    account: (id) => idMap.get('chart_of_accounts')?.get(id),
+    bankTransaction: (id) => idMap.get('bank_transactions')?.get(id),
+    resolveTaxCode: await makeTaxCodeResolver(trx, tables),
+    sanitizeUserFks,
+  });
+  droppedLinks += workpapers.skipped;
 
   // 13. Statement Writer — last: it points at periods, accounts and lead
   // sheets, both as columns and inside its layout JSON.
@@ -1378,18 +1546,23 @@ async function restoreReplace(
 
   // bank_transactions — bulk
   const btData = tables['bank_transactions'] as Array<Record<string, unknown>> | undefined;
+  let btIdMap = new Map<number, number>();
   if (btData && btData.length > 0) {
-    const rows = btData.map((row) => sanitizeUserFks('bank_transactions', {
-      ...row,
-      id: undefined,
-      client_id: targetClientId,
-      account_id: row.account_id ? (coaIdMap.get(row.account_id as number) ?? row.account_id) : null,
-      period_id: mapOptional(periodIdMap, row.period_id),
-      source_account_id: mapOptional(coaIdMap, row.source_account_id),
-      ai_suggested_account_id: mapOptional(coaIdMap, row.ai_suggested_account_id),
-      journal_entry_id: mapOptional(jeIdMap, row.journal_entry_id),
+    // Mapped: reconciliation items point at these rows.
+    const rows = btData.map((row) => ({
+      oldId: row.id as number,
+      row: sanitizeUserFks('bank_transactions', {
+        ...row,
+        id: undefined,
+        client_id: targetClientId,
+        account_id: row.account_id ? (coaIdMap.get(row.account_id as number) ?? row.account_id) : null,
+        period_id: mapOptional(periodIdMap, row.period_id),
+        source_account_id: mapOptional(coaIdMap, row.source_account_id),
+        ai_suggested_account_id: mapOptional(coaIdMap, row.ai_suggested_account_id),
+        journal_entry_id: mapOptional(jeIdMap, row.journal_entry_id),
+      }),
     }));
-    await insertBatched(trx, 'bank_transactions', rows);
+    btIdMap = await insertMapped(trx, 'bank_transactions', rows);
   }
 
   // classification_rules — bulk
@@ -1554,6 +1727,17 @@ async function restoreReplace(
     })));
     await insertBatched(trx, 'lead_sheet_notes', rows);
   }
+
+  // Tickmarks (issue #18), engagement tasks, M-1, PY tie-out, reconciliations,
+  // saved reports, export consolidation: deleteClientData removed them all.
+  await restoreClientWorkpapers(trx, tables, {
+    clientId: targetClientId,
+    period: (id) => periodIdMap.get(id),
+    account: (id) => coaIdMap.get(id),
+    bankTransaction: (id) => btIdMap.get(id),
+    resolveTaxCode: await makeTaxCodeResolver(trx, tables),
+    sanitizeUserFks,
+  });
 
   // Statement Writer — deleteClientData removed these; put the archive's back.
   await restoreFsClientTables(trx, tables, {
