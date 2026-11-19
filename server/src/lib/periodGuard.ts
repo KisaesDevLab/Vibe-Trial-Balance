@@ -31,9 +31,53 @@ export async function assertPeriodUnlocked(periodId: number, trx?: Knex.Transact
   if (period.locked_at) {
     throw Object.assign(
       new Error('This period is locked and cannot be modified. Unlock it first.'),
-      { code: 'PERIOD_LOCKED', status: 409 },
+      // expose: a route that does not map PERIOD_LOCKED answers 409, not 500.
+      { code: 'PERIOD_LOCKED', status: 409, expose: true },
     );
   }
+}
+
+/**
+ * Refuses (409 PERIOD_LOCKED) a write into any of these periods that is
+ * closed, for writes that name their periods through their rows (bank rows,
+ * tasks, notes, tickmarks, reconciliations, attachments). Takes each period
+ * row FOR UPDATE, in id order, inside the write's transaction, so a lock
+ * cannot land between the check and the write. Null ids (rows that belong
+ * to no period) and periods that do not exist are skipped: the write itself
+ * answers for those. Owner 2026-11-19: a closed period is read-only for
+ * every period write, sign-offs and Statement Writer excepted.
+ */
+export async function assertPeriodsOpen(
+  trx: Knex.Transaction,
+  periodIds: Iterable<number | string | null | undefined>,
+): Promise<void> {
+  for (const id of periodIdList(periodIds)) {
+    const row = await trx('periods').where({ id }).forUpdate().first('id', 'locked_at');
+    if (row?.locked_at) {
+      throw Object.assign(
+        new Error('This period is locked and cannot be modified. Unlock it first.'),
+        { code: 'PERIOD_LOCKED', status: 409, expose: true },
+      );
+    }
+  }
+}
+
+/**
+ * For writes that should SKIP rows of a closed period instead of refusing
+ * the batch (AI suggestions): locks the periods, as `assertPeriodsOpen`, and
+ * returns the ids that are closed.
+ */
+export async function lockAndListClosed(trx: Knex.Transaction, periodIds: Iterable<number | string | null | undefined>): Promise<Set<number>> {
+  const closed = new Set<number>();
+  for (const id of periodIdList(periodIds)) {
+    const row = await trx('periods').where({ id }).forUpdate().first('id', 'locked_at');
+    if (row?.locked_at) closed.add(id);
+  }
+  return closed;
+}
+
+function periodIdList(periodIds: Iterable<number | string | null | undefined>): number[] {
+  return [...new Set([...periodIds].map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
 }
 
 interface AuditEntry {

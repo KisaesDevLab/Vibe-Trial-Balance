@@ -96,6 +96,19 @@ periodItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<
 
   try {
     await db.transaction(async (trx) => {
+      // A closed period keeps its dates (its balances and reports hang on
+      // them); its name, folder year and "current" flag may still change.
+      if (d.startDate !== undefined || d.endDate !== undefined) {
+        // Compared in SQL, date to date (no time zone in the way).
+        const before = await trx('periods').where({ id }).forUpdate().first(
+          'locked_at',
+          trx.raw('(start_date IS DISTINCT FROM ?::date) AS start_moves', [d.startDate === undefined ? trx.raw('start_date') : (d.startDate || null)]),
+          trx.raw('(end_date IS DISTINCT FROM ?::date) AS end_moves', [d.endDate === undefined ? trx.raw('end_date') : (d.endDate || null)]),
+        );
+        if (before?.locked_at && (before.start_moves || before.end_moves)) {
+          throw Object.assign(new Error("A locked period's dates cannot change. Unlock it first."), { code: 'PERIOD_LOCKED', status: 409, expose: true });
+        }
+      }
       if (d.isCurrent === true) {
         const period = await trx('periods').where({ id }).first('client_id');
         if (period) {

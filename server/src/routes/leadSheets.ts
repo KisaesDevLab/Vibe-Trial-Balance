@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
-import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
+import { assertPeriodsOpen, assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { whereHasActivity } from '../lib/tbActivity';
 import {
   DEFAULT_LEAD_SHEETS,
@@ -548,7 +548,17 @@ leadSheetItemRouter.delete('/', async (req: AuthRequest, res: Response): Promise
     const orphaned = await db('chart_of_accounts')
       .where({ lead_sheet_id: id, is_active: true }).count({ n: '*' }).first() as { n: string | number } | undefined;
 
-    await db('lead_sheets').where({ id }).delete();
+    await db.transaction(async (trx) => {
+      // The delete cascades to sign-offs, notes and attachments in every
+      // period; not while one of those periods is closed.
+      const touched = [
+        ...(await trx('lead_sheet_signoffs').where({ lead_sheet_id: id }).distinct().pluck('period_id')),
+        ...(await trx('lead_sheet_notes').where({ lead_sheet_id: id }).distinct().pluck('period_id')),
+        ...(await trx('lead_sheet_attachments').where({ lead_sheet_id: id }).distinct().pluck('period_id')),
+      ];
+      await assertPeriodsOpen(trx, touched);
+      await trx('lead_sheets').where({ id }).delete();
+    });
     await logAudit({
       userId: req.user!.userId, periodId: null, clientId: current.client_id as number,
       entityType: 'lead_sheet', entityId: id, action: 'delete',
@@ -870,7 +880,10 @@ leadSheetPeriodRouter.post('/:leadSheetId/notes', async (req: AuthRequest, res: 
     }
 
     const user = await db('app_users').where({ id: req.user!.userId }).first('display_name', 'username');
-    const [row] = await db('lead_sheet_notes').insert({
+    const [row] = await db.transaction(async (trx) => {
+      // Not in a closed (locked) period.
+      await assertPeriodsOpen(trx, [periodId]);
+      return trx('lead_sheet_notes').insert({
       client_id: clientId,
       period_id: periodId,
       lead_sheet_id: leadSheetId,
@@ -879,6 +892,7 @@ leadSheetPeriodRouter.post('/:leadSheetId/notes', async (req: AuthRequest, res: 
       author_id: req.user!.userId,
       author_name: (user?.display_name as string | undefined) ?? (user?.username as string | undefined) ?? null,
     }).returning('*');
+    });
 
     await logAudit({
       userId: req.user!.userId, periodId, clientId,
@@ -905,7 +919,9 @@ leadSheetPeriodRouter.post('/:leadSheetId/notes/:noteId/resolve', async (req: Au
     if (!note) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Note not found' } }); return; }
 
     const user = await db('app_users').where({ id: req.user!.userId }).first('display_name', 'username');
-    const [row] = await db('lead_sheet_notes').where({ id: noteId }).update(
+    const [row] = await db.transaction(async (trx) => {
+      await assertPeriodsOpen(trx, [note.period_id as number]);
+      return trx('lead_sheet_notes').where({ id: noteId }).update(
       parsed.data.resolved
         ? {
             resolved_at: db.fn.now(),
@@ -915,6 +931,7 @@ leadSheetPeriodRouter.post('/:leadSheetId/notes/:noteId/resolve', async (req: Au
           }
         : { resolved_at: null, resolved_by: null, resolved_by_name: null, updated_at: db.fn.now() },
     ).returning('*');
+    });
 
     await logAudit({
       userId: req.user!.userId, periodId: note.period_id as number, clientId: note.client_id as number,
