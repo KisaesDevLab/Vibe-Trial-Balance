@@ -37,7 +37,31 @@ export class SyncJobError extends Error {
   }
 }
 
-const chains = new Map<number, Promise<void>>();
+const chains = new Map<number | string, Promise<void>>();
+
+/** At most this many jobs queued or running per device (security review: queue and disk). */
+export const MAX_OPEN_JOBS_PER_DEVICE = 3;
+/** Free space kept on the disk the sync files live on. */
+export const DISK_RESERVE_BYTES = 1024 * 1024 * 1024;
+
+/** A 429 the routes pass through as it is (`expose`). */
+export function busy(message: string): Error {
+  return Object.assign(new Error(message), { code: 'SYNC_BUSY', status: 429, expose: true });
+}
+
+/** Refuses when the disk the sync files live on would keep less than the reserve. */
+export function assertDiskRoom(bytes: number): void {
+  try {
+    fs.mkdirSync(SYNC_JOB_DIR, { recursive: true });
+    const st = fs.statfsSync(SYNC_JOB_DIR);
+    if (Number(st.bavail) * Number(st.bsize) < bytes + DISK_RESERVE_BYTES) {
+      throw Object.assign(new Error('The server is short of disk space for this. Tell your administrator.'), { code: 'SYNC_NO_SPACE', status: 409, expose: true });
+    }
+  } catch (err: unknown) {
+    if ((err as { code?: string }).code === 'SYNC_NO_SPACE') throw err;
+    // statfs not available: no check.
+  }
+}
 
 /**
  * Records a job and runs `work` after any earlier job of the same client.
@@ -49,6 +73,10 @@ export async function startJob(
   work: (jobId: string) => Promise<JobOutcome>,
   onFail?: () => Promise<void>,
 ): Promise<string> {
+  const open = await db('sync_jobs').where({ device_id: input.deviceId }).whereIn('state', ['queued', 'running']).count({ n: '*' }).first();
+  if (Number(open?.n ?? 0) >= MAX_OPEN_JOBS_PER_DEVICE) {
+    throw busy('This computer has other syncs still running. Wait for them to finish.');
+  }
   const [row] = await db('sync_jobs')
     .insert({
       kind: input.kind,
@@ -61,8 +89,8 @@ export async function startJob(
     })
     .returning('id');
   const jobId = String((row as { id: string }).id);
-  // A client new to the server queues with the other new ones.
-  const key = input.clientId ?? -1;
+  // A client new to the server queues with that device's other new ones.
+  const key: number | string = input.clientId ?? `new-client:${input.deviceId}`;
   const previous = chains.get(key) ?? Promise.resolve();
   const next = previous.then(() => runJob(jobId, work, onFail));
   chains.set(key, next);

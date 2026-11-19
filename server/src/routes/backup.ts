@@ -566,6 +566,34 @@ const MAX_RESTORE_ENTRIES = 200;
 const MAX_RESTORE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 const MAX_RESTORE_TABLE_BYTES = 512 * 1024 * 1024;             // 512 MiB per table
 
+/** The largest manifest.json read. */
+const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
+
+/**
+ * An archive entry's bytes, read through a counter that stops at `cap`
+ * (security review: unzipper inflates until the stream ends, whatever size the
+ * zip declares, so a small zip can expand to gigabytes in memory).
+ */
+export async function entryBuffer(file: unzipper.File, cap: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let got = 0;
+  await new Promise<void>((resolve, reject) => {
+    const stream = file.stream();
+    stream.on('data', (c: Buffer) => {
+      got += c.length;
+      if (got > cap) {
+        stream.destroy();
+        reject(Object.assign(new Error(`Archive entry "${file.path}" is larger than ${cap} bytes`), { code: 'INVALID_BACKUP' }));
+        return;
+      }
+      chunks.push(c);
+    });
+    stream.on('end', () => resolve());
+    stream.on('error', reject);
+  });
+  return Buffer.concat(chunks);
+}
+
 export async function readZipContents(filePath: string, maxEntries = MAX_RESTORE_ENTRIES): Promise<Record<string, unknown[]>> {
   const tables: Record<string, unknown[]> = {};
   const dir = await unzipper.Open.file(filePath);
@@ -603,7 +631,8 @@ export async function readZipContents(filePath: string, maxEntries = MAX_RESTORE
     }
 
     const tableName = path.basename(file.path, '.json');
-    const content = await file.buffer();
+    // The declared size is the zip's word; the read is capped by the bytes that come out.
+    const content = await entryBuffer(file, Math.min(MAX_RESTORE_TABLE_BYTES, MAX_RESTORE_UNCOMPRESSED_BYTES - (totalBytes - declaredSize)));
     tables[tableName] = JSON.parse(content.toString('utf8')) as unknown[];
   }
   return tables;
@@ -668,7 +697,7 @@ export async function readManifest(filePath: string): Promise<Record<string, unk
   const dir = await unzipper.Open.file(filePath);
   const manifestFile = dir.files.find((f) => f.path === 'manifest.json');
   if (!manifestFile) throw new Error('manifest.json not found in backup');
-  const content = await manifestFile.buffer();
+  const content = await entryBuffer(manifestFile, MAX_MANIFEST_BYTES);
   return JSON.parse(content.toString('utf8')) as Record<string, unknown>;
 }
 
@@ -762,7 +791,7 @@ export async function insertBatched(
 // so attribution is dropped rather than misassigned. Leaving the raw id in
 // place — the previous behaviour — failed the whole restore on the FK when the
 // user was absent.
-const USER_FK_COLUMNS: Record<string, string[]> = {
+export const USER_FK_COLUMNS: Record<string, string[]> = {
   periods: ['locked_by'],
   trial_balance: ['updated_by'],
   journal_entries: ['created_by'],
@@ -1016,8 +1045,13 @@ export async function restoreAsNew(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
   trustSourceUserIds: boolean,
-  /** Desktop sync: a client made on a desktop keeps its name (no " (Restored)"). */
-  opts: { keepName?: boolean } = {},
+  /**
+   * Desktop sync: a client made on a desktop keeps its name (no " (Restored)");
+   * `untrusted`: the archive came from a device, not a backup an admin chose,
+   * so no storage pointer or folder link in it is kept, whatever ids it
+   * claims (the same-client test below compares ids the archive supplies).
+   */
+  opts: { keepName?: boolean; untrusted?: boolean } = {},
 ): Promise<{
   newClientId: number;
   idMappings: Record<string, Record<number, number>>;
@@ -1309,7 +1343,7 @@ export async function restoreAsNew(
       // the other's bytes. Drop the storage pointers instead — the row keeps
       // its metadata, and the download handler already explains that the file
       // was not part of the backup.
-      const sameClient = newClientId === (row.client_id as number);
+      const sameClient = !opts.untrusted && newClientId === (row.client_id as number);
       return sanitizeUserFks('client_documents', {
         ...row,
         id: undefined,
@@ -1339,7 +1373,7 @@ export async function restoreAsNew(
       // is unique, and two clients pointing at one folder would interleave
       // their documents. It arrives unlinked instead, which the Storage page
       // surfaces and which matches linking being an explicit act.
-      if (newClientId !== (row.client_id as number)) continue;
+      if (opts.untrusted || newClientId !== (row.client_id as number)) continue;
       await trx('client_folder_links')
         .insert(sanitizeUserFks('client_folder_links', { ...row, id: undefined, client_id: newClientId }))
         // Restoring into an instance that already knows this folder is fine.

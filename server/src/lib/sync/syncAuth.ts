@@ -21,7 +21,7 @@ import type { NextFunction, Response } from 'express';
 import { db } from '../../db';
 import type { AuthRequest } from '../../middleware/auth';
 import { logAudit } from '../periodGuard';
-import { deviceIdle, DEVICE_IDLE_DAYS } from './deviceRevoke';
+import { deviceIdle, DEVICE_IDLE_DAYS, releaseDeviceHolds } from './deviceRevoke';
 import { isDeviceToken, sha256 } from './deviceTokens';
 
 export interface SyncRequest extends AuthRequest {
@@ -59,6 +59,7 @@ export async function syncAuthMiddleware(req: SyncRequest, res: Response, next: 
     }
     if (deviceIdle(row.last_used_at, row.created_at)) {
       await db('sync_devices').where({ id: row.id }).whereNull('revoked_at').update({ revoked_at: db.fn.now() });
+      await releaseDeviceHolds(db, [row.id], null, `desktop "${row.name}" unused for ${DEVICE_IDLE_DAYS} days`);
       void logAudit({ userId: row.user_id, periodId: null, entityType: 'sync_device', entityId: row.id, action: 'revoke', description: `Desktop "${row.name}" removed: unused for ${DEVICE_IDLE_DAYS} days` });
       refuse(res, 'SYNC_DEVICE_EXPIRED', `This computer had not synced for ${DEVICE_IDLE_DAYS} days, so its connection ended. Pair it again from Settings › Desktop sync.`);
       return;

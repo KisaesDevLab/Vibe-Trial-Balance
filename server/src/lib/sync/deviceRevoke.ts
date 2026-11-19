@@ -27,6 +27,26 @@ export function deviceIdle(lastUsed: Date | string | null, created: Date | strin
 }
 
 /**
+ * Releases the periods these devices hold (security review: a removed or
+ * deactivated desktop's holds froze those periods until an admin released
+ * them one by one). Their unsent work stays on the desktop.
+ */
+export async function releaseDeviceHolds(
+  q: Knex | Knex.Transaction,
+  deviceIds: number[],
+  by: number | null,
+  reason: string,
+): Promise<number> {
+  if (deviceIds.length === 0) return 0;
+  const rows = (await q('period_checkouts').whereIn('device_id', deviceIds).whereNull('released_at')
+    .update({ released_at: q.fn.now(), released_by: by, release_reason: reason }).returning(['id', 'period_id', 'user_id'])) as Array<{ id: number; period_id: number; user_id: number }>;
+  for (const r of rows) {
+    await logAudit({ userId: by ?? r.user_id, periodId: r.period_id, entityType: 'period_checkout', entityId: r.id, action: 'release', description: `Check-out released: ${reason}` }, 'commit' in q ? (q as Knex.Transaction) : undefined);
+  }
+  return rows.length;
+}
+
+/**
  * Revokes every live device the user paired and deletes their unused pairing
  * codes; writes one audit row when any device was revoked. `by` is the admin
  * who caused it, or null. `reset: true` (a password reset) also stamps
@@ -48,6 +68,8 @@ export async function revokeUserDevices(
     .whereNull('revoked_at')
     .update({ revoked_at: q.fn.now(), revoked_by: by })
     .returning('id')) as Array<{ id: number }>;
+  // Their holds go with them.
+  await releaseDeviceHolds(q, ids.map((r) => Number(r.id)), by, `its desktop was removed (${reason})`);
   if (ids.length > 0) {
     await logAudit({
       userId: by ?? userId,

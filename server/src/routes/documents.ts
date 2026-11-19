@@ -268,10 +268,21 @@ documentsItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Prom
     // Desktop sync: a lead sheet attachment of a period a desktop holds keeps
     // its file until the period is sent back (checked before the storage
     // delete, which no transaction can undo).
-    await db.transaction(async (trx) => {
-      await assertNotCheckedOut(trx, await trx('lead_sheet_attachments').where({ document_id: docId }).distinct().pluck('period_id'));
+    // The attachments that show it are unlinked under their periods' lock (a
+    // pull cannot slip in between), then the storage delete; if that fails
+    // they are linked again.
+    const linked = await db.transaction(async (trx) => {
+      const rows = (await trx('lead_sheet_attachments').where({ document_id: docId }).select('id', 'period_id')) as Array<{ id: number; period_id: number }>;
+      await assertNotCheckedOut(trx, rows.map((r) => r.period_id));
+      if (rows.length) await trx('lead_sheet_attachments').whereIn('id', rows.map((r) => r.id)).update({ document_id: null });
+      return rows.map((r) => r.id);
     });
-    await removeDocument(doc as DocumentRow);
+    try {
+      await removeDocument(doc as DocumentRow);
+    } catch (err) {
+      if (linked.length) await db('lead_sheet_attachments').whereIn('id', linked).update({ document_id: docId });
+      throw err;
+    }
 
     await logAudit({
       userId: req.user?.userId ?? null, periodId: null, clientId: doc.client_id as number,

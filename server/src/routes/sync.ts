@@ -18,7 +18,7 @@
  * desktop never signs in itself.
  */
 
-import express, { Router, type Response } from 'express';
+import { Router, type Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { db } from '../db';
@@ -29,17 +29,20 @@ import {
   CODE_TTL_MS, formatCode, isDeviceToken, newDeviceToken, newPairingCode, normaliseCode, sha256, tidyDeviceName,
 } from '../lib/sync/deviceTokens';
 import { syncAuthMiddleware, type SyncRequest } from '../lib/sync/syncAuth';
+import { releaseDeviceHolds } from '../lib/sync/deviceRevoke';
 import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
 import { createBackup, readManifest, readZipContents, restoreAsNew } from './backup';
+import { currentStampFor } from '../lib/leadSheetStamp';
 import { BackupRefusal, FORMAT_VERSION, appliedMigrations, checkArchive, syncManifestProblem } from '../lib/backupManifest';
 import { checkedOutBy } from '../lib/periodGuard';
 import { stampPeriod } from '../lib/sync/periodStampLoad';
-import { SYNC_JOB_DIR, SyncJobError, startJob } from '../lib/sync/jobs';
+import { SYNC_JOB_DIR, SyncJobError, assertDiskRoom, startJob } from '../lib/sync/jobs';
 import { checkoutApi, checkoutWarnDays, daysOut, isoDate } from '../lib/sync/checkouts';
 import { MAX_UPLOAD_BYTES, UploadError, joinState, openUpload, partBytes, putPart, receivedParts, startCompleteUpload, startUpload } from '../lib/sync/uploads';
-import { dropReplacedDocuments, mergePeriod, readSendBack, removeDocuments, stageAttachmentFiles } from '../lib/sync/mergePeriod';
+import { asSyncError, dropReplacedDocuments, mergePeriod, readBaseline, readSendBack, removeDocuments, stageAttachmentFiles, type PullBaseline } from '../lib/sync/mergePeriod';
+import { confineNewClient } from '../lib/sync/newClient';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const APP_VERSION = (require('../../package.json') as { version: string }).version;
@@ -47,6 +50,36 @@ const APP_VERSION = (require('../../package.json') as { version: string }).versi
 const bad = (res: Response, status: number, code: string, message: string): void => {
   res.status(status).json({ data: null, error: { code, message } });
 };
+
+/** Live check-outs one device may hold (security review: one device freezing every period). */
+const MAX_CHECKOUTS_PER_DEVICE = 25;
+
+/** A job result as the desktop sees it: the pull's baseline is the server's own record. */
+function withoutBaseline(result: Record<string, unknown>): Record<string, unknown> {
+  const { baseline: _b, ...rest } = result;
+  void _b;
+  return rest;
+}
+
+/**
+ * The server's record of this device's pull a send-back started from (by its
+ * check-out, or by the stamp it pulled), or of its last pull of the client
+ * (a new period). Null when there is none: client-level rows are then treated
+ * as changed on the server (SQ3 keeps the server's and lists the difference).
+ */
+async function findBaseline(
+  deviceId: number,
+  clientId: number,
+  by: { periodId?: number; checkoutId?: number; stamp?: string },
+): Promise<PullBaseline | null> {
+  const q = db('sync_jobs').where({ kind: 'pull', device_id: deviceId, state: 'done', client_id: clientId });
+  if (by.periodId !== undefined) q.where({ period_id: by.periodId });
+  if (by.checkoutId !== undefined) q.whereRaw("(result->>'checkoutId')::int = ?", [by.checkoutId]);
+  if (by.stamp !== undefined) q.whereRaw("result->>'stamp' = ?", [by.stamp]);
+  const row = await q.orderBy('created_at', 'desc').first('result');
+  const b = (row?.result as { baseline?: PullBaseline } | undefined)?.baseline;
+  return b ?? null;
+}
 
 const CODE_REFUSED = 'That code is not right or has expired. Make a new one in Vibe Trial Balance › Settings › Desktop sync.';
 
@@ -139,14 +172,14 @@ syncRouter.use(rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => `sync-fail:${ipKeyGenerator(req.ip ?? req.socket?.remoteAddress ?? 'unknown')}`,
-  requestWasSuccessful: (_req, res) => res.locals.syncUnknownToken !== true,
+  requestWasSuccessful: (_req, res) => res.statusCode !== 401,
   skipSuccessfulRequests: true,
-  // A token this server knows (a live, revoked or expired desktop) is never
-  // held back by the made-up ones counted from the same address.
+  // A live desktop's token is never held back by refused calls from the same
+  // address; a made-up, revoked or expired one counts.
   skip: async (req) => {
     const h = req.headers.authorization;
     const token = h?.startsWith('Bearer ') ? h.slice(7).trim() : '';
-    return isDeviceToken(token) && !!(await db('sync_devices').where({ token_hash: sha256(token) }).first('id'));
+    return isDeviceToken(token) && !!(await db('sync_devices').where({ token_hash: sha256(token) }).whereNull('revoked_at').first('id'));
   },
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many refused calls from this address. Wait a few minutes.' } },
 }));
@@ -320,17 +353,34 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
         return;
       }
       const taken = await db.transaction(async (trx) => {
-        // The period row lock orders this against a web write's guard.
-        await trx('periods').where({ id: period.id }).forUpdate().first('id');
+        // The period row lock orders this against a web write's guard, and a
+        // lock taken meanwhile is seen here (code review).
+        const now = await trx('periods').where({ id: period.id }).forUpdate().first('locked_at', 'is_reference');
+        if (!now || now.is_reference) return { gone: true };
+        if (now.locked_at) return { locked: true };
         const holder = await checkedOutBy(trx, period.id);
         if (holder && holder.deviceId !== device.id) return { holder };
         if (holder) return { id: holder.id, created: false };
+        const held = await trx('period_checkouts').where({ device_id: device.id }).whereNull('released_at').count({ n: '*' }).first();
+        if (Number(held?.n ?? 0) >= MAX_CHECKOUTS_PER_DEVICE) return { tooMany: true };
         const [row] = await trx('period_checkouts')
           .insert({ period_id: period.id, device_id: device.id, user_id: req.user!.userId })
           .returning('id');
         await logAudit({ userId: req.user!.userId, periodId: period.id, entityType: 'period_checkout', entityId: (row as { id: number }).id, action: 'checkout', description: `Checked out to desktop "${device.name}"` }, trx);
         return { id: (row as { id: number }).id, created: true };
       });
+      if ('gone' in taken) {
+        bad(res, 404, 'NOT_FOUND', 'No period with that id on this server.');
+        return;
+      }
+      if ('locked' in taken) {
+        bad(res, 409, 'PERIOD_LOCKED', 'This period is locked on the server. Pull it with check-out off to read it, or ask an admin to unlock it.');
+        return;
+      }
+      if ('tooMany' in taken) {
+        bad(res, 429, 'SYNC_TOO_MANY_CHECKOUTS', `This computer already holds ${MAX_CHECKOUTS_PER_DEVICE} periods. Send some back first.`);
+        return;
+      }
       if ('holder' in taken && taken.holder) {
         bad(res, 409, 'PERIOD_CHECKED_OUT', `This period is checked out to ${taken.holder.user} on "${taken.holder.device}" since ${taken.holder.since.toISOString().slice(0, 10)}. Pull it with check-out off to read it.`);
         return;
@@ -341,6 +391,7 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
     // Only a check-out this call took is undone on failure: a re-pull keeps
     // the hold the desktop already had (it may hold unsent work).
     const createdCheckout = checkoutCreated ? checkoutId : null;
+    assertDiskRoom(0);
     const jobId = await startJob(
       { kind: 'pull', deviceId: device.id, userId: req.user!.userId, clientId: period.client_id, periodId: period.id, checkoutId, checkoutCreated },
       async (id) => {
@@ -349,6 +400,7 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
         // Set inside the archive's snapshot (manifestExtra); widened so TS does not narrow it to null.
         let stamp = null as string | null;
         let pulledAt = new Date();
+        let baseline = null as PullBaseline | null;
         const made = await createBackup('period', {
           clientId: period.client_id,
           periodId: period.id,
@@ -358,13 +410,15 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
           manifestExtra: async (trx) => {
             pulledAt = new Date((await trx.raw('SELECT now() AS t')).rows[0].t);
             stamp = await stampPeriod(trx, period.id);
-            return { sync: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, pulledAt: new Date().toISOString(), deviceId: device.id } };
+            // What the send-back is compared with (SQ3), kept here, not trusted from the archive.
+            baseline = await readBaseline(trx, period.client_id);
+            return { sync: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, pulledAt: pulledAt.toISOString(), deviceId: device.id } };
           },
         }, req.user!.userId);
         // Read inside the archive's snapshot: what the desktop now has, and when.
         if (checkoutId) await db('period_checkouts').where({ id: checkoutId }).update({ stamp_at_pull: stamp, pulled_at: pulledAt });
         return {
-          result: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, size: made.file_size, checksum: made.checksum },
+          result: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, size: made.file_size, checksum: made.checksum, baseline },
           filePath: made.storage_local ?? undefined,
         };
       },
@@ -397,7 +451,7 @@ syncRouter.get('/jobs/:id', async (req: SyncRequest, res: Response): Promise<voi
     }
     res.json({
       data: {
-        id: job.id, kind: job.kind, state: job.state, result: job.result ?? null, error: job.error ?? null,
+        id: job.id, kind: job.kind, state: job.state, result: job.result ? withoutBaseline(job.result) : null, error: job.error ?? null,
         createdAt: job.created_at, finishedAt: job.finished_at, archiveReady: job.state === 'done' && !!job.file_path,
       },
       error: null,
@@ -470,7 +524,6 @@ syncRouter.post('/uploads', async (req: SyncRequest, res: Response): Promise<voi
 /** One part, as raw bytes; sending a part again replaces it. */
 syncRouter.put(
   '/uploads/:id/parts/:n',
-  express.raw({ type: () => true, limit: partBytes() + 1024 }),
   async (req: SyncRequest, res: Response): Promise<void> => {
     const id = String(req.params.id);
     if (!isUuid(id)) {
@@ -479,8 +532,8 @@ syncRouter.put(
     }
     try {
       const row = await openUpload(id, req.syncDevice!.id);
-      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-      const received = await putPart(row, Number(req.params.n), body);
+      // Streamed to disk as it arrives (not held in memory).
+      const received = await putPart(row, Number(req.params.n), req);
       res.json({ data: { received }, error: null });
     } catch (err: unknown) {
       uploadFail(res, err, 'sync/uploads/part');
@@ -571,13 +624,20 @@ syncRouter.post('/periods/:uid/push', async (req: SyncRequest, res: Response): P
         const uids = (await db('periods as p').join('clients as c', 'c.id', 'p.client_id').where('p.id', target.periodId)
           .first('p.sync_uid as period_uid', 'c.sync_uid as client_uid')) as { period_uid: string; client_uid: string };
         const { tables, manifest, files } = await readSendBack(filePath, { periodUid: uids.period_uid, clientUid: uids.client_uid, checkoutId: target.checkoutId });
-        const staged = await stageAttachmentFiles(tables, files, target);
+        const stampAtPull = (manifest.sync as Record<string, unknown> | undefined)?.stampAtPull;
+        const withBaseline = {
+          ...target,
+          baseline: await findBaseline(device.id, target.clientId, target.checkoutId !== null
+            ? { periodId: target.periodId, checkoutId: target.checkoutId }
+            : { periodId: target.periodId, stamp: typeof stampAtPull === 'string' ? stampAtPull : '-' }),
+        };
+        const staged = await stageAttachmentFiles(tables, files, withBaseline);
         let outcome;
         try {
-          outcome = await db.transaction((trx) => mergePeriod(trx, target, tables, manifest, staged.docMap));
+          outcome = await db.transaction((trx) => mergePeriod(trx, withBaseline, tables, manifest, staged.docMap));
         } catch (err) {
           await removeDocuments(staged.created);
-          throw err;
+          throw asSyncError(err);
         }
         await dropReplacedDocuments(outcome.replacedDocs);
         return { result: outcome.result as unknown as Record<string, unknown> };
@@ -642,7 +702,11 @@ syncRouter.post('/clients/:uid/periods/push', async (req: SyncRequest, res: Resp
           }).returning('id');
           periodId = Number((ins as { id: number }).id);
         }
-        const target = { periodId, clientId, deviceId: device.id, deviceName: device.name, userId: req.user!.userId, checkoutId: null, fresh: true };
+        const target = {
+          periodId, clientId, deviceId: device.id, deviceName: device.name, userId: req.user!.userId, checkoutId: null, fresh: true,
+          // A new period: the client as this device last pulled any of its periods.
+          baseline: await findBaseline(device.id, clientId, {}),
+        };
         let staged: Awaited<ReturnType<typeof stageAttachmentFiles>> | null = null;
         try {
           staged = await stageAttachmentFiles(tables, files, target);
@@ -657,7 +721,7 @@ syncRouter.post('/clients/:uid/periods/push', async (req: SyncRequest, res: Resp
         } catch (err) {
           if (staged) await removeDocuments(staged.created);
           if (!existing) await db('periods').where({ id: periodId }).delete().catch(() => undefined);
-          throw err;
+          throw asSyncError(err);
         }
       },
     );
@@ -711,6 +775,9 @@ syncRouter.post('/clients/push', async (req: SyncRequest, res: Response): Promis
         if (manifest.backupLevel !== 'client' || !clientRow || typeof clientRow.sync_uid !== 'string') {
           throw new SyncJobError('SYNC_ARCHIVE_INVALID', 'The file sent is not a client archive.');
         }
+        // Only what a client archive from a desktop may carry, and every user id the
+        // sender's or none (security review).
+        const sender = await db('app_users').where({ id: userId }).first('id', 'display_name', 'username');
         const out = await db.transaction(async (trx) => {
           // Two sends of one client wait for each other; the second finds the first.
           await trx.raw('SELECT pg_advisory_xact_lock(44, hashtext(?))', [String(clientRow.sync_uid)]);
@@ -726,7 +793,14 @@ syncRouter.post('/clients/push', async (req: SyncRequest, res: Response): Promis
               }
             }
           }
-          const r = await restoreAsNew(tables, trx, true, { keepName: true });
+          const allowedTables = confineNewClient(tables, { id: userId, name: String(sender?.display_name ?? sender?.username ?? '') });
+          const r = await restoreAsNew(allowedTables, trx, true, { keepName: true, untrusted: true });
+          // Its sign-offs are the sender's, at the balances it arrived with.
+          const signs = (await trx('lead_sheet_signoffs as s').join('periods as p', 'p.id', 's.period_id').where('p.client_id', r.newClientId)
+            .select('s.id', 's.period_id', 's.lead_sheet_id')) as Array<{ id: number; period_id: number; lead_sheet_id: number }>;
+          for (const sg of signs) {
+            await trx('lead_sheet_signoffs').where({ id: sg.id }).update({ balance_stamp: await currentStampFor(trx, sg.period_id, sg.lead_sheet_id) });
+          }
           await logAudit({ userId, periodId: null, clientId: r.newClientId, entityType: 'client', entityId: r.newClientId, action: 'sync_create', description: `Client "${String(clientRow.name)}" sent from desktop "${device.name}"` }, trx);
           return r;
         });
@@ -874,6 +948,8 @@ desktopSyncRouter.delete('/devices/:id', async (req: AuthRequest, res: Response)
       return;
     }
     await db('sync_devices').where({ id }).update({ revoked_at: db.fn.now(), revoked_by: req.user!.userId });
+    // The periods it held are released with it.
+    await releaseDeviceHolds(db, [id], req.user!.userId, 'its desktop was removed');
     await logAudit({
       userId: req.user!.userId, periodId: null, entityType: 'sync_device', entityId: id, action: 'revoke',
       description: `Removed desktop "${device.name}"`,

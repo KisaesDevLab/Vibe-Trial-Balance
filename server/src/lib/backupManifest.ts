@@ -136,19 +136,29 @@ export async function appliedMigrations(knex: Knex): Promise<string[]> {
   return rows.map((r) => r.name);
 }
 
+/** The most an archive may inflate to while its entries are hashed (a zip bomb stops here). */
+const MAX_HASHED_BYTES = 4 * 1024 * 1024 * 1024;
+
 /** Hash every entry of a zip, streaming one at a time. */
 export async function hashArchive(filePath: string): Promise<ActualEntry[]> {
   const dir = await unzipper.Open.file(filePath);
   const out: ActualEntry[] = [];
+  let total = 0;
   for (const file of dir.files) {
     if (file.type === 'Directory' || file.path === MANIFEST_PATH) continue;
     const hash = crypto.createHash('sha256');
     let size = 0;
     await new Promise<void>((resolve, reject) => {
-      file.stream()
+      const stream = file.stream();
+      stream
         .on('data', (c: Buffer) => {
           hash.update(c);
           size += c.length;
+          total += c.length;
+          if (total > MAX_HASHED_BYTES) {
+            stream.destroy();
+            reject(new BackupRefusal(DAMAGED_MESSAGE, 'BACKUP_DAMAGED', ['the archive inflates past its limit']));
+          }
         })
         .on('end', () => resolve())
         .on('error', reject);

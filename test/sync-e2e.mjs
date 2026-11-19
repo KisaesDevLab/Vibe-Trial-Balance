@@ -1256,6 +1256,9 @@ async function main() {
       for (const b of t.bank_transactions) if (b.period_id === m.periodId) b.sync_uid = randomUUID();
       // The walk's attachment has no file, and this client has no folder to store one in.
       t.lead_sheet_attachments = [];
+      // Statements are finalized on the server: a new period arrives with drafts only.
+      t.fs_report_versions = [];
+      for (const r of t.fs_reports ?? []) { r.current_version_id = null; r.status = 'draft'; }
       m.sync.periodUid = newUid;
       m.sync.totals = totalsOf(t);
     });
@@ -1288,6 +1291,8 @@ async function main() {
       Object.assign(own, { sync_uid: refUid, period_name: 'Example FY 2032', start_date: '2032-01-01', end_date: '2032-12-31', is_current: false, locked_at: null });
       for (const b of t.bank_transactions) if (b.period_id === m.periodId) b.sync_uid = randomUUID();
       t.lead_sheet_attachments = [];
+      t.fs_report_versions = [];
+      for (const r of t.fs_reports ?? []) { r.current_version_id = null; r.status = 'draft'; }
       m.sync.periodUid = refUid;
       m.sync.totals = totalsOf(t);
     }), periodsUrl);
@@ -1307,12 +1312,16 @@ async function main() {
     const clientUid = randomUUID();
     const fresh = await rewriteArchive(clientArchive, async (t) => {
       t.clients[0].sync_uid = clientUid;
+      t.fs_report_versions = [];
+      for (const r of t.fs_reports ?? []) { r.current_version_id = null; r.status = 'draft'; }
       t.clients[0].name = (await one(`SELECT name FROM clients WHERE id = $1`, [s3.client.id])).name; // the same name: allowed, no suffix
       for (const tb of ['periods', 'chart_of_accounts', 'bank_transactions', 'fs_client_layouts']) for (const r of t[tb] ?? []) r.sync_uid = randomUUID();
     });
     // A new client whose accounts' uids are held here already is refused.
     const heldUids = await rewriteArchive(clientArchive, async (t) => {
       t.clients[0].sync_uid = randomUUID();
+      t.fs_report_versions = [];
+      for (const r of t.fs_reports ?? []) { r.current_version_id = null; r.status = 'draft'; }
       for (const tb of ['periods', 'bank_transactions', 'fs_client_layouts']) for (const r of t[tb] ?? []) r.sync_uid = randomUUID();
     });
     assert.equal((await send(heldUids, '/api/v1/sync/clients/push')).refused, 'SYNC_UID_EXISTS');
@@ -1387,6 +1396,148 @@ async function main() {
         fsm.rmSync(path.join(SERVER, 'uploads', l.storage_path), { recursive: true, force: true });
       }
     }
+  });
+
+  await step('Review fixes: desktop ids, issued statements, authorship, a duplicate import, a deleted tickmark', async () => {
+    const d = s4.desk;
+    const P = s3.period.id;
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    const checkoutId = pull.json.data.checkoutId;
+    await waitJob(d.token, pull.json.data.jobId);
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    assert.ok((await one(`SELECT count(*)::int AS n FROM fs_report_versions v JOIN fs_reports r ON r.id = v.report_id WHERE r.period_id = $1`, [P])).n > 0, 'the period has an issued statement (the walk finalized one)');
+    // A tickmark no period uses, deleted on the server while the period is out.
+    const tm = await one(`INSERT INTO tickmark_library (client_id, symbol, description) VALUES ($1, 'ZD', 'Example deleted') RETURNING id`, [s3.client.id]);
+    const p2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    await waitJob(d.token, p2.json.data.jobId);
+    const archive2 = (await api(`/api/v1/sync/jobs/${p2.json.data.jobId}/archive`, { token: d.token })).buf;
+    void archive;
+    assert.equal((await api(`/api/v1/tickmarks/${tm.id}`, { method: 'DELETE', token: admin })).status, 200);
+    const other = (await one(`SELECT id FROM app_users WHERE username = 'example.reviewer'`)).id;
+    const me = (await api('/api/v1/sync/me', { token: d.token })).json.data.user.id;
+    // As a desktop writes it: its own ids for accounts and lead sheets, everywhere they appear.
+    const K = 700000;
+    const shift = (v) => (v == null ? v : Number(v) + K);
+    const shiftJson = (j) => {
+      if (Array.isArray(j)) return j.map(shiftJson);
+      if (j && typeof j === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(j)) {
+          if (k === 'accountId' || k === 'groupingId') out[k] = v == null ? v : String(Number(v) + K);
+          else if (k === 'columnCaptions' && v && typeof v === 'object') out[k] = Object.fromEntries(Object.entries(v).map(([a, c]) => [String(Number(a) + K), c]));
+          else out[k] = shiftJson(v);
+        }
+        return out;
+      }
+      return j;
+    };
+    const sent = await rewriteArchive(archive2, async (t, m) => {
+      for (const a of t.chart_of_accounts) a.id = shift(a.id);
+      for (const l of t.lead_sheets ?? []) l.id = shift(l.id);
+      for (const a of t.chart_of_accounts) if (a.lead_sheet_id != null) a.lead_sheet_id = shift(a.lead_sheet_id);
+      for (const [tb, cols] of Object.entries({
+        trial_balance: ['account_id'], journal_entry_lines: ['account_id'], variance_notes: ['account_id'], tb_tickmarks: ['account_id'],
+        lead_sheet_notes: ['account_id', 'lead_sheet_id'], lead_sheet_signoffs: ['lead_sheet_id'], py_comparison_data: ['account_id'],
+        lead_sheet_attachments: ['account_id', 'lead_sheet_id'], bank_reconciliations: ['source_account_id'],
+        bank_transactions: ['account_id', 'ai_suggested_account_id', 'source_account_id'],
+      })) for (const r of t[tb] ?? []) for (const c of cols) r[c] = shift(r[c]);
+      for (const l of t.fs_client_layouts ?? []) l.layout_json = shiftJson(l.layout_json);
+      for (const v of t.fs_report_versions ?? []) v.layout_json = shiftJson(v.layout_json);
+      // Authorship: a sign-off "by" someone else, and a task "completed by" someone else.
+      const ls = t.lead_sheets[0];
+      t.lead_sheet_signoffs = [...(t.lead_sheet_signoffs ?? []), {
+        ...(t.lead_sheet_signoffs?.[0] ?? {}), id: 990, period_id: m.periodId, lead_sheet_id: ls.id, role: 'reviewer',
+        user_id: other, user_name: 'Example Reviewer', balance_stamp: 'f'.repeat(64), signed_at: new Date().toISOString(), invalidated_at: null, invalidated_by: null,
+      }].filter((x) => !(x.lead_sheet_id === ls.id && x.role === 'reviewer' && x.id !== 990));
+      t.engagement_tasks = [...(t.engagement_tasks ?? []), {
+        id: 991, period_id: m.periodId, title: 'Example forged task', description: null, category: null, status: 'completed',
+        assignee_id: other, sort_order: 0, notes: null, completed_by: other, completed_at: new Date().toISOString(), created_by: other,
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }];
+      m.sync.totals = totalsOf(t);
+    });
+    const up = await uploadBuf(d.token, sent);
+    const r = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: up, checkoutId: p2.json.data.checkoutId } });
+    const j = await waitJob(d.token, r.json.data.jobId);
+    assert.equal(j.state, 'done', `desktop ids and an issued statement send back: ${JSON.stringify(j.error)}`);
+    assert.ok(!await one(`SELECT 1 FROM tickmark_library WHERE client_id = $1 AND symbol = 'ZD'`, [s3.client.id]), 'deleted on the server: not added back');
+    const sign = await one(`SELECT user_id, user_name, balance_stamp FROM lead_sheet_signoffs WHERE period_id = $1 AND role = 'reviewer' AND invalidated_at IS NULL ORDER BY id DESC LIMIT 1`, [P]);
+    assert.equal(sign.user_id, me, 'nobody signs for another');
+    assert.notEqual(sign.balance_stamp, 'f'.repeat(64), 'the server computes the balance stamp');
+    const task = await one(`SELECT completed_by, assignee_id, created_by FROM engagement_tasks WHERE period_id = $1 AND title = 'Example forged task'`, [P]);
+    assert.deepEqual([task.completed_by, task.assignee_id, task.created_by], [null, null, null], 'a user the period never had in that role is blanked');
+    void checkoutId;
+
+    // A statement line imported on the desktop that the server has already: a plain refusal.
+    const p3 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    await waitJob(d.token, p3.json.data.jobId);
+    const a3 = (await api(`/api/v1/sync/jobs/${p3.json.data.jobId}/archive`, { token: d.token })).buf;
+    const elsewhere = await one(`INSERT INTO bank_transactions (client_id, transaction_date, description, amount, classification_status, import_hash)
+                                 VALUES ($1, '2025-03-01', 'Example elsewhere', 100, 'unclassified', 'example-hash-1') RETURNING id`, [s3.client.id]);
+    const dup = await rewriteArchive(a3, async (t, m) => {
+      t.bank_transactions.push({ ...t.bank_transactions.find((b) => b.period_id === m.periodId), id: 995000, sync_uid: randomUUID(), import_hash: 'example-hash-1', journal_entry_id: null, account_id: null });
+      m.sync.totals = totalsOf(t);
+    });
+    const r3 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, dup), checkoutId: p3.json.data.checkoutId } });
+    assert.equal((await waitJob(d.token, r3.json.data.jobId)).error?.code, 'SYNC_DUPLICATE_IMPORT');
+    await sql(`DELETE FROM bank_transactions WHERE id = $1`, [elsewhere.id]);
+    // Deleted and imported again on the desktop (same line, a new uid): fine.
+    const own = await one(`SELECT id FROM bank_transactions WHERE period_id = $1 AND journal_entry_id IS NULL ORDER BY id LIMIT 1`, [P]);
+    if (own) await sql(`UPDATE bank_transactions SET import_hash = 'example-hash-2' WHERE id = $1`, [own.id]);
+    const p4 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    await waitJob(d.token, p4.json.data.jobId);
+    const a4 = (await api(`/api/v1/sync/jobs/${p4.json.data.jobId}/archive`, { token: d.token })).buf;
+    const again = await rewriteArchive(a4, async (t, m) => {
+      const b = t.bank_transactions.find((x) => x.import_hash === 'example-hash-2');
+      if (b) { b.sync_uid = randomUUID(); b.id = 996000; }
+      m.sync.totals = totalsOf(t);
+    });
+    const r4 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, again), checkoutId: p4.json.data.checkoutId } });
+    const j4 = await waitJob(d.token, r4.json.data.jobId);
+    assert.equal(j4.state, 'done', JSON.stringify(j4.error));
+  });
+
+  await step('Review fixes: a removed desktop releases its holds; a manifest bomb is refused; a new client carries no storage pointers', async () => {
+    const d = await pairWith(admin, 'Example removed desktop');
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    await waitJob(d.token, pull.json.data.jobId);
+    assert.equal((await api(`/api/v1/desktop-sync/devices/${d.deviceId}`, { method: 'DELETE', token: admin })).status, 200);
+    assert.ok((await one(`SELECT released_at FROM period_checkouts WHERE id = $1`, [pull.json.data.checkoutId])).released_at, 'released with its desktop');
+    // A manifest that inflates past its cap.
+    const dd = s4.desk;
+    const bomb = await new Promise((resolve, reject) => {
+      const chunks = [];
+      const z = archiver('zip', { zlib: { level: 9 } });
+      z.on('data', (x) => chunks.push(x)); z.on('end', () => resolve(Buffer.concat(chunks))); z.on('error', reject);
+      z.append(Buffer.concat([Buffer.from('{"pad":"'), Buffer.alloc(20 * 1024 * 1024, 0x20), Buffer.from('"}')]), { name: 'manifest.json' });
+      void z.finalize();
+    });
+    assert.ok(bomb.length < 1024 * 1024, 'small on the wire');
+    const r = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: dd.token, json: { uploadId: await uploadBuf(dd.token, bomb), checkoutId: null } });
+    assert.equal((await waitJob(dd.token, r.json.data.jobId)).error?.code, 'SYNC_ARCHIVE_INVALID');
+    assert.equal((await api('/api/v1/sync/me', { token: dd.token })).status, 200, 'the server is still up');
+    // A client from a desktop: documents without storage pointers, no folder link.
+    const b = await api(`/api/v1/backup/client/${s3.client.id}`, { method: 'POST', token: admin, json: {} });
+    const backupId = b.json.data.id ?? b.json.data.backup?.id;
+    const ca = (await api(`/api/v1/backup/${backupId}/download`, { token: admin })).buf;
+    const uid = randomUUID();
+    const forged = await rewriteArchive(ca, async (t) => {
+      t.clients[0].sync_uid = uid;
+      for (const tb of ['periods', 'chart_of_accounts', 'bank_transactions', 'fs_client_layouts']) for (const x of t[tb] ?? []) x.sync_uid = randomUUID();
+      t.fs_report_versions = [];
+      for (const x of t.fs_reports ?? []) { x.current_version_id = null; x.status = 'draft'; }
+      t.client_folder_links = [{ id: 1, client_id: t.clients[0].id, storage_path: 'Example stolen folder', storage_backend: 'local', status: 'linked' }];
+      t.client_documents = [...(t.client_documents ?? []), { id: 424242, client_id: t.clients[0].id, filename: 'x.pdf', object_key: 'Other Client/secret.pdf', storage_backend: 'local', file_size: 1, file_type: 'application/pdf' }];
+      t.app_users = [{ id: 1, username: 'example.injected', role: 'admin' }];
+    });
+    const sentC = await api('/api/v1/sync/clients/push', { method: 'POST', token: dd.token, json: { uploadId: await uploadBuf(dd.token, forged) } });
+    const jc = await waitJob(dd.token, sentC.json.data.jobId);
+    assert.equal(jc.state, 'done', JSON.stringify(jc.error));
+    const cid = (await one(`SELECT id FROM clients WHERE sync_uid = $1`, [uid])).id;
+    assert.equal((await one(`SELECT count(*)::int AS n FROM client_documents WHERE client_id = $1 AND object_key IS NOT NULL`, [cid])).n, 0, 'no storage pointer kept');
+    assert.equal((await one(`SELECT count(*)::int AS n FROM client_folder_links WHERE client_id = $1`, [cid])).n, 0, 'no folder link');
+    assert.equal((await one(`SELECT count(*)::int AS n FROM app_users WHERE username = 'example.injected'`)).n, 0, 'no user');
+    await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
   });
 
   await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and responses after 15 s, and nothing was cut', async () => {
