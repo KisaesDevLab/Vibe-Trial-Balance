@@ -566,13 +566,13 @@ const MAX_RESTORE_ENTRIES = 200;
 const MAX_RESTORE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 const MAX_RESTORE_TABLE_BYTES = 512 * 1024 * 1024;             // 512 MiB per table
 
-async function readZipContents(filePath: string): Promise<Record<string, unknown[]>> {
+export async function readZipContents(filePath: string, maxEntries = MAX_RESTORE_ENTRIES): Promise<Record<string, unknown[]>> {
   const tables: Record<string, unknown[]> = {};
   const dir = await unzipper.Open.file(filePath);
 
-  if (dir.files.length > MAX_RESTORE_ENTRIES) {
+  if (dir.files.length > maxEntries) {
     throw Object.assign(
-      new Error(`Backup archive has ${dir.files.length} entries (max ${MAX_RESTORE_ENTRIES})`),
+      new Error(`Backup archive has ${dir.files.length} entries (max ${maxEntries})`),
       { code: 'INVALID_BACKUP' },
     );
   }
@@ -664,7 +664,7 @@ async function placeArchivedFiles(
   return { placed, notPlaced };
 }
 
-async function readManifest(filePath: string): Promise<Record<string, unknown>> {
+export async function readManifest(filePath: string): Promise<Record<string, unknown>> {
   const dir = await unzipper.Open.file(filePath);
   const manifestFile = dir.files.find((f) => f.path === 'manifest.json');
   if (!manifestFile) throw new Error('manifest.json not found in backup');
@@ -716,7 +716,7 @@ async function jsonColumnsFor(trx: Knex.Transaction, table: string): Promise<Set
 }
 
 /** JSON-encode any json/jsonb values in `rows` so Postgres accepts them. */
-async function encodeJsonColumns<T extends Record<string, unknown>>(
+export async function encodeJsonColumns<T extends Record<string, unknown>>(
   trx: Knex.Transaction,
   table: string,
   rows: T[],
@@ -742,7 +742,7 @@ async function encodeJsonColumns<T extends Record<string, unknown>>(
 }
 
 /** Encode json columns, then bulk-insert in parameter-limit-safe batches. */
-async function insertBatched(
+export async function insertBatched(
   trx: Knex.Transaction,
   table: string,
   rows: Array<Record<string, unknown>>,
@@ -788,7 +788,7 @@ const USER_FK_COLUMNS: Record<string, string[]> = {
 
 type UserFkSanitizer = (table: string, row: Record<string, unknown>) => Record<string, unknown>;
 
-async function makeUserFkSanitizer(
+export async function makeUserFkSanitizer(
   trx: Knex.Transaction,
   trustSourceUserIds: boolean,
 ): Promise<UserFkSanitizer> {
@@ -828,7 +828,7 @@ function isLegacyAlphaTaxCode(row: Record<string, unknown>): boolean {
  * the archive's tax_codes row up by (return_form, activity_type, tax_code) → live
  * id; otherwise null (the account shows as unmapped instead of failing the FK).
  */
-async function makeTaxCodeResolver(
+export async function makeTaxCodeResolver(
   trx: Knex.Transaction,
   tables: Record<string, unknown[]>,
 ): Promise<(oldId: unknown) => number | null> {
@@ -1012,16 +1012,20 @@ export async function keepSyncUids<T extends Record<string, unknown>>(
   });
 }
 
-async function restoreAsNew(
+export async function restoreAsNew(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
   trustSourceUserIds: boolean,
+  /** Desktop sync: a client made on a desktop keeps its name (no " (Restored)"). */
+  opts: { keepName?: boolean } = {},
 ): Promise<{
   newClientId: number;
   idMappings: Record<string, Record<number, number>>;
   /** Nullable FK links nulled because the archive didn't carry the parent row. */
   droppedLinks: number;
 }> {
+  // Rows keep the archive's updated_at (migration 20261004000002's trigger).
+  await trx.raw("SET LOCAL vtb.keep_updated_at = 'on'");
   const idMap: IdMap = new Map();
   const sanitizeUserFks = await makeUserFkSanitizer(trx, trustSourceUserIds);
 
@@ -1071,7 +1075,7 @@ async function restoreAsNew(
       const oldId = row.id as number;
       const existing = await trx('clients').where('name', row.name as string).first('id');
       let insertName = row.name as string;
-      if (existing) {
+      if (existing && !opts.keepName) {
         insertName = `${insertName} (Restored)`;
       }
       // default_source_account_id points into chart_of_accounts, which is
@@ -1513,6 +1517,8 @@ async function restoreReplace(
   // client serialize. Any other session holding the lock (e.g. another
   // restore) blocks here until the current txn ends.
   await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, targetClientId]);
+  // Rows keep the archive's updated_at (migration 20261004000002's trigger).
+  await trx.raw("SET LOCAL vtb.keep_updated_at = 'on'");
   // Desktop sync: replacing the client would erase a desktop's check-out
   // with its period. Release it (or let it be sent back) first.
   await assertClientNotCheckedOut(trx, targetClientId);

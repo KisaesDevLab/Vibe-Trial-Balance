@@ -333,10 +333,11 @@ const IGNORED_AS_NEW = {
   periods: ['sync_uid'],
   chart_of_accounts: ['sync_uid'],
   bank_transactions: ['sync_uid'],
+  fs_client_layouts: ['sync_uid'],
 };
 
 /** The tables with a sync_uid (desktop sync S1). */
-const SYNC_UID_TABLES = ['clients', 'periods', 'chart_of_accounts', 'bank_transactions'];
+const SYNC_UID_TABLES = ['clients', 'periods', 'chart_of_accounts', 'bank_transactions', 'fs_client_layouts'];
 
 /** Each table's sync_uids for client `clientId`, sorted. */
 async function syncUids(clientId) {
@@ -682,7 +683,8 @@ async function main() {
     // nothing here holds the archive's.
     for (const t of SYNC_UID_TABLES) {
       const col = t === 'clients' ? 'id' : 'client_id';
-      await sql(`UPDATE ${t} SET sync_uid = gen_random_uuid() WHERE ${col} = $1`, [fx.clientId]);
+      // Keeping updated_at, which the chart's trigger would stamp (S4).
+      await sql(`BEGIN; SET LOCAL vtb.keep_updated_at = 'on'; UPDATE ${t} SET sync_uid = gen_random_uuid() WHERE ${col} = ${Number(fx.clientId)}; COMMIT;`);
     }
     const r = await api('/api/v1/restore/execute', { method: 'POST', token, json: { backupId: fx.clientBackupId, mode: 'as_new' } });
     assert.equal(r.status, 200, r.text);
@@ -773,13 +775,86 @@ async function main() {
     assert.equal(b.status, 200, b.text);
     for (const t of SYNC_UID_TABLES) {
       const col = t === 'clients' ? 'id' : 'client_id';
-      await sql(`UPDATE ${t} SET sync_uid = gen_random_uuid() WHERE ${col} = $1`, [fx.clientId]);
+      // Keeping updated_at, which the chart's trigger would stamp (S4).
+      await sql(`BEGIN; SET LOCAL vtb.keep_updated_at = 'on'; UPDATE ${t} SET sync_uid = gen_random_uuid() WHERE ${col} = ${Number(fx.clientId)}; COMMIT;`);
     }
     const r = await api('/api/v1/restore/execute', { method: 'POST', token, json: { backupId: b.json.data.id, mode: 'as_new' } });
     assert.equal(r.status, 200, r.text);
     const p25 = (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [r.json.data.newClientId])).id;
     const [after25] = await stamps(p25);
     assert.equal(after25, before25, 'the period stamp after a period archive arrives where no row holds its uids');
+  });
+
+  await step('desktop sync S4: FY 2025 pulled and sent back unchanged (references, an archived set, a removed attachment) stays exactly as it was', async () => {
+    const unzipper = require('unzipper');
+    const archiver = require('archiver');
+    // The replace steps above made the periods again: look them up by name.
+    const byName = async (n) => (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = $2`, [fx.clientId, n])).id;
+    const p25 = await byName('FY 2025');
+    const p24 = await byName('FY 2024');
+    const { createHash } = await import('node:crypto');
+    const hex = (b) => createHash('sha256').update(b).digest('hex');
+    // An archived Statement Writer set and a removed attachment in FY 2025.
+    await sql(`UPDATE fs_reports SET archived_at = now() WHERE id = (SELECT id FROM fs_reports WHERE period_id = $1 ORDER BY id LIMIT 1)`, [p25]);
+    await sql(`UPDATE lead_sheet_attachments SET deleted_at = now() WHERE id = (SELECT id FROM lead_sheet_attachments WHERE period_id = $1 ORDER BY id DESC LIMIT 1)`, [p25]);
+    const [s25, s24] = await stamps(p25, p24);
+    const code = await api('/api/v1/desktop-sync/codes', { method: 'POST', token });
+    const dev = await api('/api/v1/sync/pair', { method: 'POST', json: { code: code.json.data.code, deviceName: 'Example round-trip desktop' } });
+    assert.equal(dev.status, 201, dev.text);
+    const dt = dev.json.data.token;
+    const uid25 = (await one(`SELECT sync_uid FROM periods WHERE id = $1`, [p25])).sync_uid;
+    const job = async (id) => {
+      for (let i = 0; i < 300; i++) {
+        const j = await api(`/api/v1/sync/jobs/${id}`, { token: dt });
+        if (['done', 'failed'].includes(j.json.data.state)) return j.json.data;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      throw new Error('job timed out');
+    };
+    const pull = await api(`/api/v1/sync/periods/${uid25}/pull`, { method: 'POST', token: dt, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    assert.equal((await job(pull.json.data.jobId)).state, 'done');
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: dt })).buf;
+    // What the desktop sends: the same rows, with the totals it computed.
+    const dir = await unzipper.Open.buffer(archive);
+    const entries = new Map();
+    for (const f of dir.files) if (f.type === 'File') entries.set(f.path, await f.buffer());
+    const manifest = JSON.parse(entries.get('manifest.json').toString('utf8'));
+    const t = (n) => JSON.parse(entries.get(`tables/${n}.json`).toString('utf8'));
+    const tb = t('trial_balance');
+    const tbAcc = new Set(tb.map((r) => r.account_id));
+    const types = new Map(t('journal_entries').map((j) => [j.id, j.entry_type]));
+    let d = 0n, c = 0n;
+    for (const r of tb) { d += BigInt(r.unadjusted_debit ?? 0); c += BigInt(r.unadjusted_credit ?? 0); }
+    for (const l of t('journal_entry_lines')) if (['book', 'trans'].includes(types.get(l.journal_entry_id)) && tbAcc.has(l.account_id)) { d += BigInt(l.debit ?? 0); c += BigInt(l.credit ?? 0); }
+    manifest.sync.totals = { bookDebit: String(d), bookCredit: String(c) };
+    const sent = await new Promise((resolve, reject) => {
+      const chunks = [];
+      const z = archiver('zip', { zlib: { level: 1 } });
+      z.on('data', (x) => chunks.push(x)); z.on('end', () => resolve(Buffer.concat(chunks))); z.on('error', reject);
+      for (const [name, b] of entries) if (name !== 'manifest.json') z.append(b, { name });
+      z.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+      void z.finalize();
+    });
+    const start = await api('/api/v1/sync/uploads', { method: 'POST', token: dt, json: { size: sent.length, sha256: hex(sent) } });
+    assert.equal(start.status, 201, start.text);
+    const { uploadId, partBytes, parts } = start.json.data;
+    for (let n = 0; n < parts; n++) {
+      const r = await fetch(`${server.base}/api/v1/sync/uploads/${uploadId}/parts/${n}`, { method: 'PUT', headers: { authorization: `Bearer ${dt}` }, body: sent.subarray(n * partBytes, (n + 1) * partBytes) });
+      assert.equal(r.status, 200, await r.text());
+    }
+    assert.equal((await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token: dt })).status, 200);
+    const push = await api(`/api/v1/sync/periods/${uid25}/push`, { method: 'POST', token: dt, json: { uploadId, checkoutId: pull.json.data.checkoutId } });
+    assert.equal(push.status, 202, push.text);
+    const pj = await job(push.json.data.jobId);
+    assert.equal(pj.state, 'done', JSON.stringify(pj.error));
+    assert.deepEqual(pj.result.accountsAdded, []);
+    assert.deepEqual(pj.result.differences, []);
+    const [a25, a24] = await stamps(p25, p24);
+    assert.equal(a25, s25, 'FY 2025 is as it was');
+    assert.equal(a24, s24, 'FY 2024, a reference, is untouched');
+    assert.equal((await one(`SELECT is_reference FROM periods WHERE id = $1`, [p24])).is_reference, false);
+    assert.equal((await one(`SELECT count(*)::int AS n FROM fs_reports WHERE period_id = $1 AND archived_at IS NOT NULL`, [p25])).n >= 1, true, 'the archived set stays archived');
   });
 
   await step('an uploaded client archive passes the manifest check and restores', async () => {

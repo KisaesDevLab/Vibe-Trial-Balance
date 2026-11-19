@@ -49,7 +49,7 @@ export const STAMP_TABLES = [
 export type StampTable = (typeof STAMP_TABLES)[number];
 
 /** What a column that points at another row becomes. */
-type RefKind = 'account' | 'period' | 'journal' | 'leadSheet' | 'tickmark' | 'document' | 'bankTxn' | 'recon' | 'fsReport' | 'fsLayout';
+export type RefKind = 'account' | 'period' | 'journal' | 'leadSheet' | 'tickmark' | 'document' | 'bankTxn' | 'recon' | 'fsReport' | 'fsLayout';
 
 interface TableSpec {
   /** Columns that point at another row, and what they become. */
@@ -98,6 +98,14 @@ const SPECS: Record<StampTable, TableSpec> = {
   fs_report_versions: { refs: { report_id: 'fsReport' }, drop: ['model_json'], layouts: ['layout_json'] },
 };
 
+/**
+ * The columns of a period table that point at another row, and what kind
+ * (the send-back merge remaps ids by the same table, so the two agree).
+ */
+export function stampRefs(table: StampTable): Record<string, RefKind> {
+  return { ...(SPECS[table].refs ?? {}) };
+}
+
 /** The rows and the lookups a stamp needs. */
 export interface PeriodStampInput {
   /** The client's accounts (`sync_uid` stands for the account). */
@@ -121,6 +129,21 @@ export interface PeriodStampInput {
 function calendarDate(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * A DATE column as its calendar date, from the database (a Date at local
+ * midnight) or from an archive's JSON (that Date written as ISO text, or a
+ * plain YYYY-MM-DD), so a period and its archive stamp alike.
+ */
+function dateText(v: unknown): unknown {
+  if (v instanceof Date) return calendarDate(v);
+  if (typeof v === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    const d = new Date(v);
+    if (!Number.isNaN(d.getTime())) return calendarDate(d);
+  }
+  return v;
 }
 
 /** JSON with sorted keys: equal values, equal text. */
@@ -158,7 +181,7 @@ function makeResolver(input: PeriodStampInput): Resolver {
   const journals = new Map((input.rows.journal_entries ?? []).map((j) => [Number(j.id), `${j.entry_type}#${j.entry_number}`]));
   const recons = new Map((input.rows.bank_reconciliations ?? []).map((r) => [
     Number(r.id),
-    `${accounts.get(Number(r.source_account_id)) ?? '?'}|${r.statement_date instanceof Date ? calendarDate(r.statement_date) : String(r.statement_date)}`,
+    `${accounts.get(Number(r.source_account_id)) ?? '?'}|${String(dateText(r.statement_date))}`,
   ]));
   const layoutsById = new Map(input.fsLayouts.map((l) => [Number(l.id), l]));
   const reports = new Map((input.rows.fs_reports ?? []).map((r) => [Number(r.id), String(r.name)]));
@@ -236,7 +259,7 @@ function rowText(table: StampTable, row: Row, resolve: Resolver): string {
     // A row's own sync_uid is its identity across instances; keep it.
     const ref = spec.refs?.[k];
     if (ref) out[k] = resolve(ref, v);
-    else if (dates.has(k) && v instanceof Date) out[k] = calendarDate(v);
+    else if (dates.has(k)) out[k] = dateText(v);
     else if (layouts.has(k) && resolve.key) out[k] = keyedLayout(v, resolve.key);
     else out[k] = v;
   }

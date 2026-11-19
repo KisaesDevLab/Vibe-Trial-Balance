@@ -147,3 +147,15 @@ test('an account named by a reference counts by its sync_uid', () => {
   p.accounts[0].sync_uid = '00000000-0000-4000-8000-000000000009';
   assert.notEqual(periodStamp(p), base);
 });
+
+test('a period and its archive stamp alike: a DATE read back from JSON is the same calendar date', () => {
+  const p = period();
+  const fromJson = JSON.parse(JSON.stringify(p)) as typeof p;
+  // JSON turns the Date objects into ISO text; layouts and maps survive as plain data.
+  assert.equal(periodStamp(fromJson), base);
+  const q = period();
+  q.rows.journal_entries![0].entry_date = '2025-12-31';
+  const r = period();
+  r.rows.journal_entries![0].entry_date = new Date(2025, 11, 31);
+  assert.equal(periodStamp(q), periodStamp(r), 'YYYY-MM-DD text and a local-midnight Date are one date');
+});

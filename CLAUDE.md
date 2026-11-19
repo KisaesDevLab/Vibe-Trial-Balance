@@ -778,6 +778,18 @@ All planned phases complete. App is feature-complete.
   (`POST /periods/:id/checkout/release`, Periods page). Nothing releases automatically; older than
   `settings['sync.checkout_warn_days']` (14) is flagged stale (Periods page, dashboard for admins via
   `GET /desktop-sync/checkouts`). The web TB, JE and bank pages show `CheckoutBanner`.
+- **Desktop sync send-back (S4, migrations `20261004000001`/`…02`).** Uploads in parts
+  (`lib/sync/uploads.ts`: `POST /sync/uploads`, `PUT …/parts/:n`, `…/complete` checks the SHA-256; 50 MB
+  parts, `SYNC_PART_BYTES`). `POST /sync/periods/:uid/push`, `POST /sync/clients/:uid/periods/push` (a new
+  period, or a reference filled in) and `POST /sync/clients/push` (a new client, `restoreAsNew` with
+  `keepName`) run as jobs. **`lib/sync/mergePeriod.ts`** replaces one period's SQ4 rows in one
+  transaction, ids remapped by the stamp's `stampRefs`; bank rows in place by uid, Statement Writer
+  versions kept by number, journal entries relinked by type + number; SQ3 for accounts and layouts by
+  `updated_at` (a trigger stamps it on every changing UPDATE; restores `SET LOCAL vtb.keep_updated_at`).
+  Accepted only if the period's stamp equals the archive's own (`archiveStamp`), every other period's
+  stamp is unchanged and `sync.totals` tie; the server log names the differing tables. **A new foreign key
+  into a period table** must be classified in the `sync-e2e` FK step and handled in the merge. What a
+  desktop's archive must be is in `desktop-sync-addendum.md`.
 - Variance notes (per account per period, TB Report inline editing)
 - **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
   trusts cascades; five references shipped with none (bank_transactions, document_imports,

@@ -110,7 +110,7 @@ const OTHER_FILES: Record<string, string> = {
   'savedReports.ts': 'saved report definitions',
   'qboIntegration.ts': 'QuickBooks connection',
   'mcpHttp.ts': 'the MCP transport; its tools are classified below',
-  'sync.ts': "the desktop's own pairing, pulls and check-outs",
+  'sync.ts': "the desktop's own pairing, pulls, check-outs and uploads; its send-back (POST /periods/:uid/push) is the one writer a held period lets in, under that check-out (lib/sync/mergePeriod.ts)",
   'scannedSheetImport.ts': 'reads a scan; writes nothing',
   'diagnostics.ts': 'reads and asks the AI; writes nothing',
   'exports.ts': 'consolidation settings, by client',
