@@ -21,6 +21,7 @@
     "test:sso-e2e": "node ../test/sso-e2e.mjs",
     "test:fs": "tsx --test src/lib/__tests__/fsEngine.test.ts src/lib/__tests__/fsEngineSync.test.ts src/lib/__tests__/fsSource.test.ts src/lib/__tests__/fsPdfEngine.test.ts src/lib/__tests__/fsLayoutRemap.test.ts",
     "test:fs-e2e": "node ../test/fs-e2e.mjs",
+    "test:backup-e2e": "node ../test/backup-e2e.mjs",
     "test:twofactor": "tsx --test src/lib/__tests__/publicUrl.test.ts src/lib/__tests__/loginStage.test.ts src/lib/__tests__/trustedBrowser.test.ts src/lib/__tests__/webauthnHelpers.test.ts src/lib/__tests__/totp.test.ts src/middleware/__tests__/authGates.test.ts",
     "reset-2fa": "tsx src/reset-2fa.ts",
     "test:aliases": "tsx --test src/lib/__tests__/importAliases.test.ts",

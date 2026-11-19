@@ -702,6 +702,16 @@ All planned phases complete. App is feature-complete.
   takes an arbitrary `targetClientId` and so cannot assume the archive came from that client; without
   the guard the insert dies on the partial unique index over `(bucket, object_key)`. Restoring into
   the SAME client keeps its keys and its link, which is the whole point of that mode.
+- **A client archive must restore every client table it carries, and carry every table `deleteClientData`
+  removes.** Until S0 (issue #18) restore dropped the tickmark library and TB tickmarks, engagement tasks,
+  M-1 adjustments, reconciliations and their items (dumped, never re-inserted), and PY tie-out data, saved
+  reports and export consolidation settings (deleted on replace, never dumped). Both restore paths now share
+  `restoreClientWorkpapers` in `routes/backup.ts`; a row whose parent is not in the archive is skipped and
+  counted, never pointed at another client. A period archive carries the whole tickmark library; the prior
+  period, variance notes comparing to it and reconciliation items clearing an earlier period's transaction
+  do not come along. `npm run test:backup-e2e` (root) walks the schema's foreign keys from `clients` and
+  compares every table after restore-as-new, replace and a period restore, so a NEW client table fails it
+  until the backup carries it or `NOT_COMPARED` in `test/backup-e2e.mjs` says why not.
 - Variance notes (per account per period, TB Report inline editing)
 - **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
   trusts cascades; five references shipped with none (bank_transactions, document_imports,
