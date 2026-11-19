@@ -287,6 +287,54 @@ async function uploadBuf(token, buf) {
   return uploadId;
 }
 
+/**
+ * Desktop sync S5: every call goes through a proxy that behaves like
+ * Cloudflare at a smaller scale: a request body over BODY_CAP is refused
+ * (413), and a response that has not started within RESPONSE_MS is cut
+ * (524). Upload parts are 1 MB here (SYNC_PART_BYTES), so the cap sits just
+ * above them; nothing may hold a request open for long.
+ */
+const PROXY_BODY_CAP = 1.5 * 1024 * 1024;
+const PROXY_RESPONSE_MS = 15_000;
+let proxyCuts = 0;
+async function startProxy(target) {
+  const http = await import('node:http');
+  const up = new URL(target);
+  const port = await freePort();
+  const srv = http.createServer((req, res) => {
+    let size = 0;
+    const chunks = [];
+    let refused = false;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > PROXY_BODY_CAP && !refused) {
+        refused = true; proxyCuts++;
+        res.writeHead(413, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: null, error: { code: 'PROXY_BODY_TOO_LARGE', message: 'proxy body cap' } }));
+        req.destroy();
+      } else chunks.push(c);
+    });
+    req.on('end', () => {
+      if (refused) return;
+      const fwd = http.request({ host: up.hostname, port: up.port, path: req.url, method: req.method, headers: { ...req.headers, host: up.host } }, (r) => {
+        clearTimeout(timer);
+        res.writeHead(r.statusCode, r.headers);
+        r.pipe(res);
+      });
+      const timer = setTimeout(() => {
+        proxyCuts++;
+        fwd.destroy();
+        if (!res.headersSent) { res.writeHead(524); res.end('proxy timeout'); }
+      }, PROXY_RESPONSE_MS);
+      fwd.on('error', () => { if (!res.headersSent) { res.writeHead(502); res.end(); } });
+      fwd.end(Buffer.concat(chunks));
+    });
+  });
+  await new Promise((r) => srv.listen(port, '127.0.0.1', r));
+  srv.unref();
+  return `http://127.0.0.1:${port}`;
+}
+
 async function main() {
   await createScratchDb();
   const env = childEnv({ ...secrets, NODE_ENV: 'development', DATABASE_URL: dbUrl });
@@ -299,6 +347,8 @@ async function main() {
   dbc = new Client({ connectionString: dbUrl });
   await dbc.connect();
   await startServer();
+  // Every call from here on goes through the proxy (S5).
+  server.base = await startProxy(server.base);
 
   let admin;
   let laptop;
@@ -1234,6 +1284,15 @@ async function main() {
     assert.ok(!c.name.includes('(Restored)'), 'and its name');
     assert.equal(nc.done.clientId, c.id);
     await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
+  });
+
+  await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and responses after 15 s, and nothing was cut', async () => {
+    assert.equal(proxyCuts, 0);
+    // The proxy does cut: a body over the cap is refused before the server sees it.
+    const big = await fetch(`${server.base}/api/v1/sync/uploads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'x'.repeat(PROXY_BODY_CAP + 10) }).catch(() => null);
+    assert.ok(!big || big.status === 413);
+    const caps = await api('/api/v1/sync/capabilities', { token: s4.desk.token });
+    assert.ok(caps.json.data.partBytes < PROXY_BODY_CAP, 'the parts the server asks for fit under the cap');
   });
 
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {
