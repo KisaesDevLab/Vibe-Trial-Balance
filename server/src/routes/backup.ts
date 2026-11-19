@@ -355,7 +355,8 @@ async function createBackup(
         const refPeriods = cId && refPeriodIds.length > 0
           ? await trx('periods').where('client_id', cId).whereIn('id', refPeriodIds).select('*')
           : [];
-        await dump('periods', period ? [period, ...refPeriods] : []);
+        // Marked, so where they arrive they are hidden and read-only (migration 20261001000003).
+        await dump('periods', period ? [period, ...refPeriods.map((p: Record<string, unknown>) => ({ ...p, is_reference: true }))] : []);
         await dump('chart_of_accounts', cId ? await trx('chart_of_accounts').where('client_id', cId).select('*') : []);
         await dump('trial_balance', await trx('trial_balance').where('period_id', periodId).select('*'));
         const jeRows = await trx('journal_entries').where('period_id', periodId).select('*');

@@ -18,7 +18,8 @@ export interface Period {
 }
 
 export async function getPeriods(clientId: number): Promise<Period[]> {
-  return db('periods').where({ client_id: clientId }).orderBy('end_date', 'desc');
+  // A period that came along only as a reference (desktop sync) is not listed.
+  return db('periods').where({ client_id: clientId, is_reference: false }).orderBy('end_date', 'desc');
 }
 
 export async function getPeriod(id: number): Promise<Period | undefined> {

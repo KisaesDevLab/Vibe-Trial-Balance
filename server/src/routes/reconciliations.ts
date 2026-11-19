@@ -21,8 +21,9 @@ async function reconciliationPeriodLocked(recId: number, res: Response): Promise
   const row = await db('bank_reconciliations as br')
     .leftJoin('periods as p', 'p.id', 'br.period_id')
     .where('br.id', recId)
-    .first('p.locked_at');
-  if (row?.locked_at) {
+    .first('p.locked_at', 'p.is_reference');
+  // A reference period (desktop sync) is as read-only as a locked one.
+  if (row?.locked_at || row?.is_reference) {
     res.status(409).json({
       data: null,
       error: { code: 'PERIOD_LOCKED', message: 'This reconciliation is in a locked period and cannot be modified.' },
