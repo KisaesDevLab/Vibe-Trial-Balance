@@ -1,0 +1,614 @@
+// Copyright 2025-2026 Kisaes LLC
+// Licensed under the PolyForm Small Business License 1.0.0.
+// Use is limited to qualifying small businesses. See LICENSE for terms.
+/**
+ * Desktop sync S4: a desktop sends a period back. The archive (the server's
+ * own period `.tbak` format, written by the desktop) replaces the period's
+ * SQ4 data in ONE transaction, under the client's restore lock.
+ *
+ * What it is matched by (SQ1): accounts by `sync_uid`, then number; lead
+ * sheets by code; tickmarks by symbol; tax codes by the restore resolver;
+ * statement layouts by `sync_uid`; bank transactions by `sync_uid`; the
+ * period's own rows by period. Ids are remapped by the period stamp's
+ * reference table (`stampRefs`), so the stamp and the merge agree.
+ *
+ * Rows other rows point at are updated in place, not deleted and re-made:
+ * bank transactions (a later period's reconciliation item may clear one),
+ * Statement Writer versions (their issued PDFs are in no archive). Journal
+ * entries are replaced, and what pointed at one from outside the period is
+ * linked again by entry type + number.
+ *
+ * Client-level changes follow SQ3 (owner 2026-11-19): a new account, lead
+ * sheet, tickmark or layout is added; a change to an existing account or
+ * layout is applied only when the server's row has not changed since the
+ * pull, otherwise the server's stays and the difference is listed. Nothing
+ * client-level is deleted.
+ *
+ * Accepted only when, inside the transaction, the server period's stamp
+ * after the merge equals the stamp of the archive's own rows, and every
+ * other period's stamp is unchanged; otherwise everything rolls back.
+ *
+ * The archive is untrusted: only the SQ4 and lookup tables are read, its
+ * client and period ids are never used, and a row of any other period
+ * refuses the send-back.
+ */
+import fs from 'fs';
+import type { Knex } from 'knex';
+import unzipper from 'unzipper';
+import { db } from '../../db';
+import {
+  encodeJsonColumns, insertBatched, makeTaxCodeResolver, makeUserFkSanitizer, readManifest, readZipContents,
+} from '../../routes/backup';
+import { BackupRefusal, appliedMigrations, checkArchive, documentFilePath, syncManifestProblem } from '../backupManifest';
+import { remapFsLayoutIds } from '../fs/fsLayoutRemap';
+import { deleteDocument, storeDocument, workpaperSection, type DocumentRow } from '../documentStore';
+import { checkedOutBy, logAudit } from '../periodGuard';
+import { STAMP_TABLES, periodStamp, stampRefs, type PeriodStampInput, type RefKind, type StampTable } from './periodStamp';
+import { loadPeriodStampInput } from './periodStampLoad';
+import { SyncJobError } from './jobs';
+
+type Row = Record<string, unknown>;
+
+export interface MergeTarget {
+  periodId: number;
+  clientId: number;
+  deviceId: number;
+  deviceName: string;
+  userId: number;
+  /** The live check-out the device sends back under, or null (SQ2 off / released). */
+  checkoutId: number | null;
+}
+
+export interface MergeResult {
+  stamp: string;
+  stampBefore: string | null;
+  totalsBefore: Totals;
+  totalsAfter: Totals;
+  counts: Record<string, number>;
+  accountsAdded: string[];
+  leadSheetsAdded: string[];
+  tickmarksAdded: string[];
+  layoutsAdded: string[];
+  /** SQ3: client-level changes not applied because the server's row changed since the pull. */
+  differences: Array<{ kind: 'account' | 'layout'; key: string; field: string; server: unknown; desktop: unknown }>;
+}
+
+interface Totals {
+  bookDebit: string;
+  bookCredit: string;
+}
+
+/** Tables read from the archive; anything else in it is ignored. */
+const LOOKUP_TABLES = ['clients', 'periods', 'chart_of_accounts', 'lead_sheets', 'tickmark_library', 'tax_codes', 'client_documents', 'fs_client_layouts'];
+/** Period tables replaced as a whole: nothing outside the period points at their rows. */
+const REPLACED: StampTable[] = ['trial_balance', 'variance_notes', 'tb_tickmarks', 'm1_adjustments', 'engagement_tasks', 'lead_sheet_notes', 'lead_sheet_signoffs', 'py_comparison_data'];
+/** Columns never copied from an archive row. */
+const NEVER = new Set(['id', 'client_id', 'period_id']);
+/** Columns an SQ3 comparison leaves out. */
+const NOT_COMPARED = new Set(['id', 'client_id', 'sync_uid', 'created_at', 'updated_at', 'created_by', 'updated_by']);
+
+const fail = (code: string, message: string): SyncJobError => new SyncJobError(code, message);
+const rowsOf = (tables: Record<string, unknown[]>, t: string): Row[] => ((tables[t] ?? []) as Row[]);
+const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
+
+async function totals(q: Knex | Knex.Transaction, periodId: number): Promise<Totals> {
+  const r = await q('v_adjusted_trial_balance').where({ period_id: periodId })
+    .sum({ d: 'book_adjusted_debit', c: 'book_adjusted_credit' }).first();
+  return { bookDebit: String(r?.d ?? 0), bookCredit: String(r?.c ?? 0) };
+}
+
+async function columnsOf(trx: Knex.Transaction, table: string): Promise<Set<string>> {
+  return new Set(Object.keys(await trx(table).columnInfo()));
+}
+
+/** The archive row as a row of this server's table: known columns only, ids dropped. */
+function pick(row: Row, cols: Set<string>): Row {
+  const out: Row = {};
+  for (const [k, v] of Object.entries(row)) if (cols.has(k) && !NEVER.has(k)) out[k] = v;
+  return out;
+}
+
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** Reads and checks everything that can be checked before touching the database. */
+export async function readSendBack(filePath: string, target: MergeTarget): Promise<{ tables: Record<string, unknown[]>; manifest: Row; files: Map<number, Buffer> }> {
+  let manifest: Row;
+  try {
+    manifest = await readManifest(filePath);
+  } catch {
+    throw fail('SYNC_ARCHIVE_INVALID', 'The file sent is not a Vibe Trial Balance period archive.');
+  }
+  const problem = syncManifestProblem(manifest);
+  if (problem) throw fail('SYNC_ARCHIVE_INVALID', problem);
+  // Every entry's checksum, as a restore checks them.
+  try {
+    await checkArchive(filePath, manifest, db);
+  } catch (err: unknown) {
+    if (err instanceof BackupRefusal) throw fail(err.code === 'BACKUP_DAMAGED' ? 'SYNC_ARCHIVE_DAMAGED' : 'SYNC_SCHEMA_MISMATCH', err.message);
+    throw err;
+  }
+  const applied = await appliedMigrations(db);
+  if (manifest.schemaVersion !== applied[applied.length - 1]) {
+    throw fail('SYNC_SCHEMA_MISMATCH', 'This archive was made for a different version of the server. Update the desktop (or the server) so both match, then send it again.');
+  }
+  if (manifest.backupLevel !== 'period' || typeof manifest.periodId !== 'number') {
+    throw fail('SYNC_ARCHIVE_INVALID', 'The file sent is not a period archive.');
+  }
+  const sync = (manifest.sync ?? {}) as Row;
+  const ids = (await db('periods as p').join('clients as c', 'c.id', 'p.client_id').where('p.id', target.periodId)
+    .first('p.sync_uid as period_uid', 'c.sync_uid as client_uid')) as { period_uid: string; client_uid: string };
+  if (sync.periodUid !== ids.period_uid || sync.clientUid !== ids.client_uid) {
+    throw fail('SYNC_WRONG_PERIOD', 'This archive is of another period or client than the one it was sent to.');
+  }
+  if (target.checkoutId !== null && num(sync.checkoutId) !== target.checkoutId) {
+    throw fail('SYNC_WRONG_CHECKOUT', 'This archive was not made under the check-out it was sent with.');
+  }
+  const all = await readZipContents(filePath, 5000);
+  const tables: Record<string, unknown[]> = {};
+  for (const t of [...LOOKUP_TABLES, ...STAMP_TABLES]) if (Array.isArray(all[t])) tables[t] = all[t] as unknown[];
+
+  // Every period row belongs to the archive's own period.
+  const own = manifest.periodId as number;
+  for (const t of STAMP_TABLES) {
+    if (t === 'bank_transactions') continue; // references may be other periods' (checked below)
+    for (const r of rowsOf(tables, t)) {
+      if ('period_id' in r && num(r.period_id) !== own) {
+        throw fail('SYNC_ARCHIVE_INVALID', `The archive's ${t} holds rows of another period.`);
+      }
+    }
+  }
+
+  // The bytes of the documents behind attachments.
+  const files = new Map<number, Buffer>();
+  const docIds = new Set(rowsOf(tables, 'lead_sheet_attachments').map((a) => num(a.document_id)).filter((n): n is number => n !== null));
+  if (docIds.size > 0) {
+    const dir = await unzipper.Open.file(filePath);
+    for (const id of docIds) {
+      const entry = dir.files.find((f) => f.path === documentFilePath(id));
+      if (entry) files.set(id, await entry.buffer());
+    }
+  }
+  return { tables, manifest, files };
+}
+
+/** The stamp of the archive's own rows (`periodStamp` is pure). */
+export function archiveStamp(tables: Record<string, unknown[]>): string {
+  return periodStamp(archiveStampInput(tables));
+}
+
+function archiveStampInput(tables: Record<string, unknown[]>): PeriodStampInput {
+  return {
+    accounts: rowsOf(tables, 'chart_of_accounts').map((r) => ({ id: Number(r.id), sync_uid: String(r.sync_uid) })),
+    periods: rowsOf(tables, 'periods').map((r) => ({ id: Number(r.id), sync_uid: String(r.sync_uid) })),
+    leadSheets: rowsOf(tables, 'lead_sheets').map((r) => ({ id: Number(r.id), code: (r.code as string | null) ?? null })),
+    tickmarks: rowsOf(tables, 'tickmark_library').map((r) => ({ id: Number(r.id), symbol: String(r.symbol) })),
+    documents: rowsOf(tables, 'client_documents').map((r) => ({ id: Number(r.id), sha256: (r.sha256 as string | null) ?? null })),
+    bankTransactions: rowsOf(tables, 'bank_transactions').map((r) => ({ id: Number(r.id), sync_uid: String(r.sync_uid) })),
+    fsLayouts: rowsOf(tables, 'fs_client_layouts'),
+    rows: Object.fromEntries(STAMP_TABLES.map((t) => [t, rowsOf(tables, t)])),
+  };
+}
+
+/** The tables whose rows differ between two stamp inputs (names only: for the log). */
+function differingTables(a: PeriodStampInput, b: PeriodStampInput): string[] {
+  const one = (i: PeriodStampInput, t: StampTable) => periodStamp({ ...i, rows: { [t]: i.rows[t] ?? [] } });
+  return STAMP_TABLES.filter((t) => one(a, t) !== one(b, t));
+}
+
+/**
+ * Stages attachment files before the transaction (storage writes cannot be
+ * rolled back): a new or changed file is stored as a NEW document. Returns
+ * archive document id → stored document id, and the documents made, which
+ * the caller removes if the merge fails.
+ */
+export async function stageAttachmentFiles(
+  tables: Record<string, unknown[]>,
+  files: Map<number, Buffer>,
+  target: MergeTarget,
+): Promise<{ docMap: Map<number, number>; created: DocumentRow[] }> {
+  const docMap = new Map<number, number>();
+  const created: DocumentRow[] = [];
+  const archiveDocs = new Map(rowsOf(tables, 'client_documents').map((d) => [Number(d.id), d]));
+  const serverAtts = (await db('lead_sheet_attachments as a').leftJoin('client_documents as d', 'd.id', 'a.document_id')
+    .where('a.period_id', target.periodId).select('a.ref_code', 'a.document_id', 'd.sha256')) as Array<{ ref_code: string; document_id: number | null; sha256: string | null }>;
+  const byRef = new Map(serverAtts.map((a) => [a.ref_code, a]));
+  const section = await workpaperSection();
+  try {
+    for (const att of rowsOf(tables, 'lead_sheet_attachments')) {
+      const docId = num(att.document_id);
+      if (docId === null || att.deleted_at) continue;
+      const doc = archiveDocs.get(docId);
+      const here = byRef.get(String(att.ref_code));
+      if (here?.document_id && doc && here.sha256 && here.sha256 === doc.sha256) {
+        docMap.set(docId, here.document_id);
+        continue;
+      }
+      const bytes = files.get(docId);
+      if (!bytes) throw fail('SYNC_ARCHIVE_INVALID', `The archive lacks the file of attachment ${String(att.ref_code)}.`);
+      const stored = await storeDocument({
+        clientId: target.clientId,
+        periodId: target.periodId,
+        section,
+        subfolder: 'Lead Sheets',
+        filename: `${String(att.ref_code)}.pdf`,
+        mimeType: (doc?.file_type as string | undefined) ?? 'application/pdf',
+        buffer: bytes,
+        uploadedBy: target.userId,
+      });
+      created.push(stored as unknown as DocumentRow);
+      docMap.set(docId, Number((stored as { id: number }).id));
+    }
+  } catch (err: unknown) {
+    await removeDocuments(created);
+    const e = err as { code?: string; message?: string };
+    if (e?.code === 'CLIENT_NOT_LINKED' || e?.code === 'NOT_LINKED') {
+      throw fail('CLIENT_NOT_LINKED', 'This client has no workpaper folder linked on the server, so its attachments cannot be stored. An admin links one in Settings › Storage; then send it again.');
+    }
+    throw err;
+  }
+  return { docMap, created };
+}
+
+export async function removeDocuments(docs: DocumentRow[]): Promise<void> {
+  for (const d of docs) await deleteDocument(d).catch(() => undefined);
+}
+
+/** The merge itself: one transaction. Throws SyncJobError on a refusal. */
+export async function mergePeriod(
+  trx: Knex.Transaction,
+  target: MergeTarget,
+  tables: Record<string, unknown[]>,
+  manifest: Row,
+  docMap: Map<number, number>,
+): Promise<{ result: MergeResult; replacedDocs: number[] }> {
+  const P = target.periodId;
+  const C = target.clientId;
+  const ownOld = manifest.periodId as number;
+  await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, C]);
+  const period = await trx('periods').where({ id: P }).forUpdate().first('id', 'locked_at', 'is_reference');
+  if (!period || period.is_reference) throw fail('NOT_FOUND', 'No such period on the server.');
+  if (period.locked_at) throw fail('PERIOD_LOCKED', 'The period is locked on the server. An admin unlocks it, then send it again.');
+
+  // The hold, and the stamp the desktop started from.
+  const holder = await checkedOutBy(trx, P);
+  let since: Date;
+  let stampAtPull: string | null;
+  if (target.checkoutId !== null) {
+    if (!holder || holder.id !== target.checkoutId || holder.deviceId !== target.deviceId) {
+      throw fail('SYNC_NOT_HELD', 'This computer no longer holds the period (it was released). Pull it again to carry on.');
+    }
+    const co = await trx('period_checkouts').where({ id: target.checkoutId }).first('created_at', 'stamp_at_pull');
+    since = new Date(co.created_at);
+    stampAtPull = (co.stamp_at_pull as string | null) ?? null;
+  } else {
+    if (holder) throw fail('PERIOD_CHECKED_OUT', `The period is checked out to ${holder.user} on "${holder.device}".`);
+    const sync = (manifest.sync ?? {}) as Row;
+    stampAtPull = typeof sync.stampAtPull === 'string' ? sync.stampAtPull : null;
+    since = new Date(String(sync.pulledAt ?? 0));
+    if (!stampAtPull) throw fail('PERIOD_CHANGED', 'Without a check-out, the archive must say which version of the period it started from (sync.stampAtPull).');
+  }
+  // A missed guard, or a send-back after a release and a server edit, becomes a refusal.
+  const stampBefore = await stampOf(trx, P);
+  if (stampAtPull !== null && stampBefore !== stampAtPull) {
+    throw fail('PERIOD_CHANGED', 'The period changed on the server since it was pulled, so sending it back would lose that change. Pull it again and redo the work there.');
+  }
+
+  const otherPeriods = (await trx('periods').where({ client_id: C, is_reference: false }).whereNot({ id: P }).pluck('id')) as number[];
+  const othersBefore = new Map<number, string | null>();
+  for (const id of otherPeriods) othersBefore.set(id, await stampOf(trx, id));
+  const totalsBefore = await totals(trx, P);
+  const sanitize = await makeUserFkSanitizer(trx, true);
+  // jsonb columns go in as JSON text (knex would write a JS array as a
+  // Postgres array literal).
+  const enc = async (table: string, row: Row): Promise<Row> => (await encodeJsonColumns(trx, table, [row]))[0]!;
+  const resolveTaxCode = await makeTaxCodeResolver(trx, tables);
+  const result: MergeResult = {
+    stamp: '', stampBefore, totalsBefore, totalsAfter: totalsBefore, counts: {},
+    accountsAdded: [], leadSheetsAdded: [], tickmarksAdded: [], layoutsAdded: [], differences: [],
+  };
+  const maps: Record<RefKind, Map<number, number>> = {
+    account: new Map(), period: new Map(), journal: new Map(), leadSheet: new Map(), tickmark: new Map(),
+    document: docMap, bankTxn: new Map(), recon: new Map(), fsReport: new Map(), fsLayout: new Map(),
+  };
+  const mapRef = (kind: RefKind, v: unknown, table: string, col: string): number | null => {
+    const old = num(v);
+    if (old === null) return null;
+    const to = maps[kind].get(old);
+    if (to === undefined) throw fail('SYNC_ARCHIVE_INVALID', `The archive's ${table}.${col} names a row it does not carry.`);
+    return to;
+  };
+  const remapRow = (table: StampTable, row: Row): Row => {
+    const out = { ...row };
+    for (const [col, kind] of Object.entries(stampRefs(table))) if (col in out) out[col] = mapRef(kind, out[col], table, col);
+    return out;
+  };
+
+  // ── Periods: the own one, and references by uid.
+  for (const p of rowsOf(tables, 'periods')) {
+    const old = Number(p.id);
+    if (old === ownOld) { maps.period.set(old, P); continue; }
+    const here = await trx('periods').where({ client_id: C, sync_uid: p.sync_uid }).first('id');
+    if (here) { maps.period.set(old, Number(here.id)); continue; }
+    const cols = await columnsOf(trx, 'periods');
+    const [ins] = await trx('periods').insert(await enc('periods', { ...sanitize('periods', pick(p, cols)), client_id: C, is_reference: true, is_current: false, locked_at: null, rolled_forward_from: null })).returning('id');
+    maps.period.set(old, Number((ins as { id: number }).id));
+  }
+
+  // ── Lead sheets by code, tickmarks by symbol: matched, or added.
+  for (const ls of rowsOf(tables, 'lead_sheets')) {
+    const here = ls.code ? await trx('lead_sheets').where({ client_id: C, code: ls.code }).first('id') : undefined;
+    if (here) { maps.leadSheet.set(Number(ls.id), Number(here.id)); continue; }
+    const cols = await columnsOf(trx, 'lead_sheets');
+    const [ins] = await trx('lead_sheets').insert(await enc('lead_sheets', { ...sanitize('lead_sheets', pick(ls, cols)), client_id: C })).returning('id');
+    maps.leadSheet.set(Number(ls.id), Number((ins as { id: number }).id));
+    result.leadSheetsAdded.push(String(ls.code ?? ls.name));
+  }
+  for (const tm of rowsOf(tables, 'tickmark_library')) {
+    const here = await trx('tickmark_library').where({ client_id: C, symbol: tm.symbol }).first('id');
+    if (here) { maps.tickmark.set(Number(tm.id), Number(here.id)); continue; }
+    const cols = await columnsOf(trx, 'tickmark_library');
+    const [ins] = await trx('tickmark_library').insert(await enc('tickmark_library', { ...sanitize('tickmark_library', pick(tm, cols)), client_id: C })).returning('id');
+    maps.tickmark.set(Number(tm.id), Number((ins as { id: number }).id));
+    result.tickmarksAdded.push(String(tm.symbol));
+  }
+
+  // ── Chart (SQ3).
+  const coaCols = await columnsOf(trx, 'chart_of_accounts');
+  const fixAccount = (r: Row): Row => {
+    const out = sanitize('chart_of_accounts', pick(r, coaCols));
+    if ('tax_code_id' in out) out.tax_code_id = resolveTaxCode(out.tax_code_id);
+    if ('lead_sheet_id' in out) out.lead_sheet_id = out.lead_sheet_id == null ? null : maps.leadSheet.get(Number(out.lead_sheet_id)) ?? null;
+    delete out.sync_uid;
+    return out;
+  };
+  for (const a of rowsOf(tables, 'chart_of_accounts')) {
+    const here = (await trx('chart_of_accounts').where({ client_id: C, sync_uid: a.sync_uid }).first())
+      ?? (await trx('chart_of_accounts').where({ client_id: C, account_number: a.account_number }).first());
+    const want = fixAccount(a);
+    if (!here) {
+      const uidFree = !(await trx('chart_of_accounts').where({ sync_uid: a.sync_uid }).first('id'));
+      const [ins] = await trx('chart_of_accounts').insert(await enc('chart_of_accounts', { ...want, client_id: C, ...(uidFree ? { sync_uid: a.sync_uid } : {}) })).returning('id');
+      maps.account.set(Number(a.id), Number((ins as { id: number }).id));
+      result.accountsAdded.push(String(a.account_number));
+      continue;
+    }
+    maps.account.set(Number(a.id), Number(here.id));
+    const changes: Row = {};
+    for (const [k, v] of Object.entries(want)) {
+      if (NOT_COMPARED.has(k) || same(here[k], v)) continue;
+      changes[k] = v;
+    }
+    if (Object.keys(changes).length === 0) continue;
+    const serverUnchanged = !here.updated_at || new Date(here.updated_at as string).getTime() <= since.getTime();
+    if (serverUnchanged) {
+      await trx('chart_of_accounts').where({ id: here.id }).update(await enc('chart_of_accounts', changes));
+    } else {
+      for (const [field, desktop] of Object.entries(changes)) {
+        result.differences.push({ kind: 'account', key: String(here.account_number), field, server: here[field], desktop });
+      }
+    }
+  }
+
+  // ── Statement layouts by uid (SQ3).
+  const layoutCols = await columnsOf(trx, 'fs_client_layouts');
+  const idMaps = { account: (id: number) => maps.account.get(id), leadSheet: (id: number) => maps.leadSheet.get(id) };
+  for (const l of rowsOf(tables, 'fs_client_layouts')) {
+    const want = sanitize('fs_client_layouts', pick(l, layoutCols));
+    delete want.sync_uid;
+    want.layout_json = remapFsLayoutIds(want.layout_json, idMaps);
+    delete want.source_template_id;
+    delete want.source_style_preset_id;
+    const here = await trx('fs_client_layouts').where({ client_id: C, sync_uid: l.sync_uid }).first();
+    if (!here) {
+      const [ins] = await trx('fs_client_layouts').insert(await enc('fs_client_layouts', { ...want, client_id: C, sync_uid: l.sync_uid })).returning('id');
+      maps.fsLayout.set(Number(l.id), Number((ins as { id: number }).id));
+      result.layoutsAdded.push(String(l.name));
+      continue;
+    }
+    maps.fsLayout.set(Number(l.id), Number(here.id));
+    const changes: Row = {};
+    for (const k of ['name', 'layout_json', 'style_json', 'archived_at']) {
+      if (k in want && !same(here[k], want[k])) changes[k] = want[k];
+    }
+    if (Object.keys(changes).length === 0) continue;
+    if (!here.updated_at || new Date(here.updated_at as string).getTime() <= since.getTime()) {
+      await trx('fs_client_layouts').where({ id: here.id }).update({ ...(await enc('fs_client_layouts', changes)), updated_at: trx.fn.now() });
+    } else {
+      for (const field of Object.keys(changes)) result.differences.push({ kind: 'layout', key: String(here.name), field, server: here[field], desktop: want[field] });
+    }
+  }
+
+  // ── Journal entries: what points at the period's entries from outside is linked again by type + number.
+  const oldJes = (await trx('journal_entries').where({ period_id: P }).select('id', 'entry_type', 'entry_number')) as Array<{ id: number; entry_type: string; entry_number: number }>;
+  const keyOfJe = new Map(oldJes.map((j) => [j.id, `${j.entry_type}#${j.entry_number}`]));
+  const oldJeIds = oldJes.map((j) => j.id);
+  const docLinks = oldJeIds.length ? (await trx('client_documents').whereIn('linked_journal_entry_id', oldJeIds).select('id', 'linked_journal_entry_id')) as Array<{ id: number; linked_journal_entry_id: number }> : [];
+  const btLinks = oldJeIds.length ? (await trx('bank_transactions').whereIn('journal_entry_id', oldJeIds).whereNot('period_id', P).select('id', 'journal_entry_id')) as Array<{ id: number; journal_entry_id: number }> : [];
+  if (oldJeIds.length) {
+    await trx('bank_transactions').whereIn('journal_entry_id', oldJeIds).update({ journal_entry_id: null });
+    await trx('journal_entries').whereIn('id', oldJeIds).delete();
+  }
+  const jeCols = await columnsOf(trx, 'journal_entries');
+  const newKeyToId = new Map<string, number>();
+  for (const je of rowsOf(tables, 'journal_entries')) {
+    const [ins] = await trx('journal_entries').insert(await enc('journal_entries', { ...sanitize('journal_entries', pick(je, jeCols)), period_id: P, ...(jeCols.has('client_id') ? { client_id: C } : {}) })).returning('id');
+    const id = Number((ins as { id: number }).id);
+    maps.journal.set(Number(je.id), id);
+    newKeyToId.set(`${je.entry_type}#${je.entry_number}`, id);
+  }
+  const jelCols = await columnsOf(trx, 'journal_entry_lines');
+  await insertBatched(trx, 'journal_entry_lines', rowsOf(tables, 'journal_entry_lines').map((l) => pick(remapRow('journal_entry_lines', l), jelCols)));
+  for (const d of docLinks) {
+    const to = newKeyToId.get(keyOfJe.get(d.linked_journal_entry_id) ?? '');
+    await trx('client_documents').where({ id: d.id }).update({ linked_journal_entry_id: to ?? null });
+  }
+  for (const b of btLinks) {
+    const to = newKeyToId.get(keyOfJe.get(b.journal_entry_id) ?? '');
+    await trx('bank_transactions').where({ id: b.id }).update({ journal_entry_id: to ?? null });
+  }
+  result.counts.journal_entries = maps.journal.size;
+
+  // ── Bank transactions by uid, in place.
+  const btCols = await columnsOf(trx, 'bank_transactions');
+  const seen = new Set<number>();
+  for (const bt of rowsOf(tables, 'bank_transactions')) {
+    const here = await trx('bank_transactions').where({ client_id: C, sync_uid: bt.sync_uid }).first('id', 'period_id');
+    if (num(bt.period_id) !== ownOld) {
+      // A reference (an earlier period's transaction a reconciliation clears): linked, never replaced.
+      if (!here) throw fail('SYNC_ARCHIVE_INVALID', 'A reconciliation clears a transaction this server does not have.');
+      maps.bankTxn.set(Number(bt.id), Number(here.id));
+      continue;
+    }
+    const row: Row = { ...sanitize('bank_transactions', pick(remapRow('bank_transactions', bt), btCols)), client_id: C, period_id: P };
+    if (here) {
+      if (here.period_id !== null && Number(here.period_id) !== P) throw fail('SYNC_ARCHIVE_INVALID', 'A transaction in the archive belongs to another period here.');
+      delete row.sync_uid;
+      await trx('bank_transactions').where({ id: here.id }).update(await enc('bank_transactions', row));
+      maps.bankTxn.set(Number(bt.id), Number(here.id));
+      seen.add(Number(here.id));
+    } else {
+      const [ins] = await trx('bank_transactions').insert(await enc('bank_transactions', row)).returning('id');
+      maps.bankTxn.set(Number(bt.id), Number((ins as { id: number }).id));
+      seen.add(Number((ins as { id: number }).id));
+    }
+  }
+  const gone = ((await trx('bank_transactions').where({ client_id: C, period_id: P }).pluck('id')) as number[]).filter((id) => !seen.has(id));
+  if (gone.length) await trx('bank_transactions').whereIn('id', gone).delete();
+  result.counts.bank_transactions = seen.size;
+
+  // ── Tables replaced as a whole.
+  for (const t of REPLACED) {
+    await trx(t).where({ period_id: P }).delete();
+    const cols = await columnsOf(trx, t);
+    const rows = rowsOf(tables, t).map((r) => ({ ...sanitize(t, pick(remapRow(t, r), cols)), period_id: P, ...(cols.has('client_id') ? { client_id: C } : {}) }));
+    await insertBatched(trx, t, rows);
+    result.counts[t] = rows.length;
+  }
+
+  // ── Reconciliations and their items.
+  await trx('bank_reconciliations').where({ period_id: P }).delete();
+  const recCols = await columnsOf(trx, 'bank_reconciliations');
+  for (const r of rowsOf(tables, 'bank_reconciliations')) {
+    const [ins] = await trx('bank_reconciliations').insert(await enc('bank_reconciliations', { ...sanitize('bank_reconciliations', pick(remapRow('bank_reconciliations', r), recCols)), client_id: C, period_id: P })).returning('id');
+    maps.recon.set(Number(r.id), Number((ins as { id: number }).id));
+  }
+  const itemCols = await columnsOf(trx, 'reconciliation_items');
+  await insertBatched(trx, 'reconciliation_items', rowsOf(tables, 'reconciliation_items').map((i) => pick(remapRow('reconciliation_items', i), itemCols)));
+  result.counts.bank_reconciliations = maps.recon.size;
+
+  // ── Lead sheet attachments by ref code (tombstones kept: no ref code is reissued).
+  const attCols = await columnsOf(trx, 'lead_sheet_attachments');
+  const replacedDocs: number[] = [];
+  const archiveRefs = new Set<string>();
+  for (const a of rowsOf(tables, 'lead_sheet_attachments')) {
+    archiveRefs.add(String(a.ref_code));
+    const docOld = num(a.document_id);
+    const row: Row = { ...sanitize('lead_sheet_attachments', pick(a, attCols)), client_id: C, period_id: P };
+    row.lead_sheet_id = a.lead_sheet_id == null ? null : mapRef('leadSheet', a.lead_sheet_id, 'lead_sheet_attachments', 'lead_sheet_id');
+    row.account_id = a.account_id == null ? null : mapRef('account', a.account_id, 'lead_sheet_attachments', 'account_id');
+    row.document_id = docOld === null || a.deleted_at ? null : mapRef('document', docOld, 'lead_sheet_attachments', 'document_id');
+    const here = await trx('lead_sheet_attachments').where({ period_id: P, ref_code: a.ref_code }).first('id', 'document_id');
+    if (here) {
+      if (here.document_id && Number(here.document_id) !== row.document_id) replacedDocs.push(Number(here.document_id));
+      await trx('lead_sheet_attachments').where({ id: here.id }).update(await enc('lead_sheet_attachments', row));
+    } else {
+      await trx('lead_sheet_attachments').insert(await enc('lead_sheet_attachments', row));
+    }
+  }
+  for (const a of (await trx('lead_sheet_attachments').where({ period_id: P }).whereNull('deleted_at').select('id', 'ref_code', 'document_id')) as Array<{ id: number; ref_code: string; document_id: number | null }>) {
+    if (archiveRefs.has(a.ref_code)) continue;
+    await trx('lead_sheet_attachments').where({ id: a.id }).update({ deleted_at: trx.fn.now(), deleted_by: target.userId });
+    if (a.document_id) replacedDocs.push(a.document_id);
+  }
+  result.counts.lead_sheet_attachments = archiveRefs.size;
+
+  // ── Statement Writer: sets by name, versions kept by number (their PDFs live here).
+  const repCols = await columnsOf(trx, 'fs_reports');
+  const verCols = await columnsOf(trx, 'fs_report_versions');
+  const archiveReportNames = new Set<string>();
+  const currentOld = new Map<number, number | null>();
+  for (const r of rowsOf(tables, 'fs_reports')) {
+    archiveReportNames.add(String(r.name));
+    const row: Row = { ...sanitize('fs_reports', pick(r, repCols)), client_id: C, period_id: P, current_version_id: null };
+    row.client_layout_id = mapRef('fsLayout', r.client_layout_id, 'fs_reports', 'client_layout_id');
+    const here = await trx('fs_reports').where({ period_id: P, name: r.name }).first('id');
+    let id: number;
+    if (here) {
+      id = Number(here.id);
+      await trx('fs_reports').where({ id }).update(await enc('fs_reports', row));
+    } else {
+      const [ins] = await trx('fs_reports').insert(await enc('fs_reports', row)).returning('id');
+      id = Number((ins as { id: number }).id);
+    }
+    maps.fsReport.set(Number(r.id), id);
+    currentOld.set(id, num(r.current_version_id));
+  }
+  const versionMap = new Map<number, number>();
+  for (const v of rowsOf(tables, 'fs_report_versions')) {
+    const reportId = mapRef('fsReport', v.report_id, 'fs_report_versions', 'report_id')!;
+    const row: Row = { ...sanitize('fs_report_versions', pick(v, verCols)), report_id: reportId };
+    const here = await trx('fs_report_versions').where({ report_id: reportId, version_no: v.version_no }).first('id');
+    if (here) {
+      await trx('fs_report_versions').where({ id: here.id }).update(await enc('fs_report_versions', row));
+      versionMap.set(Number(v.id), Number(here.id));
+    } else {
+      const [ins] = await trx('fs_report_versions').insert(await enc('fs_report_versions', row)).returning('id');
+      versionMap.set(Number(v.id), Number((ins as { id: number }).id));
+    }
+  }
+  for (const [reportId, oldCurrent] of currentOld) {
+    await trx('fs_reports').where({ id: reportId }).update({ current_version_id: oldCurrent === null ? null : versionMap.get(oldCurrent) ?? null });
+  }
+  // A set the desktop no longer has is archived, not deleted (its issued versions stay).
+  await trx('fs_reports').where({ period_id: P }).whereNull('archived_at').whereNotIn('name', [...archiveReportNames])
+    .update({ archived_at: trx.fn.now() });
+  result.counts.fs_reports = maps.fsReport.size;
+
+  // ── Acceptance.
+  const stamp = await stampOf(trx, P);
+  const expected = archiveStamp(tables);
+  if (stamp !== expected) {
+    const here = await loadPeriodStampInput(trx as unknown as Knex, P);
+    console.error('[sync] merge stamp mismatch, period', P, 'tables:', here ? differingTables(here, archiveStampInput(tables)).join(', ') : '(period gone)');
+    throw fail('SYNC_MERGE_MISMATCH', 'The period on the server would not match what the desktop sent, so nothing was changed. Tell your administrator (the server log has the detail).');
+  }
+  for (const [id, before] of othersBefore) {
+    if ((await stampOf(trx, id)) !== before) {
+      throw fail('SYNC_MERGE_MISMATCH', 'Sending this period back would have changed another period, so nothing was changed. Tell your administrator.');
+    }
+  }
+  result.stamp = stamp!;
+  result.totalsAfter = await totals(trx, P);
+  const wanted = (manifest.sync as Row | undefined)?.totals as Totals | undefined;
+  if (wanted && (String(wanted.bookDebit) !== result.totalsAfter.bookDebit || String(wanted.bookCredit) !== result.totalsAfter.bookCredit)) {
+    throw fail('SYNC_TOTALS_MISMATCH', 'The trial balance totals on the server would not equal the desktop\'s, so nothing was changed.');
+  }
+
+  if (target.checkoutId !== null) {
+    await trx('period_checkouts').where({ id: target.checkoutId }).update({ released_at: trx.fn.now(), released_by: target.userId, release_reason: 'Sent back by the desktop.' });
+  }
+  await logAudit({
+    userId: target.userId, periodId: P, entityType: 'period', entityId: P, action: 'sync_merge',
+    description: `Period sent back by desktop "${target.deviceName}": ${Object.entries(result.counts).map(([t, n]) => `${t} ${n}`).join(', ')}`
+      + (result.accountsAdded.length ? `; accounts added ${result.accountsAdded.join(', ')}` : '')
+      + (result.differences.length ? `; ${result.differences.length} client-level change(s) kept as on the server` : ''),
+  }, trx);
+  return { result, replacedDocs };
+}
+
+async function stampOf(q: Knex | Knex.Transaction, periodId: number): Promise<string | null> {
+  const input = await loadPeriodStampInput(q as Knex, periodId);
+  return input ? periodStamp(input) : null;
+}
+
+/** Deletes documents the merge replaced, once it committed. */
+export async function dropReplacedDocuments(ids: number[]): Promise<void> {
+  for (const id of ids) {
+    const doc = await db('client_documents').where({ id }).first();
+    if (doc) await deleteDocument(doc as DocumentRow).catch(() => undefined);
+  }
+}
+
+export function removeUploadFile(filePath: string): void {
+  try { fs.rmSync(filePath, { force: true }); } catch { /* gone */ }
+}

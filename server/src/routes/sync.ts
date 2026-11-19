@@ -39,6 +39,7 @@ import { stampPeriod } from '../lib/sync/periodStampLoad';
 import { SYNC_JOB_DIR, startJob } from '../lib/sync/jobs';
 import { checkoutApi, checkoutWarnDays, daysOut, isoDate } from '../lib/sync/checkouts';
 import { MAX_UPLOAD_BYTES, UploadError, completeUpload, openUpload, partBytes, putPart, receivedParts, startUpload } from '../lib/sync/uploads';
+import { dropReplacedDocuments, mergePeriod, readSendBack, removeDocuments, stageAttachmentFiles } from '../lib/sync/mergePeriod';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const APP_VERSION = (require('../../package.json') as { version: string }).version;
@@ -182,7 +183,7 @@ syncRouter.get('/capabilities', async (_req: SyncRequest, res: Response): Promis
         appVersion: APP_VERSION,
         maxUploadBytes: MAX_UPLOAD_BYTES,
         partBytes: partBytes(),
-        features: ['checkout-v1'],
+        features: ['checkout-v1', 'period-merge-v1'],
         checkoutWarnDays: await checkoutWarnDays(),
       },
       error: null,
@@ -502,6 +503,69 @@ syncRouter.post('/uploads/:id/complete', async (req: SyncRequest, res: Response)
     res.json({ data: { uploadId: id, ...(await completeUpload(row)) }, error: null });
   } catch (err: unknown) {
     uploadFail(res, err, 'sync/uploads/complete');
+  }
+});
+
+/**
+ * Send a period back: `{ uploadId, checkoutId }` → 202 `{ jobId }`. The
+ * upload must be complete and this device's; with a check-out it must be
+ * the live one this device holds (released on success). Without one
+ * (SQ2 off, or released by an admin) it is taken only if the period has
+ * not changed since the pull (`manifest.sync.stampAtPull`).
+ */
+syncRouter.post('/periods/:uid/push', async (req: SyncRequest, res: Response): Promise<void> => {
+  const uid = String(req.params.uid);
+  const body = z.object({ uploadId: z.string().uuid(), checkoutId: z.number().int().positive().nullable().default(null) }).safeParse(req.body ?? {});
+  if (!body.success) {
+    bad(res, 400, 'VALIDATION_ERROR', '`uploadId` (a completed upload) is needed; `checkoutId` when the period is checked out.');
+    return;
+  }
+  if (!isUuid(uid)) {
+    bad(res, 404, 'NOT_FOUND', 'No period with that id on this server.');
+    return;
+  }
+  try {
+    const period = await db('periods').where({ sync_uid: uid }).first('id', 'client_id', 'locked_at', 'is_reference');
+    if (!period || period.is_reference) {
+      bad(res, 404, 'NOT_FOUND', 'No period with that id on this server.');
+      return;
+    }
+    if (period.locked_at) {
+      bad(res, 409, 'PERIOD_LOCKED', 'The period is locked on the server. An admin unlocks it, then send it again.');
+      return;
+    }
+    const upload = await openUpload(body.data.uploadId, req.syncDevice!.id, true);
+    if (!upload.completed_at || !upload.file_path) {
+      bad(res, 409, 'SYNC_UPLOAD_INCOMPLETE', 'Complete the upload first.');
+      return;
+    }
+    const device = req.syncDevice!;
+    const target = {
+      periodId: period.id as number, clientId: period.client_id as number, deviceId: device.id, deviceName: device.name,
+      userId: req.user!.userId, checkoutId: body.data.checkoutId,
+    };
+    const filePath = upload.file_path;
+    const jobId = await startJob(
+      { kind: 'push', deviceId: device.id, userId: req.user!.userId, clientId: target.clientId, periodId: target.periodId, checkoutId: target.checkoutId },
+      async () => {
+        const { tables, manifest, files } = await readSendBack(filePath, target);
+        const staged = await stageAttachmentFiles(tables, files, target);
+        let outcome;
+        try {
+          outcome = await db.transaction((trx) => mergePeriod(trx, target, tables, manifest, staged.docMap));
+        } catch (err) {
+          await removeDocuments(staged.created);
+          throw err;
+        }
+        await dropReplacedDocuments(outcome.replacedDocs);
+        return { result: outcome.result as unknown as Record<string, unknown> };
+      },
+    );
+    // An upload is sent once, whatever the job's outcome.
+    await db('sync_uploads').where({ id: upload.id }).update({ job_id: jobId });
+    res.status(202).json({ data: { jobId }, error: null });
+  } catch (err: unknown) {
+    uploadFail(res, err, 'sync/push');
   }
 });
 

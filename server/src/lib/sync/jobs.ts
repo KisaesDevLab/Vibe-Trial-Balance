@@ -16,7 +16,7 @@ import { db } from '../../db';
 export const SYNC_JOB_DIR = path.join(process.cwd(), 'backups', 'sync');
 export const JOB_FILE_TTL_MS = 24 * 60 * 60 * 1000;
 
-export type JobKind = 'pull';
+export type JobKind = 'pull' | 'push';
 export type JobState = 'queued' | 'running' | 'done' | 'failed';
 
 export interface JobError {

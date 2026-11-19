@@ -214,6 +214,57 @@ async function manifestOf(buf) {
   return JSON.parse((await entry.buffer()).toString('utf8'));
 }
 
+const archiver = require('archiver');
+const { createHash, randomUUID } = await import('node:crypto');
+const sha256Hex = (b) => createHash('sha256').update(b).digest('hex');
+
+/**
+ * What a desktop does to a pulled archive before sending it back: change its
+ * tables, then write the zip again with each entry's checksum.
+ */
+async function rewriteArchive(buf, mutate, afterEntries) {
+  const dir = await unzipper.Open.buffer(buf);
+  const entries = new Map();
+  for (const f of dir.files) if (f.type === 'File') entries.set(f.path, await f.buffer());
+  const manifest = JSON.parse(entries.get('manifest.json').toString('utf8'));
+  const tables = {};
+  for (const [name, b] of entries) if (name.startsWith('tables/')) tables[name.slice(7, -5)] = JSON.parse(b.toString('utf8'));
+  await mutate(tables, manifest);
+  manifest.entries = {};
+  const out = new Map();
+  for (const [t, rows] of Object.entries(tables)) out.set(`tables/${t}.json`, Buffer.from(JSON.stringify(rows, null, 2), 'utf8'));
+  for (const [name, b] of entries) if (!name.startsWith('tables/') && name !== 'manifest.json') out.set(name, b);
+  for (const [name, b] of out) manifest.entries[name] = { sha256: sha256Hex(b), size: b.length };
+  if (afterEntries) afterEntries(manifest);
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const z = archiver('zip', { zlib: { level: 1 } });
+    z.on('data', (c) => chunks.push(c));
+    z.on('end', () => resolve(Buffer.concat(chunks)));
+    z.on('error', reject);
+    for (const [name, b] of out) z.append(b, { name });
+    z.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+    void z.finalize();
+  });
+}
+
+/** Uploads a buffer in parts and completes it; returns the upload id. */
+async function uploadBuf(token, buf) {
+  const start = await api('/api/v1/sync/uploads', { method: 'POST', token, json: { size: buf.length, sha256: sha256Hex(buf) } });
+  assert.equal(start.status, 201, start.text);
+  const { uploadId, partBytes, parts } = start.json.data;
+  for (let n = 0; n < parts; n++) {
+    const r = await fetch(`${server.base}/api/v1/sync/uploads/${uploadId}/parts/${n}`, {
+      method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+      body: buf.subarray(n * partBytes, Math.min(buf.length, (n + 1) * partBytes)),
+    });
+    assert.equal(r.status, 200, await r.text());
+  }
+  const done = await api(`/api/v1/sync/uploads/${uploadId}/complete`, { method: 'POST', token });
+  assert.equal(done.status, 200, done.text);
+  return uploadId;
+}
+
 async function main() {
   await createScratchDb();
   const env = childEnv({ ...secrets, NODE_ENV: 'development', DATABASE_URL: dbUrl });
@@ -922,6 +973,109 @@ async function main() {
     assert.equal(bad.status, 400, bad.text);
     assert.equal(bad.json.error.code, 'SYNC_UPLOAD_HASH');
     assert.equal((await api('/api/v1/sync/uploads', { method: 'POST', token: d.token, json: { size: 3 * 1024 ** 3, sha256: sha } })).json.error.code, 'SYNC_UPLOAD_TOO_LARGE');
+  });
+
+  let s4;
+  await step('S4: pull, change on the desktop, send back: the period matches, other periods are untouched, the hold ends', async () => {
+    const d = await pairWith(admin, 'Roundtrip desktop');
+    const P = s3.period.id;
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    const checkoutId = pull.json.data.checkoutId;
+    const job = await waitJob(d.token, pull.json.data.jobId);
+    assert.equal(job.state, 'done', JSON.stringify(job.error));
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    const others = await sql(`SELECT id FROM periods WHERE client_id = $1 AND id <> $2 AND NOT is_reference ORDER BY id`, [s3.client.id, P]);
+    const otherRowsBefore = await sql(`SELECT period_id, account_id, unadjusted_debit, unadjusted_credit FROM trial_balance WHERE period_id = ANY($1) ORDER BY 1, 2`, [others.map((o) => o.id)]);
+    let newAccountNumber, changedAccountId, tbBefore;
+    const sent = await rewriteArchive(archive, async (t, m) => {
+      // 1. A balance changes.
+      const tb = t.trial_balance[0];
+      changedAccountId = tb.account_id;
+      tbBefore = Number(tb.unadjusted_debit);
+      tb.unadjusted_debit = String(tbBefore + 12345);
+      // 2. A new account, and 3. an AJE that uses it.
+      const maxId = Math.max(...t.chart_of_accounts.map((a) => a.id));
+      const base = t.chart_of_accounts[0];
+      newAccountNumber = `9${String(Date.now()).slice(-5)}`;
+      t.chart_of_accounts.push({ ...base, id: maxId + 1, sync_uid: randomUUID(), account_number: newAccountNumber, account_name: 'Example desktop account' });
+      const jeId = Math.max(0, ...t.journal_entries.map((j) => j.id)) + 1000;
+      const lineId = Math.max(0, ...t.journal_entry_lines.map((l) => l.id)) + 1000;
+      const num = Math.max(0, ...t.journal_entries.filter((j) => j.entry_type === 'book').map((j) => j.entry_number)) + 1;
+      t.journal_entries.push({ ...(t.journal_entries[0] ?? {}), id: jeId, period_id: m.periodId, entry_type: 'book', entry_number: num, entry_date: '2025-12-31', description: 'Example desktop AJE', is_recurring: false });
+      t.journal_entry_lines.push(
+        { ...t.journal_entry_lines[0], id: lineId, journal_entry_id: jeId, account_id: maxId + 1, debit: '500', credit: '0' },
+        { ...t.journal_entry_lines[0], id: lineId + 1, journal_entry_id: jeId, account_id: base.id, debit: '0', credit: '500' },
+      );
+      // 4. A tickmark, new to the library, placed on the changed account.
+      const tmId = Math.max(0, ...(t.tickmark_library ?? []).map((x) => x.id)) + 1;
+      t.tickmark_library = [...(t.tickmark_library ?? []), { id: tmId, client_id: m.clientId, symbol: 'DX', description: 'Example desktop mark', color: 'blue', sort_order: 99 }];
+      t.tb_tickmarks = [...(t.tb_tickmarks ?? []), { id: 1, period_id: m.periodId, account_id: changedAccountId, tickmark_id: tmId }];
+      // 5. An engagement task done.
+      // A desktop sends whole rows, as the server would write them.
+      t.engagement_tasks = [...(t.engagement_tasks ?? []), {
+        id: 1, period_id: m.periodId, title: 'Example desktop task', description: null, category: null, status: 'completed',
+        assignee_id: null, sort_order: 0, notes: null, completed_by: null, completed_at: null, created_by: null,
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }];
+    });
+    const uploadId = await uploadBuf(d.token, sent);
+    const push = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId, checkoutId } });
+    assert.equal(push.status, 202, push.text);
+    const pj = await waitJob(d.token, push.json.data.jobId);
+    assert.equal(pj.state, 'done', JSON.stringify(pj.error));
+    assert.deepEqual(pj.result.accountsAdded, [newAccountNumber]);
+    assert.deepEqual(pj.result.tickmarksAdded, ['DX']);
+    assert.deepEqual(pj.result.differences, []);
+    // The period is the desktop's now.
+    const tbNow = await one(`SELECT unadjusted_debit FROM trial_balance WHERE period_id = $1 AND account_id = $2`, [P, changedAccountId]);
+    assert.equal(Number(tbNow.unadjusted_debit), tbBefore + 12345);
+    const aje = await one(`SELECT je.id FROM journal_entries je WHERE je.period_id = $1 AND je.description = 'Example desktop AJE'`, [P]);
+    assert.ok(aje, 'the AJE arrived');
+    assert.equal((await one(`SELECT count(*)::int AS n FROM journal_entry_lines l JOIN chart_of_accounts a ON a.id = l.account_id WHERE l.journal_entry_id = $1 AND a.account_number = $2`, [aje.id, newAccountNumber])).n, 1, 'its line names the new account');
+    assert.ok(await one(`SELECT 1 FROM tb_tickmarks tt JOIN tickmark_library tl ON tl.id = tt.tickmark_id WHERE tt.period_id = $1 AND tl.symbol = 'DX'`, [P]));
+    assert.ok(await one(`SELECT 1 FROM engagement_tasks WHERE period_id = $1 AND title = 'Example desktop task'`, [P]));
+    // Other periods untouched; the hold ended; the web writes again.
+    assert.deepEqual(await sql(`SELECT period_id, account_id, unadjusted_debit, unadjusted_credit FROM trial_balance WHERE period_id = ANY($1) ORDER BY 1, 2`, [others.map((o) => o.id)]), otherRowsBefore);
+    assert.ok((await one(`SELECT released_at FROM period_checkouts WHERE id = $1`, [checkoutId])).released_at);
+    const listed = await api(`/api/v1/sync/clients/${s3.client.sync_uid}/periods`, { token: d.token });
+    const p = listed.json.data.find((x) => x.sync_uid === s3.period.sync_uid);
+    assert.equal(p.checkout, null);
+    assert.equal(p.stamp, pj.result.stamp, 'the listed stamp is the merged one');
+    assert.ok(await one(`SELECT 1 FROM audit_log WHERE action = 'sync_merge' AND period_id = $1`, [P]));
+    s4 = { desk: d, archive };
+  });
+
+  await step('S4: a send-back is refused when it is not held, when the period changed, or when the archive is damaged or wrong', async () => {
+    const d = s4.desk;
+    const P = s3.period.id;
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    const checkoutId = pull.json.data.checkoutId;
+    await waitJob(d.token, pull.json.data.jobId);
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    const pushJob = async (buf, json) => {
+      const uploadId = await uploadBuf(d.token, buf);
+      const r = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId, ...json } });
+      if (r.status !== 202) return { refused: r.json.error.code };
+      const j = await waitJob(d.token, r.json.data.jobId);
+      return j.state === 'failed' ? { refused: j.error.code } : { done: j.result };
+    };
+    // Damaged: a table that does not match its listed checksum.
+    const damaged = await rewriteArchive(archive, async () => {}, (m) => { m.entries['tables/trial_balance.json'].sha256 = '0'.repeat(64); });
+    assert.equal((await pushJob(damaged, { checkoutId })).refused, 'SYNC_ARCHIVE_DAMAGED');
+    // Wrong schema.
+    const wrongSchema = await rewriteArchive(archive, async (t, m) => { m.schemaVersion = '20200101000000_example.js'; });
+    assert.equal((await pushJob(wrongSchema, { checkoutId })).refused, 'SYNC_SCHEMA_MISMATCH');
+    // Another period's archive.
+    const wrongPeriod = await rewriteArchive(archive, async (t, m) => { m.sync.periodUid = randomUUID(); });
+    assert.equal((await pushJob(wrongPeriod, { checkoutId })).refused, 'SYNC_WRONG_PERIOD');
+    // Released by an admin, then changed on the server: refused either way.
+    assert.equal((await api(`/api/v1/periods/${P}/checkout/release`, { method: 'POST', token: admin, json: { reason: 'Example: test release' } })).status, 200);
+    const tb = await one(`SELECT account_id FROM trial_balance WHERE period_id = $1 ORDER BY account_id LIMIT 1`, [P]);
+    assert.equal((await api(`/api/v1/periods/${P}/trial-balance/${tb.account_id}`, { method: 'PUT', token: admin, json: { unadjustedDebit: 777, unadjustedCredit: 0 } })).status, 200);
+    assert.equal((await pushJob(archive, { checkoutId })).refused, 'SYNC_NOT_HELD');
+    const noHold = await rewriteArchive(archive, async (t, m) => { m.sync.stampAtPull = m.sync.stamp; });
+    assert.equal((await pushJob(noHold, { checkoutId: null })).refused, 'PERIOD_CHANGED');
   });
 
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {
