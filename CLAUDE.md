@@ -734,6 +734,29 @@ All planned phases complete. App is feature-complete.
   period (`test:backup-e2e`) and must change when any of its rows does (`periodStamp.test.ts`, one test
   per table). A new period-scoped table joins `STAMP_TABLES` with a spec, or the desktop's send-back
   will not notice changes to it.
+- **Desktop sync devices (S2, migration `20261002000001`).** A paired desktop holds a device token
+  (`vtbsync_` + 32 random bytes; only its SHA-256 is in `sync_devices`), made by `POST /api/v1/sync/pair`
+  from a one-time code (`sync_pairing_codes`, hashed, 10 minutes, one use, row-locked; 8 characters with
+  no look-alikes, `lib/sync/deviceTokens.ts`). The code is made from a signed-in session
+  (`POST /api/v1/desktop-sync/codes`), so pairing works under any sign-in, `oidc_only` included, and is not a
+  local sign-in path (no `localLoginRefusal`). **The device token works ONLY on `/api/v1/sync/*`**
+  (`syncAuthMiddleware`, `lib/sync/syncAuth.ts`): every other route's `authMiddleware` refuses it as a bad
+  JWT, and the sync routes refuse a JWT. A device acts as its user: deactivated user or revoked device →
+  401 at once; a reviewer's device reads only (`blockReviewerWrites`). **A device token ends** (owner
+  2026-11-19, `lib/sync/deviceRevoke.ts`) on Remove, on deactivation (revoked then, so reactivating does
+  not revive them: Users PATCH, Vibe Auth `setActive`), after 90 days unused (`SYNC_DEVICE_EXPIRED`), and on
+  a password RESET (admin PATCH `/users/:id`, Vibe Auth `setLocalPassword`, an emailed reset or invite
+  link): `revokeUserDevices`, which also deletes unused codes and, on a reset, stamps
+  `app_users.sync_reset_at` (migration `20261002000002`) so a session issued before it gets 401
+  `SIGN_IN_AGAIN` from `POST /desktop-sync/codes` (an emailed reset leaves old sessions working). Not on a
+  user's own password change or sign-out. Audit: every
+  sync write, every refusal, and a GET only when the route sets `res.locals.syncAudit = true` (it hands out
+  client data); polling reads are not audited. Making a code retires the user's unused ones.
+  `POST /pair` has its own limiter (10 failed tries per 15 min per ADDRESS, not `rateLimitKey`, whose JWT
+  claim is unverified). `npm run test:sync-e2e`;
+  the `oidc_only` pairing step is in `sso-e2e.mjs`. The global reviewer gate in `app.ts` lets reviewers write
+  to `/auth/*` (their own password, factors, passkeys, browsers) and `/desktop-sync/*` (their own desktops):
+  without it a new reviewer could never finish the forced password change.
 - Variance notes (per account per period, TB Report inline editing)
 - **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
   trusts cascades; five references shipped with none (bank_transactions, document_imports,

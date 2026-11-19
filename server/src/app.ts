@@ -25,6 +25,7 @@ import { glPeriodRouter } from './routes/generalLedger';
 import { dashboardRouter } from './routes/dashboard';
 import { rollForwardRouter } from './routes/rollForward';
 import { usersRouter } from './routes/users';
+import { desktopSyncRouter, syncRouter } from './routes/sync';
 import { jeCollectionRouter, jeItemRouter } from './routes/journalEntries';
 import { btCollectionRouter, btRulesRouter } from './routes/bankTransactions';
 import { settingsRouter, loadFirmIdentity } from './routes/settings';
@@ -222,6 +223,12 @@ app.use('/api/v1/periods/:periodId/diagnostics', uploadLimiter);
 app.use('/api/v1', (req, res, next) => {
   const method = req.method.toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+  // A reviewer's OWN account is theirs to change: password (a new account
+  // must rotate it), second factors, passkeys, remembered browsers, and the
+  // desktops they pair (SQ5: a reviewer may pull). Those routes check the
+  // caller themselves. Without this a new reviewer could never finish the
+  // forced password change.
+  if (req.path.startsWith('/auth/') || req.path.startsWith('/desktop-sync/')) return next();
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return next(); // let authMiddleware send 401
   try {
@@ -331,6 +338,10 @@ app.use('/api/v1/periods/:periodId/general-ledger', glPeriodRouter);
 app.use('/api/v1/periods/:periodId/dashboard', dashboardRouter);
 app.use('/api/v1/periods/:id/roll-forward', rollForwardRouter);
 app.use('/api/v1/users', usersRouter);
+// Desktop sync (S2): a paired desktop's routes, on its own device token; and
+// the signed-in user's pairing codes and devices.
+app.use('/api/v1/sync', syncRouter);
+app.use('/api/v1/desktop-sync', desktopSyncRouter);
 app.use('/api/v1/journal-entries', jeItemRouter);
 app.use('/api/v1/periods/:periodId/journal-entries', jeCollectionRouter);
 app.use('/api/v1/clients/:clientId/bank-transactions', btCollectionRouter);
