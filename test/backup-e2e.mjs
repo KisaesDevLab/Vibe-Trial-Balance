@@ -326,9 +326,43 @@ const IGNORED_COLUMNS = {
 };
 /** Extra columns that differ only when the restore makes a NEW client. */
 const IGNORED_AS_NEW = {
-  clients: ['name'], // " (Restored)" on a name clash
+  clients: ['name', 'sync_uid'], // " (Restored)" on a name clash; a copy next to its original is a new client
   client_documents: ['object_key', 'bucket', 'file_path', 'etag'], // a copy must not share the original's file
+  periods: ['sync_uid'],
+  chart_of_accounts: ['sync_uid'],
+  bank_transactions: ['sync_uid'],
 };
+
+/** The tables with a sync_uid (desktop sync S1). */
+const SYNC_UID_TABLES = ['clients', 'periods', 'chart_of_accounts', 'bank_transactions'];
+
+/** Each table's sync_uids for client `clientId`, sorted. */
+async function syncUids(clientId) {
+  const out = {};
+  for (const t of SYNC_UID_TABLES) {
+    const col = t === 'clients' ? 'id' : 'client_id';
+    out[t] = (await sql(`SELECT sync_uid::text AS u FROM ${t} WHERE ${col} = $1 ORDER BY 1`, [clientId])).map((r) => r.u);
+  }
+  return out;
+}
+
+/** The period stamp (lib/sync/periodStamp.ts) of each period id, from the server's own script. */
+async function stamps(...periodIds) {
+  const env = childEnv({ ...secrets, NODE_ENV: 'development', DATABASE_URL: dbUrl });
+  const out = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [...TSX_IMPORT, 'src/syncStamp.ts', ...periodIds.map(String)], { cwd: SERVER, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let text = '';
+    let err = '';
+    child.stdout.on('data', (c) => { text += c; });
+    child.stderr.on('data', (c) => { err += c; });
+    child.on('exit', (code) => (code === 0 ? resolve(text) : reject(new Error(`sync:stamp failed: ${err}`))));
+  });
+  const map = Object.fromEntries(out.trim().split(/\r?\n/).map((l) => l.split(' ')));
+  return periodIds.map((id) => {
+    assert.match(map[id] ?? '', /^[0-9a-f]{64}$/, `a stamp for period ${id}`);
+    return map[id];
+  });
+}
 
 /** Id columns with no foreign key in the schema. */
 const IMPLICIT_FKS = { 'fs_reports.current_version_id': 'fs_report_versions' };
@@ -522,8 +556,26 @@ async function snapshot(clientId, { periodId = null, asNew = false, ignore = {} 
     // A period archive carries the client and its client-level rows too.
     const whole = member;
     const base = Object.fromEntries([...PERIOD_CLIENT_LEVEL, 'fs_client_layouts'].map((t) => [t, whole[t]]));
+    // …and, as references, the other periods and transactions its own rows
+    // name (a variance note's comparison period, a cleared transaction of
+    // an earlier period), without their data.
+    const refPeriods = new Set([...all.variance_notes.values()]
+      .filter((v) => v.period_id === periodId && v.compare_period_id !== periodId && v.compare_period_id != null)
+      .map((v) => v.compare_period_id));
+    const recons = new Set([...all.bank_reconciliations.values()].filter((r) => r.period_id === periodId).map((r) => r.id));
+    const refTxns = new Set([...all.reconciliation_items.values()]
+      .filter((i) => recons.has(i.reconciliation_id) && i.transaction_id != null && all.bank_transactions.get(i.transaction_id)?.period_id !== periodId)
+      .map((i) => i.transaction_id));
+    for (const id of refTxns) {
+      const p = all.bank_transactions.get(id)?.period_id;
+      if (p != null && p !== periodId) refPeriods.add(p);
+    }
+    base.periods = refPeriods;
+    base.bank_transactions = refTxns;
     member = scopeOf(all, { periods: [periodId] }, base);
     for (const t of PERIOD_CLIENT_LEVEL) member[t] = whole[t];
+    for (const id of refPeriods) member.periods.add(id);
+    for (const id of refTxns) member.bank_transactions.add(id);
     // …and the layouts its statement sets use.
     member.fs_client_layouts = new Set([...member.fs_reports].map((id) => all.fs_reports.get(id).client_layout_id));
   }
@@ -583,6 +635,8 @@ async function main() {
 
   const before = await snapshot(fx.clientId);
   const totalsBefore = await adjustedTotals(fx.clientId);
+  const uidsBefore = await syncUids(fx.clientId);
+  const [stamp25] = await stamps(fx.p25);
 
   await step('client backup → restore as a new client: every client table comes back equal apart from ids', async () => {
     const b = await api(`/api/v1/backup/client/${fx.clientId}`, { method: 'POST', token });
@@ -596,6 +650,15 @@ async function main() {
     const got = await snapshot(newId, { asNew: true });
     assertSameRows('restore as new', src.rows, got.rows);
     assert.deepEqual(await adjustedTotals(newId), totalsBefore);
+    // A copy next to its original is a different client: every sync_uid new (S1).
+    const copyUids = await syncUids(newId);
+    for (const t of SYNC_UID_TABLES) {
+      assert.equal(copyUids[t].length, uidsBefore[t].length, `${t}: one uid per row`);
+      assert.deepEqual(copyUids[t].filter((u) => uidsBefore[t].includes(u)), [], `${t}: the copy holds none of the original's uids`);
+    }
+    const copy25 = (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [newId])).id;
+    const [copyStamp] = await stamps(copy25);
+    assert.notEqual(copyStamp, stamp25, 'a copy is not the same period');
   });
 
   await step('client backup → replace into the same client: every client table comes back equal apart from ids', async () => {
@@ -606,6 +669,29 @@ async function main() {
     assert.deepEqual(await adjustedTotals(fx.clientId), totalsBefore);
     // Replace re-created the periods; re-point the fixture.
     fx.p25 = (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [fx.clientId])).id;
+    // The same client, so the same identities and the same period stamp (S1).
+    assert.deepEqual(await syncUids(fx.clientId), uidsBefore, 'replace keeps every sync_uid');
+    const [replaced] = await stamps(fx.p25);
+    assert.equal(replaced, stamp25, 'the period stamp survives a backup and restore of the same period');
+  });
+
+  await step('an archive whose sync_uids no row here holds keeps them, and its period keeps its stamp', async () => {
+    // As on another instance: the original's rows take new uids first, so
+    // nothing here holds the archive's.
+    for (const t of SYNC_UID_TABLES) {
+      const col = t === 'clients' ? 'id' : 'client_id';
+      await sql(`UPDATE ${t} SET sync_uid = gen_random_uuid() WHERE ${col} = $1`, [fx.clientId]);
+    }
+    const r = await api('/api/v1/restore/execute', { method: 'POST', token, json: { backupId: fx.clientBackupId, mode: 'as_new' } });
+    assert.equal(r.status, 200, r.text);
+    const newId = r.json.data.newClientId;
+    assert.deepEqual(await syncUids(newId), uidsBefore, 'every sync_uid as in the archive');
+    const p25 = (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [newId])).id;
+    const [s] = await stamps(p25);
+    assert.equal(s, stamp25, 'the same period, stamped the same on the instance it arrives at');
+    const src = await snapshot(fx.clientId, { asNew: true });
+    const got = await snapshot(newId, { asNew: true });
+    assertSameRows('restore as new, uids kept', src.rows, got.rows);
   });
 
   await step('period backup (FY 2025) → restore as a new client: the period and the client-level rows come back equal', async () => {
@@ -614,30 +700,82 @@ async function main() {
     const r = await api('/api/v1/restore/execute', { method: 'POST', token, json: { backupId: b.json.data.id, mode: 'as_new' } });
     assert.equal(r.status, 200, r.text);
     const newId = r.json.data.newClientId;
-    // By design the prior period is not in a period archive, so the restored
-    // period cannot say which period it was rolled forward from.
-    const ignore = { periods: ['rolled_forward_from'] };
+    // The prior period comes only as a reference (no data, SQ7), so it
+    // cannot say which period IT was rolled forward from, and is marked.
+    const ignore = { periods: ['rolled_forward_from', 'is_reference'] };
     const src = await snapshot(fx.clientId, { periodId: fx.p25, asNew: true, ignore });
     const got = await snapshot(newId, { asNew: true, ignore });
-    assert.equal((await one(`SELECT rolled_forward_from FROM periods WHERE client_id = $1`, [newId])).rolled_forward_from, null);
+    const fy24 = await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2024'`, [newId]);
+    assert.ok(fy24, 'the prior period arrives as a reference');
+    assert.equal((await one(`SELECT rolled_forward_from FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [newId])).rolled_forward_from, fy24.id,
+      'so FY 2025 still says it was rolled forward from it');
+    assert.equal((await one(`SELECT count(*)::int AS n FROM trial_balance WHERE period_id = $1`, [fy24.id])).n, 0, 'a reference carries no balances');
+    // Marked as a reference: not listed, not writable (owner 2026-11-19).
+    assert.equal((await one(`SELECT is_reference FROM periods WHERE id = $1`, [fy24.id])).is_reference, true);
+    assert.equal((await one(`SELECT is_reference FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [newId])).is_reference, false);
+    const listed = await api(`/api/v1/clients/${newId}/periods`, { token });
+    assert.deepEqual(listed.json.data.map((p) => p.period_name), ['FY 2025'], 'the reference is not in the period list');
+    const [acA, acB] = (await sql(`SELECT id FROM chart_of_accounts WHERE client_id = $1 ORDER BY account_number LIMIT 2`, [newId])).map((r) => r.id);
+    const write = await api('/api/v1/journal-entries', {
+      method: 'POST', token,
+      json: {
+        periodId: fy24.id, entryType: 'book', entryDate: '2024-12-31', description: 'Into a reference',
+        lines: [{ accountId: acA, debit: 100, credit: 0 }, { accountId: acB, debit: 0, credit: 100 }],
+      },
+    });
+    assert.equal(write.status, 409, write.text);
+    assert.equal(write.json.error.code, 'PERIOD_LOCKED');
+    assert.match(write.json.error.message, /reference/);
+    // The statements read it as no prior period at all: one year of cash
+    // flows and the "no opening" check, as before references existed; the
+    // balance sheet's two years come from FY 2025's own rows, as on the original.
+    const stmtOf = (model, kind) => model.statements.find((x) => x.kind === kind);
+    const compute = async (clientId) => {
+      const rep25 = await one(`SELECT r.id FROM fs_reports r JOIN periods p ON p.id = r.period_id WHERE r.client_id = $1 AND p.period_name = 'FY 2025' ORDER BY r.id LIMIT 1`, [clientId]);
+      const c = await api(`/api/v1/fs/reports/${rep25.id}/compute`, { method: 'POST', token, json: {} });
+      assert.equal(c.status, 200, c.text);
+      return c.json.data.model;
+    };
+    const copyModel = await compute(newId);
+    assert.equal(stmtOf(copyModel, 'cash_flows').columns.length, 1, 'no prior-year cash flows from an empty opening');
+    assert.ok(copyModel.checks.find((x) => x.code === 'TB_FS_PY_OPENING_UNAVAILABLE'), 'the prior year has no opening, as without a prior period');
+    const origModel = await compute(fx.clientId);
+    const rowsOf = (m) => stmtOf(m, 'balance_sheet').rows.map((r) => [r.label, r.values]);
+    assert.deepEqual(rowsOf(copyModel), rowsOf(origModel), 'the balance sheet, both years, as on the original');
     const tables = schema.scoped.filter((t) => !PERIOD_NOT_CARRIED.includes(t));
     const pick = (rows) => Object.fromEntries(tables.map((t) => [t, rows[t]]));
     assertSameRows('period restore as new', pick(src.rows), pick(got.rows));
     for (const t of PERIOD_NOT_CARRIED) assert.equal(got.rows[t].length, 0, `${t} is not part of a period archive`);
-    // By design: a variance note comparing to FY 2024 and the reconciliation
-    // item for an FY 2024 check have nothing to point at in a period archive.
-    assert.equal((await one(`SELECT count(*)::int AS n FROM variance_notes v JOIN periods p ON p.id = v.period_id WHERE p.client_id = $1`, [newId])).n, 0);
+    // The variance notes comparing to FY 2024 and the reconciliation item for an
+    // FY 2024 check arrive, pointing at the references (owner 2026-11-19).
+    assert.equal((await one(`SELECT count(*)::int AS n FROM variance_notes v JOIN periods p ON p.id = v.period_id WHERE p.client_id = $1`, [newId])).n, 2, "both notes comparing FY 2025 to FY 2024");
     const count = async (q) => (await one(q, [newId])).n;
     assert.equal(await count(`SELECT count(*)::int AS n FROM tickmark_library WHERE client_id = $1`), 3, 'the whole library');
     assert.equal(await count(`SELECT count(*)::int AS n FROM tb_tickmarks t JOIN periods p ON p.id = t.period_id WHERE p.client_id = $1`), 3);
     assert.equal(await count(`SELECT count(*)::int AS n FROM py_comparison_data d JOIN periods p ON p.id = d.period_id WHERE p.client_id = $1`), 3);
     assert.equal(await count(`SELECT count(*)::int AS n FROM bank_reconciliations WHERE client_id = $1`), 1, 'the FY 2025 reconciliation, not the undated one');
-    assert.equal(await count(`SELECT count(*)::int AS n FROM reconciliation_items i JOIN bank_reconciliations r ON r.id = i.reconciliation_id WHERE r.client_id = $1`), 2,
-      'the FY 2024 check it cleared has no transaction to point at');
-    assert.equal(r.json.data.droppedLinks > 0, true, 'the dropped rows are counted');
+    assert.equal(await count(`SELECT count(*)::int AS n FROM reconciliation_items i JOIN bank_reconciliations r ON r.id = i.reconciliation_id WHERE r.client_id = $1`), 3,
+      'the FY 2024 check it cleared arrives as a reference');
+    assert.equal(await count(`SELECT count(*)::int AS n FROM bank_transactions t JOIN periods p ON p.id = t.period_id WHERE t.client_id = $1 AND p.period_name = 'FY 2024'`), 1,
+      'only that one transaction of FY 2024');
     const totals = await adjustedTotals(newId);
     assert.deepEqual(totals['FY 2025'], totalsBefore['FY 2025']);
-    assert.deepEqual(Object.keys(totals), ['FY 2025']);
+    assert.deepEqual(Object.keys(totals), ['FY 2025'], 'the reference period has no balances');
+  });
+
+  await step('a period archive whose sync_uids no row here holds keeps the period stamp (the path a pull takes)', async () => {
+    const [before25] = await stamps(fx.p25);
+    const b = await api(`/api/v1/backup/period/${fx.p25}`, { method: 'POST', token });
+    assert.equal(b.status, 200, b.text);
+    for (const t of SYNC_UID_TABLES) {
+      const col = t === 'clients' ? 'id' : 'client_id';
+      await sql(`UPDATE ${t} SET sync_uid = gen_random_uuid() WHERE ${col} = $1`, [fx.clientId]);
+    }
+    const r = await api('/api/v1/restore/execute', { method: 'POST', token, json: { backupId: b.json.data.id, mode: 'as_new' } });
+    assert.equal(r.status, 200, r.text);
+    const p25 = (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [r.json.data.newClientId])).id;
+    const [after25] = await stamps(p25);
+    assert.equal(after25, before25, 'the period stamp after a period archive arrives where no row holds its uids');
   });
 
   await step('an uploaded client archive passes the manifest check and restores', async () => {

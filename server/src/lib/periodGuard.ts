@@ -21,11 +21,19 @@ export async function assertPeriodUnlocked(periodId: number, trx?: Knex.Transact
   if (trx) {
     query = query.forUpdate();
   }
-  const period = await query.first('id', 'locked_at');
+  const period = await query.first('id', 'locked_at', 'is_reference');
   if (!period) {
     throw Object.assign(
       new Error('Period not found.'),
       { code: 'PERIOD_NOT_FOUND', status: 404 },
+    );
+  }
+  if (period.is_reference) {
+    // PERIOD_LOCKED, so every route that maps a locked period (about twenty)
+    // answers 409 with this message rather than a 500; `reference` tells why.
+    throw Object.assign(
+      new Error('This period came along only as a reference for another period: it holds no data here and cannot be changed.'),
+      { code: 'PERIOD_LOCKED', status: 409, reference: true },
     );
   }
   if (period.locked_at) {

@@ -322,17 +322,49 @@ async function createBackup(
         const cId = period?.client_id;
         const client = cId ? await trx('clients').where('id', cId).select('*') : [];
         await dump('clients', client);
-        await dump('periods', period ? [period] : []);
-        await dump('chart_of_accounts', cId ? await trx('chart_of_accounts').where('client_id', cId).select('*') : []);
         const coaRows = cId ? await trx('chart_of_accounts').where('client_id', cId).select('id') : [];
         const coaIds = coaRows.map((r: { id: number }) => r.id);
+        // References (desktop sync, owner 2026-11-19): the period's own rows
+        // name rows of other periods, a variance note its comparison period
+        // and a reconciliation item a transaction of an earlier period. They
+        // come along as plain rows (a period carries no balances by itself)
+        // so the notes and items restore and a send-back returns them; the
+        // prior period's data is still not carried (SQ7). The manifest's
+        // periodId tells the archive's own period from a reference.
+        const varianceRows = coaIds.length > 0
+          ? await trx('variance_notes').where('period_id', periodId).whereIn('account_id', coaIds).select('*')
+          : [];
+        const reconRows = (await trx.schema.hasTable('bank_reconciliations'))
+          ? await trx('bank_reconciliations').where('period_id', periodId).select('*')
+          : [];
+        const reconIds = reconRows.map((r: { id: number }) => r.id);
+        const itemRows = reconIds.length > 0 && (await trx.schema.hasTable('reconciliation_items'))
+          ? await trx('reconciliation_items').whereIn('reconciliation_id', reconIds).select('*')
+          : [];
+        const ownTxns = cId ? await trx('bank_transactions').where('client_id', cId).where('period_id', periodId).select('*') : [];
+        const ownTxnIds = new Set(ownTxns.map((t: { id: number }) => t.id));
+        const refTxnIds = [...new Set(itemRows.map((i: { transaction_id: number | null }) => i.transaction_id)
+          .filter((id: number | null): id is number => id != null && !ownTxnIds.has(id)))];
+        const refTxns = cId && refTxnIds.length > 0
+          ? await trx('bank_transactions').where('client_id', cId).whereIn('id', refTxnIds).select('*')
+          : [];
+        const refPeriodIds = [...new Set([
+          ...varianceRows.map((v: { compare_period_id: number | null }) => v.compare_period_id),
+          ...refTxns.map((t: { period_id: number | null }) => t.period_id),
+        ].filter((id): id is number => id != null && id !== periodId))];
+        const refPeriods = cId && refPeriodIds.length > 0
+          ? await trx('periods').where('client_id', cId).whereIn('id', refPeriodIds).select('*')
+          : [];
+        // Marked, so where they arrive they are hidden and read-only (migration 20261001000003).
+        await dump('periods', period ? [period, ...refPeriods.map((p: Record<string, unknown>) => ({ ...p, is_reference: true }))] : []);
+        await dump('chart_of_accounts', cId ? await trx('chart_of_accounts').where('client_id', cId).select('*') : []);
         await dump('trial_balance', await trx('trial_balance').where('period_id', periodId).select('*'));
         const jeRows = await trx('journal_entries').where('period_id', periodId).select('*');
         await dump('journal_entries', jeRows);
         const jeIds = jeRows.map((r: { id: number }) => r.id);
         await dump('journal_entry_lines', jeIds.length > 0 ? await trx('journal_entry_lines').whereIn('journal_entry_id', jeIds).select('*') : []);
-        await dump('bank_transactions', cId ? await trx('bank_transactions').where('client_id', cId).where('period_id', periodId).select('*') : []);
-        await dump('variance_notes', coaIds.length > 0 ? await trx('variance_notes').where('period_id', periodId).whereIn('account_id', coaIds).select('*') : []);
+        await dump('bank_transactions', [...ownTxns, ...refTxns]);
+        await dump('variance_notes', varianceRows);
         await dump('document_imports', await trx('document_imports').where('period_id', periodId).select('*'));
         if (await trx.schema.hasTable('lead_sheets')) {
           await dump('lead_sheets', cId ? await trx('lead_sheets').where('client_id', cId).select('*') : []);
@@ -367,11 +399,9 @@ async function createBackup(
           await dump('py_comparison_data', await trx('py_comparison_data').where('period_id', periodId).select('*'));
         }
         if (await trx.schema.hasTable('bank_reconciliations')) {
-          const reconRows = await trx('bank_reconciliations').where('period_id', periodId).select('*');
           await dump('bank_reconciliations', reconRows);
-          const reconIds = reconRows.map((r: { id: number }) => r.id);
           if (reconIds.length > 0 && await trx.schema.hasTable('reconciliation_items')) {
-            await dump('reconciliation_items', await trx('reconciliation_items').whereIn('reconciliation_id', reconIds).select('*'));
+            await dump('reconciliation_items', itemRows);
           }
         }
       }
@@ -925,6 +955,42 @@ async function restoreClientWorkpapers(
   return { skipped };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Desktop sync (S1): a restored row keeps the `sync_uid` it carries in the
+ * archive, so the same client, period, account or bank transaction is the
+ * same on every instance, unless a row here already holds it (a copy
+ * restored next to its original is a different client): then the column
+ * default gives it a new one. An archive from before S1 carries none, and
+ * every row gets a new one. The same uid twice in one archive keeps the
+ * first.
+ */
+export async function keepSyncUids<T extends Record<string, unknown>>(
+  trx: Knex | Knex.Transaction,
+  table: string,
+  rows: T[],
+): Promise<T[]> {
+  if (!(await trx.schema.hasColumn(table, 'sync_uid'))) {
+    return rows.map((r) => ({ ...r, sync_uid: undefined }));
+  }
+  const valid = (u: unknown): u is string => typeof u === 'string' && UUID_RE.test(u);
+  const uids = [...new Set(rows.map((r) => r.sync_uid).filter(valid))];
+  const held = new Set<string>();
+  for (const part of chunk(uids, 1000)) {
+    for (const u of (await trx(table).whereIn('sync_uid', part).pluck('sync_uid')) as string[]) held.add(u);
+  }
+  const seen = new Set<string>();
+  return rows.map((r) => {
+    const u = r.sync_uid;
+    if (valid(u) && !held.has(u) && !seen.has(u)) {
+      seen.add(u);
+      return r;
+    }
+    return { ...r, sync_uid: undefined };
+  });
+}
+
 async function restoreAsNew(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
@@ -989,8 +1055,9 @@ async function restoreAsNew(
       }
       // default_source_account_id points into chart_of_accounts, which is
       // restored AFTER clients — insert null and patch it once accounts are mapped.
+      const [kept] = await keepSyncUids(trx, 'clients', [{ ...row, id: undefined, name: insertName, default_source_account_id: null }]);
       const [inserted] = await trx('clients')
-        .insert({ ...row, id: undefined, name: insertName, default_source_account_id: null })
+        .insert(kept)
         .returning('id');
       const newId = (inserted as { id: number }).id;
       clientMap.set(oldId, newId);
@@ -1010,12 +1077,12 @@ async function restoreAsNew(
   const periodsData = tables['periods'] as Array<Record<string, unknown>> | undefined;
   if (periodsData && periodsData.length > 0) {
     const periodMap = registerMap('periods');
-    const prepared = periodsData.map((row) => sanitizeUserFks('periods', {
+    const prepared = await keepSyncUids(trx, 'periods', periodsData.map((row) => sanitizeUserFks('periods', {
       ...row,
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
       rolled_forward_from: null,
-    }));
+    })));
     const encoded = await encodeJsonColumns(trx, 'periods', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
       const indexInWhole = encoded.indexOf(batch[0]);
@@ -1060,13 +1127,13 @@ async function restoreAsNew(
   if (coaData && coaData.length > 0) {
     const coaMap = registerMap('chart_of_accounts');
     const resolveTaxCode = await makeTaxCodeResolver(trx, tables);
-    const prepared = coaData.map((row) => ({
+    const prepared = await keepSyncUids(trx, 'chart_of_accounts', coaData.map((row) => ({
       ...row,
       id: undefined,
       client_id: getNewId('clients', row.client_id as number),
       tax_code_id: resolveTaxCode(row.tax_code_id),
       lead_sheet_id: mapOptional('lead_sheets', row.lead_sheet_id),
-    }));
+    })));
     const encoded = await encodeJsonColumns(trx, 'chart_of_accounts', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
       const indexInWhole = encoded.indexOf(batch[0]);
@@ -1152,6 +1219,8 @@ async function restoreAsNew(
         journal_entry_id: mapOptional('journal_entries', row.journal_entry_id),
       }),
     }));
+    const btKept = await keepSyncUids(trx, 'bank_transactions', rows.map((r) => r.row));
+    rows.forEach((r, i) => { r.row = btKept[i]; });
     idMap.set('bank_transactions', await insertMapped(trx, 'bank_transactions', rows));
   }
 
@@ -1440,7 +1509,8 @@ async function restoreReplace(
 
   // Insert client with target ID
   // default_source_account_id is patched after chart_of_accounts is restored.
-  await trx('clients').insert({ ...clientsData[0], id: targetClientId, default_source_account_id: null });
+  const [clientKept] = await keepSyncUids(trx, 'clients', [{ ...clientsData[0], id: targetClientId, default_source_account_id: null }]);
+  await trx('clients').insert(clientKept);
 
   const periodIdMap = new Map<number, number>();
   const coaIdMap = new Map<number, number>();
@@ -1458,9 +1528,9 @@ async function restoreReplace(
   // and patch once every period has an id.
   const periodsData = tables['periods'] as Array<Record<string, unknown>> | undefined;
   if (periodsData && periodsData.length > 0) {
-    const prepared = periodsData.map((row) =>
+    const prepared = await keepSyncUids(trx, 'periods', periodsData.map((row) =>
       sanitizeUserFks('periods', remapClientId({ ...row, id: undefined, rolled_forward_from: null })),
-    );
+    ));
     const encoded = await encodeJsonColumns(trx, 'periods', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
       const indexInWhole = encoded.indexOf(batch[0]);
@@ -1485,9 +1555,9 @@ async function restoreReplace(
     const resolveTaxCode = await makeTaxCodeResolver(trx, tables);
     // lead_sheet_id is nulled on insert and applied below: the FK fires at
     // insert time, and lead_sheets are restored after this block.
-    const prepared = coaData.map((row) =>
+    const prepared = await keepSyncUids(trx, 'chart_of_accounts', coaData.map((row) =>
       remapClientId({ ...row, id: undefined, tax_code_id: resolveTaxCode(row.tax_code_id), lead_sheet_id: null }),
-    );
+    ));
     const encoded = await encodeJsonColumns(trx, 'chart_of_accounts', prepared);
     for (const batch of chunk(encoded, BATCH_SIZE)) {
       const indexInWhole = encoded.indexOf(batch[0]);
@@ -1562,6 +1632,8 @@ async function restoreReplace(
         journal_entry_id: mapOptional(jeIdMap, row.journal_entry_id),
       }),
     }));
+    const btKept = await keepSyncUids(trx, 'bank_transactions', rows.map((r) => r.row));
+    rows.forEach((r, i) => { r.row = btKept[i]; });
     btIdMap = await insertMapped(trx, 'bank_transactions', rows);
   }
 

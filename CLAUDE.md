@@ -707,11 +707,33 @@ All planned phases complete. App is feature-complete.
   M-1 adjustments, reconciliations and their items (dumped, never re-inserted), and PY tie-out data, saved
   reports and export consolidation settings (deleted on replace, never dumped). Both restore paths now share
   `restoreClientWorkpapers` in `routes/backup.ts`; a row whose parent is not in the archive is skipped and
-  counted, never pointed at another client. A period archive carries the whole tickmark library; the prior
-  period, variance notes comparing to it and reconciliation items clearing an earlier period's transaction
-  do not come along. `npm run test:backup-e2e` (root) walks the schema's foreign keys from `clients` and
+  counted, never pointed at another client. A period archive carries the whole tickmark library, and (desktop sync, owner
+  2026-11-19) the other periods and bank transactions its own rows name, as plain rows without their data:
+  a variance note's comparison period, a reconciliation item's earlier-period transaction and its period.
+  So restoring a period archive as new also makes the prior period, empty and marked `periods.is_reference`
+  (migration `20261001000003`); the manifest's `periodId` names the archive's own period. **A reference
+  period is not a period to work in:** it is left out of `GET /clients/:id/periods`, the MCP period list
+  and every prior-period lookup (`fsSource.ts`, the QuickBooks prior range), so statements read as if there
+  were no prior period; `assertPeriodUnlocked` (and the bank-transaction and reconciliation lock checks)
+  refuse writes into it as `PERIOD_LOCKED` with their own message. A new query that lists a client's
+  periods or looks for "the prior one" must add `is_reference: false`. `npm run test:backup-e2e` (root) walks the schema's foreign keys from `clients` and
   compares every table after restore-as-new, replace and a period restore, so a NEW client table fails it
   until the backup carries it or `NOT_COMPARED` in `test/backup-e2e.mjs` says why not.
+- **Rows a desktop sync must recognise carry `sync_uid` (S1, migration `20261001000001`).** `clients`,
+  `periods`, `chart_of_accounts` and `bank_transactions` have `sync_uid uuid NOT NULL DEFAULT
+  gen_random_uuid()` with a unique index; ids are re-keyed on every restore, the uid is not. Every
+  restore path inserts these four through `keepSyncUids` (`routes/backup.ts`): the archive's uid stays
+  unless a row here already holds it (a copy next to its original is a different client, so it gets new
+  ones); an archive from before S1 gets new ones. **Never copy a row of these tables with `...row` outside
+  that helper** — the unique index makes it a 500. Lead sheets (code), tax codes (resolver), the tickmark
+  library (symbol) and attachments (ref code) need no uid.
+  The **period stamp** (`lib/sync/periodStamp.ts`, pure; loader `periodStampLoad.ts`; `npm run sync:stamp
+  -- <periodId>`) is one SHA-256 over the period's SQ4 rows with every id replaced by its natural key
+  (uid, entry type+number, lead sheet code, tickmark symbol, attachment file SHA-256), user ids and
+  write times left out, DATE columns as calendar dates. It must not change across a restore of the same
+  period (`test:backup-e2e`) and must change when any of its rows does (`periodStamp.test.ts`, one test
+  per table). A new period-scoped table joins `STAMP_TABLES` with a spec, or the desktop's send-back
+  will not notice changes to it.
 - Variance notes (per account per period, TB Report inline editing)
 - **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
   trusts cascades; five references shipped with none (bank_transactions, document_imports,
