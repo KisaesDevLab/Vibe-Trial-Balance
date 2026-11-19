@@ -29,6 +29,15 @@ import {
   CODE_TTL_MS, formatCode, newDeviceToken, newPairingCode, normaliseCode, sha256, tidyDeviceName,
 } from '../lib/sync/deviceTokens';
 import { syncAuthMiddleware, type SyncRequest } from '../lib/sync/syncAuth';
+import fs from 'fs';
+import path from 'path';
+import { z } from 'zod';
+import { createBackup } from './backup';
+import { FORMAT_VERSION, appliedMigrations } from '../lib/backupManifest';
+import { checkedOutBy } from '../lib/periodGuard';
+import { stampPeriod } from '../lib/sync/periodStampLoad';
+import { SYNC_JOB_DIR, startJob } from '../lib/sync/jobs';
+import { checkoutApi, checkoutWarnDays, isoDate } from '../lib/sync/checkouts';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const APP_VERSION = (require('../../package.json') as { version: string }).version;
@@ -116,7 +125,21 @@ syncRouter.post('/pair', pairLimiter, async (req: AuthRequest, res: Response): P
 });
 
 // Everything else under /api/v1/sync is a paired device's.
-syncRouter.use(syncAuthMiddleware, blockReviewerWrites);
+syncRouter.use(syncAuthMiddleware);
+
+/**
+ * Per device: 1200 calls per 15 minutes (job polling included). The global
+ * /api/ limiter skips device calls (app.ts), so one office address with
+ * several desktops is not one shared bucket.
+ */
+syncRouter.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `sync-device:${(req as SyncRequest).syncDevice?.id ?? 'none'}`,
+  message: { data: null, error: { code: 'RATE_LIMITED', message: 'This computer is syncing too often. Wait a few minutes.' } },
+}));
 
 syncRouter.get('/me', (req: SyncRequest, res: Response): void => {
   res.json({
@@ -129,16 +152,285 @@ syncRouter.get('/me', (req: SyncRequest, res: Response): void => {
   });
 });
 
-syncRouter.get('/clients', async (_req: SyncRequest, res: Response): Promise<void> => {
+/** What this server speaks; the desktop checks it before anything else. */
+syncRouter.get('/capabilities', async (_req: SyncRequest, res: Response): Promise<void> => {
+  try {
+    const applied = await appliedMigrations(db);
+    res.json({
+      data: {
+        formatVersions: [FORMAT_VERSION],
+        schemaVersion: applied[applied.length - 1] ?? null,
+        appVersion: APP_VERSION,
+        // Uploads (send-back) arrive in S4; 0 says this server takes none yet.
+        maxUploadBytes: 0,
+        features: ['checkout-v1'],
+        checkoutWarnDays: await checkoutWarnDays(),
+      },
+      error: null,
+    });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'sync/capabilities');
+  }
+});
+
+const clientListSchema = z.object({
+  search: z.string().trim().max(100).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+  active: z.enum(['1', '0', 'all']).default('1'),
+});
+
+syncRouter.get('/clients', async (req: SyncRequest, res: Response): Promise<void> => {
   // Client names leave the server: audited (syncAuth.ts).
   res.locals.syncAudit = true;
+  const q = clientListSchema.safeParse(req.query);
+  if (!q.success) {
+    bad(res, 400, 'VALIDATION_ERROR', 'search, limit (1-500), offset and active (1, 0, all) are the only options.');
+    return;
+  }
   try {
-    const rows = await db('clients')
+    const base = db('clients');
+    if (q.data.active !== 'all') base.where({ is_active: q.data.active === '1' });
+    if (q.data.search) {
+      const like = `%${q.data.search.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      base.where((w) => w.whereILike('name', like).orWhereILike('client_code', like));
+    }
+    const [{ n }] = (await base.clone().count({ n: '*' })) as Array<{ n: string | number }>;
+    const rows = await base
       .orderBy('name')
+      .orderBy('id')
+      .limit(q.data.limit)
+      .offset(q.data.offset)
       .select('sync_uid', 'name', 'client_code', 'entity_type', 'is_active');
-    res.json({ data: rows, error: null, meta: { count: rows.length } });
+    res.json({ data: rows, error: null, meta: { count: rows.length, total: Number(n), limit: q.data.limit, offset: q.data.offset } });
   } catch (err: unknown) {
     sendServerError(res, err, 'sync/clients');
+  }
+});
+
+const isUuid = (v: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
+syncRouter.get('/clients/:uid/periods', async (req: SyncRequest, res: Response): Promise<void> => {
+  res.locals.syncAudit = true;
+  const uid = String(req.params.uid);
+  if (!isUuid(uid)) {
+    bad(res, 404, 'NOT_FOUND', 'No client with that id on this server.');
+    return;
+  }
+  try {
+    const client = await db('clients').where({ sync_uid: uid }).first('id');
+    if (!client) {
+      bad(res, 404, 'NOT_FOUND', 'No client with that id on this server.');
+      return;
+    }
+    // A reference period (desktop sync) holds no data here: not offered.
+    const periods = (await db('periods')
+      .where({ client_id: client.id, is_reference: false })
+      .orderBy('end_date', 'desc')
+      .orderBy('id', 'desc')
+      .select('id', 'sync_uid', 'period_name', 'start_date', 'end_date', 'locked_at', 'is_current')) as Array<Record<string, unknown> & { id: number }>;
+    const warnDays = await checkoutWarnDays();
+    const out = [];
+    for (const p of periods) {
+      const holder = await checkedOutBy(db, p.id);
+      out.push({
+        sync_uid: p.sync_uid,
+        period_name: p.period_name,
+        start_date: isoDate(p.start_date),
+        end_date: isoDate(p.end_date),
+        locked_at: p.locked_at,
+        is_current: p.is_current,
+        checkout: holder ? checkoutApi(holder, warnDays, req.syncDevice!.id) : null,
+        stamp: await stampPeriod(db, p.id),
+      });
+    }
+    res.json({ data: out, error: null, meta: { count: out.length, checkoutWarnDays: warnDays } });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'sync/periods');
+  }
+});
+
+/**
+ * Pull a period: `{ checkout: true }` holds it for this device (SQ2) so the
+ * web app and MCP cannot change it until it is sent back or released; a
+ * reviewer, or `checkout: false`, takes a read-only copy. Returns a job; the
+ * archive is at `GET /jobs/:id/archive` once the job is done. Mounted before
+ * the reviewer write block: a reviewer may pull, without a check-out (SQ5).
+ */
+syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): Promise<void> => {
+  const uid = String(req.params.uid);
+  const body = z.object({ checkout: z.boolean().default(true) }).safeParse(req.body ?? {});
+  if (!body.success) {
+    bad(res, 400, 'VALIDATION_ERROR', '`checkout` must be true or false.');
+    return;
+  }
+  const wantCheckout = body.data.checkout;
+  if (wantCheckout && req.user!.role === 'reviewer') {
+    bad(res, 403, 'READ_ONLY', 'A reviewer can pull a period to read it, not check it out. Pull it with check-out off.');
+    return;
+  }
+  if (!isUuid(uid)) {
+    bad(res, 404, 'NOT_FOUND', 'No period with that id on this server.');
+    return;
+  }
+  try {
+    const period = await db('periods as p')
+      .join('clients as c', 'c.id', 'p.client_id')
+      .where('p.sync_uid', uid)
+      .first('p.id', 'p.client_id', 'p.locked_at', 'p.is_reference', 'c.sync_uid as client_uid');
+    if (!period || period.is_reference) {
+      bad(res, 404, 'NOT_FOUND', 'No period with that id on this server.');
+      return;
+    }
+    const device = req.syncDevice!;
+    let checkoutId: number | null = null;
+    if (wantCheckout) {
+      if (period.locked_at) {
+        bad(res, 409, 'PERIOD_LOCKED', 'This period is locked on the server. Pull it with check-out off to read it, or ask an admin to unlock it.');
+        return;
+      }
+      const taken = await db.transaction(async (trx) => {
+        // The period row lock orders this against a web write's guard.
+        await trx('periods').where({ id: period.id }).forUpdate().first('id');
+        const holder = await checkedOutBy(trx, period.id);
+        if (holder && holder.deviceId !== device.id) return { holder };
+        if (holder) return { id: holder.id };
+        const [row] = await trx('period_checkouts')
+          .insert({ period_id: period.id, device_id: device.id, user_id: req.user!.userId })
+          .returning('id');
+        await logAudit({ userId: req.user!.userId, periodId: period.id, entityType: 'period_checkout', entityId: (row as { id: number }).id, action: 'checkout', description: `Checked out to desktop "${device.name}"` }, trx);
+        return { id: (row as { id: number }).id };
+      });
+      if ('holder' in taken && taken.holder) {
+        bad(res, 409, 'PERIOD_CHECKED_OUT', `This period is checked out to ${taken.holder.user} on "${taken.holder.device}" since ${taken.holder.since.toISOString().slice(0, 10)}. Pull it with check-out off to read it.`);
+        return;
+      }
+      checkoutId = (taken as { id: number }).id;
+    }
+    const createdCheckout = checkoutId;
+    const jobId = await startJob(
+      { kind: 'pull', deviceId: device.id, userId: req.user!.userId, clientId: period.client_id, periodId: period.id, checkoutId },
+      async (id) => {
+        const dir = path.join(SYNC_JOB_DIR, id);
+        fs.mkdirSync(dir, { recursive: true });
+        // Set inside the archive's snapshot (manifestExtra); widened so TS does not narrow it to null.
+        let stamp = null as string | null;
+        const made = await createBackup('period', {
+          clientId: period.client_id,
+          periodId: period.id,
+          includeFiles: true,
+          outDir: dir,
+          recordHistory: false,
+          manifestExtra: async (trx) => {
+            stamp = await stampPeriod(trx, period.id);
+            return { sync: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, pulledAt: new Date().toISOString(), deviceId: device.id } };
+          },
+        }, req.user!.userId);
+        if (checkoutId) await db('period_checkouts').where({ id: checkoutId }).update({ stamp_at_pull: stamp });
+        return {
+          result: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, size: made.file_size, checksum: made.checksum },
+          filePath: made.storage_local ?? undefined,
+        };
+      },
+      // A pull that failed must not leave the period held.
+      createdCheckout
+        ? async () => {
+          await db('period_checkouts').where({ id: createdCheckout }).whereNull('released_at')
+            .update({ released_at: db.fn.now(), release_reason: 'The pull failed.' });
+        }
+        : undefined,
+    );
+    res.status(202).json({ data: { jobId, checkoutId }, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'sync/pull');
+  }
+});
+
+/** A job of this device's: its state, then its result or error. */
+syncRouter.get('/jobs/:id', async (req: SyncRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  if (!isUuid(id)) {
+    bad(res, 404, 'NOT_FOUND', 'No such job.');
+    return;
+  }
+  try {
+    const job = await db('sync_jobs').where({ id, device_id: req.syncDevice!.id }).first();
+    if (!job) {
+      bad(res, 404, 'NOT_FOUND', 'No such job.');
+      return;
+    }
+    res.json({
+      data: {
+        id: job.id, kind: job.kind, state: job.state, result: job.result ?? null, error: job.error ?? null,
+        createdAt: job.created_at, finishedAt: job.finished_at, archiveReady: job.state === 'done' && !!job.file_path,
+      },
+      error: null,
+    });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'sync/jobs');
+  }
+});
+
+/** The pulled period's .tbak, once the job is done (kept for a day). */
+syncRouter.get('/jobs/:id/archive', async (req: SyncRequest, res: Response): Promise<void> => {
+  res.locals.syncAudit = true;
+  const id = String(req.params.id);
+  if (!isUuid(id)) {
+    bad(res, 404, 'NOT_FOUND', 'No such job.');
+    return;
+  }
+  try {
+    const job = await db('sync_jobs').where({ id, device_id: req.syncDevice!.id }).first('state', 'file_path');
+    if (!job) {
+      bad(res, 404, 'NOT_FOUND', 'No such job.');
+      return;
+    }
+    if (job.state !== 'done') {
+      bad(res, 409, 'SYNC_JOB_NOT_DONE', job.state === 'failed' ? 'This job failed; there is no archive.' : 'Not ready yet. Ask again in a moment.');
+      return;
+    }
+    if (!job.file_path || !fs.existsSync(job.file_path)) {
+      bad(res, 410, 'SYNC_ARCHIVE_GONE', 'This archive was kept for a day and has been deleted. Pull the period again.');
+      return;
+    }
+    const size = fs.statSync(job.file_path).size;
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', String(size));
+    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(job.file_path)}"`);
+    fs.createReadStream(job.file_path).on('error', (err) => {
+      console.error('[sync] archive read failed', err.message);
+      res.destroy(err);
+    }).pipe(res);
+  } catch (err: unknown) {
+    sendServerError(res, err, 'sync/archive');
+  }
+});
+
+// Writes from here on: a reviewer's device has none.
+syncRouter.use(blockReviewerWrites);
+
+/** The holder gives a check-out back without sending anything. */
+syncRouter.delete('/checkouts/:id', async (req: SyncRequest, res: Response): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    bad(res, 404, 'NOT_FOUND', 'No such check-out.');
+    return;
+  }
+  try {
+    const done = await db.transaction(async (trx) => {
+      const row = await trx('period_checkouts').where({ id, device_id: req.syncDevice!.id }).whereNull('released_at').forUpdate().first('id', 'period_id');
+      if (!row) return false;
+      await trx('period_checkouts').where({ id }).update({ released_at: trx.fn.now(), released_by: req.user!.userId, release_reason: 'Given back by the desktop.' });
+      await logAudit({ userId: req.user!.userId, periodId: row.period_id, entityType: 'period_checkout', entityId: id, action: 'release', description: `Check-out given back by desktop "${req.syncDevice!.name}"` }, trx);
+      return true;
+    });
+    if (!done) {
+      bad(res, 404, 'NOT_FOUND', 'This computer holds no such check-out.');
+      return;
+    }
+    res.json({ data: { released: true }, error: null });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'sync/checkouts');
   }
 });
 

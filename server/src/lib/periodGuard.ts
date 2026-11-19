@@ -15,7 +15,17 @@ import { db } from '../db';
  *  When called without a trx, performs a plain read — acceptable only for read-only paths
  *  (reports / comparisons) where a stale answer is fine.
  */
-export async function assertPeriodUnlocked(periodId: number, trx?: Knex.Transaction): Promise<void> {
+export async function assertPeriodUnlocked(
+  periodId: number,
+  trx?: Knex.Transaction,
+  opts: {
+    /**
+     * Desktop sync S4's merge, writing for the device that holds this
+     * check-out: the one caller a checked-out period lets through.
+     */
+    syncCheckoutId?: number;
+  } = {},
+): Promise<void> {
   const q = trx ?? db;
   let query = q('periods').where({ id: periodId });
   if (trx) {
@@ -42,6 +52,37 @@ export async function assertPeriodUnlocked(periodId: number, trx?: Knex.Transact
       { code: 'PERIOD_LOCKED', status: 409 },
     );
   }
+  // Desktop sync (S3): a period a desktop has checked out is that desktop's
+  // until it sends it back or an admin releases it. `expose` lets the code
+  // and message through `sendServerError`, so a route that only maps
+  // PERIOD_LOCKED still answers 409 PERIOD_CHECKED_OUT.
+  const out = await checkedOutBy(q, periodId);
+  if (out && out.id !== opts.syncCheckoutId) {
+    throw Object.assign(
+      new Error(`This period is checked out to ${out.user} on "${out.device}" since ${out.since.toISOString().slice(0, 10)}. It can be changed once they send it back, or an admin releases it.`),
+      { code: 'PERIOD_CHECKED_OUT', status: 409, expose: true, checkout: out },
+    );
+  }
+}
+
+export interface PeriodCheckoutHolder {
+  id: number;
+  user: string;
+  device: string;
+  deviceId: number;
+  since: Date;
+}
+
+/** The live check-out of a period, if any (desktop sync S3). */
+export async function checkedOutBy(q: Knex | Knex.Transaction, periodId: number): Promise<PeriodCheckoutHolder | null> {
+  const row = await q('period_checkouts as c')
+    .join('sync_devices as d', 'd.id', 'c.device_id')
+    .join('app_users as u', 'u.id', 'c.user_id')
+    .where('c.period_id', periodId)
+    .whereNull('c.released_at')
+    .first('c.id', 'c.created_at', 'd.id as device_id', 'd.name as device', 'u.display_name', 'u.username');
+  if (!row) return null;
+  return { id: row.id, user: row.display_name ?? row.username, device: row.device, deviceId: row.device_id, since: new Date(row.created_at) };
 }
 
 interface AuditEntry {

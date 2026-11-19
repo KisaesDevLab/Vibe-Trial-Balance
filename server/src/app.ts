@@ -26,6 +26,8 @@ import { dashboardRouter } from './routes/dashboard';
 import { rollForwardRouter } from './routes/rollForward';
 import { usersRouter } from './routes/users';
 import { desktopSyncRouter, syncRouter } from './routes/sync';
+import { startSyncJobHousekeeping } from './lib/sync/jobs';
+import { isDeviceToken } from './lib/sync/deviceTokens';
 import { jeCollectionRouter, jeItemRouter } from './routes/journalEntries';
 import { btCollectionRouter, btRulesRouter } from './routes/bankTransactions';
 import { settingsRouter, loadFirmIdentity } from './routes/settings';
@@ -154,6 +156,11 @@ app.use('/api/', rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: rateLimitKey,
+  // A paired desktop's calls (a device token on /v1/sync/*) have their own
+  // per-device limit (routes/sync.ts): several desktops behind one office
+  // address must not share this bucket. Pairing keeps its own limiter too.
+  skip: (req) => req.path.startsWith('/v1/sync/') && req.path !== '/v1/sync/pair'
+    && isDeviceToken(req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7).trim() : ''),
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } },
 }));
 
@@ -453,6 +460,7 @@ async function start(): Promise<void> {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/api/v1/health`);
     startBackupScheduler();
+    startSyncJobHousekeeping();
     startQboKeepalive();
     // Router mode only; non-blocking with retry — requests made before
     // registration completes fail closed at the router, which is correct.

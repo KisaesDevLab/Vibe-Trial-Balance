@@ -192,6 +192,27 @@ async function pairWith(sessionToken, deviceName) {
   return { code: c.json.data.code, token: p.json.data.token, deviceId: p.json.data.device.id };
 }
 
+const unzipper = require('unzipper');
+
+/** Polls a sync job until it is done or failed (30 s). */
+async function waitJob(token, jobId) {
+  for (let i = 0; i < 200; i++) {
+    const j = await api(`/api/v1/sync/jobs/${jobId}`, { token });
+    assert.equal(j.status, 200, j.text);
+    if (j.json.data.state === 'done' || j.json.data.state === 'failed') return j.json.data;
+    await sleep(150);
+  }
+  throw new Error('job did not finish in 30 s');
+}
+
+/** The manifest inside a .tbak. */
+async function manifestOf(buf) {
+  const dir = await unzipper.Open.buffer(buf);
+  const entry = dir.files.find((f) => f.path === 'manifest.json');
+  assert.ok(entry, 'manifest.json in the archive');
+  return JSON.parse((await entry.buffer()).toString('utf8'));
+}
+
 async function main() {
   await createScratchDb();
   const env = childEnv({ ...secrets, NODE_ENV: 'development', DATABASE_URL: dbUrl });
@@ -409,6 +430,150 @@ async function main() {
     assert.equal((await api(`/api/v1/users/${userId}`, { method: 'PATCH', token: admin, json: { isActive: false } })).status, 200);
     assert.equal((await api(`/api/v1/users/${userId}`, { method: 'PATCH', token: admin, json: { isActive: true } })).status, 200);
     assert.equal((await api('/api/v1/sync/me', { token: desk.token })).json.error.code, 'SYNC_DEVICE_REVOKED');
+  });
+
+  // ─────────────────────────────── S3: read and pull
+  const s3 = {};
+  await step('S3: capabilities say what this server speaks', async () => {
+    s3.laptop = await pairWith(admin, 'S3 laptop');
+    s3.desk = await pairWith(admin, 'S3 desk');
+    const c = await api('/api/v1/sync/capabilities', { token: s3.laptop.token });
+    assert.equal(c.status, 200, c.text);
+    assert.deepEqual(c.json.data.formatVersions, [2]);
+    assert.match(c.json.data.schemaVersion, /^\d{14}_.+\.js$/);
+    assert.ok(c.json.data.features.includes('checkout-v1'));
+    assert.equal(c.json.data.checkoutWarnDays, 14);
+  });
+
+  await step('S3: the client list pages and searches', async () => {
+    await sql(`INSERT INTO clients (name, entity_type) VALUES ('Example Paging Client A', 'llc'), ('Example Paging Client B', 'llc')`);
+    const all = await sql(`SELECT name FROM clients WHERE is_active ORDER BY name, id`);
+    const page = await api('/api/v1/sync/clients?limit=1&offset=1', { token: s3.laptop.token });
+    assert.equal(page.status, 200, page.text);
+    assert.equal(page.json.meta.total, all.length);
+    assert.deepEqual(page.json.data.map((c) => c.name), [all[1].name]);
+    const word = all[0].name.split(/\s+/)[0];
+    const found = await api(`/api/v1/sync/clients?search=${encodeURIComponent(word.toLowerCase())}`, { token: s3.laptop.token });
+    assert.ok(found.json.data.some((c) => c.name === all[0].name), `search "${word}"`);
+    assert.equal((await api('/api/v1/sync/clients?limit=0', { token: s3.laptop.token })).status, 400);
+  });
+
+  await step("S3: a client's periods carry their stamps, and a reference period is not offered", async () => {
+    const c = await one(`SELECT c.id, c.sync_uid FROM clients c JOIN periods p ON p.client_id = c.id JOIN trial_balance tb ON tb.period_id = p.id
+                         GROUP BY c.id ORDER BY count(*) DESC, c.id LIMIT 1`);
+    s3.client = c;
+    const ref = await one(`INSERT INTO periods (client_id, period_name, start_date, end_date, is_reference) VALUES ($1, 'Example reference', '1990-01-01', '1990-12-31', true) RETURNING id`, [c.id]);
+    const r = await api(`/api/v1/sync/clients/${c.sync_uid}/periods`, { token: s3.laptop.token });
+    assert.equal(r.status, 200, r.text);
+    assert.ok(r.json.data.length > 0);
+    assert.ok(!r.json.data.some((p) => p.period_name === 'Example reference'), 'the reference is not listed');
+    for (const p of r.json.data) {
+      assert.match(p.stamp, /^[0-9a-f]{64}$/);
+      assert.equal(p.checkout, null);
+    }
+    await sql(`DELETE FROM periods WHERE id = $1`, [ref.id]);
+    const withTb = await one(`SELECT p.id, p.sync_uid FROM periods p JOIN trial_balance tb ON tb.period_id = p.id WHERE p.client_id = $1 GROUP BY p.id ORDER BY count(*) DESC, p.id LIMIT 1`, [c.id]);
+    s3.period = { ...withTb, stamp: r.json.data.find((p) => p.sync_uid === withTb.sync_uid).stamp };
+    assert.equal((await api('/api/v1/sync/clients/00000000-0000-4000-8000-000000000000/periods', { token: s3.laptop.token })).status, 404);
+  });
+
+  await step('S3: a pull with check-out returns a job; its archive carries the stamp and the check-out', async () => {
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: s3.laptop.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    s3.checkoutId = pull.json.data.checkoutId;
+    assert.ok(s3.checkoutId > 0);
+    const job = await waitJob(s3.laptop.token, pull.json.data.jobId);
+    assert.equal(job.state, 'done', JSON.stringify(job.error));
+    assert.equal(job.result.stamp, s3.period.stamp, 'the stamp in the result is the period as listed');
+    const other = await api(`/api/v1/sync/jobs/${pull.json.data.jobId}`, { token: s3.desk.token });
+    assert.equal(other.status, 404, "another device's job is not visible");
+    const a = await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: s3.laptop.token });
+    assert.equal(a.status, 200, a.text);
+    assert.equal(a.buf.subarray(0, 2).toString('latin1'), 'PK');
+    const m = await manifestOf(a.buf);
+    assert.equal(m.backupLevel, 'period');
+    assert.equal(m.periodId, s3.period.id);
+    assert.equal(m.sync.stamp, s3.period.stamp);
+    assert.equal(m.sync.checkoutId, s3.checkoutId);
+    assert.equal(m.sync.periodUid, s3.period.sync_uid);
+    assert.equal(m.sync.clientUid, s3.client.sync_uid);
+    assert.equal((await one(`SELECT stamp_at_pull FROM period_checkouts WHERE id = $1`, [s3.checkoutId])).stamp_at_pull, s3.period.stamp);
+    assert.equal((await one(`SELECT count(*)::int AS n FROM backup_history WHERE period_id = $1`, [s3.period.id])).n, 0, 'a pull is not a backup');
+  });
+
+  await step('S3: a checked-out period refuses web writes, naming who has it', async () => {
+    const [a1, a2] = (await sql(`SELECT id FROM chart_of_accounts WHERE client_id = $1 ORDER BY account_number LIMIT 2`, [s3.client.id])).map((r) => r.id);
+    s3.je = { periodId: s3.period.id, entryType: 'book', entryDate: '2025-12-31', description: 'Example S3 entry', lines: [{ accountId: a1, debit: 100, credit: 0 }, { accountId: a2, debit: 0, credit: 100 }] };
+    const w = await api('/api/v1/journal-entries', { method: 'POST', token: admin, json: s3.je });
+    assert.equal(w.status, 409, w.text);
+    assert.equal(w.json.error.code, 'PERIOD_CHECKED_OUT');
+    assert.match(w.json.error.message, /S3 laptop/);
+    const listed = await api(`/api/v1/sync/clients/${s3.client.sync_uid}/periods`, { token: s3.desk.token });
+    const p = listed.json.data.find((x) => x.sync_uid === s3.period.sync_uid);
+    assert.equal(p.checkout.device, 'S3 laptop');
+    assert.equal(p.checkout.mine, false);
+    assert.equal(p.checkout.stale, false);
+  });
+
+  await step('S3: a second device is refused a check-out but may pull to read; the holder re-pulls the same check-out', async () => {
+    const again = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: s3.desk.token, json: { checkout: true } });
+    assert.equal(again.status, 409, again.text);
+    assert.equal(again.json.error.code, 'PERIOD_CHECKED_OUT');
+    assert.match(again.json.error.message, /S3 laptop/);
+    const read = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: s3.desk.token, json: { checkout: false } });
+    assert.equal(read.status, 202, read.text);
+    assert.equal(read.json.data.checkoutId, null);
+    assert.equal((await waitJob(s3.desk.token, read.json.data.jobId)).state, 'done');
+    const mine = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: s3.laptop.token, json: {} });
+    assert.equal(mine.status, 202, mine.text);
+    assert.equal(mine.json.data.checkoutId, s3.checkoutId, 'checkout defaults to true and is the one it holds');
+    await waitJob(s3.laptop.token, mine.json.data.jobId);
+  });
+
+  await step("S3: a reviewer's desktop pulls to read only", async () => {
+    assert.equal((await api(`/api/v1/users/${reviewerId}`, { method: 'PATCH', token: admin, json: { isActive: true } })).status, 200);
+    const rd = await pairWith(reviewer, 'S3 reviewer desktop');
+    const out = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: rd.token, json: { checkout: true } });
+    assert.equal(out.status, 403, out.text);
+    const read = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: rd.token, json: { checkout: false } });
+    assert.equal(read.status, 202, read.text);
+    assert.equal((await waitJob(rd.token, read.json.data.jobId)).state, 'done');
+  });
+
+  await step('S3: an old check-out is flagged stale, never released', async () => {
+    await sql(`UPDATE period_checkouts SET created_at = now() - interval '15 days' WHERE id = $1`, [s3.checkoutId]);
+    const listed = await api(`/api/v1/sync/clients/${s3.client.sync_uid}/periods`, { token: s3.laptop.token });
+    const p = listed.json.data.find((x) => x.sync_uid === s3.period.sync_uid);
+    assert.equal(p.checkout.days, 15);
+    assert.equal(p.checkout.stale, true);
+    assert.equal(p.checkout.mine, true);
+  });
+
+  await step('S3: only the holder gives a check-out back; then the web writes again', async () => {
+    assert.equal((await api(`/api/v1/sync/checkouts/${s3.checkoutId}`, { method: 'DELETE', token: s3.desk.token })).status, 404);
+    const r = await api(`/api/v1/sync/checkouts/${s3.checkoutId}`, { method: 'DELETE', token: s3.laptop.token });
+    assert.equal(r.status, 200, r.text);
+    const w = await api('/api/v1/journal-entries', { method: 'POST', token: admin, json: s3.je });
+    assert.equal(w.status, 201, w.text);
+    assert.equal((await api(`/api/v1/sync/checkouts/${s3.checkoutId}`, { method: 'DELETE', token: s3.laptop.token })).status, 404, 'once');
+  });
+
+  await step('S3: a locked period pulls only to read', async () => {
+    await sql(`UPDATE periods SET locked_at = now() WHERE id = $1`, [s3.period.id]);
+    const out = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: s3.laptop.token, json: { checkout: true } });
+    assert.equal(out.status, 409, out.text);
+    assert.equal(out.json.error.code, 'PERIOD_LOCKED');
+    const read = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: s3.laptop.token, json: { checkout: false } });
+    assert.equal(read.status, 202, read.text);
+    await waitJob(s3.laptop.token, read.json.data.jobId);
+    await sql(`UPDATE periods SET locked_at = NULL WHERE id = $1`, [s3.period.id]);
+  });
+
+  await step('S3: polling is not audited; an archive download is', async () => {
+    const n = async () => (await one(`SELECT count(*)::int AS n FROM audit_log WHERE entity_type = 'sync_device' AND action = 'sync' AND description LIKE '%/archive%'`)).n;
+    assert.ok((await n()) >= 1);
+    const checkouts = await sql(`SELECT action FROM audit_log WHERE entity_type = 'period_checkout' ORDER BY id`);
+    assert.deepEqual([...new Set(checkouts.map((r) => r.action))].sort(), ['checkout', 'release']);
   });
 
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {

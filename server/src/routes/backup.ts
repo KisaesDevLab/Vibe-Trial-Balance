@@ -112,6 +112,19 @@ interface BackupOptions {
    * only). Off by default: an archive carries rows, not bytes.
    */
   includeFiles?: boolean;
+  /**
+   * Desktop sync (S3 pull): write the archive here instead of the backups
+   * folder, and record no backup_history row (it is not a backup anyone
+   * restores from the Backups page; the sync job owns the file).
+   */
+  outDir?: string;
+  recordHistory?: boolean;
+  /**
+   * Fields added to the manifest, computed inside the archive's own
+   * REPEATABLE READ snapshot (the period stamp, so it describes exactly the
+   * rows in the archive).
+   */
+  manifestExtra?: (trx: Knex.Transaction) => Promise<Record<string, unknown>>;
 }
 
 interface BackupHistoryRow {
@@ -161,7 +174,7 @@ function appendAndWait(archive: archiver.Archiver, body: Buffer, name: string): 
   });
 }
 
-async function createBackup(
+export async function createBackup(
   level: BackupLevel,
   options: BackupOptions,
   userId: number | null,
@@ -177,6 +190,7 @@ async function createBackup(
   let clientName: string | null = null;
   let periodName: string | null = null;
   let username = 'system';
+  let extra: Record<string, unknown> = {};
 
   await db.transaction(
     async (trx) => {
@@ -356,7 +370,7 @@ async function createBackup(
           ? await trx('periods').where('client_id', cId).whereIn('id', refPeriodIds).select('*')
           : [];
         // Marked, so where they arrive they are hidden and read-only (migration 20261001000003).
-        await dump('periods', period ? [period, ...refPeriods.map((p: Record<string, unknown>) => ({ ...p, is_reference: true }))] : []);
+        await dump('periods', period ? [period, ...refPeriods.map((p: Record<string, unknown>) => ({ ...p, is_reference: true, is_current: false }))] : []);
         await dump('chart_of_accounts', cId ? await trx('chart_of_accounts').where('client_id', cId).select('*') : []);
         await dump('trial_balance', await trx('trial_balance').where('period_id', periodId).select('*'));
         const jeRows = await trx('journal_entries').where('period_id', periodId).select('*');
@@ -405,6 +419,7 @@ async function createBackup(
           }
         }
       }
+      if (options.manifestExtra) extra = await options.manifestExtra(trx);
     },
     { isolationLevel: 'repeatable read' },
   );
@@ -421,7 +436,7 @@ async function createBackup(
     ? `_${resolvedPeriodName.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}`
     : '';
   const filename = `backup_${level}${suffix}_${ts}.tbak`;
-  const filePath = path.join(BACKUP_DIR, filename);
+  const filePath = path.join(options.outDir ?? BACKUP_DIR, filename);
 
   // Build manifest (no checksum yet). Format 2 adds fields only; see
   // lib/backupManifest.ts. It is written LAST, once every entry is hashed.
@@ -449,6 +464,7 @@ async function createBackup(
     missingFiles,
     entries,
     checksum: '',
+    ...extra,
   };
 
   // Create ZIP
@@ -510,6 +526,10 @@ async function createBackup(
 
   // Update manifest with checksum (re-zip would be needed for perfect integrity; store in DB instead)
   manifest.checksum = checksum;
+
+  if (options.recordHistory === false) {
+    return { filename, file_size: fileSize, checksum, storage_local: filePath } as unknown as BackupHistoryRow;
+  }
 
   // Insert backup_history
   const [record] = await db('backup_history')
