@@ -16,7 +16,7 @@ import path from 'path';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
-import { logAudit } from '../lib/periodGuard';
+import { assertNotCheckedOut, logAudit } from '../lib/periodGuard';
 import {
   storeDocument,
   openDocument,
@@ -265,6 +265,12 @@ documentsItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Prom
     // Storage first, then the row: if the object cannot be removed, the row
     // must not be hidden, or an admin believes the file is gone while it still
     // exists and still bills.
+    // Desktop sync: a lead sheet attachment of a period a desktop holds keeps
+    // its file until the period is sent back (checked before the storage
+    // delete, which no transaction can undo).
+    await db.transaction(async (trx) => {
+      await assertNotCheckedOut(trx, await trx('lead_sheet_attachments').where({ document_id: docId }).distinct().pluck('period_id'));
+    });
     await removeDocument(doc as DocumentRow);
 
     await logAudit({

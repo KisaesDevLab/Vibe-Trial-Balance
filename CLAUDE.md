@@ -757,6 +757,27 @@ All planned phases complete. App is feature-complete.
   the `oidc_only` pairing step is in `sso-e2e.mjs`. The global reviewer gate in `app.ts` lets reviewers write
   to `/auth/*` (their own password, factors, passkeys, browsers) and `/desktop-sync/*` (their own desktops):
   without it a new reviewer could never finish the forced password change.
+- **Desktop sync check-outs (S3, migration `20261003000001`).** `POST /api/v1/sync/periods/:uid/pull`
+  `{ checkout }` takes a `period_checkouts` row (one live per period) and runs a job (`sync_jobs`,
+  `lib/sync/jobs.ts`: in-process, one at a time per client, a restart fails open jobs) that writes the
+  period `.tbak` with files into `backups/sync/<job>` (no `backup_history` row; `createBackup` options
+  `outDir`, `recordHistory: false`, `manifestExtra` computed inside the archive's REPEATABLE READ
+  snapshot: `manifest.sync { stamp, checkoutId, periodUid, clientUid }`). **While a period is checked
+  out, every write to its data refuses with 409 `PERIOD_CHECKED_OUT` naming the user and device**:
+  `assertPeriodUnlocked` (lock-gated writes) and `assertNotCheckedOut(trx, periodIds)` (writes the lock
+  does not gate: Statement Writer reports, sign-offs, notes, tickmarks, engagement tasks, variance notes,
+  reconciliations, bank rows by their OWN period, period name/dates, lock, delete, restore replace, and
+  the lead sheet / tickmark / document deletes that cascade into a held period). Both take the period
+  row FOR UPDATE **inside the write's transaction**; lock behaviour itself is unchanged. Guard errors
+  carry `expose: true`, which `sendServerError`, the restore handler and the MCP tool wrapper pass
+  through (so a route that maps only PERIOD_LOCKED still answers 409). **A new write route or MCP tool
+  must be classified in `lib/__tests__/periodWriteRoutes.test.ts`** (the test reads the route list from
+  the source) and, if it writes period data, guarded and added to the held-period walk in
+  `test/sync-e2e.mjs`, which fires every period route and tool at a held period and checks the stamp
+  did not move. Release: the holder (`DELETE /sync/checkouts/:id`) or an admin with a reason
+  (`POST /periods/:id/checkout/release`, Periods page). Nothing releases automatically; older than
+  `settings['sync.checkout_warn_days']` (14) is flagged stale (Periods page, dashboard for admins via
+  `GET /desktop-sync/checkouts`). The web TB, JE and bank pages show `CheckoutBanner`.
 - Variance notes (per account per period, TB Report inline editing)
 - **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
   trusts cascades; five references shipped with none (bank_transactions, document_imports,

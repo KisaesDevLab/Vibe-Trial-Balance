@@ -115,10 +115,12 @@ test('an attachment is its file: a stamped file changes the stamp', () => {
   assert.notEqual(periodStamp(p), base);
 });
 
-test('a statement layout counts, with its ids taken as the accounts and lead sheets they name', () => {
+test("a finalized version's layout counts, with its ids taken as the accounts and lead sheets they name; the client's layout does not", () => {
   const p = period();
+  // Its own copy: the fixture's version shares the same object.
+  p.fsLayouts[0].layout_json = JSON.parse(JSON.stringify(p.fsLayouts[0].layout_json));
   (p.fsLayouts[0].layout_json as { statements: Array<{ body: Row[] }> }).statements[0].body.pop();
-  assert.notEqual(periodStamp(p), base, 'a line removed from the layout');
+  assert.equal(periodStamp(p), base, "the client's layout is client-level (SQ3), not the period's");
   const q = period();
   const v = q.rows.fs_report_versions![0];
   // The account line now names the other account.

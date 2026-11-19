@@ -32,6 +32,7 @@ import {
   deleteFsClientData, dumpFsClientTables, dumpFsLibrary, restoreFsClientTables, restoreFsLibrary, FS_USER_FK_COLUMNS,
 } from '../lib/fs/fsBackup';
 import { sendServerError } from '../lib/safeError';
+import { assertClientNotCheckedOut } from '../lib/periodGuard';
 import {
   BackupRefusal,
   FORMAT_VERSION,
@@ -112,6 +113,19 @@ interface BackupOptions {
    * only). Off by default: an archive carries rows, not bytes.
    */
   includeFiles?: boolean;
+  /**
+   * Desktop sync (S3 pull): write the archive here instead of the backups
+   * folder, and record no backup_history row (it is not a backup anyone
+   * restores from the Backups page; the sync job owns the file).
+   */
+  outDir?: string;
+  recordHistory?: boolean;
+  /**
+   * Fields added to the manifest, computed inside the archive's own
+   * REPEATABLE READ snapshot (the period stamp, so it describes exactly the
+   * rows in the archive).
+   */
+  manifestExtra?: (trx: Knex.Transaction) => Promise<Record<string, unknown>>;
 }
 
 interface BackupHistoryRow {
@@ -161,7 +175,7 @@ function appendAndWait(archive: archiver.Archiver, body: Buffer, name: string): 
   });
 }
 
-async function createBackup(
+export async function createBackup(
   level: BackupLevel,
   options: BackupOptions,
   userId: number | null,
@@ -177,6 +191,7 @@ async function createBackup(
   let clientName: string | null = null;
   let periodName: string | null = null;
   let username = 'system';
+  let extra: Record<string, unknown> = {};
 
   await db.transaction(
     async (trx) => {
@@ -356,7 +371,7 @@ async function createBackup(
           ? await trx('periods').where('client_id', cId).whereIn('id', refPeriodIds).select('*')
           : [];
         // Marked, so where they arrive they are hidden and read-only (migration 20261001000003).
-        await dump('periods', period ? [period, ...refPeriods.map((p: Record<string, unknown>) => ({ ...p, is_reference: true }))] : []);
+        await dump('periods', period ? [period, ...refPeriods.map((p: Record<string, unknown>) => ({ ...p, is_reference: true, is_current: false }))] : []);
         await dump('chart_of_accounts', cId ? await trx('chart_of_accounts').where('client_id', cId).select('*') : []);
         await dump('trial_balance', await trx('trial_balance').where('period_id', periodId).select('*'));
         const jeRows = await trx('journal_entries').where('period_id', periodId).select('*');
@@ -405,6 +420,7 @@ async function createBackup(
           }
         }
       }
+      if (options.manifestExtra) extra = await options.manifestExtra(trx);
     },
     { isolationLevel: 'repeatable read' },
   );
@@ -421,7 +437,7 @@ async function createBackup(
     ? `_${resolvedPeriodName.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}`
     : '';
   const filename = `backup_${level}${suffix}_${ts}.tbak`;
-  const filePath = path.join(BACKUP_DIR, filename);
+  const filePath = path.join(options.outDir ?? BACKUP_DIR, filename);
 
   // Build manifest (no checksum yet). Format 2 adds fields only; see
   // lib/backupManifest.ts. It is written LAST, once every entry is hashed.
@@ -449,6 +465,7 @@ async function createBackup(
     missingFiles,
     entries,
     checksum: '',
+    ...extra,
   };
 
   // Create ZIP
@@ -510,6 +527,10 @@ async function createBackup(
 
   // Update manifest with checksum (re-zip would be needed for perfect integrity; store in DB instead)
   manifest.checksum = checksum;
+
+  if (options.recordHistory === false) {
+    return { filename, file_size: fileSize, checksum, storage_local: filePath } as unknown as BackupHistoryRow;
+  }
 
   // Insert backup_history
   const [record] = await db('backup_history')
@@ -1492,6 +1513,9 @@ async function restoreReplace(
   // client serialize. Any other session holding the lock (e.g. another
   // restore) blocks here until the current txn ends.
   await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, targetClientId]);
+  // Desktop sync: replacing the client would erase a desktop's check-out
+  // with its period. Release it (or let it be sent back) first.
+  await assertClientNotCheckedOut(trx, targetClientId);
 
   const sanitizeUserFks = await makeUserFkSanitizer(trx, trustSourceUserIds);
 
@@ -2421,7 +2445,8 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         });
       }
     } catch (_e) { /* ignore */ }
-    if (code === 'INVALID_BACKUP' || code === 'RESTORE_BROKEN_REF') {
+    // PERIOD_CHECKED_OUT (desktop sync) is a guard's refusal, authored for the admin.
+    if (code === 'INVALID_BACKUP' || code === 'RESTORE_BROKEN_REF' || (err as { expose?: unknown }).expose === true) {
       // These carry an operator-actionable message that we author ourselves —
       // safe to return verbatim. RESTORE_BROKEN_REF used to fall through to the
       // generic 500 below, hiding the one message that explains the failure.

@@ -317,6 +317,8 @@ const NOT_COMPARED = {
   coa_template_accounts: 'firm library',
   coa_template_tax_codes: 'firm library',
   fs_report_version_files: 'issued PDF bytes: backups carry rows, not bytes',
+  period_checkouts: 'desktop sync state of this server (which desktop holds a period)',
+  sync_jobs: 'desktop sync jobs of this server',
 };
 
 /** Columns that legitimately differ after a restore. */
@@ -702,7 +704,8 @@ async function main() {
     const newId = r.json.data.newClientId;
     // The prior period comes only as a reference (no data, SQ7), so it
     // cannot say which period IT was rolled forward from, and is marked.
-    const ignore = { periods: ['rolled_forward_from', 'is_reference'] };
+    // is_current too: a reference is never the current period (it is checked below).
+    const ignore = { periods: ['rolled_forward_from', 'is_reference', 'is_current'] };
     const src = await snapshot(fx.clientId, { periodId: fx.p25, asNew: true, ignore });
     const got = await snapshot(newId, { asNew: true, ignore });
     const fy24 = await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY 2024'`, [newId]);
@@ -712,6 +715,7 @@ async function main() {
     assert.equal((await one(`SELECT count(*)::int AS n FROM trial_balance WHERE period_id = $1`, [fy24.id])).n, 0, 'a reference carries no balances');
     // Marked as a reference: not listed, not writable (owner 2026-11-19).
     assert.equal((await one(`SELECT is_reference FROM periods WHERE id = $1`, [fy24.id])).is_reference, true);
+    assert.equal((await one(`SELECT is_current FROM periods WHERE id = $1`, [fy24.id])).is_current, false, 'a reference is never current');
     assert.equal((await one(`SELECT is_reference FROM periods WHERE client_id = $1 AND period_name = 'FY 2025'`, [newId])).is_reference, false);
     const listed = await api(`/api/v1/clients/${newId}/periods`, { token });
     assert.deepEqual(listed.json.data.map((p) => p.period_name), ['FY 2025'], 'the reference is not in the period list');

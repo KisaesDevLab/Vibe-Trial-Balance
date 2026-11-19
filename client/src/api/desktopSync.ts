@@ -40,3 +40,22 @@ export function listSyncDevices(all: boolean) {
 export function revokeSyncDevice(id: number) {
   return apiFetch<{ id: number }>(`/desktop-sync/devices/${id}`, { method: 'DELETE' });
 }
+
+/** A period a desktop holds (desktop sync S3). */
+export interface SyncCheckout {
+  id: number;
+  periodId: number;
+  periodName: string;
+  clientId: number;
+  clientName: string;
+  user: string;
+  device: string;
+  since: string;
+  days: number;
+  stale: boolean;
+}
+
+/** Every live check-out (an admin), or the user's own. */
+export function listCheckouts() {
+  return apiFetch<SyncCheckout[]>('/desktop-sync/checkouts');
+}

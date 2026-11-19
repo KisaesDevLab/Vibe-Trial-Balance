@@ -39,6 +39,7 @@ export async function syncAuthMiddleware(req: SyncRequest, res: Response, next: 
   const header = req.headers.authorization;
   const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : '';
   if (!isDeviceToken(token)) {
+    res.locals.syncUnknownToken = true;
     refuse(res, 'SYNC_NOT_PAIRED', 'This computer is not connected to this server. Pair it again from Settings › Desktop sync.');
     return;
   }
@@ -48,6 +49,7 @@ export async function syncAuthMiddleware(req: SyncRequest, res: Response, next: 
       .where('d.token_hash', sha256(token))
       .first('d.id', 'd.name', 'd.revoked_at', 'd.last_used_at', 'd.created_at', 'u.id as user_id', 'u.username', 'u.role', 'u.is_active');
     if (!row) {
+      res.locals.syncUnknownToken = true;
       refuse(res, 'SYNC_NOT_PAIRED', 'This computer is not connected to this server. Pair it again from Settings › Desktop sync.');
       return;
     }
