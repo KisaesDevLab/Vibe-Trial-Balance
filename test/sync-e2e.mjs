@@ -84,8 +84,16 @@ function killTree(child) {
   return new Promise((resolve) => {
     if (child.exitCode !== null) { resolve(); return; }
     child.once('exit', () => resolve());
-    if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-    else child.kill('SIGTERM');
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      return;
+    }
+    // The server runs in its own process group (spawned detached): end the
+    // whole group, the Chromium a PDF render started included, and kill it
+    // if it has not gone in 5 s (it would otherwise keep CI waiting).
+    const group = (sig) => { try { process.kill(-child.pid, sig); } catch { /* gone */ } };
+    group('SIGTERM');
+    setTimeout(() => group('SIGKILL'), 5000).unref();
   });
 }
 
@@ -134,7 +142,7 @@ async function startServer() {
   const child = spawn(process.execPath, [...TSX_IMPORT, 'src/app.ts'], {
     cwd: SERVER,
     env: childEnv({ ...secrets, NODE_ENV: 'development', PORT: String(port), DATABASE_URL: dbUrl, MIGRATIONS_AUTO: 'false', VIBE_AUTH_MODE: 'local', SYNC_PART_BYTES: String(1024 * 1024) }),
-    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32',
   });
   child.stdout.on('data', (c) => capture('[server]', c));
   child.stderr.on('data', (c) => capture('[server]', c));
