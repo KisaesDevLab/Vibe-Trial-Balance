@@ -45,7 +45,7 @@ const chains = new Map<number, Promise<void>>();
  * fails. Returns the job id at once.
  */
 export async function startJob(
-  input: { kind: JobKind; deviceId: number; userId: number; clientId: number; periodId?: number; checkoutId?: number | null; checkoutCreated?: boolean },
+  input: { kind: JobKind; deviceId: number; userId: number; clientId: number | null; periodId?: number; checkoutId?: number | null; checkoutCreated?: boolean },
   work: (jobId: string) => Promise<JobOutcome>,
   onFail?: () => Promise<void>,
 ): Promise<string> {
@@ -61,11 +61,13 @@ export async function startJob(
     })
     .returning('id');
   const jobId = String((row as { id: string }).id);
-  const previous = chains.get(input.clientId) ?? Promise.resolve();
+  // A client new to the server queues with the other new ones.
+  const key = input.clientId ?? -1;
+  const previous = chains.get(key) ?? Promise.resolve();
   const next = previous.then(() => runJob(jobId, work, onFail));
-  chains.set(input.clientId, next);
+  chains.set(key, next);
   void next.finally(() => {
-    if (chains.get(input.clientId) === next) chains.delete(input.clientId);
+    if (chains.get(key) === next) chains.delete(key);
   });
   return jobId;
 }

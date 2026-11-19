@@ -32,11 +32,11 @@ import { syncAuthMiddleware, type SyncRequest } from '../lib/sync/syncAuth';
 import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
-import { createBackup } from './backup';
-import { FORMAT_VERSION, appliedMigrations } from '../lib/backupManifest';
+import { createBackup, readManifest, readZipContents, restoreAsNew } from './backup';
+import { BackupRefusal, FORMAT_VERSION, appliedMigrations, checkArchive, syncManifestProblem } from '../lib/backupManifest';
 import { checkedOutBy } from '../lib/periodGuard';
 import { stampPeriod } from '../lib/sync/periodStampLoad';
-import { SYNC_JOB_DIR, startJob } from '../lib/sync/jobs';
+import { SYNC_JOB_DIR, SyncJobError, startJob } from '../lib/sync/jobs';
 import { checkoutApi, checkoutWarnDays, daysOut, isoDate } from '../lib/sync/checkouts';
 import { MAX_UPLOAD_BYTES, UploadError, completeUpload, openUpload, partBytes, putPart, receivedParts, startUpload } from '../lib/sync/uploads';
 import { dropReplacedDocuments, mergePeriod, readSendBack, removeDocuments, stageAttachmentFiles } from '../lib/sync/mergePeriod';
@@ -550,7 +550,9 @@ syncRouter.post('/periods/:uid/push', async (req: SyncRequest, res: Response): P
     const jobId = await startJob(
       { kind: 'push', deviceId: device.id, userId: req.user!.userId, clientId: target.clientId, periodId: target.periodId, checkoutId: target.checkoutId },
       async () => {
-        const { tables, manifest, files } = await readSendBack(filePath, target);
+        const uids = (await db('periods as p').join('clients as c', 'c.id', 'p.client_id').where('p.id', target.periodId)
+          .first('p.sync_uid as period_uid', 'c.sync_uid as client_uid')) as { period_uid: string; client_uid: string };
+        const { tables, manifest, files } = await readSendBack(filePath, { periodUid: uids.period_uid, clientUid: uids.client_uid, checkoutId: target.checkoutId });
         const staged = await stageAttachmentFiles(tables, files, target);
         let outcome;
         try {
@@ -568,6 +570,149 @@ syncRouter.post('/periods/:uid/push', async (req: SyncRequest, res: Response): P
     res.status(202).json({ data: { jobId }, error: null });
   } catch (err: unknown) {
     uploadFail(res, err, 'sync/push');
+  }
+});
+
+/**
+ * A period made on the desktop (S4 step 5): `{ uploadId }` → job. Its
+ * `sync_uid` must be new here, or name a period that came along only as a
+ * reference (filled in, flag cleared, SQ7); dates may not overlap another
+ * period of the client. Then the same merge.
+ */
+syncRouter.post('/clients/:uid/periods/push', async (req: SyncRequest, res: Response): Promise<void> => {
+  const clientUid = String(req.params.uid);
+  const body = z.object({ uploadId: z.string().uuid() }).safeParse(req.body ?? {});
+  if (!body.success || !isUuid(clientUid)) {
+    bad(res, 400, 'VALIDATION_ERROR', '`uploadId` (a completed upload) is needed.');
+    return;
+  }
+  try {
+    const client = await db('clients').where({ sync_uid: clientUid }).first('id');
+    if (!client) {
+      bad(res, 404, 'NOT_FOUND', 'No client with that id on this server.');
+      return;
+    }
+    const upload = await openUpload(body.data.uploadId, req.syncDevice!.id, true);
+    if (!upload.completed_at || !upload.file_path) {
+      bad(res, 409, 'SYNC_UPLOAD_INCOMPLETE', 'Complete the upload first.');
+      return;
+    }
+    const device = req.syncDevice!;
+    const filePath = upload.file_path;
+    const clientId = client.id as number;
+    const jobId = await startJob(
+      { kind: 'push', deviceId: device.id, userId: req.user!.userId, clientId },
+      async () => {
+        const { tables, manifest, files } = await readSendBack(filePath, { periodUid: null, clientUid, checkoutId: null });
+        const sync = manifest.sync as Record<string, unknown>;
+        const own = ((tables.periods ?? []) as Array<Record<string, unknown>>).find((p) => Number(p.id) === Number(manifest.periodId));
+        if (!own) throw new SyncJobError('SYNC_ARCHIVE_INVALID', "The archive does not carry its own period's row.");
+        const existing = await db('periods').where({ sync_uid: sync.periodUid }).first('id', 'client_id', 'is_reference');
+        if (existing && (!existing.is_reference || existing.client_id !== clientId)) {
+          throw new SyncJobError('SYNC_PERIOD_EXISTS', 'This period is on the server already: send it back to it instead.');
+        }
+        const overlap = await db('periods').where({ client_id: clientId, is_reference: false })
+          .where('start_date', '<=', own.end_date as string).where('end_date', '>=', own.start_date as string).first('period_name');
+        if (overlap) throw new SyncJobError('PERIOD_OVERLAPS', `Its dates overlap "${overlap.period_name}" on the server.`);
+        // Files are stored before the transaction, so the period must exist first; a
+        // failure below removes it with everything else.
+        let periodId = existing ? Number(existing.id) : 0;
+        if (!periodId) {
+          const [ins] = await db('periods').insert({
+            client_id: clientId, sync_uid: sync.periodUid, period_name: own.period_name, start_date: own.start_date, end_date: own.end_date,
+            folder_year: own.folder_year ?? null, is_current: false, is_reference: true,
+          }).returning('id');
+          periodId = Number((ins as { id: number }).id);
+        }
+        const target = { periodId, clientId, deviceId: device.id, deviceName: device.name, userId: req.user!.userId, checkoutId: null, fresh: true };
+        let staged: Awaited<ReturnType<typeof stageAttachmentFiles>> | null = null;
+        try {
+          staged = await stageAttachmentFiles(tables, files, target);
+          const docMap = staged.docMap;
+          const outcome = await db.transaction(async (trx) => {
+            // Made as a reference so nothing can write to it meanwhile; filled in here.
+            await trx('periods').where({ id: periodId }).update({ is_reference: false, period_name: own.period_name, start_date: own.start_date, end_date: own.end_date });
+            return mergePeriod(trx, target, tables, manifest, docMap);
+          });
+          await dropReplacedDocuments(outcome.replacedDocs);
+          return { result: { periodUid: sync.periodUid, ...(outcome.result as unknown as Record<string, unknown>) } };
+        } catch (err) {
+          if (staged) await removeDocuments(staged.created);
+          if (!existing) await db('periods').where({ id: periodId }).delete().catch(() => undefined);
+          throw err;
+        }
+      },
+    );
+    await db('sync_uploads').where({ id: upload.id }).update({ job_id: jobId });
+    res.status(202).json({ data: { jobId }, error: null });
+  } catch (err: unknown) {
+    uploadFail(res, err, 'sync/push-period');
+  }
+});
+
+/**
+ * A client made on the desktop (S4 step 6): `{ uploadId }` of a client
+ * archive → job. Restored as new, keeping its `sync_uid`s and its name
+ * (no " (Restored)"); 409 CLIENT_EXISTS when its uid is here already. Its
+ * document files are not placed (it has no workpaper folder yet).
+ */
+syncRouter.post('/clients/push', async (req: SyncRequest, res: Response): Promise<void> => {
+  const body = z.object({ uploadId: z.string().uuid() }).safeParse(req.body ?? {});
+  if (!body.success) {
+    bad(res, 400, 'VALIDATION_ERROR', '`uploadId` (a completed upload) is needed.');
+    return;
+  }
+  try {
+    const upload = await openUpload(body.data.uploadId, req.syncDevice!.id, true);
+    if (!upload.completed_at || !upload.file_path) {
+      bad(res, 409, 'SYNC_UPLOAD_INCOMPLETE', 'Complete the upload first.');
+      return;
+    }
+    const filePath = upload.file_path;
+    const manifest = await readManifest(filePath).catch(() => null);
+    const problem = manifest ? syncManifestProblem(manifest) : 'The file sent is not a Vibe Trial Balance archive.';
+    if (problem || !manifest) {
+      bad(res, 400, 'SYNC_ARCHIVE_INVALID', problem ?? 'Not an archive.');
+      return;
+    }
+    const tables = await readZipContents(filePath, 5000);
+    const clientRow = ((tables.clients ?? []) as Array<Record<string, unknown>>)[0];
+    if (manifest.backupLevel !== 'client' || !clientRow || typeof clientRow.sync_uid !== 'string') {
+      bad(res, 400, 'SYNC_ARCHIVE_INVALID', 'The file sent is not a client archive.');
+      return;
+    }
+    if (await db('clients').where({ sync_uid: clientRow.sync_uid }).first('id')) {
+      bad(res, 409, 'CLIENT_EXISTS', 'This client is on the server already: send its periods back to it instead.');
+      return;
+    }
+    const applied = await appliedMigrations(db);
+    if (manifest.schemaVersion !== applied[applied.length - 1]) {
+      bad(res, 409, 'SYNC_SCHEMA_MISMATCH', 'This archive was made for a different version of the server. Update the desktop (or the server) so both match, then send it again.');
+      return;
+    }
+    const device = req.syncDevice!;
+    const jobId = await startJob(
+      { kind: 'push', deviceId: device.id, userId: req.user!.userId, clientId: null },
+      async () => {
+        try {
+          await checkArchive(filePath, manifest, db);
+        } catch (err: unknown) {
+          if (err instanceof BackupRefusal) throw new SyncJobError('SYNC_ARCHIVE_DAMAGED', err.message);
+          throw err;
+        }
+        const out = await db.transaction(async (trx) => {
+          const r = await restoreAsNew(tables, trx, true, { keepName: true });
+          await logAudit({ userId: req.user!.userId, periodId: null, clientId: r.newClientId, entityType: 'client', entityId: r.newClientId, action: 'sync_create', description: `Client "${String(clientRow.name)}" sent from desktop "${device.name}"` }, trx);
+          return r;
+        });
+        const files = Array.isArray(manifest.files) ? manifest.files.length : 0;
+        return { result: { clientUid: clientRow.sync_uid, clientId: out.newClientId, filesNotPlaced: files } };
+      },
+    );
+    await db('sync_uploads').where({ id: upload.id }).update({ job_id: jobId });
+    res.status(202).json({ data: { jobId }, error: null });
+  } catch (err: unknown) {
+    uploadFail(res, err, 'sync/push-client');
   }
 });
 

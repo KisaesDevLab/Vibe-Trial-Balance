@@ -1012,10 +1012,12 @@ export async function keepSyncUids<T extends Record<string, unknown>>(
   });
 }
 
-async function restoreAsNew(
+export async function restoreAsNew(
   tables: Record<string, unknown[]>,
   trx: Knex.Transaction,
   trustSourceUserIds: boolean,
+  /** Desktop sync: a client made on a desktop keeps its name (no " (Restored)"). */
+  opts: { keepName?: boolean } = {},
 ): Promise<{
   newClientId: number;
   idMappings: Record<string, Record<number, number>>;
@@ -1073,7 +1075,7 @@ async function restoreAsNew(
       const oldId = row.id as number;
       const existing = await trx('clients').where('name', row.name as string).first('id');
       let insertName = row.name as string;
-      if (existing) {
+      if (existing && !opts.keepName) {
         insertName = `${insertName} (Restored)`;
       }
       // default_source_account_id points into chart_of_accounts, which is

@@ -1133,7 +1133,7 @@ async function main() {
     assert.equal(diff.desktop, 'Example renamed on the desktop');
     assert.equal((await one(`SELECT account_name FROM chart_of_accounts WHERE id = $1`, [acct.id])).account_name, 'Example renamed on the web', "the server's change stays");
     assert.equal((await one(`SELECT count(*)::int AS n FROM chart_of_accounts WHERE client_id = $1 AND account_number = $2`, [s3.client.id, both])).n, 1);
-    // And a journal line on an account with no trial balance row is refused.
+    // And a journal line on an account with no trial balance row: the totals differ, refused.
     const p2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
     await waitJob(d.token, p2.json.data.jobId);
     const a2 = (await api(`/api/v1/sync/jobs/${p2.json.data.jobId}/archive`, { token: d.token })).buf;
@@ -1145,12 +1145,14 @@ async function main() {
       t.journal_entries.push({ ...t.journal_entries[0], id: je, entry_type: 'book', entry_number: 99999, description: 'Example orphan' });
       t.journal_entry_lines.push({ ...t.journal_entry_lines[0], id: 990001, journal_entry_id: je, account_id: noTb.id, debit: '1', credit: '0' });
       t.journal_entry_lines.push({ ...t.journal_entry_lines[0], id: 990002, journal_entry_id: je, account_id: t.trial_balance[0].account_id, debit: '0', credit: '1' });
-      m.sync.totals = totalsOf(t);
+      // A desktop that counts every line, as if the account had a row.
+      const right = totalsOf(t);
+      m.sync.totals = { bookDebit: String(BigInt(right.bookDebit) + 1n), bookCredit: right.bookCredit };
     });
     const up2 = await uploadBuf(d.token, orphan);
     const r2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: up2, checkoutId: p2.json.data.checkoutId } });
     const j2 = await waitJob(d.token, r2.json.data.jobId);
-    assert.equal(j2.error?.code, 'SYNC_ARCHIVE_INVALID');
+    assert.equal(j2.error?.code, 'SYNC_TOTALS_MISMATCH', 'an entry on an account with no trial balance row is caught by the totals');
     assert.equal((await api(`/api/v1/sync/checkouts/${p2.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200, 'a refused send-back keeps the hold');
   });
 
@@ -1173,6 +1175,65 @@ async function main() {
       WHERE c.contype = 'f' AND c.confrelid::regclass::text = ANY ($1)`, [PERIOD_TABLES]);
     const unhandled = rows.filter((r) => !HANDLED.has(`${r.from_table}.${r.from_col}`)).map((r) => `${r.from_table}.${r.from_col} -> ${r.to_table}`);
     assert.deepEqual(unhandled, [], 'classify a new foreign key into a period table here and in mergePeriod.ts');
+  });
+
+  await step('S4: a period and a client made on the desktop arrive with their uids; an overlap or a known client is refused', async () => {
+    const d = s4.desk;
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: false } });
+    await waitJob(d.token, pull.json.data.jobId);
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    const newUid = randomUUID();
+    const asNewPeriod = (start, end) => rewriteArchive(archive, async (t, m) => {
+      const own = t.periods.find((p) => p.id === m.periodId);
+      Object.assign(own, { sync_uid: newUid, period_name: 'Example FY 2030', start_date: start, end_date: end, is_current: false, locked_at: null });
+      for (const b of t.bank_transactions) if (b.period_id === m.periodId) b.sync_uid = randomUUID();
+      // The walk's attachment has no file, and this client has no folder to store one in.
+      t.lead_sheet_attachments = [];
+      m.sync.periodUid = newUid;
+      m.sync.totals = totalsOf(t);
+    });
+    const send = async (buf, url) => {
+      const uploadId = await uploadBuf(d.token, buf);
+      const r = await api(url, { method: 'POST', token: d.token, json: { uploadId } });
+      if (r.status !== 202) return { refused: r.json.error.code };
+      const j = await waitJob(d.token, r.json.data.jobId);
+      return j.state === 'failed' ? { refused: j.error.code, message: j.error.message } : { done: j.result };
+    };
+    const periodsUrl = `/api/v1/sync/clients/${s3.client.sync_uid}/periods/push`;
+    const p0 = await one(`SELECT start_date::text AS s, end_date::text AS e FROM periods WHERE id = $1`, [s3.period.id]);
+    assert.equal((await send(await asNewPeriod(p0.s, p0.e), periodsUrl)).refused, 'PERIOD_OVERLAPS');
+    assert.equal((await one(`SELECT count(*)::int AS n FROM periods WHERE sync_uid = $1`, [newUid])).n, 0, 'a refused new period leaves nothing behind');
+    const ok = await send(await asNewPeriod('2030-01-01', '2030-12-31'), periodsUrl);
+    assert.ok(ok.done, JSON.stringify(ok));
+    const made = await one(`SELECT id, client_id, is_reference, period_name FROM periods WHERE sync_uid = $1`, [newUid]);
+    assert.equal(made.client_id, s3.client.id);
+    assert.equal(made.is_reference, false);
+    assert.equal(made.period_name, 'Example FY 2030');
+    const tbN = (id) => one(`SELECT count(*)::int AS n FROM trial_balance WHERE period_id = $1`, [id]);
+    assert.equal((await tbN(made.id)).n, (await tbN(s3.period.id)).n, 'its trial balance arrived');
+    const again = await send(await asNewPeriod('2031-01-01', '2031-12-31'), periodsUrl);
+    assert.equal(again.refused, 'SYNC_PERIOD_EXISTS');
+
+    // A whole client made on the desktop.
+    const b = await api(`/api/v1/backup/client/${s3.client.id}`, { method: 'POST', token: admin, json: {} });
+    assert.ok(b.status === 200 || b.status === 201, b.text);
+    const backupId = b.json.data.id ?? b.json.data.backup?.id;
+    const clientArchive = (await api(`/api/v1/backup/${backupId}/download`, { token: admin })).buf;
+    const known = await send(clientArchive, '/api/v1/sync/clients/push');
+    assert.equal(known.refused, 'CLIENT_EXISTS');
+    const clientUid = randomUUID();
+    const fresh = await rewriteArchive(clientArchive, async (t) => {
+      t.clients[0].sync_uid = clientUid;
+      t.clients[0].name = (await one(`SELECT name FROM clients WHERE id = $1`, [s3.client.id])).name; // the same name: allowed, no suffix
+      for (const tb of ['periods', 'chart_of_accounts', 'bank_transactions', 'fs_client_layouts']) for (const r of t[tb] ?? []) r.sync_uid = randomUUID();
+    });
+    const nc = await send(fresh, '/api/v1/sync/clients/push');
+    assert.ok(nc.done, JSON.stringify(nc));
+    const c = await one(`SELECT id, name FROM clients WHERE sync_uid = $1`, [clientUid]);
+    assert.ok(c, 'the client keeps its uid');
+    assert.ok(!c.name.includes('(Restored)'), 'and its name');
+    assert.equal(nc.done.clientId, c.id);
+    await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
   });
 
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {

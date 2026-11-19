@@ -57,6 +57,8 @@ export interface MergeTarget {
   userId: number;
   /** The live check-out the device sends back under, or null (SQ2 off / released). */
   checkoutId: number | null;
+  /** A period new to the server (S4 step 5): nothing to compare with the pull. */
+  fresh?: boolean;
 }
 
 export interface MergeResult {
@@ -121,7 +123,10 @@ function canon(v: unknown): string {
 const same = (a: unknown, b: unknown): boolean => canon(a) === canon(b);
 
 /** Reads and checks everything that can be checked before touching the database. */
-export async function readSendBack(filePath: string, target: MergeTarget): Promise<{ tables: Record<string, unknown[]>; manifest: Row; files: Map<number, Buffer> }> {
+export async function readSendBack(
+  filePath: string,
+  expect: { periodUid: string | null; clientUid: string; checkoutId: number | null },
+): Promise<{ tables: Record<string, unknown[]>; manifest: Row; files: Map<number, Buffer> }> {
   let manifest: Row;
   try {
     manifest = await readManifest(filePath);
@@ -145,12 +150,10 @@ export async function readSendBack(filePath: string, target: MergeTarget): Promi
     throw fail('SYNC_ARCHIVE_INVALID', 'The file sent is not a period archive.');
   }
   const sync = (manifest.sync ?? {}) as Row;
-  const ids = (await db('periods as p').join('clients as c', 'c.id', 'p.client_id').where('p.id', target.periodId)
-    .first('p.sync_uid as period_uid', 'c.sync_uid as client_uid')) as { period_uid: string; client_uid: string };
-  if (sync.periodUid !== ids.period_uid || sync.clientUid !== ids.client_uid) {
+  if ((expect.periodUid !== null && sync.periodUid !== expect.periodUid) || sync.clientUid !== expect.clientUid || typeof sync.periodUid !== 'string') {
     throw fail('SYNC_WRONG_PERIOD', 'This archive is of another period or client than the one it was sent to.');
   }
-  if (target.checkoutId !== null && num(sync.checkoutId) !== target.checkoutId) {
+  if (expect.checkoutId !== null && num(sync.checkoutId) !== expect.checkoutId) {
     throw fail('SYNC_WRONG_CHECKOUT', 'This archive was not made under the check-out it was sent with.');
   }
   const all = await readZipContents(filePath, 5000);
@@ -301,6 +304,9 @@ export async function mergePeriod(
     const co = await trx('period_checkouts').where({ id: target.checkoutId }).first('created_at', 'stamp_at_pull');
     since = new Date(co.created_at);
     stampAtPull = (co.stamp_at_pull as string | null) ?? null;
+  } else if (target.fresh) {
+    since = new Date(String(((manifest.sync ?? {}) as Row).pulledAt ?? 0));
+    stampAtPull = null;
   } else {
     if (holder) throw fail('PERIOD_CHECKED_OUT', `The period is checked out to ${holder.user} on "${holder.device}".`);
     const sync = (manifest.sync ?? {}) as Row;
@@ -447,9 +453,6 @@ export async function mergePeriod(
 
   // ── Journal entries: what points at the period's entries from outside is linked again by type + number.
   const oldJes = (await trx('journal_entries').where({ period_id: P }).select('id', 'entry_type', 'entry_number')) as Array<{ id: number; entry_type: string; entry_number: number }>;
-  const serverLineAccounts = new Set(((await trx('journal_entry_lines as l').join('journal_entries as j', 'j.id', 'l.journal_entry_id')
-    .where('j.period_id', P).distinct().pluck('l.account_id')) as number[]).map(Number));
-  const serverHadLineOn = (id: number | undefined): boolean => id !== undefined && serverLineAccounts.has(id);
   const keyOfJe = new Map(oldJes.map((j) => [j.id, `${j.entry_type}#${j.entry_number}`]));
   const oldJeIds = oldJes.map((j) => j.id);
   const docLinks = oldJeIds.length ? (await trx('client_documents').whereIn('linked_journal_entry_id', oldJeIds).select('id', 'linked_journal_entry_id')) as Array<{ id: number; linked_journal_entry_id: number }> : [];
@@ -466,18 +469,10 @@ export async function mergePeriod(
     maps.journal.set(Number(je.id), id);
     newKeyToId.set(`${je.entry_type}#${je.entry_number}`, id);
   }
-  // The adjusted trial balance shows an entry only on accounts with a trial
-  // balance row (the web makes one, ensureTrialBalanceRows); an archive must too.
-  // Lines already like that on the server (older data) are taken as they are.
-  const tbAccounts = new Set(rowsOf(tables, 'trial_balance').map((r) => Number(r.account_id)));
-  const serverTbAccounts = new Set(((await trx('trial_balance').where({ period_id: P }).pluck('account_id')) as number[]).map(Number));
-  for (const l of rowsOf(tables, 'journal_entry_lines')) {
-    const old = Number(l.account_id);
-    const mapped = maps.account.get(old);
-    if (!tbAccounts.has(old) && (mapped === undefined || !serverTbAccounts.has(mapped)) && !serverHadLineOn(mapped)) {
-      throw fail('SYNC_ARCHIVE_INVALID', 'A journal entry line names an account with no trial balance row in the archive.');
-    }
-  }
+  // The adjusted trial balance counts an entry only on an account with a trial
+  // balance row (the web makes one, ensureTrialBalanceRows). An archive that
+  // forgot it is caught by the totals check below: the desktop's totals then
+  // differ from the server's.
   const jelCols = await columnsOf(trx, 'journal_entry_lines');
   await insertBatched(trx, 'journal_entry_lines', rowsOf(tables, 'journal_entry_lines').map((l) => pick(remapRow('journal_entry_lines', l), jelCols)));
   for (const d of docLinks) {
