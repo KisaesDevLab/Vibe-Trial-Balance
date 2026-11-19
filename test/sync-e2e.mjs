@@ -849,6 +849,42 @@ async function main() {
     assert.equal((await api(`/api/v1/lead-sheets/${ls.id}`, { method: 'PATCH', token: admin, json: { code: 'EXR2', name: 'Example renamed sheet' } })).status, 200, 'free again once released');
   });
 
+  await step('S3: a reference period refuses every write; a client layout edit does not move a held period stamp', async () => {
+    const c = s3.client.id;
+    const ref = await one(`INSERT INTO periods (client_id, period_name, start_date, end_date, is_reference) VALUES ($1, 'Example reference 2', '1991-01-01', '1991-12-31', true) RETURNING id`, [c]);
+    const [a1] = (await sql(`SELECT id FROM chart_of_accounts WHERE client_id = $1 ORDER BY account_number LIMIT 1`, [c])).map((r) => r.id);
+    const tick = await one(`SELECT id FROM tickmark_library WHERE client_id = $1 ORDER BY id LIMIT 1`, [c]);
+    const calls = [
+      ['variance note', `/api/v1/periods/${ref.id}/variance-notes/${a1}`, 'PUT', { note: 'Example' }],
+      ['engagement task', `/api/v1/periods/${ref.id}/engagement-tasks`, 'POST', { title: 'Example task' }],
+      ['tickmark', `/api/v1/periods/${ref.id}/tb-tickmarks/toggle`, 'POST', { accountId: a1, tickmarkId: tick?.id ?? 1 }],
+      ['lock', `/api/v1/periods/${ref.id}/lock`, 'POST', {}],
+      ['rename', `/api/v1/periods/${ref.id}`, 'PATCH', { periodName: 'Example renamed' }],
+      ['roll forward', `/api/v1/periods/${ref.id}/roll-forward`, 'POST', { periodName: 'Example from a reference', startDate: '1992-01-01', endDate: '1992-12-31' }],
+    ];
+    const bad = [];
+    for (const [what, url, method, json] of calls) {
+      const r = await api(url, { method, token: admin, json });
+      if (r.status !== 409 || r.json?.error?.code !== 'PERIOD_LOCKED' || !/reference/.test(r.json?.error?.message ?? '')) bad.push(`${what}: ${r.status} ${r.text}`);
+    }
+    assert.deepEqual(bad, []);
+    await sql(`DELETE FROM periods WHERE id = $1`, [ref.id]);
+
+    // The layout a held period's report uses is the client's (SQ3), not the period's.
+    const rep = await one(`SELECT client_layout_id FROM fs_reports WHERE period_id = $1 AND archived_at IS NULL ORDER BY id LIMIT 1`, [s3.period.id]);
+    assert.ok(rep, 'the walk left a Statement Writer set in the period');
+    const d = await pairWith(admin, 'Layout desktop');
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    await waitJob(d.token, pull.json.data.jobId);
+    const stampOf = async () => (await api(`/api/v1/sync/clients/${s3.client.sync_uid}/periods`, { token: d.token })).json.data.find((x) => x.sync_uid === s3.period.sync_uid).stamp;
+    const before = await stampOf();
+    const edit = await api(`/api/v1/fs/layouts/${rep.client_layout_id}`, { method: 'PATCH', token: admin, json: { name: 'Example layout, renamed' } });
+    assert.equal(edit.status, 200, edit.text);
+    assert.equal(await stampOf(), before, 'a layout edit leaves the held period stamp as it was');
+    assert.equal((await api(`/api/v1/sync/checkouts/${pull.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200);
+  });
+
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {
     let limited = false;
     for (let i = 0; i < 14 && !limited; i++) {

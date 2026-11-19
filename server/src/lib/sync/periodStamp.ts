@@ -89,7 +89,11 @@ const SPECS: Record<StampTable, TableSpec> = {
   lead_sheet_attachments: { refs: { lead_sheet_id: 'leadSheet', account_id: 'account', document_id: 'document' } },
   bank_reconciliations: { refs: { source_account_id: 'account' }, dates: ['statement_date'] },
   reconciliation_items: { refs: { reconciliation_id: 'recon', transaction_id: 'bankTxn' } },
-  fs_reports: { refs: { client_layout_id: 'fsLayout' }, drop: ['current_version_id'] },
+  // The layout a set uses is the CLIENT's (fs_client_layouts), edited while a
+  // period is out and handled on send-back by the SQ3 rule (owner
+  // 2026-11-19), so it is not part of the period: a layout edit must not
+  // move a held period's stamp. A finalized version's frozen layout_json is.
+  fs_reports: { drop: ['current_version_id', 'client_layout_id'] },
   // model_json is derived from the numbers (numbers_hash carries them).
   fs_report_versions: { refs: { report_id: 'fsReport' }, drop: ['model_json'], layouts: ['layout_json'] },
 };

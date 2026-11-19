@@ -83,10 +83,20 @@ export async function assertNotCheckedOut(
 ): Promise<void> {
   const ids = [...new Set([...periodIds].map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
   for (const id of ids) {
-    await trx('periods').where({ id }).forUpdate().first('id');
+    const row = await trx('periods').where({ id }).forUpdate().first('id', 'is_reference');
+    // A reference period (desktop sync) holds no data here: no write of any kind.
+    if (row?.is_reference) throw referenceError();
     const out = await checkedOutBy(trx, id);
     if (out && out.id !== opts.syncCheckoutId) throw checkedOutError(out);
   }
+}
+
+/** The refusal for a period that came along only as a reference. */
+export function referenceError(): Error {
+  return Object.assign(
+    new Error('This period came along only as a reference for another period: it holds no data here and cannot be changed.'),
+    { code: 'PERIOD_LOCKED', status: 409, reference: true, expose: true },
+  );
 }
 
 /**
@@ -96,10 +106,15 @@ export async function assertNotCheckedOut(
  */
 export async function lockAndListHeld(trx: Knex.Transaction, periodIds: Iterable<number | string | null | undefined>): Promise<Set<number>> {
   const ids = [...new Set([...periodIds].map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
-  for (const id of ids) await trx('periods').where({ id }).forUpdate().first('id');
+  const refs: number[] = [];
+  for (const id of ids) {
+    const row = await trx('periods').where({ id }).forUpdate().first('id', 'is_reference');
+    if (row?.is_reference) refs.push(id);
+  }
   if (ids.length === 0) return new Set();
   const held = (await trx('period_checkouts').whereIn('period_id', ids).whereNull('released_at').pluck('period_id')) as number[];
-  return new Set(held.map(Number));
+  // A reference period is skipped like a held one.
+  return new Set([...held.map(Number), ...refs]);
 }
 
 /**

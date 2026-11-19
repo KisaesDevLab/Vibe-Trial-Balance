@@ -125,10 +125,11 @@ syncRouter.post('/pair', pairLimiter, async (req: AuthRequest, res: Response): P
 });
 
 /**
- * Before the device check: 100 REFUSED calls (401) per 15 minutes per
- * address. A device token is checked by a database lookup, and the global
- * /api/ limiter skips anything shaped like one, so made-up tokens would be
- * unlimited otherwise. Answered calls, a 409 included, do not count.
+ * Before the device check: 100 calls with an UNKNOWN token per 15 minutes
+ * per address. A device token is checked by a database lookup, and the
+ * global /api/ limiter skips anything shaped like one, so made-up tokens
+ * would be unlimited otherwise. A revoked or expired desktop that keeps
+ * retrying does not count (it would lock out the whole office).
  */
 syncRouter.use(rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -136,7 +137,7 @@ syncRouter.use(rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => `sync-fail:${ipKeyGenerator(req.ip ?? req.socket?.remoteAddress ?? 'unknown')}`,
-  requestWasSuccessful: (_req, res) => res.statusCode !== 401,
+  requestWasSuccessful: (_req, res) => res.locals.syncUnknownToken !== true,
   skipSuccessfulRequests: true,
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many refused calls from this address. Wait a few minutes.' } },
 }));
