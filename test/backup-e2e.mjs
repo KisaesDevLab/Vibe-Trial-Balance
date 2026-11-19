@@ -271,7 +271,6 @@ async function enrichFixture() {
     [fx.clientId, bank, fx.p25, fx.adminId],
   );
   for (const t of [tx[0], tx[1], old24]) await sql(`INSERT INTO reconciliation_items (reconciliation_id, transaction_id, cleared_at) VALUES ($1,$2,'2025-02-03T10:00:00Z')`, [recon.id, t]);
-  fx.outstandingFromFy24 = 1;
   const undated = await one(
     `INSERT INTO bank_reconciliations (client_id, source_account_id, period_id, statement_date, statement_ending_balance, status, created_by) VALUES ($1,$2,NULL,'2024-06-30',0,'open',$3) RETURNING id`,
     [fx.clientId, bank, fx.adminId],
@@ -413,12 +412,16 @@ function normalizeScalar(v) {
  * natural form of the row it points at (its own scalar columns only), and ids
  * inside Statement Writer JSON replaced the same way.
  */
-function makeCanon(all, { asNew, ignore = {} }) {
+function makeCanon(all, { asNew, ignore = {}, member }) {
   const keyCache = new Map();
   const ignored = (t) => new Set([...(IGNORED_COLUMNS[t] ?? []), ...(asNew ? IGNORED_AS_NEW[t] ?? [] : []), ...(ignore[t] ?? [])]);
   const targetKey = (parent, id) => {
     if (id === null || id === undefined) return null;
     if (parent === 'clients') return '<client>';
+    // A copy's natural key equals the original's, so a reference left pointing
+    // at the SOURCE client's row would compare equal. Only rows inside this
+    // snapshot count.
+    if (member[parent] && !member[parent].has(id)) return `<outside ${parent}>`;
     const ck = `${parent}:${id}`;
     if (keyCache.has(ck)) return keyCache.get(ck);
     const row = all[parent]?.get(id);
@@ -524,7 +527,7 @@ async function snapshot(clientId, { periodId = null, asNew = false, ignore = {} 
     // …and the layouts its statement sets use.
     member.fs_client_layouts = new Set([...member.fs_reports].map((id) => all.fs_reports.get(id).client_layout_id));
   }
-  return { all, member, rows: rowsOf(all, member, makeCanon(all, { asNew, ignore }), schema.scoped) };
+  return { all, member, rows: rowsOf(all, member, makeCanon(all, { asNew, ignore, member }), schema.scoped) };
 }
 
 /** Client-level tables a period archive carries in full. */
@@ -624,6 +627,14 @@ async function main() {
     // By design: a variance note comparing to FY 2024 and the reconciliation
     // item for an FY 2024 check have nothing to point at in a period archive.
     assert.equal((await one(`SELECT count(*)::int AS n FROM variance_notes v JOIN periods p ON p.id = v.period_id WHERE p.client_id = $1`, [newId])).n, 0);
+    const count = async (q) => (await one(q, [newId])).n;
+    assert.equal(await count(`SELECT count(*)::int AS n FROM tickmark_library WHERE client_id = $1`), 3, 'the whole library');
+    assert.equal(await count(`SELECT count(*)::int AS n FROM tb_tickmarks t JOIN periods p ON p.id = t.period_id WHERE p.client_id = $1`), 3);
+    assert.equal(await count(`SELECT count(*)::int AS n FROM py_comparison_data d JOIN periods p ON p.id = d.period_id WHERE p.client_id = $1`), 3);
+    assert.equal(await count(`SELECT count(*)::int AS n FROM bank_reconciliations WHERE client_id = $1`), 1, 'the FY 2025 reconciliation, not the undated one');
+    assert.equal(await count(`SELECT count(*)::int AS n FROM reconciliation_items i JOIN bank_reconciliations r ON r.id = i.reconciliation_id WHERE r.client_id = $1`), 2,
+      'the FY 2024 check it cleared has no transaction to point at');
+    assert.equal(r.json.data.droppedLinks > 0, true, 'the dropped rows are counted');
     const totals = await adjustedTotals(newId);
     assert.deepEqual(totals['FY 2025'], totalsBefore['FY 2025']);
     assert.deepEqual(Object.keys(totals), ['FY 2025']);
@@ -640,7 +651,16 @@ async function main() {
     assert.ok(up.json.data.manifest.schemaVersion, 'the manifest names its schema version');
     const r = await api('/api/v1/restore/execute', { method: 'POST', token, json: { tempFile: up.json.data.tempFile, uploadNonce: up.json.data.uploadNonce, mode: 'as_new' } });
     assert.equal(r.status, 200, r.text);
-    assert.deepEqual(await adjustedTotals(r.json.data.newClientId), totalsBefore);
+    const newId = r.json.data.newClientId;
+    assert.deepEqual(await adjustedTotals(newId), totalsBefore);
+    // An uploaded file is not trusted: who did what is dropped, not misassigned.
+    const users = await sql(`
+      SELECT (SELECT count(*) FROM tickmark_library WHERE client_id = $1 AND created_by IS NOT NULL)
+           + (SELECT count(*) FROM engagement_tasks t JOIN periods p ON p.id = t.period_id WHERE p.client_id = $1 AND (assignee_id IS NOT NULL OR created_by IS NOT NULL OR completed_by IS NOT NULL))
+           + (SELECT count(*) FROM bank_reconciliations WHERE client_id = $1 AND (created_by IS NOT NULL OR completed_by IS NOT NULL))
+           + (SELECT count(*) FROM py_comparison_data d JOIN periods p ON p.id = d.period_id WHERE p.client_id = $1 AND uploaded_by IS NOT NULL) AS n`, [newId]);
+    assert.equal(Number(users[0].n), 0);
+    assert.ok((await one(`SELECT count(*)::int AS n FROM tickmark_library WHERE client_id = $1`, [newId])).n === 3);
   });
 
   log(`\n${passed} steps passed`);
