@@ -32,6 +32,7 @@ import {
   deleteFsClientData, dumpFsClientTables, dumpFsLibrary, restoreFsClientTables, restoreFsLibrary, FS_USER_FK_COLUMNS,
 } from '../lib/fs/fsBackup';
 import { sendServerError } from '../lib/safeError';
+import { assertClientNotCheckedOut } from '../lib/periodGuard';
 import {
   BackupRefusal,
   FORMAT_VERSION,
@@ -1512,6 +1513,9 @@ async function restoreReplace(
   // client serialize. Any other session holding the lock (e.g. another
   // restore) blocks here until the current txn ends.
   await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [42, targetClientId]);
+  // Desktop sync: replacing the client would erase a desktop's check-out
+  // with its period. Release it (or let it be sent back) first.
+  await assertClientNotCheckedOut(trx, targetClientId);
 
   const sanitizeUserFks = await makeUserFkSanitizer(trx, trustSourceUserIds);
 
@@ -2441,7 +2445,8 @@ restoreRouter.post('/execute', async (req: AuthRequest, res: Response): Promise<
         });
       }
     } catch (_e) { /* ignore */ }
-    if (code === 'INVALID_BACKUP' || code === 'RESTORE_BROKEN_REF') {
+    // PERIOD_CHECKED_OUT (desktop sync) is a guard's refusal, authored for the admin.
+    if (code === 'INVALID_BACKUP' || code === 'RESTORE_BROKEN_REF' || (err as { expose?: unknown }).expose === true) {
       // These carry an operator-actionable message that we author ourselves —
       // safe to return verbatim. RESTORE_BROKEN_REF used to fall through to the
       // generic 500 below, hiding the one message that explains the failure.

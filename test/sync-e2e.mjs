@@ -16,6 +16,7 @@
 
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import path from 'node:path';
@@ -574,6 +575,278 @@ async function main() {
     assert.ok((await n()) >= 1);
     const checkouts = await sql(`SELECT action FROM audit_log WHERE entity_type = 'period_checkout' ORDER BY id`);
     assert.deepEqual([...new Set(checkouts.map((r) => r.action))].sort(), ['checkout', 'release']);
+  });
+
+  await step('S3: every period-writing route and MCP tool refuses a held period, and its stamp does not move', async () => {
+    const cid = s3.client.id;
+    const pid = s3.period.id;
+    const adminId = (await one(`SELECT id FROM app_users WHERE username = 'admin'`)).id;
+    const [acc1, acc2] = await sql(`SELECT id, account_number, account_name FROM chart_of_accounts WHERE client_id = $1 ORDER BY account_number LIMIT 2`, [cid]);
+    const a1 = acc1.id;
+    const a2 = acc2.id;
+    const created = async (r, what) => { assert.ok(r.status === 200 || r.status === 201, `${what}: ${r.status} ${r.text}`); return r.json.data; };
+
+    // ── 1. Fixtures, one row of each kind the routes touch, before the check-out.
+    const other = await one(`INSERT INTO periods (client_id, period_name, start_date, end_date, is_current) VALUES ($1, 'Example FY 2023', '2023-01-01', '2023-12-31', false) RETURNING id`, [cid]);
+    const txU = (await created(await api(`/api/v1/clients/${cid}/bank-transactions`, { method: 'POST', token: admin, json: { transactionDate: '2024-06-28', description: 'Example walk deposit', amount: 12345, periodId: pid, sourceAccountId: a1 } }), 'bank transaction')).id;
+    const txAi = (await created(await api(`/api/v1/clients/${cid}/bank-transactions`, { method: 'POST', token: admin, json: { transactionDate: '2024-06-29', description: 'Example walk suggestion', amount: -2500, periodId: pid, sourceAccountId: a1 } }), 'bank transaction')).id;
+    await sql(`UPDATE bank_transactions SET classification_status = 'ai_suggested', ai_suggested_account_id = $2, ai_confidence = 0.9 WHERE id = $1`, [txAi, a2]);
+    const recOpen = (await created(await api(`/api/v1/clients/${cid}/reconciliations`, { method: 'POST', token: admin, json: { sourceAccountId: a1, periodId: pid, statementDate: '2024-12-31', statementEndingBalance: 12345, notes: 'Example walk reconciliation' } }), 'reconciliation')).id;
+    const recDone = (await one(
+      `INSERT INTO bank_reconciliations (client_id, source_account_id, period_id, statement_date, statement_ending_balance, beginning_book_balance, status, created_by, completed_by, completed_at)
+       VALUES ($1,$2,$3,'2024-11-30',0,0,'completed',$4,$4,now()) RETURNING id`, [cid, a1, pid, adminId])).id;
+    const jeLines = [{ accountId: a1, debit: 2500, credit: 0 }, { accountId: a2, debit: 0, credit: 2500 }];
+    const jeId = (await created(await api('/api/v1/journal-entries', { method: 'POST', token: admin, json: { ...s3.je, description: 'Example walk entry', lines: jeLines } }), 'journal entry')).id;
+    const taskId = (await one(`INSERT INTO engagement_tasks (period_id, title, status, created_by) VALUES ($1, 'Example walk task', 'open', $2) RETURNING id`, [pid, adminId])).id;
+    const m1Id = (await one(`INSERT INTO m1_adjustments (period_id, description, category, book_amount, tax_amount, created_by) VALUES ($1, 'Example walk M-1', 'Meals & Entertainment', 10000, 5000, $2) RETURNING id`, [pid, adminId])).id;
+    const lsId = (await one(`INSERT INTO lead_sheets (client_id, code, name, sort_order, created_by) VALUES ($1, 'W', 'Example walk lead sheet', 900, $2) RETURNING id`, [cid, adminId])).id;
+    const noteId = (await one(`INSERT INTO lead_sheet_notes (client_id, period_id, lead_sheet_id, account_id, body, author_id, author_name) VALUES ($1,$2,$3,$4,'Example walk query',$5,'Administrator') RETURNING id`, [cid, pid, lsId, a1, adminId])).id;
+    await sql(`INSERT INTO lead_sheet_signoffs (period_id, lead_sheet_id, role, user_id, user_name, balance_stamp) VALUES ($1,$2,'preparer',$3,'Administrator','example-stamp')`, [pid, lsId, adminId]);
+    const tmId = (await one(`INSERT INTO tickmark_library (client_id, symbol, description, color, sort_order, created_by) VALUES ($1, 'Ω', 'Example walk tickmark', 'green', 900, $2) RETURNING id`, [cid, adminId])).id;
+    await sql(`INSERT INTO tb_tickmarks (period_id, account_id, tickmark_id, created_by) VALUES ($1,$2,$3,$4)`, [pid, a1, tmId, adminId]);
+    await sql(`INSERT INTO variance_notes (account_id, period_id, compare_period_id, note, created_by) VALUES ($1,$2,$3,'Example walk variance',$4)`, [a1, pid, other.id, adminId]);
+    await sql(`INSERT INTO py_comparison_data (period_id, account_id, py_debit, py_credit, source, source_filename, uploaded_by) VALUES ($1,$2,100,0,'manual',NULL,$4), ($1,$3,0,100,'manual',NULL,$4)`, [pid, a1, a2, adminId]);
+    const fsBody = { name: 'Example FS', settings: { framework: 'gaap', columns: { mode: 'cy_py', pctOfRevenue: false, varianceAmt: false, variancePct: false } }, layoutSource: { kind: 'default' } };
+    const reportId = (await created(await api(`/api/v1/periods/${pid}/fs/reports`, { method: 'POST', token: admin, json: fsBody }), 'FS report')).report.id;
+    const otherReportId = (await created(await api(`/api/v1/periods/${other.id}/fs/reports`, { method: 'POST', token: admin, json: fsBody }), 'FS report in the other period')).report.id;
+    // A final set, for reopen (which refuses a draft anyway).
+    const finalReportId = (await created(await api(`/api/v1/periods/${pid}/fs/reports`, { method: 'POST', token: admin, json: { ...fsBody, name: 'Example FS final' } }), 'FS report to finalize')).report.id;
+    await created(await api(`/api/v1/fs/reports/${finalReportId}/finalize`, { method: 'POST', token: admin, json: { overrideValidation: true, reason: 'Example override reason' } }), 'FS finalize');
+    // The client has no storage folder link here, so an upload cannot store
+    // bytes: the attachment and its document are inserted as backup-e2e does.
+    // Every attachment route checks the guard before it touches storage.
+    const docId = (await one(
+      `INSERT INTO client_documents (client_id, filename, file_size, file_type, uploaded_by, storage_backend, object_key, sha256, period_id, section)
+       VALUES ($1,'W-1.pdf',1234,'application/pdf',$2,'local','example/walk/W-1.pdf','example-sha',$3,'Workpapers') RETURNING id`, [cid, adminId, pid])).id;
+    const attId = (await one(
+      `INSERT INTO lead_sheet_attachments (client_id, period_id, lead_sheet_id, lead_sheet_code, account_id, ref_code, document_id, source_file_name, created_by)
+       VALUES ($1,$2,$3,'W',$4,'W-1',$5,'example-walk.pdf',$6) RETURNING id`, [cid, pid, lsId, a1, docId, adminId])).id;
+    // QuickBooks confirm reads a pending preview and the client's connection
+    // row (no call to Intuit): both inserted, the connection a stand-in.
+    const realm = 'example-realm-walk';
+    const qboConn = (await one(
+      `INSERT INTO qbo_connections (client_id, realm_id, company_name, environment, status, refresh_token_enc, refresh_token_expires_at, first_authorized_at, connected_by)
+       VALUES ($1,$2,'Example Company','sandbox','active','example-not-a-token', now() + interval '90 days', now(), $3) RETURNING id`, [cid, realm, adminId])).id;
+    const qboRaw = {
+      Header: { ReportName: 'TrialBalance', StartPeriod: '2024-01-01', EndPeriod: '2024-12-31', ReportBasis: 'Accrual' },
+      Columns: { Column: [{ ColTitle: '', ColType: 'Account' }, { ColTitle: 'Debit', ColType: 'Money' }, { ColTitle: 'Credit', ColType: 'Money' }] },
+      Rows: { Row: [
+        { type: 'Data', ColData: [{ value: 'Example Cash', id: '9001' }, { value: '1.00' }, { value: '' }] },
+        { type: 'Data', ColData: [{ value: 'Example Revenue', id: '9002' }, { value: '' }, { value: '1.00' }] },
+        { group: 'GrandTotal', Summary: { ColData: [{ value: 'TOTAL' }, { value: '1.00' }, { value: '1.00' }] } },
+      ] },
+    };
+    const stored = {
+      raw: qboRaw, sha256: 'example', params: { start_date: '2024-01-01', end_date: '2024-12-31', accounting_method: 'Accrual' },
+      header: { reportBasis: 'Accrual', startPeriod: '2024-01-01', endPeriod: '2024-12-31', currency: null, time: null, noReportData: false },
+      companyName: 'Example Company', accountingMethod: 'Accrual', realmId: realm, environment: 'sandbox', accounts: [], fetchedAt: new Date().toISOString(), target: 'current',
+    };
+    const qboImportId = (await one(`INSERT INTO document_imports (client_id, period_id, import_type, document_type, status, ai_extraction, imported_by) VALUES ($1,$2,'qbo','trial_balance','pending',$3,$4) RETURNING id`, [cid, pid, JSON.stringify(stored), adminId])).id;
+    // A client backup to restore over the client in place.
+    const backup = await created(await api(`/api/v1/backup/client/${cid}`, { method: 'POST', token: admin }), 'client backup');
+    const walkStart = (await one(`SELECT now() AS t`)).t;
+
+    // ── 2. Check the period out from a new desktop and record its stamp.
+    const walk = await pairWith(admin, 'Walk desktop');
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: walk.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    const walkCheckoutId = pull.json.data.checkoutId;
+    assert.equal((await waitJob(walk.token, pull.json.data.jobId)).state, 'done');
+    const listedPeriod = async () => {
+      const r = await api(`/api/v1/sync/clients/${s3.client.sync_uid}/periods`, { token: walk.token });
+      assert.equal(r.status, 200, r.text);
+      return r.json.data.find((p) => p.sync_uid === s3.period.sync_uid);
+    };
+    const before = await listedPeriod();
+    assert.equal(before.checkout?.device, 'Walk desktop');
+    const periodBefore = await one(`SELECT period_name, start_date, end_date, folder_year, locked_at FROM periods WHERE id = $1`, [pid]);
+    const countIn = async (table) => (await one(`SELECT count(*)::int AS n FROM ${table} WHERE period_id = $1`, [pid])).n;
+    const pyBefore = await countIn('py_comparison_data');
+
+    const failures = [];
+    try {
+      // ── 3. Every PERIOD_ROUTES entry, as admin, at the held period's rows.
+      const exists = (table, id, extra = '') => async () => (await one(`SELECT count(*)::int AS n FROM ${table} WHERE id = $1 ${extra}`, [id])).n === 1;
+      const csvForm = () => {
+        const f = new FormData();
+        f.append('file', new Blob(['Date,Description,Amount\n2024-07-02,Example walk import,250\n'], { type: 'text/csv' }), 'example-walk.csv');
+        f.append('periodId', String(pid));
+        f.append('sourceAccountId', String(a1));
+        return f;
+      };
+      const { PDFDocument } = require('pdf-lib');
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addPage([200, 200]);
+      const pdfBytes = await pdfDoc.save();
+      const pdfForm = () => {
+        const f = new FormData();
+        f.append('file', new Blob([pdfBytes], { type: 'application/pdf' }), 'example-walk-2.pdf');
+        f.append('leadSheetId', String(lsId));
+        f.append('accountId', String(a1));
+        return f;
+      };
+      const tbMatch = (a, debitCents, creditCents) => ({ csvRow: 0, csvAccountNumber: a.account_number, csvAccountName: a.account_name, csvDebit: debitCents ? (debitCents / 100).toFixed(2) : null, csvCredit: creditCents ? (creditCents / 100).toFixed(2) : null, matchedAccountId: a.id, matchedAccountNumber: a.account_number, matchedAccountName: a.account_name, confidence: 1, matchType: 'exact', action: 'match', debitCents, creditCents });
+      const pdfMatch = (a, debitCents, creditCents) => ({ pdfAccountName: a.account_name, pdfAccountNumber: a.account_number, pdfAmount: ((debitCents || creditCents) / 100).toFixed(2), isDebit: debitCents > 0, debitCents, creditCents, matchedAccountId: a.id, matchedAccountNumber: a.account_number, matchedAccountName: a.account_name, confidence: 1, matchType: 'exact', action: 'match', category: 'assets' });
+
+      const walkRoutes = [
+        ['bankTransactions.ts btCollectionRouter POST /', 'POST', `/api/v1/clients/${cid}/bank-transactions`, { json: { transactionDate: '2024-07-01', description: 'Example walk new', amount: 500, periodId: pid, sourceAccountId: a1 } }],
+        ['bankTransactions.ts btCollectionRouter POST /import', 'POST', `/api/v1/clients/${cid}/bank-transactions/import`, { form: csvForm }],
+        ['bankTransactions.ts btCollectionRouter POST /manual', 'POST', `/api/v1/clients/${cid}/bank-transactions/manual`, { json: { periodId: pid, sourceAccountId: a1, transactions: [{ transactionDate: '2024-07-03', description: 'Example walk manual', amount: 700, accountId: a2, createRule: false }] } }],
+        ['bankTransactions.ts btCollectionRouter POST /batch-delete', 'POST', `/api/v1/clients/${cid}/bank-transactions/batch-delete`, { json: { ids: [txU] }, still: exists('bank_transactions', txU) }],
+        ['bankTransactions.ts btCollectionRouter POST /batch-classify', 'POST', `/api/v1/clients/${cid}/bank-transactions/batch-classify`, { json: { ids: [txU], accountId: a2 } }],
+        ['bankTransactions.ts btCollectionRouter POST /batch-update-source', 'POST', `/api/v1/clients/${cid}/bank-transactions/batch-update-source`, { json: { ids: [txU], sourceAccountId: a2 } }],
+        ['bankTransactions.ts btCollectionRouter POST /batch-confirm-ai', 'POST', `/api/v1/clients/${cid}/bank-transactions/batch-confirm-ai`, { json: { ids: [txAi] } }],
+        ['bankTransactions.ts btCollectionRouter PATCH /:id', 'PATCH', `/api/v1/clients/${cid}/bank-transactions/${txU}`, { json: { accountId: a2, description: 'Example walk renamed' } }],
+        ['bankTransactions.ts btCollectionRouter DELETE /:id', 'DELETE', `/api/v1/clients/${cid}/bank-transactions/${txU}`, { still: exists('bank_transactions', txU) }],
+        ['bankStatementPdfImport.ts bankStatementPdfRouter POST /confirm', 'POST', '/api/v1/import/bank-statement-pdf/confirm', { json: { clientId: cid, periodId: pid, sourceAccountId: a1, transactions: [{ date: '2024-07-04', description: 'Example walk statement line', amount: 900, checkNumber: null, payeeName: null, category: null }] } }],
+        ['csvImport.ts csvImportRouter POST /confirm', 'POST', '/api/v1/import/csv/confirm', { json: { periodId: pid, clientId: cid, matches: [tbMatch(acc1, 100, 0), { ...tbMatch(acc2, 0, 100), csvRow: 1 }], aiExtraction: null } }],
+        ['pdfImport.ts pdfImportRouter POST /confirm', 'POST', '/api/v1/import/pdf/confirm', { json: { periodId: pid, clientId: cid, matches: [pdfMatch(acc1, 100, 0), pdfMatch(acc2, 0, 100)], aiExtraction: null } }],
+        ['qboImport.ts qboImportRouter POST /confirm', 'POST', '/api/v1/import/qbo/confirm', { json: { importId: qboImportId, decisions: [{ rowKey: '0', action: 'skip' }, { rowKey: '1', action: 'skip' }] } }],
+        ['documents.ts documentsItemRouter DELETE /:id', 'DELETE', `/api/v1/documents/${docId}`, { still: exists('client_documents', docId, 'AND deleted_at IS NULL') }],
+        ['fs.ts fsRouter PATCH /reports/:reportId', 'PATCH', `/api/v1/fs/reports/${reportId}`, { json: { name: 'Example FS renamed' } }],
+        ['fs.ts fsRouter DELETE /reports/:reportId', 'DELETE', `/api/v1/fs/reports/${reportId}`, { still: exists('fs_reports', reportId, 'AND archived_at IS NULL') }],
+        // Rolling forward writes the TARGET period: the other period's statements into the held one.
+        ['fs.ts fsRouter POST /reports/:reportId/roll-forward', 'POST', `/api/v1/fs/reports/${otherReportId}/roll-forward`, { json: { periodId: pid, name: 'Example FS rolled' } }],
+        ['fs.ts fsRouter POST /reports/:reportId/finalize', 'POST', `/api/v1/fs/reports/${reportId}/finalize`, { json: { overrideValidation: true, reason: 'Example override reason' } }],
+        ['fs.ts fsRouter POST /reports/:reportId/reopen', 'POST', `/api/v1/fs/reports/${finalReportId}/reopen`, { json: {}, still: exists('fs_reports', finalReportId, `AND status = 'final'`) }],
+        ['fs.ts fsPeriodRouter POST /reports', 'POST', `/api/v1/periods/${pid}/fs/reports`, { json: { ...fsBody, name: 'Example FS second' } }],
+        ['journalEntries.ts jeItemRouter POST /', 'POST', '/api/v1/journal-entries', { json: { ...s3.je, description: 'Example walk entry two', lines: jeLines } }],
+        ['journalEntries.ts jeItemRouter PUT /:id/lines', 'PUT', `/api/v1/journal-entries/${jeId}/lines`, { json: { lines: [{ accountId: a1, debit: 3000, credit: 0 }, { accountId: a2, debit: 0, credit: 3000 }] } }],
+        ['journalEntries.ts jeItemRouter PATCH /:id', 'PATCH', `/api/v1/journal-entries/${jeId}`, { json: { description: 'Example walk entry edited' } }],
+        ['journalEntries.ts jeItemRouter DELETE /:id', 'DELETE', `/api/v1/journal-entries/${jeId}`, { still: exists('journal_entries', jeId) }],
+        ['leadSheetAttachments.ts leadSheetAttachmentCollectionRouter POST /', 'POST', `/api/v1/periods/${pid}/lead-sheet-attachments`, { form: pdfForm }],
+        ['leadSheetAttachments.ts leadSheetAttachmentItemRouter POST /annotations', 'POST', `/api/v1/lead-sheet-attachments/${attId}/annotations`, { json: { kind: 'note', page: 1, xPct: 0.5, yPct: 0.5, text: 'Example walk annotation', color: 'red' } }],
+        ['leadSheetAttachments.ts leadSheetAttachmentItemRouter DELETE /', 'DELETE', `/api/v1/lead-sheet-attachments/${attId}`, { still: exists('lead_sheet_attachments', attId, 'AND deleted_at IS NULL') }],
+        ['leadSheets.ts leadSheetItemRouter DELETE /', 'DELETE', `/api/v1/lead-sheets/${lsId}`, { still: exists('lead_sheets', lsId) }],
+        ['leadSheets.ts leadSheetPeriodRouter POST /:leadSheetId/signoff', 'POST', `/api/v1/periods/${pid}/lead-sheets/${lsId}/signoff`, { json: { role: 'reviewer' } }],
+        ['leadSheets.ts leadSheetPeriodRouter POST /:leadSheetId/unsign', 'POST', `/api/v1/periods/${pid}/lead-sheets/${lsId}/unsign`, { json: { role: 'preparer' } }],
+        ['leadSheets.ts leadSheetPeriodRouter POST /:leadSheetId/notes', 'POST', `/api/v1/periods/${pid}/lead-sheets/${lsId}/notes`, { json: { leadSheetId: lsId, accountId: a1, body: 'Example walk second query' } }],
+        ['leadSheets.ts leadSheetPeriodRouter POST /:leadSheetId/notes/:noteId/resolve', 'POST', `/api/v1/periods/${pid}/lead-sheets/${lsId}/notes/${noteId}/resolve`, { json: { resolved: true } }],
+        ['periods.ts periodItemRouter PATCH /:id', 'PATCH', `/api/v1/periods/${pid}`, { json: { periodName: 'Example renamed period' } }],
+        ['periods.ts periodItemRouter POST /:id/lock', 'POST', `/api/v1/periods/${pid}/lock`, { json: {} }],
+        ['pyComparison.ts pyComparisonRouter POST /manual', 'POST', `/api/v1/periods/${pid}/py-comparison/manual`, { json: { accounts: [{ accountId: a1, debit: 200, credit: 0 }, { accountId: a2, debit: 0, credit: 200 }] } }],
+        ['pyComparison.ts pyComparisonRouter POST /confirm-csv', 'POST', `/api/v1/periods/${pid}/py-comparison/confirm-csv`, { json: { clientId: cid, sourceType: 'csv', sourceFilename: 'example-walk.csv', matches: [{ csvAccountNumber: acc1.account_number, csvAccountName: acc1.account_name, matchedAccountId: a1, debitCents: 300, creditCents: 0, action: 'match' }, { csvAccountNumber: acc2.account_number, csvAccountName: acc2.account_name, matchedAccountId: a2, debitCents: 0, creditCents: 300, action: 'match' }] } }],
+        ['pyComparison.ts pyComparisonRouter POST /confirm-pdf', 'POST', `/api/v1/periods/${pid}/py-comparison/confirm-pdf`, { json: { clientId: cid, sourceFilename: 'example-walk.pdf', matches: [{ pdfAccountNumber: acc1.account_number, pdfAccountName: acc1.account_name, matchedAccountId: a1, debitCents: 400, creditCents: 0, action: 'match' }, { pdfAccountNumber: acc2.account_number, pdfAccountName: acc2.account_name, matchedAccountId: a2, debitCents: 0, creditCents: 400, action: 'match' }] } }],
+        ['pyComparison.ts pyComparisonRouter DELETE /', 'DELETE', `/api/v1/periods/${pid}/py-comparison`, { still: async () => (await countIn('py_comparison_data')) === pyBefore }],
+        ['pyComparison.ts pyComparisonRouter POST /create-aje', 'POST', `/api/v1/periods/${pid}/py-comparison/create-aje`, { json: { entryType: 'book', description: 'Example walk true-up', offsetAccountId: a2, accountIds: [a1] } }],
+        ['reconciliations.ts reconciliationCollectionRouter POST /', 'POST', `/api/v1/clients/${cid}/reconciliations`, { json: { sourceAccountId: a1, periodId: pid, statementDate: '2024-10-31', statementEndingBalance: 0 } }],
+        ['reconciliations.ts reconciliationItemRouter PATCH /', 'PATCH', `/api/v1/reconciliations/${recOpen}`, { json: { notes: 'Example walk edited' } }],
+        ['reconciliations.ts reconciliationItemRouter POST /toggle-item', 'POST', `/api/v1/reconciliations/${recOpen}/toggle-item`, { json: { transactionId: txU } }],
+        ['reconciliations.ts reconciliationItemRouter POST /complete', 'POST', `/api/v1/reconciliations/${recOpen}/complete`, { json: { force: true } }],
+        ['reconciliations.ts reconciliationItemRouter POST /reopen', 'POST', `/api/v1/reconciliations/${recDone}/reopen`, { json: {} }],
+        ['reconciliations.ts reconciliationItemRouter DELETE /', 'DELETE', `/api/v1/reconciliations/${recOpen}`, { still: exists('bank_reconciliations', recOpen) }],
+        ['tickmarks.ts tickmarkLibraryItemRouter DELETE /', 'DELETE', `/api/v1/tickmarks/${tmId}`, { still: exists('tickmark_library', tmId) }],
+        ['tickmarks.ts tbTickmarkRouter POST /toggle', 'POST', `/api/v1/periods/${pid}/tb-tickmarks/toggle`, { json: { accountId: a1, tickmarkId: tmId } }],
+        ['trialBalance.ts tbPeriodRouter POST /initialize', 'POST', `/api/v1/periods/${pid}/trial-balance/initialize`, { json: {} }],
+        ['trialBalance.ts tbPeriodRouter POST /import', 'POST', `/api/v1/periods/${pid}/trial-balance/import`, { json: { rows: [{ accountNumber: acc1.account_number, accountName: 'Example walk alias', debit: 100, credit: 0 }] } }],
+        ['trialBalance.ts tbPeriodRouter POST /import-prior-year', 'POST', `/api/v1/periods/${pid}/trial-balance/import-prior-year`, { json: { rows: [{ accountNumber: acc1.account_number, debit: 100, credit: 0 }] } }],
+        ['trialBalance.ts tbPeriodRouter PUT /:accountId', 'PUT', `/api/v1/periods/${pid}/trial-balance/${a1}`, { json: { unadjustedDebit: 100, unadjustedCredit: 0 } }],
+        ['taxWorkpapers.ts m1CollectionRouter POST /', 'POST', `/api/v1/periods/${pid}/m1-adjustments`, { json: { description: 'Example walk M-1 two', category: 'Penalties & Fines', bookAmount: 100, taxAmount: 0 } }],
+        ['taxWorkpapers.ts m1ItemRouter PATCH /', 'PATCH', `/api/v1/m1-adjustments/${m1Id}`, { json: { notes: 'Example walk edited' } }],
+        ['taxWorkpapers.ts m1ItemRouter DELETE /', 'DELETE', `/api/v1/m1-adjustments/${m1Id}`, { still: exists('m1_adjustments', m1Id) }],
+        ['engagement.ts engagementCollectionRouter POST /', 'POST', `/api/v1/periods/${pid}/engagement-tasks`, { json: { title: 'Example walk task two', status: 'open' } }],
+        ['engagement.ts engagementItemRouter PATCH /', 'PATCH', `/api/v1/engagement-tasks/${taskId}`, { json: { status: 'in_progress', notes: 'Example walk edited' } }],
+        ['engagement.ts engagementItemRouter DELETE /', 'DELETE', `/api/v1/engagement-tasks/${taskId}`, { still: exists('engagement_tasks', taskId) }],
+        ['comparison.ts comparisonRouter PUT /variance-notes/:accountId', 'PUT', `/api/v1/periods/${pid}/compare/${other.id}/variance-notes/${a1}`, { json: { note: 'Example walk variance edited' } }],
+        ['varianceNotes.ts varianceNotesRouter PUT /:accountId', 'PUT', `/api/v1/periods/${pid}/variance-notes/${a2}`, { json: { note: 'Example walk variance' } }],
+        // Last: a missed guard here would delete the period or the client's data and fail every route after it.
+        ['backup.ts restoreRouter POST /execute', 'POST', '/api/v1/restore/execute', { json: { backupId: backup.id, mode: 'replace', targetClientId: cid }, still: exists('periods', pid) }],
+        ['periods.ts periodItemRouter DELETE /:id', 'DELETE', `/api/v1/periods/${pid}`, { still: exists('periods', pid) }],
+      ];
+
+      // The walk covers PERIOD_ROUTES exactly, read from the classification test.
+      const classified = readFileSync(path.join(SERVER, 'src', 'lib', '__tests__', 'periodWriteRoutes.test.ts'), 'utf8');
+      const listOf = (name) => [...classified.match(new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\];`))[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+      const periodRoutes = listOf('PERIOD_ROUTES');
+      const walked = walkRoutes.map((r) => r[0]);
+      const missing = periodRoutes.filter((r) => !walked.includes(r));
+      const extra = walked.filter((r) => !periodRoutes.includes(r));
+      if (missing.length || extra.length) failures.push(`walk does not match PERIOD_ROUTES: missing ${JSON.stringify(missing)}, not listed ${JSON.stringify(extra)}`);
+
+      for (const [route, method, url, { json, form, still } = {}] of walkRoutes) {
+        let r;
+        try {
+          r = await api(url, { method, token: admin, json, form: form?.() });
+        } catch (err) {
+          failures.push(`${route} (${method} ${url}): request failed: ${err.message}`);
+          continue;
+        }
+        if (r.status !== 409 || r.json?.error?.code !== 'PERIOD_CHECKED_OUT' || !String(r.json?.error?.message).includes('Walk desktop')) {
+          failures.push(`${route} (${method} ${url}): ${r.status} ${r.text}`);
+        }
+        if (still && !(await still())) failures.push(`${route} (${method} ${url}): the row is gone`);
+      }
+
+      // ── 4. Every MCP_PERIOD_TOOLS tool, through the real handlers.
+      // run() keeps only stderr, and the tool result is on stdout.
+      const mcpCall = (tool, args) => new Promise((resolve) => {
+        const child = spawn(process.execPath, [...TSX_IMPORT, 'src/mcpCall.ts', tool, JSON.stringify(args)], { cwd: SERVER, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+        let out = '';
+        child.stdout.on('data', (c) => { out += c; });
+        child.stderr.on('data', (c) => capture(`[mcp ${tool}]`, c));
+        child.on('exit', (code) => resolve({ code, out }));
+      });
+      const mcpTools = {
+        update_trial_balance_row: { periodId: pid, accountId: a1, debitCents: 100, creditCents: 0 },
+        create_journal_entry: { periodId: pid, entryType: 'book', entryDate: '2024-12-31', description: 'Example MCP entry', lines: jeLines },
+        lock_period: { periodId: pid },
+        add_variance_note: { periodId: pid, accountId: a1, note: 'Example MCP variance note' },
+        update_engagement_task: { taskId, status: 'in_progress', notes: 'Example MCP edit' },
+      };
+      const periodTools = listOf('MCP_PERIOD_TOOLS');
+      if (JSON.stringify([...periodTools].sort()) !== JSON.stringify(Object.keys(mcpTools).sort())) {
+        failures.push(`MCP walk does not match MCP_PERIOD_TOOLS: ${JSON.stringify(periodTools)} vs ${JSON.stringify(Object.keys(mcpTools))}`);
+      }
+      for (const [tool, args] of Object.entries(mcpTools)) {
+        const { code, out } = await mcpCall(tool, args);
+        const line = out.split(/\r?\n/).find((l) => l.startsWith('{'));
+        let result = null;
+        try { result = line ? JSON.parse(line) : null; } catch { /* reported below */ }
+        const text = (result?.content ?? []).map((c) => c.text ?? '').join(' ');
+        if (code !== 0 || result?.isError !== true || !text.includes('Walk desktop')) failures.push(`MCP ${tool}: exit ${code} ${line ?? out}`);
+      }
+      if (!(await exists('engagement_tasks', taskId)())) failures.push('MCP update_engagement_task: the task is gone');
+
+      // ── 5. Nothing moved: the stamp, the holder, and the period's own fields (not in the stamp).
+      const after = await listedPeriod();
+      if (after?.stamp !== before.stamp) failures.push(`the stamp moved: ${before.stamp} -> ${after?.stamp}`);
+      if (after?.checkout?.device !== 'Walk desktop') failures.push(`the check-out is no longer Walk desktop's: ${JSON.stringify(after?.checkout)}`);
+      const periodAfter = await one(`SELECT period_name, start_date, end_date, folder_year, locked_at FROM periods WHERE id = $1`, [pid]);
+      if (JSON.stringify(periodAfter) !== JSON.stringify(periodBefore)) failures.push(`the period row changed: ${JSON.stringify(periodBefore)} -> ${JSON.stringify(periodAfter)}`);
+    } finally {
+      // ── 6. Give the check-out back and tidy what is not period data.
+      const rel = await api(`/api/v1/sync/checkouts/${walkCheckoutId}`, { method: 'DELETE', token: walk.token });
+      if (rel.status !== 200) failures.push(`release: ${rel.status} ${rel.text}`);
+      const backups = await sql(`SELECT id FROM backup_history WHERE id = $1 OR (client_id = $2 AND trigger_type = 'pre_restore' AND created_at >= $3)`, [backup.id, cid, walkStart]);
+      for (const b of backups) await api(`/api/v1/backup/${b.id}`, { method: 'DELETE', token: admin });
+      await sql(`DELETE FROM qbo_connections WHERE id = $1`, [qboConn]);
+    }
+    assert.deepEqual(failures, [], `\n  ${failures.join('\n  ')}`);
+  });
+
+  await step("S3: while a period is held, a lead sheet's code and a tickmark's symbol stay; the admin list shows the hold", async () => {
+    const d = await pairWith(admin, 'Rename desktop');
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    await waitJob(d.token, pull.json.data.jobId);
+    const ls = await one(`INSERT INTO lead_sheets (client_id, code, name) VALUES ($1, 'EXR', 'Example rename sheet') RETURNING id`, [s3.client.id]);
+    const tm = await one(`INSERT INTO tickmark_library (client_id, symbol, description) VALUES ($1, 'ER', 'Example rename mark') RETURNING id`, [s3.client.id]);
+    const code = await api(`/api/v1/lead-sheets/${ls.id}`, { method: 'PATCH', token: admin, json: { code: 'EXR2', name: 'Example rename sheet' } });
+    assert.equal(code.status, 409, code.text);
+    assert.equal(code.json.error.code, 'PERIOD_CHECKED_OUT');
+    const name = await api(`/api/v1/lead-sheets/${ls.id}`, { method: 'PATCH', token: admin, json: { name: 'Example renamed sheet' } });
+    assert.equal(name.status, 200, `a name change is fine: ${name.text}`);
+    const sym = await api(`/api/v1/tickmarks/${tm.id}`, { method: 'PATCH', token: admin, json: { symbol: 'E2' } });
+    assert.equal(sym.status, 409, sym.text);
+    assert.equal((await api(`/api/v1/tickmarks/${tm.id}`, { method: 'PATCH', token: admin, json: { description: 'Example mark' } })).status, 200);
+    const list = await api('/api/v1/desktop-sync/checkouts', { token: admin });
+    assert.equal(list.status, 200, list.text);
+    const mine = list.json.data.find((c) => c.device === 'Rename desktop');
+    assert.ok(mine, 'listed');
+    assert.equal(mine.periodId, s3.period.id);
+    assert.equal(mine.stale, false);
+    assert.equal((await api(`/api/v1/sync/checkouts/${pull.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200);
+    assert.equal((await api(`/api/v1/lead-sheets/${ls.id}`, { method: 'PATCH', token: admin, json: { code: 'EXR2', name: 'Example renamed sheet' } })).status, 200, 'free again once released');
   });
 
   await step('pairing is rate limited by address, whatever token a guesser sends', async () => {

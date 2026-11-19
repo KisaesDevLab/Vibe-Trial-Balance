@@ -45,7 +45,7 @@ const chains = new Map<number, Promise<void>>();
  * fails. Returns the job id at once.
  */
 export async function startJob(
-  input: { kind: JobKind; deviceId: number; userId: number; clientId: number; periodId?: number; checkoutId?: number | null },
+  input: { kind: JobKind; deviceId: number; userId: number; clientId: number; periodId?: number; checkoutId?: number | null; checkoutCreated?: boolean },
   work: (jobId: string) => Promise<JobOutcome>,
   onFail?: () => Promise<void>,
 ): Promise<string> {
@@ -57,6 +57,7 @@ export async function startJob(
       client_id: input.clientId,
       period_id: input.periodId ?? null,
       checkout_id: input.checkoutId ?? null,
+      checkout_created: input.checkoutCreated === true,
     })
     .returning('id');
   const jobId = String((row as { id: string }).id);
@@ -95,10 +96,11 @@ async function runJob(jobId: string, work: (jobId: string) => Promise<JobOutcome
 
 /**
  * At start-up: a job left queued or running was cut off by a restart. Mark it
- * failed, and release the check-out a failed pull had taken.
+ * failed, and release the check-out a failed pull had TAKEN (not one it
+ * reused: that desktop still holds work).
  */
 export async function failInterruptedJobs(): Promise<void> {
-  const open = (await db('sync_jobs').whereIn('state', ['queued', 'running']).select('id', 'kind', 'checkout_id')) as Array<{ id: string; kind: string; checkout_id: number | null }>;
+  const open = (await db('sync_jobs').whereIn('state', ['queued', 'running']).select('id', 'kind', 'checkout_id', 'checkout_created')) as Array<{ id: string; kind: string; checkout_id: number | null; checkout_created: boolean }>;
   for (const j of open) {
     await db.transaction(async (trx) => {
       await trx('sync_jobs').where({ id: j.id }).update({
@@ -106,7 +108,7 @@ export async function failInterruptedJobs(): Promise<void> {
         error: JSON.stringify({ code: 'SYNC_JOB_INTERRUPTED', message: 'The server restarted before this finished. Start it again.' }),
         finished_at: trx.fn.now(),
       });
-      if (j.kind === 'pull' && j.checkout_id) {
+      if (j.kind === 'pull' && j.checkout_id && j.checkout_created) {
         await trx('period_checkouts').where({ id: j.checkout_id }).whereNull('released_at')
           .update({ released_at: trx.fn.now(), release_reason: 'The pull was cut off by a server restart.' });
       }

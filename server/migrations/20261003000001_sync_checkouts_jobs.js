@@ -38,6 +38,8 @@ exports.up = async function (knex) {
       t.integer('client_id').nullable().references('id').inTable('clients').onDelete('CASCADE');
       t.integer('period_id').nullable().references('id').inTable('periods').onDelete('CASCADE');
       t.integer('checkout_id').nullable().references('id').inTable('period_checkouts').onDelete('SET NULL');
+      /** This job's pull took the check-out (a re-pull reuses one): only then does a failure release it. */
+      t.boolean('checkout_created').notNullable().defaultTo(false);
       /** queued → running → done | failed */
       t.string('state', 10).notNullable().defaultTo('queued');
       t.jsonb('result').nullable();

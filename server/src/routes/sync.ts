@@ -37,7 +37,7 @@ import { FORMAT_VERSION, appliedMigrations } from '../lib/backupManifest';
 import { checkedOutBy } from '../lib/periodGuard';
 import { stampPeriod } from '../lib/sync/periodStampLoad';
 import { SYNC_JOB_DIR, startJob } from '../lib/sync/jobs';
-import { checkoutApi, checkoutWarnDays, isoDate } from '../lib/sync/checkouts';
+import { checkoutApi, checkoutWarnDays, daysOut, isoDate } from '../lib/sync/checkouts';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const APP_VERSION = (require('../../package.json') as { version: string }).version;
@@ -123,6 +123,23 @@ syncRouter.post('/pair', pairLimiter, async (req: AuthRequest, res: Response): P
     sendServerError(res, err, 'sync/pair');
   }
 });
+
+/**
+ * Before the device check: 100 REFUSED calls (401) per 15 minutes per
+ * address. A device token is checked by a database lookup, and the global
+ * /api/ limiter skips anything shaped like one, so made-up tokens would be
+ * unlimited otherwise. Answered calls, a 409 included, do not count.
+ */
+syncRouter.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `sync-fail:${ipKeyGenerator(req.ip ?? req.socket?.remoteAddress ?? 'unknown')}`,
+  requestWasSuccessful: (_req, res) => res.statusCode !== 401,
+  skipSuccessfulRequests: true,
+  message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many refused calls from this address. Wait a few minutes.' } },
+}));
 
 // Everything else under /api/v1/sync is a paired device's.
 syncRouter.use(syncAuthMiddleware);
@@ -284,6 +301,7 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
     }
     const device = req.syncDevice!;
     let checkoutId: number | null = null;
+    let checkoutCreated = false;
     if (wantCheckout) {
       if (period.locked_at) {
         bad(res, 409, 'PERIOD_LOCKED', 'This period is locked on the server. Pull it with check-out off to read it, or ask an admin to unlock it.');
@@ -294,22 +312,25 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
         await trx('periods').where({ id: period.id }).forUpdate().first('id');
         const holder = await checkedOutBy(trx, period.id);
         if (holder && holder.deviceId !== device.id) return { holder };
-        if (holder) return { id: holder.id };
+        if (holder) return { id: holder.id, created: false };
         const [row] = await trx('period_checkouts')
           .insert({ period_id: period.id, device_id: device.id, user_id: req.user!.userId })
           .returning('id');
         await logAudit({ userId: req.user!.userId, periodId: period.id, entityType: 'period_checkout', entityId: (row as { id: number }).id, action: 'checkout', description: `Checked out to desktop "${device.name}"` }, trx);
-        return { id: (row as { id: number }).id };
+        return { id: (row as { id: number }).id, created: true };
       });
       if ('holder' in taken && taken.holder) {
         bad(res, 409, 'PERIOD_CHECKED_OUT', `This period is checked out to ${taken.holder.user} on "${taken.holder.device}" since ${taken.holder.since.toISOString().slice(0, 10)}. Pull it with check-out off to read it.`);
         return;
       }
       checkoutId = (taken as { id: number }).id;
+      checkoutCreated = (taken as { created: boolean }).created;
     }
-    const createdCheckout = checkoutId;
+    // Only a check-out this call took is undone on failure: a re-pull keeps
+    // the hold the desktop already had (it may hold unsent work).
+    const createdCheckout = checkoutCreated ? checkoutId : null;
     const jobId = await startJob(
-      { kind: 'pull', deviceId: device.id, userId: req.user!.userId, clientId: period.client_id, periodId: period.id, checkoutId },
+      { kind: 'pull', deviceId: device.id, userId: req.user!.userId, clientId: period.client_id, periodId: period.id, checkoutId, checkoutCreated },
       async (id) => {
         const dir = path.join(SYNC_JOB_DIR, id);
         fs.mkdirSync(dir, { recursive: true });
@@ -438,6 +459,41 @@ syncRouter.delete('/checkouts/:id', async (req: SyncRequest, res: Response): Pro
 
 export const desktopSyncRouter = Router();
 desktopSyncRouter.use(authMiddleware);
+
+/**
+ * GET /api/v1/desktop-sync/checkouts — the periods desktops hold: every one
+ * for an admin (dashboard, stale warning), the user's own otherwise.
+ */
+desktopSyncRouter.get('/checkouts', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const q = db('period_checkouts as c')
+      .join('periods as p', 'p.id', 'c.period_id')
+      .join('clients as cl', 'cl.id', 'p.client_id')
+      .join('sync_devices as d', 'd.id', 'c.device_id')
+      .join('app_users as u', 'u.id', 'c.user_id')
+      .whereNull('c.released_at')
+      .orderBy('c.created_at')
+      .select('c.id', 'c.created_at', 'p.id as period_id', 'p.period_name', 'cl.id as client_id', 'cl.name as client_name',
+        'd.name as device', 'u.display_name', 'u.username');
+    if (req.user!.role !== 'admin') q.where('c.user_id', req.user!.userId);
+    const warnDays = await checkoutWarnDays();
+    const rows = (await q) as Array<Record<string, unknown>>;
+    res.json({
+      data: rows.map((r) => {
+        const since = new Date(r.created_at as string);
+        const days = daysOut(since);
+        return {
+          id: r.id, periodId: r.period_id, periodName: r.period_name, clientId: r.client_id, clientName: r.client_name,
+          user: (r.display_name as string | null) ?? r.username, device: r.device, since: since.toISOString(), days, stale: days >= warnDays,
+        };
+      }),
+      error: null,
+      meta: { count: rows.length, checkoutWarnDays: warnDays },
+    });
+  } catch (err: unknown) {
+    sendServerError(res, err, 'desktop-sync/checkouts');
+  }
+});
 
 desktopSyncRouter.post('/codes', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
