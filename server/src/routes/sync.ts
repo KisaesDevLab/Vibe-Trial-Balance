@@ -19,7 +19,7 @@
  */
 
 import { Router, type Response } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { db } from '../db';
 import { authMiddleware, blockReviewerWrites, type AuthRequest } from '../middleware/auth';
@@ -49,7 +49,9 @@ const pairLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => `ip:${req.ip ?? req.socket?.remoteAddress ?? 'unknown'}`,
+  // ipKeyGenerator groups an IPv6 address by its /56, so a guesser cannot
+  // rotate through the addresses of one network for fresh buckets.
+  keyGenerator: (req) => `ip:${ipKeyGenerator(req.ip ?? req.socket?.remoteAddress ?? 'unknown')}`,
   // Guesses are what it is for: a code that pairs does not use up a try.
   skipSuccessfulRequests: true,
   message: { data: null, error: { code: 'RATE_LIMITED', message: 'Too many pairing attempts. Wait a few minutes and try again.' } },
