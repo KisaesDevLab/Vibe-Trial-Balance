@@ -426,13 +426,24 @@ leadSheetAttachmentItemRouter.delete('/', async (req: AuthRequest, res: Response
 
     // Remove the bytes and the document row, but keep this row as a tombstone
     // so its ref code stays reserved. document_id is SET NULL by the FK.
-    // Checked again before the storage delete, which no transaction can undo.
-    await db.transaction(async (trx) => assertNotCheckedOut(trx, [att.row.period_id as number]));
-    await removeDocument(att.doc);
-    await db('lead_sheet_attachments').where({ id }).update({
-      deleted_at: db.fn.now(),
-      deleted_by: req.user?.userId ?? null,
+    // The attachment row changes under the period lock (desktop sync: a pull
+    // cannot slip in between and take a row that is about to change); the
+    // storage delete, which no transaction can undo, follows. If it fails the
+    // row is put back, so nothing is hidden while its file still exists.
+    await db.transaction(async (trx) => {
+      await assertNotCheckedOut(trx, [att.row.period_id as number]);
+      await trx('lead_sheet_attachments').where({ id }).update({
+        deleted_at: trx.fn.now(),
+        deleted_by: req.user?.userId ?? null,
+        document_id: null,
+      });
     });
+    try {
+      await removeDocument(att.doc);
+    } catch (err) {
+      await db('lead_sheet_attachments').where({ id }).update({ deleted_at: null, deleted_by: null, document_id: att.doc.id });
+      throw err;
+    }
     await logAudit({
       userId: req.user?.userId ?? null, periodId: att.row.period_id as number, clientId: att.row.client_id as number,
       entityType: 'lead_sheet_attachment', entityId: id, action: 'delete',

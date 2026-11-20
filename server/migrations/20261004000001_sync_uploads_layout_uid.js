@@ -11,6 +11,13 @@
  * matches it by this uid and applies the SQ3 rule (owner 2026-11-19).
  */
 exports.up = async function (knex) {
+  // When the holder last pulled the period (a re-pull keeps the check-out):
+  // SQ3 judges "changed on the server since the pull" from it.
+  if (!(await knex.schema.hasColumn('period_checkouts', 'pulled_at'))) {
+    await knex.schema.alterTable('period_checkouts', (t) => {
+      t.timestamp('pulled_at', { useTz: true }).nullable();
+    });
+  }
   if (!(await knex.schema.hasColumn('fs_client_layouts', 'sync_uid'))) {
     await knex.raw('ALTER TABLE fs_client_layouts ADD COLUMN sync_uid uuid NOT NULL DEFAULT gen_random_uuid()');
     await knex.raw('CREATE UNIQUE INDEX fs_client_layouts_sync_uid_unique ON fs_client_layouts (sync_uid)');
@@ -35,6 +42,9 @@ exports.up = async function (knex) {
 };
 
 exports.down = async function (knex) {
+  if (await knex.schema.hasColumn('period_checkouts', 'pulled_at')) {
+    await knex.schema.alterTable('period_checkouts', (t) => t.dropColumn('pulled_at'));
+  }
   await knex.schema.dropTableIfExists('sync_uploads');
   if (await knex.schema.hasColumn('fs_client_layouts', 'sync_uid')) {
     await knex.raw('DROP INDEX IF EXISTS fs_client_layouts_sync_uid_unique');

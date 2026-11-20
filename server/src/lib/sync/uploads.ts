@@ -13,12 +13,15 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { db } from '../../db';
-import { SYNC_JOB_DIR } from './jobs';
+import { SYNC_JOB_DIR, assertDiskRoom, busy } from './jobs';
+import type { Readable } from 'stream';
 
 export const UPLOAD_DIR = path.join(SYNC_JOB_DIR, 'uploads');
 /** The largest archive taken (as a restore's 2 GiB uncompressed cap). */
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 export const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+/** Uploads open at once per device (not sent yet, not expired). */
+export const MAX_OPEN_UPLOADS_PER_DEVICE = 3;
 
 export function partBytes(): number {
   const n = Number(process.env.SYNC_PART_BYTES);
@@ -57,6 +60,10 @@ export async function startUpload(deviceId: number, userId: number, size: number
     throw new UploadError(400, 'SYNC_UPLOAD_TOO_LARGE', `An upload is 1 byte to ${MAX_UPLOAD_BYTES} bytes.`);
   }
   if (!/^[0-9a-f]{64}$/.test(sha256)) throw new UploadError(400, 'VALIDATION_ERROR', 'sha256 is 64 lowercase hex characters.');
+  const open = await db('sync_uploads').where({ device_id: deviceId }).whereNull('job_id').where('expires_at', '>', new Date()).count({ n: '*' }).first();
+  if (Number(open?.n ?? 0) >= MAX_OPEN_UPLOADS_PER_DEVICE) throw busy('This computer has other uploads open. Send or wait for them first.');
+  // The parts and the joined file (twice the size) must fit.
+  assertDiskRoom(size * 2);
   const part = partBytes();
   const [row] = await db('sync_uploads').insert({
     device_id: deviceId, user_id: userId, size, sha256, part_bytes: part, expires_at: new Date(Date.now() + UPLOAD_TTL_MS),
@@ -89,17 +96,81 @@ export function receivedParts(row: UploadRow): number[] {
   return out;
 }
 
-export async function putPart(row: UploadRow, n: number, body: Buffer): Promise<number[]> {
+/**
+ * One part, streamed from the request to disk (never held in memory whole:
+ * security review), refused as soon as it runs past its length.
+ */
+export async function putPart(row: UploadRow, n: number, body: Readable): Promise<number[]> {
   const size = Number(row.size);
   const count = partCount(size, row.part_bytes);
   if (!Number.isInteger(n) || n < 0 || n >= count) throw new UploadError(400, 'VALIDATION_ERROR', `Parts are numbered 0 to ${count - 1}.`);
   const want = partLength(size, row.part_bytes, n);
-  if (body.length !== want) throw new UploadError(400, 'SYNC_PART_SIZE', `Part ${n} must be ${want} bytes; ${body.length} arrived.`);
   fs.mkdirSync(dirOf(row.id), { recursive: true });
   const tmp = `${partPath(row.id, n)}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  await fs.promises.writeFile(tmp, body);
-  await fs.promises.rename(tmp, partPath(row.id, n));
+  const out = fs.createWriteStream(tmp);
+  let got = 0;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      body.on('data', (c: Buffer) => {
+        got += c.length;
+        if (got > want) {
+          body.destroy();
+          reject(new UploadError(400, 'SYNC_PART_SIZE', `Part ${n} must be ${want} bytes; more arrived.`));
+          return;
+        }
+        if (!out.write(c)) {
+          body.pause();
+          out.once('drain', () => body.resume());
+        }
+      });
+      body.on('end', () => out.end(() => resolve()));
+      body.on('error', reject);
+      out.on('error', reject);
+    });
+    if (got !== want) throw new UploadError(400, 'SYNC_PART_SIZE', `Part ${n} must be ${want} bytes; ${got} arrived.`);
+    await fs.promises.rename(tmp, partPath(row.id, n));
+  } catch (err) {
+    out.destroy();
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
   return receivedParts(row);
+}
+
+/** Uploads being joined now, and the last join error of each (this process only). */
+const joining = new Set<string>();
+const joinErrors = new Map<string, UploadError>();
+
+export function joinState(id: string): { joining: boolean; error: { code: string; message: string } | null } {
+  const e = joinErrors.get(id);
+  return { joining: joining.has(id), error: e ? { code: e.code, message: e.message } : null };
+}
+
+/**
+ * Starts joining the parts (a background task: up to 2 GiB is read and
+ * hashed, longer than a proxy waits). Refuses at once when parts are
+ * missing. The desktop polls `GET /uploads/:id` until `complete` (or an
+ * error). Calling it again while it runs, or after, is harmless.
+ */
+export function startCompleteUpload(row: UploadRow): { complete: boolean; joining: boolean } {
+  if (row.completed_at && row.file_path && fs.existsSync(row.file_path)) return { complete: true, joining: false };
+  if (joining.has(row.id)) return { complete: false, joining: true };
+  const size = Number(row.size);
+  const count = partCount(size, row.part_bytes);
+  const have = receivedParts(row);
+  if (have.length !== count) {
+    const missing = [...Array(count).keys()].filter((n) => !have.includes(n));
+    throw new UploadError(409, 'SYNC_UPLOAD_INCOMPLETE', `Parts still to send: ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? '…' : ''}.`);
+  }
+  joining.add(row.id);
+  joinErrors.delete(row.id);
+  void completeUpload(row)
+    .catch((err: unknown) => {
+      joinErrors.set(row.id, err instanceof UploadError ? err : new UploadError(500, 'SYNC_UPLOAD_FAILED', 'The server could not join the upload. Send it again.'));
+      if (!(err instanceof UploadError)) console.error('[sync] upload join failed', row.id, err instanceof Error ? err.message : err);
+    })
+    .finally(() => joining.delete(row.id));
+  return { complete: false, joining: true };
 }
 
 /** Joins the parts, checks size and SHA-256, and records the file. */
@@ -113,8 +184,10 @@ export async function completeUpload(row: UploadRow): Promise<{ size: number; sh
     throw new UploadError(409, 'SYNC_UPLOAD_INCOMPLETE', `Parts still to send: ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? '…' : ''}.`);
   }
   const out = path.join(dirOf(row.id), 'archive.tbak');
+  // Written beside, then renamed: a finished archive is never truncated.
+  const tmp = `${out}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   const hash = crypto.createHash('sha256');
-  const fd = await fs.promises.open(out, 'w');
+  const fd = await fs.promises.open(tmp, 'w');
   try {
     for (let n = 0; n < count; n++) {
       const buf = await fs.promises.readFile(partPath(row.id, n));
@@ -127,9 +200,10 @@ export async function completeUpload(row: UploadRow): Promise<{ size: number; sh
   }
   const got = hash.digest('hex');
   if (got !== row.sha256) {
-    fs.rmSync(out, { force: true });
+    fs.rmSync(tmp, { force: true });
     throw new UploadError(400, 'SYNC_UPLOAD_HASH', 'The parts do not add up to the file announced (its SHA-256 differs). Send it again.');
   }
+  await fs.promises.rename(tmp, out);
   for (let n = 0; n < count; n++) fs.rmSync(partPath(row.id, n), { force: true });
   await db('sync_uploads').where({ id: row.id }).update({ file_path: out, completed_at: db.fn.now() });
   return { size, sha256: got };
