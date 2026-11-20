@@ -285,7 +285,9 @@ export function LeadSheetsPage() {
     onSuccess: (res) => {
       if (res.error) { pushToast(res.error.message, 'error'); return; }
       const n = res.data?.orphanedAccounts ?? 0;
-      pushToast(n > 0 ? `Deleted. ${n} account${n === 1 ? '' : 's'} moved to Unassigned.` : 'Lead sheet deleted.', 'success');
+      // A sheet with history in a closed period is retired, not deleted.
+      const done = res.data?.retired ? 'Retired (kept in closed periods)' : 'Deleted';
+      pushToast(n > 0 ? `${done}. ${n} account${n === 1 ? '' : 's'} moved to Unassigned.` : `Lead sheet ${done.toLowerCase()}.`, 'success');
       setSelectedId(null);
       invalidate();
     },
@@ -560,7 +562,8 @@ export function LeadSheetsPage() {
                               const msg = n > 0
                                 ? `Delete "${s.name}"? ${n} account${n === 1 ? '' : 's'} will move to Unassigned.`
                                 : `Delete "${s.name}"?`;
-                              if (await confirmAction({ message: msg, tone: 'danger', confirmLabel: 'Delete' })) {
+                              const full = `${msg} If it has sign-offs, notes or attachments in a closed period, it is retired instead and kept there.`;
+                              if (await confirmAction({ message: full, tone: 'danger', confirmLabel: 'Delete' })) {
                                 deleteMutation.mutate(s.id);
                               }
                             }}

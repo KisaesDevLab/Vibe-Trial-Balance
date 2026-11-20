@@ -177,7 +177,7 @@ export const updateLeadSheet = (
 ) => apiFetch<LeadSheet>(`/lead-sheets/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
 
 export const deleteLeadSheet = (id: number) =>
-  apiFetch<{ id: number; orphanedAccounts: number }>(`/lead-sheets/${id}`, { method: 'DELETE' });
+  apiFetch<{ id: number; orphanedAccounts: number; retired?: boolean }>(`/lead-sheets/${id}`, { method: 'DELETE' });
 
 // ─── period-scoped ───────────────────────────────────────────────────────────
 

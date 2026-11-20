@@ -18,7 +18,8 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
-import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
+import { liveLeadSheets } from '../lib/retired';
+import { assertPeriodsOpen, assertPeriodUnlocked, lockAndListClosed, logAudit } from '../lib/periodGuard';
 import { whereHasActivity } from '../lib/tbActivity';
 import {
   DEFAULT_LEAD_SHEETS,
@@ -154,8 +155,7 @@ leadSheetCollectionRouter.get('/', async (req: AuthRequest, res: Response): Prom
   const periodId = req.query.periodId ? Number(req.query.periodId) : null;
 
   try {
-    const sheets = await db('lead_sheets')
-      .where({ client_id: clientId })
+    const sheets = await liveLeadSheets(db, clientId)
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'code', order: 'asc' }, { column: 'id', order: 'asc' }]);
 
     const counts = await db('chart_of_accounts')
@@ -260,6 +260,28 @@ leadSheetCollectionRouter.post('/', async (req: AuthRequest, res: Response): Pro
   }
   try {
     const max = await db('lead_sheets').where({ client_id: clientId }).max({ m: 'sort_order' }).first() as { m: number | null } | undefined;
+    // A code held by a retired lead sheet brings that sheet back (its history
+    // in closed periods with it) rather than clashing with it.
+    if (parsed.data.code) {
+      const retired = await db('lead_sheets')
+        .where({ client_id: clientId, code: parsed.data.code })
+        .whereNotNull('retired_at')
+        .first('id');
+      if (retired) {
+        const [restored] = await db('lead_sheets').where({ id: retired.id }).update({
+          retired_at: null,
+          name: parsed.data.name,
+          sort_order: parsed.data.sortOrder ?? Number(max?.m ?? 0) + 10,
+        }).returning('*');
+        await logAudit({
+          userId: req.user!.userId, periodId: null, clientId,
+          entityType: 'lead_sheet', entityId: restored.id, action: 'update',
+          description: `Restored retired lead sheet ${restored.code ?? ''} — ${restored.name}`.trim(),
+        });
+        res.status(201).json({ data: { ...restored, restored: true }, error: null });
+        return;
+      }
+    }
     const [row] = await db('lead_sheets').insert({
       client_id: clientId,
       code: parsed.data.code ?? null,
@@ -384,7 +406,7 @@ leadSheetCollectionRouter.post('/auto-assign/preview', async (req: AuthRequest, 
     return;
   }
   try {
-    const sheets = await db('lead_sheets').where({ client_id: clientId }).select('id', 'code', 'name');
+    const sheets = await liveLeadSheets(db, clientId).select('id', 'code', 'name');
     if (sheets.length === 0) {
       res.status(409).json({
         data: null,
@@ -548,13 +570,30 @@ leadSheetItemRouter.delete('/', async (req: AuthRequest, res: Response): Promise
     const orphaned = await db('chart_of_accounts')
       .where({ lead_sheet_id: id, is_active: true }).count({ n: '*' }).first() as { n: string | number } | undefined;
 
-    await db('lead_sheets').where({ id }).delete();
+    const retired = await db.transaction(async (trx): Promise<boolean> => {
+      // A delete cascades to sign-offs, notes and attachments in every
+      // period. When any of them sits in a closed period the sheet is retired
+      // instead: hidden, its accounts unassigned, that history kept.
+      const touched = (await trx.raw(
+        `SELECT period_id FROM lead_sheet_signoffs WHERE lead_sheet_id = ?
+         UNION SELECT period_id FROM lead_sheet_notes WHERE lead_sheet_id = ?
+         UNION SELECT period_id FROM lead_sheet_attachments WHERE lead_sheet_id = ?`, [id, id, id],
+      )).rows as Array<{ period_id: number }>;
+      const closed = await lockAndListClosed(trx, touched.map((r) => r.period_id));
+      if (closed.size > 0) {
+        await trx('chart_of_accounts').where({ lead_sheet_id: id }).update({ lead_sheet_id: null, lead_sheet_source: null });
+        await trx('lead_sheets').where({ id }).update({ retired_at: trx.fn.now() });
+        return true;
+      }
+      await trx('lead_sheets').where({ id }).delete();
+      return false;
+    });
     await logAudit({
       userId: req.user!.userId, periodId: null, clientId: current.client_id as number,
       entityType: 'lead_sheet', entityId: id, action: 'delete',
-      description: `Deleted lead sheet ${current.code ?? ''} — ${current.name}`.trim(),
+      description: `${retired ? 'Retired (it has history in a closed period)' : 'Deleted'} lead sheet ${current.code ?? ''} — ${current.name}`.trim(),
     });
-    res.json({ data: { id, orphanedAccounts: Number(orphaned?.n ?? 0) }, error: null });
+    res.json({ data: { id, orphanedAccounts: Number(orphaned?.n ?? 0), retired }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'lead-sheets');
   }
@@ -566,8 +605,13 @@ async function buildPeriodView(periodId: number, leadSheetId: number | null) {
   const clientId = await periodClientId(periodId);
   if (clientId === null) return null;
 
-  const sheetQuery = db('lead_sheets').where({ client_id: clientId });
-  if (leadSheetId !== null) sheetQuery.where('id', leadSheetId);
+  const sheetQuery = db('lead_sheets as ls').where({ 'ls.client_id': clientId }).select('ls.*');
+  if (leadSheetId !== null) sheetQuery.where('ls.id', leadSheetId);
+  // A retired sheet appears only in periods that hold its history.
+  sheetQuery.where((w) => w.whereNull('ls.retired_at')
+    .orWhereExists(db('lead_sheet_signoffs as s').whereRaw('s.lead_sheet_id = ls.id').where('s.period_id', periodId))
+    .orWhereExists(db('lead_sheet_notes as n').whereRaw('n.lead_sheet_id = ls.id').where('n.period_id', periodId))
+    .orWhereExists(db('lead_sheet_attachments as a').whereRaw('a.lead_sheet_id = ls.id').where('a.period_id', periodId).whereNull('a.deleted_at')));
   const sheets = await sheetQuery
     .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'code', order: 'asc' }]);
 
@@ -870,7 +914,10 @@ leadSheetPeriodRouter.post('/:leadSheetId/notes', async (req: AuthRequest, res: 
     }
 
     const user = await db('app_users').where({ id: req.user!.userId }).first('display_name', 'username');
-    const [row] = await db('lead_sheet_notes').insert({
+    const [row] = await db.transaction(async (trx) => {
+      // Not in a closed (locked) period.
+      await assertPeriodsOpen(trx, [periodId]);
+      return trx('lead_sheet_notes').insert({
       client_id: clientId,
       period_id: periodId,
       lead_sheet_id: leadSheetId,
@@ -879,6 +926,7 @@ leadSheetPeriodRouter.post('/:leadSheetId/notes', async (req: AuthRequest, res: 
       author_id: req.user!.userId,
       author_name: (user?.display_name as string | undefined) ?? (user?.username as string | undefined) ?? null,
     }).returning('*');
+    });
 
     await logAudit({
       userId: req.user!.userId, periodId, clientId,
@@ -905,7 +953,9 @@ leadSheetPeriodRouter.post('/:leadSheetId/notes/:noteId/resolve', async (req: Au
     if (!note) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Note not found' } }); return; }
 
     const user = await db('app_users').where({ id: req.user!.userId }).first('display_name', 'username');
-    const [row] = await db('lead_sheet_notes').where({ id: noteId }).update(
+    const [row] = await db.transaction(async (trx) => {
+      await assertPeriodsOpen(trx, [note.period_id as number]);
+      return trx('lead_sheet_notes').where({ id: noteId }).update(
       parsed.data.resolved
         ? {
             resolved_at: db.fn.now(),
@@ -915,6 +965,7 @@ leadSheetPeriodRouter.post('/:leadSheetId/notes/:noteId/resolve', async (req: Au
           }
         : { resolved_at: null, resolved_by: null, resolved_by_name: null, updated_at: db.fn.now() },
     ).returning('*');
+    });
 
     await logAudit({
       userId: req.user!.userId, periodId: note.period_id as number, clientId: note.client_id as number,

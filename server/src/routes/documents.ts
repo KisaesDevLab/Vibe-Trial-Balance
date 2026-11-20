@@ -16,7 +16,7 @@ import path from 'path';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
-import { logAudit } from '../lib/periodGuard';
+import { assertPeriodsOpen, logAudit } from '../lib/periodGuard';
 import {
   storeDocument,
   openDocument,
@@ -265,7 +265,22 @@ documentsItemRouter.delete('/:id', async (req: AuthRequest, res: Response): Prom
     // Storage first, then the row: if the object cannot be removed, the row
     // must not be hidden, or an admin believes the file is gone while it still
     // exists and still bills.
-    await removeDocument(doc as DocumentRow);
+    // A lead sheet attachment of a closed (locked) period keeps its file. The
+    // attachments that show it are unlinked under their periods' row lock (a
+    // lock cannot land in between), then the storage delete, which no
+    // transaction can undo; if that fails they are linked again.
+    const linked = await db.transaction(async (trx) => {
+      const rows = (await trx('lead_sheet_attachments').where({ document_id: docId }).select('id', 'period_id')) as Array<{ id: number; period_id: number }>;
+      await assertPeriodsOpen(trx, rows.map((r) => r.period_id));
+      if (rows.length) await trx('lead_sheet_attachments').whereIn('id', rows.map((r) => r.id)).update({ document_id: null });
+      return rows.map((r) => r.id);
+    });
+    try {
+      await removeDocument(doc as DocumentRow);
+    } catch (err) {
+      if (linked.length) await db('lead_sheet_attachments').whereIn('id', linked).update({ document_id: docId });
+      throw err;
+    }
 
     await logAudit({
       userId: req.user?.userId ?? null, periodId: null, clientId: doc.client_id as number,

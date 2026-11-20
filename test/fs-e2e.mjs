@@ -690,6 +690,100 @@ async function main() {
     assert.equal((await sql('SELECT count(*)::int AS n FROM fs_letters WHERE is_default'))[0].n, 1);
   });
 
+  await step('a closed period refuses every period write; sign-offs and its name still change', async () => {
+    // Owner 2026-11-19: about thirty writes ignored the lock. FY2026, locked.
+    // Looked up again: the replace restore above re-created the client's rows.
+    const cid = fx.clientId;
+    const one = async (q, params) => (await sql(q, params))[0];
+    const pid = (await one(`SELECT id FROM periods WHERE client_id = $1 AND period_name = 'FY2026'`, [cid])).id;
+    const adminId = (await one(`SELECT id FROM app_users WHERE username = 'admin'`)).id;
+    const acct = async (n) => (await one(`SELECT id FROM chart_of_accounts WHERE client_id = $1 AND account_number = $2`, [cid, n])).id;
+    const a1 = await acct('1000');
+    const a2 = await acct('1100');
+    const lsId = (await one(`SELECT id FROM lead_sheets WHERE client_id = $1 AND code = 'A'`, [cid])).id;
+    const txId = (await one(`INSERT INTO bank_transactions (client_id, period_id, source_account_id, transaction_date, description, amount, classification_status) VALUES ($1,$2,$3,'2026-03-01','Example locked deposit',1000,'unclassified') RETURNING id`, [cid, pid, a1])).id;
+    const recOpen = (await one(`INSERT INTO bank_reconciliations (client_id, source_account_id, period_id, statement_date, statement_ending_balance, beginning_book_balance, status, created_by) VALUES ($1,$2,$3,'2026-03-31',0,0,'in_progress',$4) RETURNING id`, [cid, a1, pid, adminId])).id;
+    const recDone = (await one(`INSERT INTO bank_reconciliations (client_id, source_account_id, period_id, statement_date, statement_ending_balance, beginning_book_balance, status, created_by, completed_by, completed_at) VALUES ($1,$2,$3,'2026-02-28',0,0,'completed',$4,$4,now()) RETURNING id`, [cid, a1, pid, adminId])).id;
+    const taskId = (await one(`INSERT INTO engagement_tasks (period_id, title, status, created_by) VALUES ($1,'Example locked task','open',$2) RETURNING id`, [pid, adminId])).id;
+    const noteId = (await one(`INSERT INTO lead_sheet_notes (client_id, period_id, lead_sheet_id, account_id, body, author_id, author_name) VALUES ($1,$2,$3,$4,'Example locked query',$5,'Administrator') RETURNING id`, [cid, pid, lsId, a1, adminId])).id;
+    const tmId = (await one(`INSERT INTO tickmark_library (client_id, symbol, description, color, sort_order, created_by) VALUES ($1,'Ω','Example locked tickmark','green',900,$2) RETURNING id`, [cid, adminId])).id;
+    await sql(`INSERT INTO tb_tickmarks (period_id, account_id, tickmark_id, created_by) VALUES ($1,$2,$3,$4)`, [pid, a1, tmId, adminId]);
+    const docId = (await one(`INSERT INTO client_documents (client_id, filename, file_size, file_type, uploaded_by, storage_backend, object_key, sha256, period_id, section) VALUES ($1,'L-1.pdf',1234,'application/pdf',$2,'local','example/locked/L-1.pdf','example-sha',$3,'Workpapers') RETURNING id`, [cid, adminId, pid])).id;
+    const attId = (await one(`INSERT INTO lead_sheet_attachments (client_id, period_id, lead_sheet_id, lead_sheet_code, account_id, ref_code, document_id, source_file_name, created_by) VALUES ($1,$2,$3,'A',$4,'A-1',$5,'example-locked.pdf',$6) RETURNING id`, [cid, pid, lsId, a1, docId, adminId])).id;
+    await sql(`UPDATE periods SET locked_at = now(), locked_by = $2 WHERE id = $1`, [pid, adminId]);
+
+    const exists = (table, id, extra = '') => async () => (await one(`SELECT count(*)::int AS n FROM ${table} WHERE id = $1 ${extra}`, [id])).n === 1;
+    const refused = [
+      ['POST', `/api/v1/clients/${cid}/bank-transactions`, { transactionDate: '2026-03-02', description: 'Example locked new', amount: 500, periodId: pid, sourceAccountId: a1 }],
+      ['POST', `/api/v1/clients/${cid}/bank-transactions/batch-delete`, { ids: [txId] }, exists('bank_transactions', txId)],
+      ['POST', `/api/v1/clients/${cid}/bank-transactions/batch-update-source`, { ids: [txId], sourceAccountId: a2 }],
+      ['PATCH', `/api/v1/clients/${cid}/bank-transactions/${txId}`, { description: 'Example locked renamed' }],
+      ['DELETE', `/api/v1/clients/${cid}/bank-transactions/${txId}`, undefined, exists('bank_transactions', txId)],
+      ['DELETE', `/api/v1/documents/${docId}`, undefined, exists('client_documents', docId, 'AND deleted_at IS NULL')],
+      ['POST', `/api/v1/periods/${pid}/engagement-tasks`, { title: 'Example locked task two', status: 'open' }],
+      ['PATCH', `/api/v1/engagement-tasks/${taskId}`, { status: 'in_progress' }],
+      ['DELETE', `/api/v1/engagement-tasks/${taskId}`, undefined, exists('engagement_tasks', taskId)],
+      ['POST', `/api/v1/lead-sheet-attachments/${attId}/annotations`, { kind: 'note', page: 1, xPct: 0.5, yPct: 0.5, text: 'Example locked annotation', color: 'red' }],
+      ['DELETE', `/api/v1/lead-sheet-attachments/${attId}`, undefined, exists('lead_sheet_attachments', attId, 'AND deleted_at IS NULL')],
+      ['POST', `/api/v1/periods/${pid}/lead-sheets/${lsId}/notes`, { leadSheetId: lsId, accountId: a1, body: 'Example locked second query' }],
+      ['POST', `/api/v1/periods/${pid}/lead-sheets/${lsId}/notes/${noteId}/resolve`, { resolved: true }],
+      ['POST', `/api/v1/clients/${cid}/reconciliations`, { sourceAccountId: a1, periodId: pid, statementDate: '2026-04-30', statementEndingBalance: 0 }],
+      ['PATCH', `/api/v1/reconciliations/${recOpen}`, { notes: 'Example locked edit' }],
+      ['POST', `/api/v1/reconciliations/${recOpen}/toggle-item`, { transactionId: txId }],
+      ['POST', `/api/v1/reconciliations/${recOpen}/complete`, { force: true }],
+      ['POST', `/api/v1/reconciliations/${recDone}/reopen`, {}],
+      ['DELETE', `/api/v1/reconciliations/${recOpen}`, undefined, exists('bank_reconciliations', recOpen)],
+      ['POST', `/api/v1/periods/${pid}/tb-tickmarks/toggle`, { accountId: a1, tickmarkId: tmId }],
+      ['PUT', `/api/v1/periods/${pid}/variance-notes/${a2}`, { note: 'Example locked variance' }],
+      ['PATCH', `/api/v1/periods/${pid}`, { startDate: '2026-02-01' }],
+    ];
+    const failures = [];
+    for (const [method, url, json, still] of refused) {
+      const r = await api(url, { method, token, json });
+      if (r.status !== 409 || r.json?.error?.code !== 'PERIOD_LOCKED') failures.push(`${method} ${url}: ${r.status} ${r.text}`);
+      if (still && !(await still())) failures.push(`${method} ${url}: the row is gone`);
+    }
+    assert.deepEqual(failures, [], `\n  ${failures.join('\n  ')}`);
+    assert.equal((await one(`SELECT count(*)::int AS n FROM tb_tickmarks WHERE period_id = $1`, [pid])).n, 1, 'the tickmark stays placed');
+
+    // A lead sheet or tickmark with history in a closed period is retired,
+    // not deleted: hidden from lists, its closed-period history kept.
+    const zId = (await one(`INSERT INTO lead_sheets (client_id, code, name, sort_order, created_by) VALUES ($1,'Z','Example retiring sheet',990,$2) RETURNING id`, [cid, adminId])).id;
+    await sql(`INSERT INTO lead_sheet_signoffs (period_id, lead_sheet_id, role, user_id, user_name, balance_stamp) VALUES ($1,$2,'preparer',$3,'Administrator','example-stamp')`, [pid, zId, adminId]);
+    const unlockedId = (await one(`SELECT id FROM periods WHERE client_id = $1 AND locked_at IS NULL AND id <> $2 ORDER BY id LIMIT 1`, [cid, pid])).id;
+    await sql(`INSERT INTO tb_tickmarks (period_id, account_id, tickmark_id, created_by) VALUES ($1,$2,$3,$4)`, [unlockedId, a1, tmId, adminId]);
+    const retireLs = await api(`/api/v1/lead-sheets/${zId}`, { method: 'DELETE', token });
+    assert.equal(retireLs.status, 200, retireLs.text);
+    assert.equal(retireLs.json.data.retired, true);
+    assert.equal((await one(`SELECT count(*)::int AS n FROM lead_sheet_signoffs WHERE lead_sheet_id = $1`, [zId])).n, 1, 'its sign-off is kept');
+    const list = await api(`/api/v1/clients/${cid}/lead-sheets`, { token });
+    assert.ok(!list.json.data.sheets?.some?.((s) => s.id === zId) && !JSON.stringify(list.json.data).includes('Example retiring sheet'), 'hidden from the list');
+    const view = await api(`/api/v1/periods/${pid}/lead-sheets`, { token });
+    assert.equal(view.status, 200, view.text);
+    assert.ok(JSON.stringify(view.json.data).includes('Example retiring sheet'), 'still shown in the closed period that holds its sign-off');
+    const back = await api(`/api/v1/clients/${cid}/lead-sheets`, { method: 'POST', token, json: { code: 'Z', name: 'Example restored sheet' } });
+    assert.equal(back.status, 201, back.text);
+    assert.equal(back.json.data.id, zId, 'the same sheet comes back');
+    const retireTm = await api(`/api/v1/tickmarks/${tmId}`, { method: 'DELETE', token });
+    assert.equal(retireTm.status, 200, retireTm.text);
+    assert.equal(retireTm.json.data.retired, true);
+    assert.equal((await one(`SELECT count(*)::int AS n FROM tb_tickmarks WHERE tickmark_id = $1 AND period_id = $2`, [tmId, pid])).n, 1, 'kept where the period is closed');
+    assert.equal((await one(`SELECT count(*)::int AS n FROM tb_tickmarks WHERE tickmark_id = $1 AND period_id = $2`, [tmId, unlockedId])).n, 0, 'removed where it is open');
+    const tmList = await api(`/api/v1/clients/${cid}/tickmarks`, { token });
+    assert.ok(!tmList.json.data.some((t) => t.id === tmId), 'hidden from the library');
+
+    // Still allowed on a closed period: a sign-off (adding evidence) and the
+    // period's name (its dates unchanged). Statement Writer is covered above.
+    const sign = await api(`/api/v1/periods/${pid}/lead-sheets/${lsId}/signoff`, { method: 'POST', token, json: { role: 'reviewer' } });
+    assert.ok(sign.status === 200 || sign.status === 201, sign.text);
+    const rename = await api(`/api/v1/periods/${pid}`, { method: 'PATCH', token, json: { periodName: 'FY2026 (closed)', startDate: '2026-01-01' } });
+    assert.equal(rename.status, 200, rename.text);
+
+    await sql(`UPDATE periods SET locked_at = NULL, locked_by = NULL WHERE id = $1`, [pid]);
+    const open = await api(`/api/v1/periods/${pid}/engagement-tasks`, { method: 'POST', token, json: { title: 'Example open task', status: 'open' } });
+    assert.equal(open.status, 201, open.text);
+  });
+
   await step('deleting a period that has statements (and audit rows) takes them along', async () => {
     // The replace-restore above re-created the period; give it an audit row,
     // because audit_log is append-only and a period WITH history is the

@@ -21,6 +21,7 @@ import {
   type CsvMapping,
 } from '../api/bankTransactions';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
+import { LockedPeriodBanner, useSelectedPeriodLocked } from '../components/LockedPeriodBanner';
 import { useUIStore } from '../store/uiStore';
 import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 import { downloadXlsx } from '../utils/downloadXlsx';
@@ -69,6 +70,9 @@ function StatusBadge({ status }: { status: ClassificationStatus }) {
 export function BankTransactionsPage() {
   const { selectedClientId, selectedPeriodId } = useUIStore();
   const qc = useQueryClient();
+  const selectedPeriodLocked = useSelectedPeriodLocked();
+  // The global mutation toast shows a refusal; this only skips the success path.
+  const refused = (res: unknown): boolean => !!(res as { error?: unknown } | undefined)?.error;
 
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterPeriod, setFilterPeriod] = useState(false);
@@ -242,8 +246,9 @@ export function BankTransactionsPage() {
 
   const batchDeleteMutation = useMutation({
     mutationFn: (ids: number[]) => batchDeleteTransactions(clientId!, ids),
-    onSuccess: (_res, ids) => {
+    onSuccess: (res, ids) => {
       invalidate();
+      if (refused(res)) return;
       setSelected(new Set());
       showBatchMessage(`Deleted ${ids.length} transaction(s) successfully.`);
     },
@@ -252,8 +257,9 @@ export function BankTransactionsPage() {
   const batchClassifyMutation = useMutation({
     mutationFn: ({ ids, accountId }: { ids: number[]; accountId: number }) =>
       batchClassifyTransactions(clientId!, ids, accountId),
-    onSuccess: (_res, { ids }) => {
+    onSuccess: (res, { ids }) => {
       invalidate();
+      if (refused(res)) return;
       setSelected(new Set());
       setBatchAccountId('');
       showBatchMessage(`Classified ${ids.length} transaction(s) successfully.`);
@@ -263,8 +269,9 @@ export function BankTransactionsPage() {
   const batchSourceMutation = useMutation({
     mutationFn: ({ ids, sourceAccountId }: { ids: number[]; sourceAccountId: number | null }) =>
       batchUpdateSourceAccount(clientId!, ids, sourceAccountId),
-    onSuccess: (_res, { ids }) => {
+    onSuccess: (res, { ids }) => {
       invalidate();
+      if (refused(res)) return;
       setSelected(new Set());
       setBatchSourceAccountId('');
       showBatchMessage(`Updated source account on ${ids.length} transaction(s).`);
@@ -294,6 +301,7 @@ export function BankTransactionsPage() {
     mutationFn: (ids: number[]) => batchConfirmAiSuggestions(clientId!, ids),
     onSuccess: (res) => {
       invalidate();
+      if (refused(res)) return;
       const n = (res as { data?: { confirmed?: number } })?.data?.confirmed ?? 0;
       showBatchMessage(`Confirmed ${n} AI suggestion(s) — journal entries created.`);
       setSelected(new Set());
@@ -303,7 +311,7 @@ export function BankTransactionsPage() {
   const updateDescMutation = useMutation({
     mutationFn: ({ id, description }: { id: number; description: string | null }) =>
       classifyTransaction(clientId!, id, { description }),
-    onSuccess: () => { invalidate(); setEditingDescId(null); },
+    onSuccess: (res) => { invalidate(); if (!refused(res)) setEditingDescId(null); },
   });
 
   const deleteRuleMutation = useMutation({
@@ -545,6 +553,9 @@ export function BankTransactionsPage() {
       </div>
 
       {/* Batch operation messages */}
+      {selectedPeriodLocked && (
+        <LockedPeriodBanner>The selected period is locked: its bank transactions cannot be added, changed or deleted until it is unlocked.</LockedPeriodBanner>
+      )}
       {batchMessage && (
         <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 text-green-700 dark:text-green-400 text-sm px-4 py-2 rounded mb-3">{batchMessage}</div>
       )}

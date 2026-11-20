@@ -22,7 +22,8 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
-import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
+import { liveLeadSheets, liveTickmarks } from '../lib/retired';
+import { assertPeriodsOpen, assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { nextRefCode, refPrefix } from '../lib/leadSheetRef';
 import {
   burnAnnotation, imageToPdf, isConvertibleImage, pdfPageCount,
@@ -138,7 +139,7 @@ leadSheetAttachmentCollectionRouter.post('/', uploadSingle('file'), async (req: 
     let leadSheetId = parsed.data.leadSheetId ?? null;
     let code = parsed.data.leadSheetCode ?? null;
     if (leadSheetId) {
-      const ls = await db('lead_sheets').where({ id: leadSheetId, client_id: period.client_id }).first('id', 'code');
+      const ls = await liveLeadSheets(db, period.client_id as number).where({ id: leadSheetId }).first('id', 'code');
       if (!ls) {
         res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'That lead sheet belongs to a different client.' } });
         return;
@@ -187,7 +188,11 @@ leadSheetAttachmentCollectionRouter.post('/', uploadSingle('file'), async (req: 
       });
 
       try {
-        const [row] = await db('lead_sheet_attachments').insert({
+        // Again under the period row lock: the period may have been locked
+        // while the bytes were stored (the catch removes them).
+        const [row] = await db.transaction(async (trx) => {
+          await assertPeriodsOpen(trx, [periodId]);
+          return trx('lead_sheet_attachments').insert({
           client_id: period.client_id,
           period_id: periodId,
           lead_sheet_id: leadSheetId,
@@ -195,9 +200,10 @@ leadSheetAttachmentCollectionRouter.post('/', uploadSingle('file'), async (req: 
           account_id: parsed.data.accountId ?? null,
           ref_code: refCode,
           document_id: doc.id,
-          source_file_name: req.file.originalname,
+          source_file_name: req.file!.originalname,
           created_by: req.user?.userId ?? null,
         }).returning('*');
+        });
 
         await logAudit({
           userId: req.user?.userId ?? null, periodId, clientId: period.client_id as number,
@@ -339,8 +345,8 @@ leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res:
       // library is what a client's workpapers actually use. Symbol and colour
       // are SNAPSHOT into the record so deleting the library tickmark later
       // never orphans what was actually stamped.
-      const tm = await db('tickmark_library')
-        .where({ id: input.tickmarkId, client_id: att.row.client_id })
+      const tm = await liveTickmarks(db, att.row.client_id as number)
+        .where({ id: input.tickmarkId })
         .first('id', 'symbol', 'color', 'description');
       if (!tm) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tickmark not found for this client.' } }); return; }
       annotation = {
@@ -365,6 +371,9 @@ leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res:
 
     await db.transaction(async (trx) => {
       await trx('lead_sheet_attachments').where({ id }).forUpdate().first('id');
+      // Again under the period row lock, held until the stamped bytes and
+      // the row are written: the check at the top ran before the work above.
+      await assertPeriodsOpen(trx, [att.row.period_id as number]);
 
       // Re-read inside the lock: a concurrent stamp may have replaced the bytes
       // (and the row's size/hash) since loadAttachment ran.
@@ -419,11 +428,24 @@ leadSheetAttachmentItemRouter.delete('/', async (req: AuthRequest, res: Response
 
     // Remove the bytes and the document row, but keep this row as a tombstone
     // so its ref code stays reserved. document_id is SET NULL by the FK.
-    await removeDocument(att.doc);
-    await db('lead_sheet_attachments').where({ id }).update({
-      deleted_at: db.fn.now(),
-      deleted_by: req.user?.userId ?? null,
+    // The row changes under the period row lock, so a lock cannot land
+    // between the check and the change; the storage delete, which no
+    // transaction can undo, follows. If it fails the row is put back, so
+    // nothing is hidden while its file still exists.
+    await db.transaction(async (trx) => {
+      await assertPeriodsOpen(trx, [att.row.period_id as number]);
+      await trx('lead_sheet_attachments').where({ id }).update({
+        deleted_at: trx.fn.now(),
+        deleted_by: req.user?.userId ?? null,
+        document_id: null,
+      });
     });
+    try {
+      await removeDocument(att.doc);
+    } catch (err) {
+      await db('lead_sheet_attachments').where({ id }).update({ deleted_at: null, deleted_by: null, document_id: att.doc.id });
+      throw err;
+    }
     await logAudit({
       userId: req.user?.userId ?? null, periodId: att.row.period_id as number, clientId: att.row.client_id as number,
       entityType: 'lead_sheet_attachment', entityId: id, action: 'delete',

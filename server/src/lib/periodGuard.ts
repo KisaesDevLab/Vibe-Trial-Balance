@@ -28,12 +28,51 @@ export async function assertPeriodUnlocked(periodId: number, trx?: Knex.Transact
       { code: 'PERIOD_NOT_FOUND', status: 404 },
     );
   }
-  if (period.locked_at) {
-    throw Object.assign(
-      new Error('This period is locked and cannot be modified. Unlock it first.'),
-      { code: 'PERIOD_LOCKED', status: 409 },
-    );
-  }
+  if (period.locked_at) throw periodLockedError();
+}
+
+/**
+ * The refusal for a closed (locked) period: 409 PERIOD_LOCKED. `expose`, so a
+ * route that does not map PERIOD_LOCKED itself still answers 409, not 500.
+ */
+export function periodLockedError(message = 'This period is locked and cannot be modified. Unlock it first.'): Error {
+  return Object.assign(new Error(message), { code: 'PERIOD_LOCKED', status: 409, expose: true });
+}
+
+/**
+ * Refuses (409 PERIOD_LOCKED) a write into any of these periods that is
+ * closed, for writes that name their periods through their rows (bank rows,
+ * tasks, notes, tickmarks, reconciliations, attachments). Takes each period
+ * row FOR UPDATE, in id order, inside the write's transaction, so a lock
+ * cannot land between the check and the write. Null ids (rows that belong
+ * to no period) and periods that do not exist are skipped: the write itself
+ * answers for those. Owner 2026-11-19: a closed period is read-only for
+ * every period write, sign-offs and Statement Writer excepted.
+ */
+export async function assertPeriodsOpen(
+  trx: Knex.Transaction,
+  periodIds: Iterable<number | string | null | undefined>,
+): Promise<void> {
+  if ((await lockAndListClosed(trx, periodIds)).size > 0) throw periodLockedError();
+}
+
+/** `assertPeriodsOpen` for the period of one row of `table` (a task, a reconciliation). */
+export async function assertRowPeriodOpen(trx: Knex.Transaction, table: string, id: number): Promise<void> {
+  const row = await trx(table).where({ id }).first('period_id');
+  await assertPeriodsOpen(trx, [row?.period_id as number | null | undefined]);
+}
+
+/**
+ * For writes that should SKIP rows of a closed period instead of refusing
+ * the batch (AI suggestions): locks the periods, as `assertPeriodsOpen`, and
+ * returns the ids that are closed.
+ */
+export async function lockAndListClosed(trx: Knex.Transaction, periodIds: Iterable<number | string | null | undefined>): Promise<Set<number>> {
+  const ids = [...new Set([...periodIds].map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))];
+  if (ids.length === 0) return new Set();
+  // One statement; ORDER BY id takes the row locks in id order.
+  const rows = (await trx('periods').whereIn('id', ids).orderBy('id').forUpdate().select('id', 'locked_at')) as Array<{ id: number; locked_at: unknown }>;
+  return new Set(rows.filter((r) => r.locked_at).map((r) => Number(r.id)));
 }
 
 interface AuditEntry {
