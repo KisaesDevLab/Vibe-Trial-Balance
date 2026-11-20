@@ -19,7 +19,7 @@ import { getJournalEntries, createJournalEntry } from './services/journalEntrySe
 import { getChartOfAccounts } from './services/coaService';
 import { getTaxMappingStatus, confirmTaxAssignments } from './services/taxService';
 import { runDiagnostics } from './services/diagnosticsService';
-import { assertPeriodsOpen, logAudit } from '../lib/periodGuard';
+import { assertPeriodsOpen, assertRowPeriodOpen, logAudit } from '../lib/periodGuard';
 import { getMcpAgentUserId, generateMcpAgentJwt } from './auth';
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
@@ -707,7 +707,7 @@ export function createMcpServer(rateLimitKey = 'default'): Server {
           if (typeof a.notes === 'string') updates.notes = a.notes;
 
           const [updated] = await db.transaction(async (trx) => {
-            await assertPeriodsOpen(trx, [(await trx('engagement_tasks').where({ id: taskId }).first('period_id'))?.period_id]);
+            await assertRowPeriodOpen(trx, 'engagement_tasks', taskId);
             return trx('engagement_tasks').where({ id: taskId }).update(updates).returning('*');
           });
           if (!updated) return { content: [{ type: 'text', text: `Task ${taskId} not found` }], isError: true };

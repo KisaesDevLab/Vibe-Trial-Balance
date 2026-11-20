@@ -7,41 +7,11 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
-import { assertPeriodsOpen } from '../lib/periodGuard';
-import type { Knex } from 'knex';
+import { assertPeriodsOpen, assertRowPeriodOpen } from '../lib/periodGuard';
 
 // ── Collection: /api/v1/clients/:clientId/reconciliations ────────────────────
 export const reconciliationCollectionRouter = Router({ mergeParams: true });
 reconciliationCollectionRouter.use(authMiddleware);
-
-/**
- * Refuses (PERIOD_LOCKED) a write to a reconciliation whose period is
- * closed. Inside the write's transaction, so it orders against a lock.
- */
-async function assertReconPeriodOpen(trx: Knex.Transaction, recId: number): Promise<void> {
-  const r = await trx('bank_reconciliations').where({ id: recId }).first('period_id');
-  await assertPeriodsOpen(trx, [r?.period_id as number | null | undefined]);
-}
-
-/**
- * Reject mutations against a reconciliation whose period is locked. Returns
- * true iff the caller should abort (already replied 409). Locked reconciliations
- * must remain read-only once their period is closed.
- */
-async function reconciliationPeriodLocked(recId: number, res: Response): Promise<boolean> {
-  const row = await db('bank_reconciliations as br')
-    .leftJoin('periods as p', 'p.id', 'br.period_id')
-    .where('br.id', recId)
-    .first('p.locked_at');
-  if (row?.locked_at) {
-    res.status(409).json({
-      data: null,
-      error: { code: 'PERIOD_LOCKED', message: 'This reconciliation is in a locked period and cannot be modified.' },
-    });
-    return true;
-  }
-  return false;
-}
 
 const createSchema = z.object({
   sourceAccountId: z.number().int().positive(),
@@ -226,7 +196,7 @@ reconciliationItemRouter.patch('/', async (req: AuthRequest, res: Response): Pro
       return;
     }
     const [updated] = await db.transaction(async (trx) => {
-      await assertReconPeriodOpen(trx, id);
+      await assertRowPeriodOpen(trx, 'bank_reconciliations', id);
       return trx('bank_reconciliations').where({ id }).update(updates).returning('*');
     });
     res.json({ data: { ...updated, statement_ending_balance: Number(updated.statement_ending_balance), beginning_book_balance: Number(updated.beginning_book_balance) }, error: null });
@@ -244,7 +214,6 @@ reconciliationItemRouter.post('/toggle-item', async (req: AuthRequest, res: Resp
     return;
   }
   try {
-    if (await reconciliationPeriodLocked(id, res)) return;
     const rec = await db('bank_reconciliations').where({ id }).first('status');
     if (!rec) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Reconciliation not found' } });
@@ -255,7 +224,7 @@ reconciliationItemRouter.post('/toggle-item', async (req: AuthRequest, res: Resp
       return;
     }
     const cleared = await db.transaction(async (trx) => {
-      await assertReconPeriodOpen(trx, id);
+      await assertRowPeriodOpen(trx, 'bank_reconciliations', id);
       const existing = await trx('reconciliation_items').where({ reconciliation_id: id, transaction_id: transactionId }).first('id');
       if (existing) {
         await trx('reconciliation_items').where({ reconciliation_id: id, transaction_id: transactionId }).delete();
@@ -278,7 +247,6 @@ reconciliationItemRouter.post('/complete', async (req: AuthRequest, res: Respons
     return;
   }
   try {
-    if (await reconciliationPeriodLocked(id, res)) return;
     const rec = await db('bank_reconciliations').where({ id }).first();
     if (!rec) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Reconciliation not found' } });
@@ -324,7 +292,7 @@ reconciliationItemRouter.post('/complete', async (req: AuthRequest, res: Respons
     }
 
     const [updated] = await db.transaction(async (trx) => {
-      await assertReconPeriodOpen(trx, id);
+      await assertRowPeriodOpen(trx, 'bank_reconciliations', id);
       return trx('bank_reconciliations')
         .where({ id })
         .update({ status: 'completed', completed_by: req.user!.userId, completed_at: trx.fn.now() })
@@ -358,7 +326,7 @@ reconciliationItemRouter.post('/reopen', async (req: AuthRequest, res: Response)
       return;
     }
     const [updated] = await db.transaction(async (trx) => {
-      await assertReconPeriodOpen(trx, id);
+      await assertRowPeriodOpen(trx, 'bank_reconciliations', id);
       return trx('bank_reconciliations')
         .where({ id })
         .update({ status: 'open', completed_by: null, completed_at: null })
@@ -388,7 +356,7 @@ reconciliationItemRouter.delete('/', async (req: AuthRequest, res: Response): Pr
       return;
     }
     await db.transaction(async (trx) => {
-      await assertReconPeriodOpen(trx, id);
+      await assertRowPeriodOpen(trx, 'bank_reconciliations', id);
       await trx('reconciliation_items').where({ reconciliation_id: id }).delete();
       await trx('bank_reconciliations').where({ id }).delete();
     });

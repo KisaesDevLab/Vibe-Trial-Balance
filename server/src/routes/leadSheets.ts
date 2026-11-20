@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
+import { liveLeadSheets } from '../lib/retired';
 import { assertPeriodsOpen, assertPeriodUnlocked, lockAndListClosed, logAudit } from '../lib/periodGuard';
 import { whereHasActivity } from '../lib/tbActivity';
 import {
@@ -154,9 +155,7 @@ leadSheetCollectionRouter.get('/', async (req: AuthRequest, res: Response): Prom
   const periodId = req.query.periodId ? Number(req.query.periodId) : null;
 
   try {
-    const sheets = await db('lead_sheets')
-      .where({ client_id: clientId })
-      .whereNull('retired_at')
+    const sheets = await liveLeadSheets(db, clientId)
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'code', order: 'asc' }, { column: 'id', order: 'asc' }]);
 
     const counts = await db('chart_of_accounts')
@@ -407,7 +406,7 @@ leadSheetCollectionRouter.post('/auto-assign/preview', async (req: AuthRequest, 
     return;
   }
   try {
-    const sheets = await db('lead_sheets').where({ client_id: clientId }).whereNull('retired_at').select('id', 'code', 'name');
+    const sheets = await liveLeadSheets(db, clientId).select('id', 'code', 'name');
     if (sheets.length === 0) {
       res.status(409).json({
         data: null,
@@ -575,12 +574,12 @@ leadSheetItemRouter.delete('/', async (req: AuthRequest, res: Response): Promise
       // A delete cascades to sign-offs, notes and attachments in every
       // period. When any of them sits in a closed period the sheet is retired
       // instead: hidden, its accounts unassigned, that history kept.
-      const touched = [
-        ...(await trx('lead_sheet_signoffs').where({ lead_sheet_id: id }).distinct().pluck('period_id')),
-        ...(await trx('lead_sheet_notes').where({ lead_sheet_id: id }).distinct().pluck('period_id')),
-        ...(await trx('lead_sheet_attachments').where({ lead_sheet_id: id }).distinct().pluck('period_id')),
-      ];
-      const closed = await lockAndListClosed(trx, touched);
+      const touched = (await trx.raw(
+        `SELECT period_id FROM lead_sheet_signoffs WHERE lead_sheet_id = ?
+         UNION SELECT period_id FROM lead_sheet_notes WHERE lead_sheet_id = ?
+         UNION SELECT period_id FROM lead_sheet_attachments WHERE lead_sheet_id = ?`, [id, id, id],
+      )).rows as Array<{ period_id: number }>;
+      const closed = await lockAndListClosed(trx, touched.map((r) => r.period_id));
       if (closed.size > 0) {
         await trx('chart_of_accounts').where({ lead_sheet_id: id }).update({ lead_sheet_id: null, lead_sheet_source: null });
         await trx('lead_sheets').where({ id }).update({ retired_at: trx.fn.now() });

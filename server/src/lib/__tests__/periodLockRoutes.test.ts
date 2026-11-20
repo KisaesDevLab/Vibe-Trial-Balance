@@ -165,8 +165,8 @@ const MCP_OTHER: Record<string, string> = {
  * What counts as reaching the lock: a guard, or a helper in the same file
  * that is itself checked below to call one.
  */
-const GUARD = /\b(assertPeriodUnlocked|assertPeriodsOpen|lockAndListClosed|PERIOD_LOCKED)\b/;
-const GUARDED_HELPERS = ['syncTxJE', 'assertReconPeriodOpen', 'reconciliationPeriodLocked', 'upsertTrialBalance', 'createJournalEntry'];
+const GUARD = /\b(assertPeriodUnlocked|assertPeriodsOpen|assertRowPeriodOpen|lockAndListClosed|periodLockedError|PERIOD_LOCKED)\b/;
+const GUARDED_HELPERS = ['syncTxJE', 'upsertTrialBalance', 'createJournalEntry'];
 
 interface Found { key: string; file: string; body: string }
 

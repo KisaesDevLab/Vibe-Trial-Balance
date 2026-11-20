@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
+import { liveTickmarks } from '../lib/retired';
 import { assertPeriodsOpen, lockAndListClosed } from '../lib/periodGuard';
 
 // Tickmark library (per client)
@@ -34,7 +35,7 @@ tickmarkLibraryCollectionRouter.get('/', async (req: AuthRequest, res: Response)
   const clientId = Number(req.params.clientId);
   if (isNaN(clientId)) { res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid client ID' } }); return; }
   try {
-    const rows = await db('tickmark_library').where({ client_id: clientId }).whereNull('retired_at')
+    const rows = await liveTickmarks(db, clientId)
       .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'id', order: 'asc' }]);
     res.json({ data: rows, error: null });
   } catch (err: unknown) {

@@ -21,7 +21,7 @@ import {
   type CsvMapping,
 } from '../api/bankTransactions';
 import { listAccounts, type Account } from '../api/chartOfAccounts';
-import { listPeriods } from '../api/periods';
+import { LockedPeriodBanner, useSelectedPeriodLocked } from '../components/LockedPeriodBanner';
 import { useUIStore } from '../store/uiStore';
 import { AccountSearchDropdown } from '../components/AccountSearchDropdown';
 import { downloadXlsx } from '../utils/downloadXlsx';
@@ -70,21 +70,9 @@ function StatusBadge({ status }: { status: ClassificationStatus }) {
 export function BankTransactionsPage() {
   const { selectedClientId, selectedPeriodId } = useUIStore();
   const qc = useQueryClient();
-  // A locked period refuses changes to its bank rows; say so up front.
-  const { data: periodsForLock } = useQuery({
-    queryKey: ['periods', selectedClientId],
-    queryFn: async () => { const r = await listPeriods(selectedClientId!); return r.data ?? []; },
-    enabled: !!selectedClientId,
-  });
-  const selectedPeriodLocked = !!periodsForLock?.find((p) => p.id === selectedPeriodId)?.locked_at;
-  const [actionError, setActionError] = useState<string | null>(null);
-  /** True when the server refused (the message is shown); false to carry on. */
-  const refused = (res: unknown): boolean => {
-    const msg = (res as { error?: { message?: string } | null } | undefined)?.error?.message;
-    if (msg) { setActionError(msg); return true; }
-    setActionError(null);
-    return false;
-  };
+  const selectedPeriodLocked = useSelectedPeriodLocked();
+  // The global mutation toast shows a refusal; this only skips the success path.
+  const refused = (res: unknown): boolean => !!(res as { error?: unknown } | undefined)?.error;
 
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterPeriod, setFilterPeriod] = useState(false);
@@ -234,7 +222,7 @@ export function BankTransactionsPage() {
   const classifyMutation = useMutation({
     mutationFn: ({ id, accountId }: { id: number; accountId: number }) =>
       classifyTransaction(clientId!, id, { accountId, classificationStatus: 'manual' }),
-    onSuccess: (res) => { refused(res); invalidate(); },
+    onSuccess: () => invalidate(),
   });
 
   const confirmMutation = useMutation({
@@ -243,12 +231,12 @@ export function BankTransactionsPage() {
         accountId: tx.ai_suggested_account_id ?? tx.account_id,
         classificationStatus: 'confirmed',
       }),
-    onSuccess: (res) => { refused(res); invalidate(); },
+    onSuccess: () => invalidate(),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteBankTransaction(clientId!, id),
-    onSuccess: (res) => { refused(res); invalidate(); },
+    onSuccess: () => invalidate(),
   });
 
   const showBatchMessage = (msg: string) => {
@@ -566,15 +554,7 @@ export function BankTransactionsPage() {
 
       {/* Batch operation messages */}
       {selectedPeriodLocked && (
-        <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-sm px-4 py-2 rounded mb-3">
-          The selected period is locked: its bank transactions cannot be added, changed or deleted until it is unlocked.
-        </div>
-      )}
-      {actionError && (
-        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-300 text-sm px-4 py-2 rounded mb-3 flex justify-between">
-          <span>{actionError}</span>
-          <button onClick={() => setActionError(null)} aria-label="Dismiss" className="ml-3">&times;</button>
-        </div>
+        <LockedPeriodBanner>The selected period is locked: its bank transactions cannot be added, changed or deleted until it is unlocked.</LockedPeriodBanner>
       )}
       {batchMessage && (
         <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 text-green-700 dark:text-green-400 text-sm px-4 py-2 rounded mb-3">{batchMessage}</div>

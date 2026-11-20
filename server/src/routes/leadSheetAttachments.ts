@@ -22,6 +22,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
+import { liveLeadSheets, liveTickmarks } from '../lib/retired';
 import { assertPeriodsOpen, assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { nextRefCode, refPrefix } from '../lib/leadSheetRef';
 import {
@@ -138,7 +139,7 @@ leadSheetAttachmentCollectionRouter.post('/', uploadSingle('file'), async (req: 
     let leadSheetId = parsed.data.leadSheetId ?? null;
     let code = parsed.data.leadSheetCode ?? null;
     if (leadSheetId) {
-      const ls = await db('lead_sheets').where({ id: leadSheetId, client_id: period.client_id }).first('id', 'code');
+      const ls = await liveLeadSheets(db, period.client_id as number).where({ id: leadSheetId }).first('id', 'code');
       if (!ls) {
         res.status(403).json({ data: null, error: { code: 'FORBIDDEN', message: 'That lead sheet belongs to a different client.' } });
         return;
@@ -344,9 +345,8 @@ leadSheetAttachmentItemRouter.post('/annotations', async (req: AuthRequest, res:
       // library is what a client's workpapers actually use. Symbol and colour
       // are SNAPSHOT into the record so deleting the library tickmark later
       // never orphans what was actually stamped.
-      const tm = await db('tickmark_library')
-        .where({ id: input.tickmarkId, client_id: att.row.client_id })
-        .whereNull('retired_at')
+      const tm = await liveTickmarks(db, att.row.client_id as number)
+        .where({ id: input.tickmarkId })
         .first('id', 'symbol', 'color', 'description');
       if (!tm) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Tickmark not found for this client.' } }); return; }
       annotation = {

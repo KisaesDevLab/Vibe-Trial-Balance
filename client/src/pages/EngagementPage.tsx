@@ -4,6 +4,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { LockedPeriodBanner } from '../components/LockedPeriodBanner';
 import { useUIStore } from '../store/uiStore';
 import { confirmAction } from '../components/ConfirmDialog';
 import { listUsers } from '../api/users';
@@ -196,13 +197,8 @@ function TemplatesModal({ onClose, onAdd }: { onClose: () => void; onAdd: (items
 
 function ChecklistTab({ periodId, locked }: { periodId: number; locked: boolean }) {
   const qc = useQueryClient();
-  // A refusal from the server (a period locked meanwhile) is shown, not dropped.
-  const [error, setError] = useState<string | null>(null);
-  const done = (res: { error?: { message: string } | null } | void, after: () => void) => {
-    if (res && res.error) { setError(res.error.message); return; }
-    setError(null);
-    after();
-  };
+  // The global mutation toast shows a refusal; this only skips the success path.
+  const done = (res: { error?: unknown } | void, after: () => void) => { if (!res?.error) after(); };
   const [modal, setModal]             = useState<EngagementTask | null | 'new'>(null);
   const [showTemplates, setShowTemplates] = useState(false);
   const [filterStatus, setFilterStatus]   = useState<TaskStatus | 'all'>('all');
@@ -271,12 +267,7 @@ function ChecklistTab({ periodId, locked }: { periodId: number; locked: boolean 
   return (
     <div className="space-y-4">
       {locked && (
-        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
-          This period is locked, so its checklist is read-only. Unlock the period to change tasks.
-        </div>
-      )}
-      {error && (
-        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-200">{error}</div>
+        <LockedPeriodBanner>This period is locked, so its checklist is read-only. Unlock the period to change tasks.</LockedPeriodBanner>
       )}
       {/* Toolbar */}
       <div className="flex items-center justify-between flex-wrap gap-2">

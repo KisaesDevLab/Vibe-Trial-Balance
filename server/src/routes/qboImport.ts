@@ -29,6 +29,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
+import { liveLeadSheets } from '../lib/retired';
 import { inferAccountType, type AccountCategory } from '../lib/accountTypeInference';
 import { assignSequentialNumbers } from '../lib/accountNumbering';
 import { suggestLeadSheet } from '../lib/leadSheets';
@@ -708,7 +709,7 @@ qboImportRouter.post('/confirm', async (req: AuthRequest, res: Response): Promis
       seenMatch.add(r.matchedAccountId!);
     }
 
-    const leadSheets = (await db('lead_sheets').where({ client_id: clientId }).whereNull('retired_at').select('id', 'code')) as Array<{ id: number; code: string | null }>;
+    const leadSheets = (await liveLeadSheets(db, clientId).select('id', 'code')) as Array<{ id: number; code: string | null }>;
     const leadSheetByCode = new Map<string, number>(
       leadSheets.filter((s) => !!s.code).map((s) => [s.code!.trim().toUpperCase(), s.id]),
     );

@@ -150,9 +150,11 @@ export function TickmarksPage() {
     mutationFn: deleteTickmark,
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: qk });
-      // A refusal used to vanish silently; a retire (placed in a closed period) is said.
-      const msg = res.error ? res.error.message : res.data?.retired ? 'Tickmark retired: it stays on the closed periods it was placed in, and is removed everywhere else.' : null;
-      if (msg) { setApplyMsg(msg); setTimeout(() => setApplyMsg(null), 6000); }
+      // A retire (placed in a closed period) is said; a refusal gets the global toast.
+      if (res.data?.retired) {
+        setApplyMsg('Tickmark retired: it stays on the closed periods it was placed in, and is removed everywhere else.');
+        setTimeout(() => setApplyMsg(null), 6000);
+      }
     },
   });
 

@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { sendServerError } from '../lib/safeError';
-import { assertPeriodsOpen } from '../lib/periodGuard';
+import { assertPeriodsOpen, assertRowPeriodOpen } from '../lib/periodGuard';
 
 export const engagementCollectionRouter = Router({ mergeParams: true });
 engagementCollectionRouter.use(authMiddleware);
@@ -110,7 +110,7 @@ engagementItemRouter.patch('/', async (req: AuthRequest, res: Response): Promise
   }
   try {
     const [updated] = await db.transaction(async (trx) => {
-      await assertPeriodsOpen(trx, [(await trx('engagement_tasks').where({ id }).first('period_id'))?.period_id]);
+      await assertRowPeriodOpen(trx, 'engagement_tasks', id);
       return trx('engagement_tasks').where({ id }).update(updates).returning('*');
     });
     if (!updated) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Task not found' } }); return; }
@@ -126,7 +126,7 @@ engagementItemRouter.delete('/', async (req: AuthRequest, res: Response): Promis
   if (isNaN(id)) { res.status(400).json({ data: null, error: { code: 'INVALID_ID', message: 'Invalid ID' } }); return; }
   try {
     const deleted = await db.transaction(async (trx): Promise<number> => {
-      await assertPeriodsOpen(trx, [(await trx('engagement_tasks').where({ id }).first('period_id'))?.period_id]);
+      await assertRowPeriodOpen(trx, 'engagement_tasks', id);
       const n: number = await trx('engagement_tasks').where({ id }).delete();
       return n;
     });

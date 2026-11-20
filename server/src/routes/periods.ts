@@ -6,7 +6,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { logAudit } from '../lib/periodGuard';
+import { logAudit, periodLockedError } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
 import { isForeignKeyViolation, foreignKeyBlockMessage, isRaisedException } from '../lib/pgErrors';
 
@@ -106,7 +106,7 @@ periodItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<
           trx.raw('(end_date IS DISTINCT FROM ?::date) AS end_moves', [d.endDate === undefined ? trx.raw('end_date') : (d.endDate || null)]),
         );
         if (before?.locked_at && (before.start_moves || before.end_moves)) {
-          throw Object.assign(new Error("A locked period's dates cannot change. Unlock it first."), { code: 'PERIOD_LOCKED', status: 409, expose: true });
+          throw periodLockedError("A locked period's dates cannot change. Unlock it first.");
         }
       }
       if (d.isCurrent === true) {
