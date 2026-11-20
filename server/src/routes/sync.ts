@@ -870,7 +870,7 @@ desktopSyncRouter.get('/checkouts', async (req: AuthRequest, res: Response): Pro
         return {
           id: r.id, periodId: r.period_id, periodName: r.period_name, clientId: r.client_id, clientName: r.client_name,
           user: (r.display_name as string | null) ?? r.username, device: r.device, since: since.toISOString(), days, stale: days >= warnDays,
-          mine: Number(r.user_id) === req.user!.userId,
+          mine: r.user_id === req.user!.userId,
         };
       }),
       error: null,

@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { changePassword } from '../../api/auth';
-import { DESKTOP_SYNC_QUERY_KEY, listCheckouts, listSyncDevices } from '../../api/desktopSync';
+import { CHECKOUTS_QUERY_KEY, DESKTOP_SYNC_QUERY_KEY, listCheckouts, listSyncDevices } from '../../api/desktopSync';
 import { PasswordInput } from '../PasswordInput';
 
 export function ChangePasswordForm() {
@@ -21,11 +21,11 @@ export function ChangePasswordForm() {
   // Changing your password signs out your paired desktops and releases the
   // periods they hold (desktop sync): say so before, not after.
   const { data: devices } = useQuery({
-    queryKey: [...DESKTOP_SYNC_QUERY_KEY, 'mine'],
+    queryKey: [...DESKTOP_SYNC_QUERY_KEY, false],
     queryFn: async () => (await listSyncDevices(false)).data ?? [],
   });
   const { data: checkouts } = useQuery({
-    queryKey: ['desktop-sync-checkouts'],
+    queryKey: CHECKOUTS_QUERY_KEY,
     queryFn: async () => (await listCheckouts()).data ?? [],
   });
   const myDevices = (devices ?? []).filter((d) => d.mine);
@@ -54,7 +54,7 @@ export function ChangePasswordForm() {
     setPwSaved(true);
     setTimeout(() => setPwSaved(false), 3000);
     void qc.invalidateQueries({ queryKey: DESKTOP_SYNC_QUERY_KEY });
-    void qc.invalidateQueries({ queryKey: ['desktop-sync-checkouts'] });
+    void qc.invalidateQueries({ queryKey: CHECKOUTS_QUERY_KEY });
   };
 
   return (

@@ -11,6 +11,7 @@
 import { apiFetch } from './client';
 
 export const DESKTOP_SYNC_QUERY_KEY = ['desktop-sync-devices'] as const;
+export const CHECKOUTS_QUERY_KEY = ['desktop-sync-checkouts'] as const;
 
 export interface PairingCode {
   /** As shown: XXXX-XXXX. */
