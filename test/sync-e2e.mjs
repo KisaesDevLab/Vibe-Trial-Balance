@@ -1701,6 +1701,123 @@ async function main() {
     await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
   });
 
+  // ── Code review of the sync branch (2026-11-21).
+  await step('Code review: a pull that cannot start leaves no hold; a send-back under a hold whose pull never finished is refused', async () => {
+    const d = await pairWith(admin, 'Busy desktop');
+    const P = s3.period.id;
+    // This computer has three jobs running already.
+    const fake = await sql(`INSERT INTO sync_jobs (device_id, user_id, kind, state)
+                            SELECT d.id, d.user_id, 'pull', 'running' FROM sync_devices d CROSS JOIN generate_series(1, 3) WHERE d.id = $1 RETURNING id`, [d.deviceId]);
+    assert.equal(fake.length, 3);
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(pull.status, 429, pull.text);
+    assert.equal(pull.json.error.code, 'SYNC_BUSY');
+    assert.equal((await one(`SELECT count(*)::int AS n FROM period_checkouts WHERE period_id = $1 AND released_at IS NULL`, [P])).n, 0, 'the refused pull left no hold');
+    await sql(`DELETE FROM sync_jobs WHERE id = ANY($1)`, [fake.map((f) => f.id)]);
+    // A hold with no stamp (its pull never finished): a send-back under it is refused.
+    const p = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(p.status, 202, p.text);
+    await waitJob(d.token, p.json.data.jobId);
+    const archive = (await api(`/api/v1/sync/jobs/${p.json.data.jobId}/archive`, { token: d.token })).buf;
+    await sql(`UPDATE period_checkouts SET stamp_at_pull = NULL WHERE id = $1`, [p.json.data.checkoutId]);
+    const r = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, archive), checkoutId: p.json.data.checkoutId } });
+    const j = await waitJob(d.token, r.json.data.jobId);
+    assert.equal(j.error?.code, 'SYNC_NOT_PULLED', JSON.stringify(j));
+    assert.equal((await api(`/api/v1/sync/checkouts/${p.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200);
+  });
+
+  await step('Code review: a delete elsewhere that would cascade into a held period is refused', async () => {
+    const d = s4.desk;
+    const P = s3.period.id;
+    const C = s3.client.id;
+    const acct = (await one(`SELECT id FROM chart_of_accounts WHERE client_id = $1 ORDER BY id LIMIT 1`, [C])).id;
+    // Another period of the client, not held, with a check P's reconciliation clears,
+    // an entry a bank line of P points at, and that a variance note of P compares with.
+    const Q = (await one(`INSERT INTO periods (client_id, period_name, start_date, end_date) VALUES ($1, 'Example FY 2040', '2040-01-01', '2040-12-31') RETURNING id`, [C])).id;
+    const tx = (await one(`INSERT INTO bank_transactions (client_id, period_id, transaction_date, description, amount, classification_status)
+                           VALUES ($1, $2, '2040-12-28', 'Example outstanding check', -2500, 'unclassified') RETURNING id`, [C, Q])).id;
+    const rec = (await one(`INSERT INTO bank_reconciliations (client_id, source_account_id, period_id, statement_date, statement_ending_balance, beginning_book_balance)
+                            VALUES ($1, $2, $3, '2025-12-31', 0, 0) RETURNING id`, [C, acct, P])).id;
+    await sql(`INSERT INTO reconciliation_items (reconciliation_id, transaction_id) VALUES ($1, $2)`, [rec, tx]);
+    const je = (await one(`INSERT INTO journal_entries (period_id, entry_type, entry_number, entry_date, description) VALUES ($1, 'book', 9001, '2040-12-31', 'Example other-year entry') RETURNING id`, [Q])).id;
+    const line = (await one(`INSERT INTO bank_transactions (client_id, period_id, transaction_date, description, amount, classification_status, journal_entry_id)
+                             VALUES ($1, $2, '2025-12-30', 'Example linked line', 100, 'manual', $3) RETURNING id`, [C, P, je])).id;
+    await sql(`INSERT INTO variance_notes (period_id, account_id, compare_period_id, note) VALUES ($1, $2, $3, 'Example vs 2040')`, [P, acct, Q]);
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    await waitJob(d.token, pull.json.data.jobId);
+    const stampOfP = async () => (await api(`/api/v1/sync/clients/${s3.client.sync_uid}/periods`, { token: d.token })).json.data.find((x) => x.sync_uid === s3.period.sync_uid).stamp;
+    const before = await stampOfP();
+    const refused = (r, what) => { assert.equal(r.status, 409, `${what}: ${r.text}`); assert.equal(r.json.error.code, 'PERIOD_CHECKED_OUT', what); };
+    refused(await api(`/api/v1/clients/${C}/bank-transactions/${tx}`, { method: 'DELETE', token: admin }), 'a check the held period cleared');
+    refused(await api(`/api/v1/clients/${C}/bank-transactions/batch-delete`, { method: 'POST', token: admin, json: { ids: [tx] } }), 'the same, in a batch');
+    refused(await api(`/api/v1/journal-entries/${je}`, { method: 'DELETE', token: admin }), 'an entry a held bank line points at');
+    refused(await api(`/api/v1/periods/${Q}`, { method: 'DELETE', token: admin }), 'a period the held one compares with and clears checks of');
+    assert.equal(await stampOfP(), before, 'the held period did not move');
+    // Released: the deletes go through.
+    assert.equal((await api(`/api/v1/sync/checkouts/${pull.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200);
+    await sql(`DELETE FROM bank_transactions WHERE id = $1`, [line]);
+    await sql(`DELETE FROM variance_notes WHERE compare_period_id = $1`, [Q]);
+    await sql(`DELETE FROM bank_reconciliations WHERE id = $1`, [rec]);
+    const del = await api(`/api/v1/periods/${Q}`, { method: 'DELETE', token: admin });
+    assert.equal(del.status, 200, del.text);
+  });
+
+  await step('Code review: a statement set renamed on the desktop keeps its issued versions', async () => {
+    const d = s4.desk;
+    const P = s3.period.id;
+    const set = await one(`SELECT r.id, r.name FROM fs_reports r WHERE r.period_id = $1 AND EXISTS (SELECT 1 FROM fs_report_versions v WHERE v.report_id = r.id) ORDER BY r.id LIMIT 1`, [P]);
+    assert.ok(set, 'the period has a set with an issued version');
+    const versions = (await one(`SELECT count(*)::int AS n FROM fs_report_versions WHERE report_id = $1`, [set.id])).n;
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    await waitJob(d.token, pull.json.data.jobId);
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    const sent = await rewriteArchive(archive, async (t) => {
+      const r = t.fs_reports.find((x) => x.name === set.name);
+      r.name = 'Example renamed on the desktop';
+      // …and a new draft set given the old name: it must not take the renamed one's place.
+      t.fs_reports.push({ ...r, id: 990000, name: set.name, status: 'draft', current_version_id: null, archived_at: null });
+    });
+    const r = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, sent), checkoutId: pull.json.data.checkoutId } });
+    const j = await waitJob(d.token, r.json.data.jobId);
+    assert.equal(j.state, 'done', JSON.stringify(j.error));
+    const after = await one(`SELECT name FROM fs_reports WHERE id = $1`, [set.id]);
+    assert.equal(after.name, 'Example renamed on the desktop', 'the same set, renamed');
+    assert.equal((await one(`SELECT count(*)::int AS n FROM fs_report_versions WHERE report_id = $1`, [set.id])).n, versions, 'its issued versions stay with it');
+    const fresh = await one(`SELECT id FROM fs_reports WHERE period_id = $1 AND name = $2 AND id <> $3`, [P, set.name, set.id]);
+    assert.ok(fresh, 'the new set with the old name is a set of its own');
+    await sql(`DELETE FROM fs_reports WHERE id = $1`, [fresh.id]);
+    await sql(`UPDATE fs_reports SET name = $2 WHERE id = $1`, [set.id, set.name]);
+  });
+
+  await step('Code review: a part whose connection drops mid-way ends, leaving no partial file', async () => {
+    const d = await pairWith(admin, 'Dropping desktop');
+    const size = 2 * 1024 * 1024;
+    const start = await api('/api/v1/sync/uploads', { method: 'POST', token: d.token, json: { size, sha256: 'b'.repeat(64) } });
+    assert.equal(start.status, 201, start.text);
+    const { uploadId, partBytes } = start.json.data;
+    const url = new URL(`${server.base}/api/v1/sync/uploads/${uploadId}/parts/0`);
+    const http = await import('node:http');
+    await new Promise((resolve) => {
+      const req = http.request({ host: url.hostname, port: url.port, path: url.pathname, method: 'PUT',
+        headers: { authorization: `Bearer ${d.token}`, 'content-type': 'application/octet-stream', 'content-length': String(partBytes) } });
+      req.on('error', () => resolve());
+      req.on('response', () => resolve());
+      req.write(randomBytes(64 * 1024), () => setTimeout(() => { req.destroy(); resolve(); }, 200));
+    });
+    const fsm = await import('node:fs');
+    const dir = path.join(SERVER, 'backups', 'sync', 'uploads', uploadId);
+    let leftovers = ['?'];
+    for (let i = 0; i < 40 && leftovers.length; i++) {
+      await sleep(100);
+      leftovers = fsm.existsSync(dir) ? fsm.readdirSync(dir).filter((f) => f.endsWith('.tmp')) : [];
+    }
+    assert.deepEqual(leftovers, [], 'the partial part was removed');
+    const st = await api(`/api/v1/sync/uploads/${uploadId}`, { token: d.token });
+    assert.deepEqual(st.json.data.received, [], 'and nothing counts as received');
+    assert.equal((await api(`/api/v1/sync/uploads/${uploadId}`, { method: 'DELETE', token: d.token })).status, 200);
+  });
+
   await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and sync responses after 15 s, and nothing was cut', async () => {
     assert.equal(proxyCuts, 0);
     // The proxy does cut: a body over the cap is refused before the server sees it.

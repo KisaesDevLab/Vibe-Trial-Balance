@@ -14,7 +14,8 @@ import fs from 'fs';
 import path from 'path';
 import { db } from '../../db';
 import { SYNC_JOB_DIR, assertDiskRoom, busy } from './jobs';
-import type { Readable } from 'stream';
+import { Transform, type Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 
 export const UPLOAD_DIR = path.join(SYNC_JOB_DIR, 'uploads');
 /** The largest archive taken (as a restore's 2 GiB uncompressed cap). */
@@ -117,30 +118,23 @@ export async function putPart(row: UploadRow, n: number, body: Readable): Promis
   const want = partLength(size, row.part_bytes, n);
   fs.mkdirSync(dirOf(row.id), { recursive: true });
   const tmp = `${partPath(row.id, n)}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  const out = fs.createWriteStream(tmp);
   let got = 0;
+  // Counted on the way through, refused as soon as it runs past its length.
+  const limit = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      got += chunk.length;
+      if (got > want) cb(new UploadError(400, 'SYNC_PART_SIZE', `Part ${n} must be ${want} bytes; more arrived.`));
+      else cb(null, chunk);
+    },
+  });
   try {
-    await new Promise<void>((resolve, reject) => {
-      body.on('data', (c: Buffer) => {
-        got += c.length;
-        if (got > want) {
-          body.destroy();
-          reject(new UploadError(400, 'SYNC_PART_SIZE', `Part ${n} must be ${want} bytes; more arrived.`));
-          return;
-        }
-        if (!out.write(c)) {
-          body.pause();
-          out.once('drain', () => body.resume());
-        }
-      });
-      body.on('end', () => out.end(() => resolve()));
-      body.on('error', reject);
-      out.on('error', reject);
-    });
+    // pipeline ends on every outcome, a dropped connection included (it rejects
+    // with ERR_STREAM_PREMATURE_CLOSE), and destroys every stream: no request
+    // left waiting and no file left open (code review).
+    await pipeline(body, limit, fs.createWriteStream(tmp));
     if (got !== want) throw new UploadError(400, 'SYNC_PART_SIZE', `Part ${n} must be ${want} bytes; ${got} arrived.`);
     await fs.promises.rename(tmp, partPath(row.id, n));
   } catch (err) {
-    out.destroy();
     fs.rmSync(tmp, { force: true });
     throw err;
   }
@@ -262,15 +256,26 @@ export async function completeUpload(row: UploadRow): Promise<{ size: number; sh
 }
 
 /**
- * Past its day an upload's files go. An unsent upload's row goes with them;
+ * Past its day an upload's files go (not while its push job waits or runs).
+ * An unsent upload's row goes with them;
  * a sent one's row stays `USED_UPLOAD_KEEP_MS` longer, so it can still name
  * its job (Q101).
  */
 export async function pruneUploads(now = Date.now()): Promise<void> {
   const old = (await db('sync_uploads').where('expires_at', '<', new Date(now)).select('id', 'job_id', 'expires_at')) as Array<{ id: string; job_id: string | null; expires_at: Date }>;
+  // A push still waiting its turn (jobs of one client run one at a time) or
+  // running reads its archive: its files stay until the job is over (code review).
+  const jobIds = old.map((u) => u.job_id).filter((j): j is string => !!j);
+  const states = new Map(jobIds.length
+    ? ((await db('sync_jobs').whereIn('id', jobIds).select('id', 'state')) as Array<{ id: string; state: string }>).map((j) => [j.id, j.state])
+    : []);
   for (const u of old) {
+    const kept = new Date(u.expires_at).getTime() + USED_UPLOAD_KEEP_MS >= now;
+    const state = u.job_id ? states.get(u.job_id) : undefined;
+    // A claimed id with no job row yet is a push starting this moment (but not for 30 days).
+    if (u.job_id && (state === 'queued' || state === 'running' || (state === undefined && kept))) continue;
     fs.rmSync(dirOf(u.id), { recursive: true, force: true });
-    if (!u.job_id || new Date(u.expires_at).getTime() + USED_UPLOAD_KEEP_MS < now) {
+    if (!u.job_id || !kept) {
       await db('sync_uploads').where({ id: u.id }).delete();
     }
   }

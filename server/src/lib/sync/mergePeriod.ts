@@ -374,6 +374,9 @@ export async function mergePeriod(
     }
     const co = await trx('period_checkouts').where({ id: target.checkoutId }).first('stamp_at_pull');
     stampAtPull = (co.stamp_at_pull as string | null) ?? null;
+    // A hold whose pull never finished has no stamp to compare with: nothing the
+    // desktop has came from it (code review).
+    if (!stampAtPull) throw fail('SYNC_NOT_PULLED', 'The period was checked out but its pull never finished, so there is nothing to compare this with. Pull it again, then send it back.');
   } else if (target.fresh) {
     stampAtPull = null;
   } else {
@@ -775,17 +778,38 @@ export async function mergePeriod(
   const verCols = await columnsOf(trx, 'fs_report_versions');
   const currentOld = new Map<number, number | null>();
   const usedReports = new Set<number>();
-  for (const r of rowsOf(tables, 'fs_reports')) {
-    const row: Row = { ...sanitize('fs_reports', pick(r, repCols)), client_id: C, period_id: P, current_version_id: null };
-    row.client_layout_id = mapRef('fsLayout', r.client_layout_id, 'fs_reports', 'client_layout_id');
-    // By name, preferring the same archived state; each server set matched once.
+  const setRows = rowsOf(tables, 'fs_reports');
+  const matched = new Map<Row, number>();
+  // An issued version first (code review): it is frozen here, so the same
+  // number finalized at the same moment with the same numbers says which
+  // server set it belongs to, whatever the set is called now. A set renamed on
+  // the desktop and a new set given its old name then both land right.
+  for (const r of setRows) {
+    for (const v of rowsOf(tables, 'fs_report_versions').filter((x) => num(x.report_id) === num(r.id))) {
+      const hit = (await trx('fs_report_versions as v').join('fs_reports as s', 's.id', 'v.report_id')
+        .where({ 's.period_id': P, 'v.version_no': v.version_no, 'v.numbers_hash': v.numbers_hash })
+        .select('v.report_id', 'v.finalized_at')) as Array<{ report_id: number; finalized_at: unknown }>;
+      const set = hit.find((h) => iso(h.finalized_at) === iso(v.finalized_at) && !usedReports.has(Number(h.report_id)));
+      if (set) { usedReports.add(Number(set.report_id)); matched.set(r, Number(set.report_id)); break; }
+    }
+  }
+  // Then by name, preferring the same archived state; each server set matched
+  // once. Without issued versions a rename cannot be told from a new set, and
+  // the refusal below says so.
+  for (const r of setRows) {
+    if (matched.has(r)) continue;
     const cands = (await trx('fs_reports').where({ period_id: P, name: r.name }).select('id', 'archived_at')) as Array<{ id: number; archived_at: unknown }>;
     const free = cands.filter((c) => !usedReports.has(Number(c.id)));
     const here = free.find((c) => !!c.archived_at === !!r.archived_at) ?? free[0];
-    if (here) usedReports.add(Number(here.id));
+    if (here) { usedReports.add(Number(here.id)); matched.set(r, Number(here.id)); }
+  }
+  for (const r of setRows) {
+    const row: Row = { ...sanitize('fs_reports', pick(r, repCols)), client_id: C, period_id: P, current_version_id: null };
+    row.client_layout_id = mapRef('fsLayout', r.client_layout_id, 'fs_reports', 'client_layout_id');
     let id: number;
-    if (here) {
-      id = Number(here.id);
+    const here = matched.get(r);
+    if (here !== undefined) {
+      id = here;
       await trx('fs_reports').where({ id }).update(await enc('fs_reports', row));
     } else {
       const [ins] = await trx('fs_reports').insert(await enc('fs_reports', row)).returning('id');
@@ -825,7 +849,7 @@ export async function mergePeriod(
   // A set is never deleted, only archived (its issued versions stay): one the
   // server has that the archive lacks is refused, not guessed.
   const missingSet = await trx('fs_reports').where({ period_id: P }).whereNotIn('id', [...usedReports, ...maps.fsReport.values()]).first('name');
-  if (missingSet) throw fail('SYNC_ARCHIVE_INVALID', `The archive lacks the statement set "${String(missingSet.name)}" the server has: archive it on the desktop instead of deleting it.`);
+  if (missingSet) throw fail('SYNC_ARCHIVE_INVALID', `The archive lacks the statement set "${String(missingSet.name)}" the server has. If it was renamed on the desktop, give it that name back and send again (rename it on the server); if it was deleted, archive it on the desktop instead.`);
   result.counts.fs_reports = maps.fsReport.size;
 
   // ── Acceptance.

@@ -57,6 +57,11 @@ The desktop requires **HTTPS**, except for `http://localhost` (a server on the s
 - **Check-outs:** a period pulled with check-out is read-only in the web app and over MCP until it is sent back or
   an admin releases it on the Periods page (with a reason). Nothing is released automatically; one older than 14
   days (`settings` key `sync.checkout_warn_days`) is flagged on the Periods page and the admin dashboard.
+- **Deletes that reach a held period** are refused too (409 `PERIOD_CHECKED_OUT`): deleting a bank transaction that a
+  held period's reconciliation clears, a journal entry that a held period's bank line points at, or a period that a
+  held period's variance notes compare with.
+- **A pull that cannot start** (the computer already has 3 syncs running, or the disk is full) takes no check-out.
+  A send-back under a check-out whose pull never finished is refused (`SYNC_NOT_PULLED`): pull again first.
 - **Send-back:** accepted only when the archive is of this server's schema version, its checksums hold, the period
   is as it was at the pull (or held by that desktop), and the result matches what the desktop sent exactly.
 - **Audit:** pairing, removals, check-outs, releases, send-backs, and every sync call that writes or hands out
@@ -95,6 +100,13 @@ call, with `error.jobId` naming the job it became, for as long as its row is kep
 other is refused the same way. Whether
 a join is running lives in the server's memory: after a server restart an upload reads `complete: false, joining:
 false` with no error, and `POST /sync/uploads/:id/complete` starts the join again.
+
+## Statement sets
+
+Sets are matched by name. A set renamed on the desktop is still the same set when it has an issued version: the
+version (number, finalized at the same moment, same numbers) names the set, which takes the new name. A set renamed
+with no issued version cannot be told from a new one, and the send-back is refused naming the server's set: give it
+its server name back (and rename it on the server), or archive it on the desktop instead of deleting it.
 
 ## Who signed
 

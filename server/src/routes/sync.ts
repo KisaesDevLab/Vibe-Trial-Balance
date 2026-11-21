@@ -36,7 +36,8 @@ import { z } from 'zod';
 import { createBackup, readManifest, readZipContents, restoreAsNew } from './backup';
 import { currentStampFor } from '../lib/leadSheetStamp';
 import { BackupRefusal, FORMAT_VERSION, appliedMigrations, checkArchive, syncManifestProblem } from '../lib/backupManifest';
-import { checkedOutBy } from '../lib/periodGuard';
+import { checkedOutBy, checkedOutByMany } from '../lib/periodGuard';
+import { mapWithConcurrency } from '../lib/concurrency';
 import { stampPeriod } from '../lib/sync/periodStampLoad';
 import { SYNC_JOB_DIR, SyncJobError, assertDiskRoom, startJob } from '../lib/sync/jobs';
 import { checkoutApi, checkoutWarnDays, daysOut, isoDate } from '../lib/sync/checkouts';
@@ -53,6 +54,8 @@ const bad = (res: Response, status: number, code: string, message: string): void
 
 /** Live check-outs one device may hold (security review: one device freezing every period). */
 const MAX_CHECKOUTS_PER_DEVICE = 25;
+/** Period stamps computed at once for the desktop's period list. */
+const PERIOD_STAMP_CONCURRENCY = 4;
 
 /** A job result as the desktop sees it: the pull's baseline is the server's own record. */
 function withoutBaseline(result: Record<string, unknown>): Record<string, unknown> {
@@ -292,10 +295,12 @@ syncRouter.get('/clients/:uid/periods', async (req: SyncRequest, res: Response):
       .orderBy('id', 'desc')
       .select('id', 'sync_uid', 'period_name', 'start_date', 'end_date', 'locked_at', 'is_current')) as Array<Record<string, unknown> & { id: number }>;
     const warnDays = await checkoutWarnDays();
-    const out = [];
-    for (const p of periods) {
-      const holder = await checkedOutBy(db, p.id);
-      out.push({
+    // One query for every hold, and the stamps a few at a time (code review:
+    // one by one, a client with many long periods ran into the proxy's ~100 s).
+    const holders = await checkedOutByMany(db, periods.map((p) => p.id));
+    const out = await mapWithConcurrency(periods, PERIOD_STAMP_CONCURRENCY, async (p) => {
+      const holder = holders.get(p.id);
+      return {
         sync_uid: p.sync_uid,
         period_name: p.period_name,
         start_date: isoDate(p.start_date),
@@ -304,8 +309,8 @@ syncRouter.get('/clients/:uid/periods', async (req: SyncRequest, res: Response):
         is_current: p.is_current,
         checkout: holder ? checkoutApi(holder, warnDays, req.syncDevice!.id) : null,
         stamp: await stampPeriod(db, p.id),
-      });
-    }
+      };
+    });
     res.json({ data: out, error: null, meta: { count: out.length, checkoutWarnDays: warnDays } });
   } catch (err: unknown) {
     sendServerError(res, err, 'sync/periods');
@@ -345,6 +350,8 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
       return;
     }
     const device = req.syncDevice!;
+    // Before any hold is taken: a full disk refuses the pull without one (code review).
+    assertDiskRoom(0);
     let checkoutId: number | null = null;
     let checkoutCreated = false;
     if (wantCheckout) {
@@ -391,49 +398,55 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
     // Only a check-out this call took is undone on failure: a re-pull keeps
     // the hold the desktop already had (it may hold unsent work).
     const createdCheckout = checkoutCreated ? checkoutId : null;
-    assertDiskRoom(0);
-    const jobId = await startJob(
-      { kind: 'pull', deviceId: device.id, userId: req.user!.userId, clientId: period.client_id, periodId: period.id, checkoutId, checkoutCreated },
-      async (id) => {
-        const dir = path.join(SYNC_JOB_DIR, id);
-        fs.mkdirSync(dir, { recursive: true });
-        // Set inside the archive's snapshot (manifestExtra); widened so TS does not narrow it to null.
-        let stamp = null as string | null;
-        let pulledAt = new Date();
-        let baseline = null as PullBaseline | null;
-        // The period's adjusted book totals (whole cents as text), in the manifest and the result (Q102, Q109).
-        let totals = null as { bookDebit: string; bookCredit: string } | null;
-        const made = await createBackup('period', {
-          clientId: period.client_id,
-          periodId: period.id,
-          includeFiles: true,
-          outDir: dir,
-          recordHistory: false,
-          manifestExtra: async (trx) => {
-            pulledAt = new Date((await trx.raw('SELECT now() AS t')).rows[0].t);
-            stamp = await stampPeriod(trx, period.id);
-            // What the send-back is compared with (SQ3), kept here, not trusted from the archive.
-            baseline = await readBaseline(trx, period.client_id);
-            // totals: a pulled archive sent back as it came is a valid send-back.
-            totals = await periodTotals(trx, period.id);
-            return { sync: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, pulledAt: pulledAt.toISOString(), deviceId: device.id, totals } };
-          },
-        }, req.user!.userId);
-        // Read inside the archive's snapshot: what the desktop now has, and when.
-        if (checkoutId) await db('period_checkouts').where({ id: checkoutId }).update({ stamp_at_pull: stamp, pulled_at: pulledAt });
-        return {
-          result: { periodUid: uid, clientUid: period.client_uid, stamp, totals, checkoutId, size: made.file_size, checksum: made.checksum, baseline },
-          filePath: made.storage_local ?? undefined,
-        };
-      },
-      // A pull that failed must not leave the period held.
-      createdCheckout
-        ? async () => {
-          await db('period_checkouts').where({ id: createdCheckout }).whereNull('released_at')
-            .update({ released_at: db.fn.now(), release_reason: 'The pull failed.' });
-        }
-        : undefined,
-    );
+    const releaseCreated = async (reason: string): Promise<void> => {
+      if (!createdCheckout) return;
+      await db('period_checkouts').where({ id: createdCheckout }).whereNull('released_at')
+        .update({ released_at: db.fn.now(), release_reason: reason });
+    };
+    let jobId: string;
+    try {
+      jobId = await startJob(
+        { kind: 'pull', deviceId: device.id, userId: req.user!.userId, clientId: period.client_id, periodId: period.id, checkoutId, checkoutCreated },
+        async (id) => {
+          const dir = path.join(SYNC_JOB_DIR, id);
+          fs.mkdirSync(dir, { recursive: true });
+          // Set inside the archive's snapshot (manifestExtra); widened so TS does not narrow it to null.
+          let stamp = null as string | null;
+          let pulledAt = new Date();
+          let baseline = null as PullBaseline | null;
+          // The period's adjusted book totals (whole cents as text), in the manifest and the result (Q102, Q109).
+          let totals = null as { bookDebit: string; bookCredit: string } | null;
+          const made = await createBackup('period', {
+            clientId: period.client_id,
+            periodId: period.id,
+            includeFiles: true,
+            outDir: dir,
+            recordHistory: false,
+            manifestExtra: async (trx) => {
+              pulledAt = new Date((await trx.raw('SELECT now() AS t')).rows[0].t);
+              stamp = await stampPeriod(trx, period.id);
+              // What the send-back is compared with (SQ3), kept here, not trusted from the archive.
+              baseline = await readBaseline(trx, period.client_id);
+              // totals: a pulled archive sent back as it came is a valid send-back.
+              totals = await periodTotals(trx, period.id);
+              return { sync: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, pulledAt: pulledAt.toISOString(), deviceId: device.id, totals } };
+            },
+          }, req.user!.userId);
+          // Read inside the archive's snapshot: what the desktop now has, and when.
+          if (checkoutId) await db('period_checkouts').where({ id: checkoutId }).update({ stamp_at_pull: stamp, pulled_at: pulledAt });
+          return {
+            result: { periodUid: uid, clientUid: period.client_uid, stamp, totals, checkoutId, size: made.file_size, checksum: made.checksum, baseline },
+            filePath: made.storage_local ?? undefined,
+          };
+        },
+        // A pull that failed must not leave the period held.
+        createdCheckout ? () => releaseCreated('The pull failed.') : undefined,
+      );
+    } catch (err) {
+      // The job never started (this computer has too many running): nor does the hold (code review).
+      await releaseCreated('The pull could not start.');
+      throw err;
+    }
     res.status(202).json({ data: { jobId, checkoutId }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'sync/pull');
@@ -997,12 +1010,15 @@ desktopSyncRouter.delete('/devices/:id', async (req: AuthRequest, res: Response)
       bad(res, 404, 'NOT_FOUND', 'Device not found');
       return;
     }
-    await db('sync_devices').where({ id }).update({ revoked_at: db.fn.now(), revoked_by: req.user!.userId });
-    // The periods it held are released with it.
-    await releaseDeviceHolds(db, [id], req.user!.userId, 'its desktop was removed');
-    await logAudit({
-      userId: req.user!.userId, periodId: null, entityType: 'sync_device', entityId: id, action: 'revoke',
-      description: `Removed desktop "${device.name}"`,
+    // One transaction (code review): a revoked device can no longer give its
+    // holds back, so it is never revoked without them being released.
+    await db.transaction(async (trx) => {
+      await trx('sync_devices').where({ id }).update({ revoked_at: trx.fn.now(), revoked_by: req.user!.userId });
+      await releaseDeviceHolds(trx, [id], req.user!.userId, 'its desktop was removed');
+      await logAudit({
+        userId: req.user!.userId, periodId: null, entityType: 'sync_device', entityId: id, action: 'revoke',
+        description: `Removed desktop "${device.name}"`,
+      }, trx);
     });
     res.json({ data: { id }, error: null });
   } catch (err: unknown) {

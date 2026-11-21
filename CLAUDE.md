@@ -748,8 +748,9 @@ All planned phases complete. App is feature-complete.
   a password RESET (admin PATCH `/users/:id`, Vibe Auth `setLocalPassword`, an emailed reset or invite
   link): `revokeUserDevices`, which also deletes unused codes and, on a reset, stamps
   `app_users.sync_reset_at` (migration `20261002000002`) so a session issued before it gets 401
-  `SIGN_IN_AGAIN` from `POST /desktop-sync/codes` (an emailed reset leaves old sessions working). Not on a
-  user's own password change or sign-out. Audit: every
+  `SIGN_IN_AGAIN` from `POST /desktop-sync/codes` (an emailed reset leaves old sessions working). A
+  user's own password change (owner 2026-11-19) also calls `revokeUserDevices`, releasing their holds, but is
+  not a reset: no `sync_reset_at`, so the session that changed it may pair again at once. Not on sign-out. Audit: every
   sync write, every refusal, and a GET only when the route sets `res.locals.syncAudit = true` (it hands out
   client data); polling reads are not audited. Making a code retires the user's unused ones.
   `POST /pair` has its own limiter (10 failed tries per 15 min per ADDRESS, not `rateLimitKey`, whose JWT
