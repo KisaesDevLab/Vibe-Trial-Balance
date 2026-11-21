@@ -244,8 +244,19 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
       updates.sso_only_since = null;
     }
 
-    const [updated] = await db('app_users').where({ id }).update(updates)
-      .returning([...USER_COLUMNS]);
+    const changedFields = Object.keys(updates).filter(k => k !== 'updated_at');
+    const hasPasswordChange = changedFields.includes('password_hash');
+    // One transaction (code review): a reset or deactivation that saved but
+    // left the account's desktops connected would answer 500 and keep them live.
+    const updated = await db.transaction(async (trx) => {
+      const [row] = await trx('app_users').where({ id }).update(updates).returning([...USER_COLUMNS]);
+      if (!row) return null;
+      // A password reset ends the desktops the account paired (owner 2026-11-19).
+      if (hasPasswordChange) await revokeUserDevices(id, req.user!.userId, `an admin reset the password of "${row.username}"`, { reset: true, trx });
+      // Deactivation ends them for good: reactivating does not bring them back.
+      if (parsed.data.isActive === false) await revokeUserDevices(id, req.user!.userId, `"${row.username}" was deactivated`, { trx });
+      return row;
+    });
     if (!updated) {
       res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'User not found' } });
       return;
@@ -253,12 +264,6 @@ usersRouter.patch('/:id', adminOnly, async (req: AuthRequest, res: Response): Pr
     // Role or is_active change must take effect immediately for an already-
     // authenticated target user, so drop their cached auth lookup.
     invalidateAuthCache(id);
-    const changedFields = Object.keys(updates).filter(k => k !== 'updated_at');
-    const hasPasswordChange = changedFields.includes('password_hash');
-    // A password reset ends the desktops the account paired (owner 2026-11-19).
-    if (hasPasswordChange) await revokeUserDevices(id, req.user!.userId, `an admin reset the password of "${updated.username}"`, { reset: true });
-    // Deactivation ends them for good: reactivating does not bring them back.
-    if (parsed.data.isActive === false) await revokeUserDevices(id, req.user!.userId, `"${updated.username}" was deactivated`);
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'user', entityId: id, action: 'update', description: `Updated user "${updated.username}" — ${hasPasswordChange ? 'password changed' : changedFields.join(', ')}` });
     res.json({ data: updated, error: null });
   } catch (err: unknown) {

@@ -71,7 +71,7 @@ export function assertDiskRoom(bytes: number): void {
 export async function startJob(
   input: { id?: string; kind: JobKind; deviceId: number; userId: number; clientId: number | null; periodId?: number; checkoutId?: number | null; checkoutCreated?: boolean },
   work: (jobId: string) => Promise<JobOutcome>,
-  onFail?: () => Promise<void>,
+  onFail?: (err: unknown) => Promise<void>,
 ): Promise<string> {
   const open = await db('sync_jobs').where({ device_id: input.deviceId }).whereIn('state', ['queued', 'running']).count({ n: '*' }).first();
   if (Number(open?.n ?? 0) >= MAX_OPEN_JOBS_PER_DEVICE) {
@@ -102,7 +102,7 @@ export async function startJob(
   return jobId;
 }
 
-async function runJob(jobId: string, work: (jobId: string) => Promise<JobOutcome>, onFail?: () => Promise<void>): Promise<void> {
+async function runJob(jobId: string, work: (jobId: string) => Promise<JobOutcome>, onFail?: (err: unknown) => Promise<void>): Promise<void> {
   try {
     await db('sync_jobs').where({ id: jobId }).update({ state: 'running', started_at: db.fn.now() });
     const out = await work(jobId);
@@ -118,7 +118,7 @@ async function runJob(jobId: string, work: (jobId: string) => Promise<JobOutcome
       : { code: 'SYNC_JOB_FAILED', message: 'The server could not finish this. Try again; if it keeps failing, tell your administrator.' };
     if (!(err instanceof SyncJobError)) console.error('[sync] job failed', jobId, err instanceof Error ? err.message : err);
     try {
-      if (onFail) await onFail();
+      if (onFail) await onFail(err);
     } catch (undo: unknown) {
       console.error('[sync] job undo failed', jobId, undo instanceof Error ? undo.message : undo);
     }
@@ -128,8 +128,9 @@ async function runJob(jobId: string, work: (jobId: string) => Promise<JobOutcome
 
 /**
  * At start-up: a job left queued or running was cut off by a restart. Mark it
- * failed, and release the check-out a failed pull had TAKEN (not one it
- * reused: that desktop still holds work).
+ * failed, release the check-out a failed pull had TAKEN (not one it reused:
+ * that desktop still holds work), and give a send-back's upload back so it
+ * can be sent again.
  */
 export async function failInterruptedJobs(): Promise<void> {
   const open = (await db('sync_jobs').whereIn('state', ['queued', 'running']).select('id', 'kind', 'checkout_id', 'checkout_created')) as Array<{ id: string; kind: string; checkout_id: number | null; checkout_created: boolean }>;
@@ -140,6 +141,7 @@ export async function failInterruptedJobs(): Promise<void> {
         error: JSON.stringify({ code: 'SYNC_JOB_INTERRUPTED', message: 'The server restarted before this finished. Start it again.' }),
         finished_at: trx.fn.now(),
       });
+      if (j.kind === 'push') await trx('sync_uploads').where({ job_id: j.id }).update({ job_id: null });
       if (j.kind === 'pull' && j.checkout_id && j.checkout_created) {
         await trx('period_checkouts').where({ id: j.checkout_id }).whereNull('released_at')
           .update({ released_at: trx.fn.now(), release_reason: 'The pull was cut off by a server restart.' });
@@ -159,6 +161,38 @@ export async function pruneJobFiles(now = Date.now()): Promise<void> {
       // Gone already, or not ours to delete: forget it either way.
     }
     await db('sync_jobs').where({ id: j.id }).update({ file_path: null });
+  }
+  await pruneOrphanJobDirs(now);
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Code review: a job row goes with its period, client, device or user (the
+ * foreign keys cascade), leaving its archive behind. A job folder whose row is
+ * gone is removed once it is an hour old (a row is written before its folder,
+ * so a young folder without one is not an orphan in the making).
+ */
+async function pruneOrphanJobDirs(now: number): Promise<void> {
+  let names: string[];
+  try {
+    names = fs.readdirSync(SYNC_JOB_DIR).filter((n) => UUID_RE.test(n));
+  } catch {
+    return;
+  }
+  for (let k = 0; k < names.length; k += 1000) {
+    const chunk = names.slice(k, k + 1000);
+    const known = new Set(((await db('sync_jobs').whereIn('id', chunk).pluck('id')) as string[]).map((id) => id.toLowerCase()));
+    for (const n of chunk) {
+      if (known.has(n.toLowerCase())) continue;
+      const dir = path.join(SYNC_JOB_DIR, n);
+      try {
+        if (now - fs.statSync(dir).mtimeMs < 60 * 60 * 1000) continue;
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Gone already.
+      }
+    }
   }
 }
 

@@ -518,13 +518,18 @@ syncRouter.use(blockReviewerWrites);
 
 /**
  * A send-back job from an upload, sent once (Q98): the upload is claimed for
- * the job before it starts, and given back if the job could not start, so
- * it may be sent again.
+ * the job before it starts, and given back, so the same upload may be sent
+ * again, when the job could not start or failed for a reason sending it again
+ * may cure (code review): a server error, or a restart (`failInterruptedJobs`).
+ * A refusal (SyncJobError) keeps it used: the same archive would be refused
+ * again, and it would only take one of the device's open-upload places.
  */
 async function startPushJob(uploadId: string, input: Omit<Parameters<typeof startJob>[0], 'id'>, work: Parameters<typeof startJob>[1]): Promise<string> {
   const jobId = await claimUpload(uploadId, input.deviceId);
   try {
-    return await startJob({ ...input, id: jobId }, work);
+    return await startJob({ ...input, id: jobId }, work, async (err) => {
+      if (!(err instanceof SyncJobError)) await unclaimUpload(uploadId, jobId);
+    });
   } catch (err) {
     await unclaimUpload(uploadId, jobId);
     throw err;

@@ -1424,7 +1424,10 @@ async function main() {
     await waitJob(d.token, p2.json.data.jobId);
     const archive2 = (await api(`/api/v1/sync/jobs/${p2.json.data.jobId}/archive`, { token: d.token })).buf;
     void archive;
-    assert.equal((await api(`/api/v1/tickmarks/${tm.id}`, { method: 'DELETE', token: admin })).status, 200);
+    // The web refuses it while a period of the client is held (code review 2);
+    // the merge must still cope with one gone by another road.
+    assert.equal((await api(`/api/v1/tickmarks/${tm.id}`, { method: 'DELETE', token: admin })).status, 409);
+    await sql(`DELETE FROM tickmark_library WHERE id = $1`, [tm.id]);
     const other = (await one(`SELECT id FROM app_users WHERE username = 'example.reviewer'`)).id;
     const me = (await api('/api/v1/sync/me', { token: d.token })).json.data.user.id;
     // As a desktop writes it: its own ids for accounts and lead sheets, everywhere they appear.
@@ -1816,6 +1819,91 @@ async function main() {
     const st = await api(`/api/v1/sync/uploads/${uploadId}`, { token: d.token });
     assert.deepEqual(st.json.data.received, [], 'and nothing counts as received');
     assert.equal((await api(`/api/v1/sync/uploads/${uploadId}`, { method: 'DELETE', token: d.token })).status, 200);
+  });
+
+  // ── Second code review (2026-11-21).
+  await step('Code review 2: while any period of the client is held, its lead sheets and tickmarks are not deleted, nor a codeless lead sheet renamed', async () => {
+    const d = await pairWith(admin, 'Keys desktop');
+    const C = s3.client.id;
+    const ls = await one(`INSERT INTO lead_sheets (client_id, code, name) VALUES ($1, 'EXD', 'Example delete sheet') RETURNING id`, [C]);
+    const bare = await one(`INSERT INTO lead_sheets (client_id, code, name) VALUES ($1, NULL, 'Example codeless sheet') RETURNING id`, [C]);
+    const tm = await one(`INSERT INTO tickmark_library (client_id, symbol, description) VALUES ($1, 'ED', 'Example delete mark') RETURNING id`, [C]);
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    await waitJob(d.token, pull.json.data.jobId);
+    const refused = (r, what) => { assert.equal(r.status, 409, `${what}: ${r.text}`); assert.equal(r.json.error.code, 'PERIOD_CHECKED_OUT', what); };
+    refused(await api(`/api/v1/lead-sheets/${ls.id}`, { method: 'DELETE', token: admin }), 'a lead sheet no held row uses yet');
+    refused(await api(`/api/v1/tickmarks/${tm.id}`, { method: 'DELETE', token: admin }), 'a tickmark no held row uses yet');
+    refused(await api(`/api/v1/lead-sheets/${bare.id}`, { method: 'PATCH', token: admin, json: { name: 'Example renamed codeless' } }), 'the name of a codeless sheet');
+    assert.equal((await api(`/api/v1/lead-sheets/${bare.id}`, { method: 'PATCH', token: admin, json: { sortOrder: 7 } })).status, 200, 'its order is free');
+    assert.equal((await api(`/api/v1/lead-sheets/${ls.id}`, { method: 'PATCH', token: admin, json: { name: 'Example coded rename' } })).status, 200, 'a coded sheet is matched by code: its name is free');
+    assert.equal((await api(`/api/v1/sync/checkouts/${pull.json.data.checkoutId}`, { method: 'DELETE', token: d.token })).status, 200);
+    assert.equal((await api(`/api/v1/lead-sheets/${bare.id}`, { method: 'PATCH', token: admin, json: { name: 'Example renamed codeless' } })).status, 200, 'released: free again');
+    for (const [kind, id] of [['lead-sheets', ls.id], ['lead-sheets', bare.id], ['tickmarks', tm.id]]) {
+      const r = await api(`/api/v1/${kind}/${id}`, { method: 'DELETE', token: admin });
+      assert.equal(r.status, 200, r.text);
+    }
+  });
+
+  await step("Code review 2: a desktop holding two periods of a client has its second send-back's account edit applied, not read as the server's", async () => {
+    const d = await pairWith(admin, 'Two periods desktop');
+    const C = s3.client.id;
+    const Q = await one(`INSERT INTO periods (client_id, period_name, start_date, end_date) VALUES ($1, 'Example FY 2041', '2041-01-01', '2041-12-31') RETURNING id, sync_uid`, [C]);
+    const acct = await one(`SELECT id, sync_uid, account_name FROM chart_of_accounts WHERE client_id = $1 AND is_active ORDER BY account_number LIMIT 1`, [C]);
+    const pullOf = async (uid) => {
+      const r = await api(`/api/v1/sync/periods/${uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+      assert.equal(r.status, 202, r.text);
+      await waitJob(d.token, r.json.data.jobId);
+      return { checkoutId: r.json.data.checkoutId, archive: (await api(`/api/v1/sync/jobs/${r.json.data.jobId}/archive`, { token: d.token })).buf };
+    };
+    const p1 = await pullOf(s3.period.sync_uid);
+    const p2 = await pullOf(Q.sync_uid);
+    const sendBack = async (uid, pulled, name) => {
+      const sent = await rewriteArchive(pulled.archive, async (t) => {
+        t.chart_of_accounts.find((x) => x.sync_uid === acct.sync_uid).account_name = name;
+      });
+      const r = await api(`/api/v1/sync/periods/${uid}/push`, { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, sent), checkoutId: pulled.checkoutId } });
+      assert.equal(r.status, 202, r.text);
+      const j = await waitJob(d.token, r.json.data.jobId);
+      assert.equal(j.state, 'done', JSON.stringify(j.error));
+      return j.result;
+    };
+    const first = await sendBack(s3.period.sync_uid, p1, 'Example first desktop name');
+    assert.deepEqual(first.differences, []);
+    const second = await sendBack(Q.sync_uid, p2, 'Example second desktop name');
+    assert.deepEqual(second.differences, [], 'only this desktop changed the account since its pulls');
+    assert.equal((await one(`SELECT account_name FROM chart_of_accounts WHERE id = $1`, [acct.id])).account_name, 'Example second desktop name');
+    await sql(`UPDATE chart_of_accounts SET account_name = $2 WHERE id = $1`, [acct.id, acct.account_name]);
+    assert.equal((await api(`/api/v1/periods/${Q.id}`, { method: 'DELETE', token: admin })).status, 200);
+  });
+
+  await step('Code review 2: a refused send-back keeps its upload used; one cut off by a restart gives it back, to be sent again', async () => {
+    const d = await pairWith(admin, 'Retry desktop');
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    await waitJob(d.token, pull.json.data.jobId);
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    // A refusal: the same archive would be refused again, so the upload stays used.
+    const wrong = await rewriteArchive(archive, async (_t, m) => { m.sync.totals = { bookDebit: '1', bookCredit: '1' }; });
+    const refusedId = await uploadBuf(d.token, wrong);
+    const r = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: refusedId, checkoutId: pull.json.data.checkoutId } });
+    assert.equal((await waitJob(d.token, r.json.data.jobId)).error?.code, 'SYNC_TOTALS_MISMATCH');
+    const used = await api(`/api/v1/sync/uploads/${refusedId}`, { token: d.token });
+    assert.equal(used.json?.error?.code, 'SYNC_UPLOAD_USED', used.text);
+    // Cut off by a restart: given back.
+    const uploadId = await uploadBuf(d.token, archive);
+    const cut = (await one(`INSERT INTO sync_jobs (device_id, user_id, client_id, period_id, kind, state)
+                            SELECT d.id, d.user_id, $2, $3, 'push', 'running' FROM sync_devices d WHERE d.id = $1 RETURNING id`, [d.deviceId, s3.client.id, s3.period.id])).id;
+    await sql(`UPDATE sync_uploads SET job_id = $2 WHERE id = $1`, [uploadId, cut]);
+    await killTree(server.child);
+    await startServer();
+    server.base = await startProxy(server.base);
+    assert.equal((await waitJob(d.token, cut)).error?.code, 'SYNC_JOB_INTERRUPTED');
+    const st = await api(`/api/v1/sync/uploads/${uploadId}`, { token: d.token });
+    assert.equal(st.status, 200, `unsent again: ${st.text}`);
+    const again = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId, checkoutId: pull.json.data.checkoutId } });
+    assert.equal(again.status, 202, again.text);
+    const j = await waitJob(d.token, again.json.data.jobId);
+    assert.equal(j.state, 'done', `sent again without uploading it again: ${JSON.stringify(j.error)}`);
   });
 
   await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and sync responses after 15 s, and nothing was cut', async () => {

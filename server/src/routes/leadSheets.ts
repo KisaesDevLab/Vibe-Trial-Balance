@@ -518,10 +518,15 @@ leadSheetItemRouter.patch('/', async (req: AuthRequest, res: Response): Promise<
     if (parsed.data.sortOrder !== undefined) updates.sort_order = parsed.data.sortOrder;
 
     const [row] = await db.transaction(async (trx) => {
-      // A send-back matches lead sheets by code (owner 2026-11-19).
-      if (parsed.data.code !== undefined) {
-        const was = await trx('lead_sheets').where({ id }).first('code');
-        if ((was?.code ?? null) !== (parsed.data.code ?? null)) await assertClientKeysFrozen(trx, current.client_id as number, "a lead sheet's code");
+      // A send-back matches lead sheets by code (owner 2026-11-19), and one
+      // without a code by its name (code review).
+      const was = await trx('lead_sheets').where({ id }).first('code', 'name');
+      if (parsed.data.code !== undefined && (was?.code ?? null) !== (parsed.data.code ?? null)) {
+        await assertClientKeysFrozen(trx, current.client_id as number, "a lead sheet's code");
+      }
+      const codeAfter = parsed.data.code !== undefined ? parsed.data.code : was?.code;
+      if (!codeAfter && parsed.data.name !== undefined && parsed.data.name !== was?.name) {
+        await assertClientKeysFrozen(trx, current.client_id as number, 'the name of a lead sheet without a code');
       }
       return trx('lead_sheets').where({ id }).update(updates).returning('*');
     });
@@ -564,6 +569,9 @@ leadSheetItemRouter.delete('/', async (req: AuthRequest, res: Response): Promise
         ...(await trx('lead_sheet_attachments').where({ lead_sheet_id: id }).distinct().pluck('period_id')),
       ];
       await assertNotCheckedOut(trx, touched);
+      // Nor while any period of the client is held (code review): the desktop
+      // may have used it since the pull, and its send-back would be refused.
+      await assertClientKeysFrozen(trx, current.client_id as number, 'its lead sheets');
       await trx('lead_sheets').where({ id }).delete();
     });
     await logAudit({

@@ -101,6 +101,10 @@ tickmarkLibraryItemRouter.delete('/', async (req: AuthRequest, res: Response): P
       // Desktop sync: the delete cascades to the tickmarks placed in every
       // period; not while a desktop holds one of them.
       await assertNotCheckedOut(trx, await trx('tb_tickmarks').where({ tickmark_id: id }).distinct().pluck('period_id'));
+      // Nor while any period of the client is held (code review): the desktop
+      // may have placed it since the pull, and its send-back would be refused.
+      const lib = await trx('tickmark_library').where({ id }).first('client_id');
+      if (lib?.client_id) await assertClientKeysFrozen(trx, Number(lib.client_id), 'its tickmarks');
       const n: number = await trx('tickmark_library').where({ id }).delete();
       return n;
     });

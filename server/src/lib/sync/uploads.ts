@@ -280,6 +280,8 @@ export async function pruneUploads(now = Date.now()): Promise<void> {
     const state = u.job_id ? states.get(u.job_id) : undefined;
     // A claimed id with no job row yet is a push starting this moment (but not for 30 days).
     if (u.job_id && (state === 'queued' || state === 'running' || (state === undefined && kept))) continue;
+    // Nor while its parts are being joined (code review): the join reads them.
+    if (joining.has(u.id)) continue;
     fs.rmSync(dirOf(u.id), { recursive: true, force: true });
     if (!u.job_id || !kept) {
       await db('sync_uploads').where({ id: u.id }).delete();

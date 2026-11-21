@@ -201,22 +201,28 @@ export function createVibeUsers(opts: VibeUsersOptions = {}): UserAdapter {
 
     async setLocalPassword(id, password) {
       const n = userId(id);
-      await db('app_users').where({ id: n }).update({
-        password_hash: await bcrypt.hash(password, BCRYPT_COST),
-        must_change_password: false,
-        sso_only_since: null,
-        updated_at: db.fn.now(),
+      const hash = await bcrypt.hash(password, BCRYPT_COST);
+      // One transaction (code review): never the new password with the desktops still connected.
+      await db.transaction(async (trx) => {
+        await trx('app_users').where({ id: n }).update({
+          password_hash: hash,
+          must_change_password: false,
+          sso_only_since: null,
+          updated_at: trx.fn.now(),
+        });
+        // A password set by an admin is a reset: paired desktops end (owner 2026-11-19).
+        await revokeUserDevices(n, null, 'the password was set from single sign-on administration', { reset: true, trx });
       });
-      // A password set by an admin is a reset: paired desktops end (owner 2026-11-19).
-      await revokeUserDevices(n, null, 'the password was set from single sign-on administration', { reset: true });
       changed(n);
     },
 
     async setActive(id, active) {
       const n = userId(id);
-      await db('app_users').where({ id: n }).update({ is_active: active, updated_at: db.fn.now() });
-      // Deactivation ends paired desktops for good (owner 2026-11-19).
-      if (!active) await revokeUserDevices(n, null, 'the account was deactivated from single sign-on administration');
+      await db.transaction(async (trx) => {
+        await trx('app_users').where({ id: n }).update({ is_active: active, updated_at: trx.fn.now() });
+        // Deactivation ends paired desktops for good (owner 2026-11-19).
+        if (!active) await revokeUserDevices(n, null, 'the account was deactivated from single sign-on administration', { trx });
+      });
       changed(n);
     },
   };

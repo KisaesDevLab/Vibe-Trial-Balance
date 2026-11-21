@@ -101,6 +101,36 @@ export async function readBaseline(q: Knex | Knex.Transaction, clientId: number)
   };
 }
 
+type Wrote = Record<'accounts' | 'layouts', Map<string, { was: string | null; now: string | null }>>;
+
+/**
+ * Code review: a send-back's own writes to accounts and layouts move their
+ * updated_at, so this device's other pulls of the client would read its later
+ * edits to them as changes made on the server (SQ3 keeps the server's). Each
+ * of those baselines takes the new updated_at where it still had the one this
+ * send-back replaced (or did not have the row, for one it added); a row
+ * changed on the server in between keeps its older value, and stays changed.
+ */
+async function carryIntoBaselines(trx: Knex.Transaction, deviceId: number, clientId: number, wrote: Wrote): Promise<void> {
+  if (wrote.accounts.size === 0 && wrote.layouts.size === 0) return;
+  const jobs = (await trx('sync_jobs').where({ kind: 'pull', device_id: deviceId, client_id: clientId, state: 'done' })
+    .whereRaw("result->'baseline' IS NOT NULL").select('id', 'result')) as Array<{ id: string; result: { baseline?: PullBaseline | null } }>;
+  for (const job of jobs) {
+    const b = job.result.baseline;
+    if (!b) continue;
+    let changed = false;
+    for (const kind of ['accounts', 'layouts'] as const) {
+      for (const [uid, { was, now }] of wrote[kind]) {
+        const cur = b[kind][uid];
+        if (now === null || (was === null ? cur !== undefined : cur !== was)) continue;
+        b[kind][uid] = now;
+        changed = true;
+      }
+    }
+    if (changed) await trx('sync_jobs').where({ id: job.id }).update({ result: job.result });
+  }
+}
+
 /** A database refusal (a constraint) as a send-back refusal: not "try again". */
 export function asSyncError(err: unknown): unknown {
   const e = err as { code?: string; constraint?: string; table?: string } | null;
@@ -535,6 +565,9 @@ export async function mergePeriod(
     return out;
   };
   const accountUid = new Map<number, string>();
+  // What this send-back itself writes to client-level rows (uid → updated_at
+  // before and after), carried into this device's other pulls' baselines.
+  const wrote: Wrote = { accounts: new Map(), layouts: new Map() };
   for (const a of rowsOf(tables, 'chart_of_accounts')) {
     const here = (await trx('chart_of_accounts').where({ client_id: C, sync_uid: a.sync_uid }).first())
       ?? (await trx('chart_of_accounts').where({ client_id: C, account_number: a.account_number }).first());
@@ -546,7 +579,8 @@ export async function mergePeriod(
     const want = fixAccount(a);
     if (!here) {
       const uidFree = !(await trx('chart_of_accounts').where({ sync_uid: a.sync_uid }).first('id'));
-      const [ins] = await trx('chart_of_accounts').insert(await enc('chart_of_accounts', { ...want, client_id: C, ...(uidFree ? { sync_uid: a.sync_uid } : {}) })).returning(['id', 'sync_uid']);
+      const [ins] = await trx('chart_of_accounts').insert(await enc('chart_of_accounts', { ...want, client_id: C, ...(uidFree ? { sync_uid: a.sync_uid } : {}) })).returning(['id', 'sync_uid', 'updated_at']);
+      wrote.accounts.set(String((ins as Row).sync_uid), { was: null, now: iso((ins as Row).updated_at) });
       maps.account.set(Number(a.id), Number((ins as { id: number }).id));
       accountUid.set(Number(a.id), String((ins as { sync_uid: string }).sync_uid));
       result.accountsAdded.push(String(a.account_number));
@@ -561,7 +595,8 @@ export async function mergePeriod(
     }
     if (Object.keys(changes).length === 0) continue;
     if (unchangedSincePull('accounts', here.sync_uid, here.updated_at)) {
-      await trx('chart_of_accounts').where({ id: here.id }).update(await enc('chart_of_accounts', changes));
+      const [upd] = await trx('chart_of_accounts').where({ id: here.id }).update(await enc('chart_of_accounts', changes)).returning('updated_at');
+      wrote.accounts.set(String(here.sync_uid), { was: iso(here.updated_at), now: iso((upd as Row).updated_at) });
     } else {
       for (const [field, desktop] of Object.entries(changes)) {
         result.differences.push({ kind: 'account', key: String(here.account_number), field, server: here[field], desktop });
@@ -587,7 +622,8 @@ export async function mergePeriod(
       throw fail('SYNC_UID_EXISTS', 'A statement layout in the archive belongs to another client on the server.');
     }
     if (!here) {
-      const [ins] = await trx('fs_client_layouts').insert(await enc('fs_client_layouts', { ...want, client_id: C, sync_uid: l.sync_uid })).returning('id');
+      const [ins] = await trx('fs_client_layouts').insert(await enc('fs_client_layouts', { ...want, client_id: C, sync_uid: l.sync_uid })).returning(['id', 'updated_at']);
+      wrote.layouts.set(String(l.sync_uid), { was: null, now: iso((ins as Row).updated_at) });
       maps.fsLayout.set(Number(l.id), Number((ins as { id: number }).id));
       result.layoutsAdded.push(String(l.name));
       continue;
@@ -599,7 +635,8 @@ export async function mergePeriod(
     }
     if (Object.keys(changes).length === 0) continue;
     if (unchangedSincePull('layouts', here.sync_uid, here.updated_at)) {
-      await trx('fs_client_layouts').where({ id: here.id }).update({ ...(await enc('fs_client_layouts', changes)), updated_at: trx.fn.now() });
+      const [upd] = await trx('fs_client_layouts').where({ id: here.id }).update({ ...(await enc('fs_client_layouts', changes)), updated_at: trx.fn.now() }).returning('updated_at');
+      wrote.layouts.set(String(here.sync_uid), { was: iso(here.updated_at), now: iso((upd as Row).updated_at) });
     } else {
       for (const field of Object.keys(changes)) result.differences.push({ kind: 'layout', key: String(here.name), field, server: here[field], desktop: want[field] });
     }
@@ -874,6 +911,7 @@ export async function mergePeriod(
   if (target.checkoutId !== null) {
     await trx('period_checkouts').where({ id: target.checkoutId }).update({ released_at: trx.fn.now(), released_by: target.userId, release_reason: 'Sent back by the desktop.' });
   }
+  await carryIntoBaselines(trx, target.deviceId, C, wrote);
   await logAudit({
     userId: target.userId, periodId: P, entityType: 'period', entityId: P, action: 'sync_merge',
     description: `Period sent back by desktop "${target.deviceName}": ${Object.entries(result.counts).map(([t, n]) => `${t} ${n}`).join(', ')}`
