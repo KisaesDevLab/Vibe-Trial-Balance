@@ -114,4 +114,11 @@ A sign-off sent back that the server already has (same lead sheet, role, signing
 signer the server has; a note the server has (same text, written at the same moment) keeps its author, and its
 resolver when resolved at the same moment. Any other sign-off is the sender's. A new client sent from a desktop has
 every sign-off given to the sender (`signoffsReassigned` in the job result counts those that named someone else),
-and arrives with no storage folder (`folder: null`): an admin links one on the Document Storage page (Client folders).
+and gets a storage folder linked by the configured pattern (`folder: { path, created }` in the job result; if one
+cannot be made the client still arrives, with `folder: null` and the reason in `folderProblem`). A period sent back
+with attachment files for a client with no folder links one the same way, and its result names the folder
+(`folder` is null when the send-back stored no files).
+
+A pull carries the client's prior period (the period ending the day before this one starts) as a reference period: an
+empty `periods` row marked `is_reference`, with its adjusted balances in `manifest.sync.priorPeriod` (see the
+addendum). A variance note made on the desktop against it comes back pointing at the server's prior period.

@@ -42,6 +42,7 @@ import {
 import { BackupRefusal, appliedMigrations, checkArchive, documentFilePath, syncManifestProblem } from '../backupManifest';
 import { remapFsLayoutIds } from '../fs/fsLayoutRemap';
 import { deleteDocument, storeDocument, workpaperSection, type DocumentRow } from '../documentStore';
+import { createClientFolder, getLink } from '../clientFolders';
 import { checkedOutBy, logAudit } from '../periodGuard';
 import { currentStampFor } from '../leadSheetStamp';
 import { STAMP_TABLES, periodStamp, stampRefs, type PeriodStampInput, type RefKind, type StampTable } from './periodStamp';
@@ -325,9 +326,11 @@ export async function stageAttachmentFiles(
   tables: Record<string, unknown[]>,
   files: Map<number, Buffer>,
   target: MergeTarget,
-): Promise<{ docMap: Map<number, number>; created: DocumentRow[] }> {
+): Promise<{ docMap: Map<number, number>; created: DocumentRow[]; folder: SyncFolder | null }> {
   const docMap = new Map<number, number>();
   const created: DocumentRow[] = [];
+  // The client's folder, linked on the first file to store when it has none (Q123).
+  let folder: SyncFolder | null = null;
   const archiveDocs = new Map(rowsOf(tables, 'client_documents').map((d) => [Number(d.id), d]));
   const serverAtts = (await db('lead_sheet_attachments as a').leftJoin('client_documents as d', 'd.id', 'a.document_id')
     .where('a.period_id', target.periodId).select('a.ref_code', 'a.document_id', 'd.sha256')) as Array<{ ref_code: string; document_id: number | null; sha256: string | null }>;
@@ -349,6 +352,7 @@ export async function stageAttachmentFiles(
       if (!bytes) throw fail('SYNC_ARCHIVE_INVALID', `The archive lacks the file of attachment ${String(att.ref_code)}.`);
       // Every attachment is a PDF (the web converts images on upload).
       if (bytes.subarray(0, 5).toString('latin1') !== '%PDF-') throw fail('SYNC_ARCHIVE_INVALID', `The file of attachment ${String(att.ref_code)} is not a PDF.`);
+      folder ??= await ensureSyncFolder(target.clientId, target.userId, target.deviceName);
       const stored = await storeDocument({
         clientId: target.clientId,
         periodId: target.periodId,
@@ -370,7 +374,40 @@ export async function stageAttachmentFiles(
     }
     throw err;
   }
-  return { docMap, created };
+  return { docMap, created, folder };
+}
+
+/** The client's workpaper folder, as a send-back reports it (Q123). */
+export interface SyncFolder {
+  /** The folder's storage path, e.g. `Clients/Example LLC/`. */
+  path: string;
+  /** True when this send-back linked it (the client had none). */
+  created: boolean;
+}
+
+/**
+ * Q123 (owner 2026-11-21): a send-back that brings files for a client with no
+ * workpaper folder links one, as Settings › Storage › Create would (the
+ * configured folder pattern, a free name, the sentinel written first), instead
+ * of refusing. A client with a folder keeps it. Made outside the merge's
+ * transaction, like every storage write: a merge refused afterwards leaves a
+ * correct, linked folder, which an admin may unlink.
+ */
+export async function ensureSyncFolder(clientId: number, userId: number, deviceName: string): Promise<SyncFolder> {
+  const have = await getLink(clientId);
+  if (have) return { path: have.storage_path, created: false };
+  const r = await createClientFolder(clientId, null, userId);
+  if (!r.ok) {
+    // Linked meanwhile by another request: that one.
+    const now = r.code === 'CLIENT_ALREADY_BOUND' ? await getLink(clientId) : null;
+    if (now) return { path: now.storage_path, created: false };
+    throw fail('CLIENT_NOT_LINKED', `This client has no workpaper folder on the server and one could not be made (${r.message}). An admin links one in Settings › Storage; then send it again.`);
+  }
+  await logAudit({
+    userId, periodId: null, clientId, entityType: 'client_folder_link', entityId: r.link.id, action: 'create',
+    description: `Created storage folder ${r.link.storage_path} for files sent from desktop "${deviceName}"`,
+  });
+  return { path: r.link.storage_path, created: true };
 }
 
 export async function removeDocuments(docs: DocumentRow[]): Promise<void> {

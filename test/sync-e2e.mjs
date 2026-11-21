@@ -1400,6 +1400,31 @@ async function main() {
       assert.equal((await one(`SELECT count(*)::int AS n FROM client_documents WHERE id = $1`, [oldDoc])).n, 0, 'the old document is removed');
       const file = await api(`/api/v1/documents/${now.document_id}/download`, { token: admin });
       if (file.status === 200) assert.equal(sha256Hex(file.buf), sha256Hex(stamped), 'the stored bytes are the stamped ones');
+      assert.deepEqual(j2.result.folder, { path: link.json.data.link.storage_path, created: false }, 'the folder the files went to (Q123)');
+      // Q123: a client with no folder gets one linked by the send-back, not a refusal.
+      const fsm = await import('node:fs');
+      await sql(`DELETE FROM client_folder_links WHERE client_id = $1`, [s3.client.id]);
+      fsm.rmSync(path.join(SERVER, 'uploads', link.json.data.link.storage_path), { recursive: true, force: true });
+      const p3 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+      await waitJob(d.token, p3.json.data.jobId);
+      const again = await pdf('Example original - reviewed twice');
+      const sent3 = await rewriteArchive((await api(`/api/v1/sync/jobs/${p3.json.data.jobId}/archive`, { token: d.token })).buf, async (t, _m, entries) => {
+        const a = t.lead_sheet_attachments.find((x) => x.ref_code === ref);
+        const doc = t.client_documents.find((x) => x.id === a.document_id);
+        entries.set(`files/${doc.id}`, again);
+        doc.sha256 = sha256Hex(again);
+        doc.file_size = again.length;
+      });
+      const r3 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, sent3), checkoutId: p3.json.data.checkoutId } });
+      const j3 = await waitJob(d.token, r3.json.data.jobId);
+      assert.equal(j3.state, 'done', JSON.stringify(j3.error));
+      const made = await one(`SELECT storage_path FROM client_folder_links WHERE client_id = $1`, [s3.client.id]);
+      assert.ok(made, 'a folder was linked');
+      assert.deepEqual(j3.result.folder, { path: made.storage_path, created: true });
+      const doc3 = await one(`SELECT d.sha256, d.object_key FROM lead_sheet_attachments a JOIN client_documents d ON d.id = a.document_id WHERE a.period_id = $1 AND a.ref_code = $2`, [P, ref]);
+      assert.equal(doc3.sha256, sha256Hex(again));
+      assert.ok(String(doc3.object_key).startsWith(made.storage_path), `stored in it: ${doc3.object_key}`);
+      assert.ok(await one(`SELECT 1 FROM audit_log WHERE entity_type = 'client_folder_link' AND action = 'create' AND client_id = $1`, [s3.client.id]), 'audited');
     } finally {
       const l = await one(`SELECT storage_path FROM client_folder_links WHERE client_id = $1`, [s3.client.id]);
       await sql(`DELETE FROM client_folder_links WHERE client_id = $1`, [s3.client.id]);
@@ -1550,7 +1575,9 @@ async function main() {
     assert.equal(jc.state, 'done', JSON.stringify(jc.error));
     const cid = (await one(`SELECT id FROM clients WHERE sync_uid = $1`, [uid])).id;
     assert.equal((await one(`SELECT count(*)::int AS n FROM client_documents WHERE client_id = $1 AND object_key IS NOT NULL`, [cid])).n, 0, 'no storage pointer kept');
-    assert.equal((await one(`SELECT count(*)::int AS n FROM client_folder_links WHERE client_id = $1`, [cid])).n, 0, 'no folder link');
+    // Its folder is the server's own (Q123), never the one the archive named.
+    const links = await sql(`SELECT storage_path FROM client_folder_links WHERE client_id = $1`, [cid]);
+    assert.ok(links.every((l) => !l.storage_path.includes('Example stolen folder')), JSON.stringify(links));
     assert.equal((await one(`SELECT count(*)::int AS n FROM app_users WHERE username = 'example.injected'`)).n, 0, 'no user');
     await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
   });
@@ -1698,7 +1725,10 @@ async function main() {
     const j = await waitJob(d.token, r.json.data.jobId);
     assert.equal(j.state, 'done', `a new client with sign-offs: ${JSON.stringify(j.error)}`);
     assert.equal(j.result.signoffsReassigned, signs);
-    assert.equal(j.result.folder, null, 'linking a folder stays an explicit step');
+    const linked = await one(`SELECT l.storage_path FROM client_folder_links l JOIN clients c ON c.id = l.client_id WHERE c.sync_uid = $1`, [clientUid]);
+    assert.ok(linked, 'a folder is linked for the new client (Q123)');
+    assert.deepEqual(j.result.folder, { path: linked.storage_path, created: true });
+    assert.equal(j.result.folderProblem, null);
     const rows = await sql(`SELECT DISTINCT s.user_id FROM lead_sheet_signoffs s JOIN periods p ON p.id = s.period_id JOIN clients c ON c.id = p.client_id WHERE c.sync_uid = $1`, [clientUid]);
     assert.deepEqual(rows.map((x) => x.user_id), [me]);
     await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
@@ -1904,6 +1934,57 @@ async function main() {
     assert.equal(again.status, 202, again.text);
     const j = await waitJob(d.token, again.json.data.jobId);
     assert.equal(j.state, 'done', `sent again without uploading it again: ${JSON.stringify(j.error)}`);
+  });
+
+  await step('Desktop requests Q122: a pull carries the prior period as a reference, with its balances in the manifest; a note made against it comes back', async () => {
+    const d = await pairWith(admin, 'Prior period desktop');
+    const C = s3.client.id;
+    const own = await one(`SELECT start_date::text AS s FROM periods WHERE id = $1`, [s3.period.id]);
+    let prior = await one(`SELECT id, sync_uid FROM periods WHERE client_id = $1 AND NOT is_reference AND id <> $2 AND end_date = $3::date - 1 ORDER BY id LIMIT 1`, [C, s3.period.id, own.s]);
+    let made = null;
+    if (!prior) {
+      prior = await one(`INSERT INTO periods (client_id, period_name, start_date, end_date) VALUES ($1, 'Example prior year', ($2::date - interval '1 year')::date, $2::date - 1) RETURNING id, sync_uid`, [C, own.s]);
+      made = prior.id;
+    }
+    // A balance in it, so the manifest has one to carry.
+    const acct = await one(`SELECT id, sync_uid FROM chart_of_accounts WHERE client_id = $1 AND is_active ORDER BY account_number LIMIT 1`, [C]);
+    if (made) await sql(`INSERT INTO trial_balance (period_id, account_id, unadjusted_debit, unadjusted_credit) VALUES ($1, $2, 123456, 0)`, [made, acct.id]);
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    assert.equal((await waitJob(d.token, pull.json.data.jobId)).state, 'done');
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    const m = await manifestOf(archive);
+    const pp = m.sync.priorPeriod;
+    assert.ok(pp, 'the manifest names the prior period');
+    assert.equal(pp.periodUid, prior.sync_uid);
+    assert.match(pp.startDate, /^\d{4}-\d{2}-\d{2}$/);
+    const want = await sql(`SELECT a.sync_uid AS "accountUid", v.book_adjusted_debit::text AS "bookDebit", v.book_adjusted_credit::text AS "bookCredit",
+                                   v.tax_adjusted_debit::text AS "taxDebit", v.tax_adjusted_credit::text AS "taxCredit"
+                            FROM v_adjusted_trial_balance v JOIN chart_of_accounts a ON a.id = v.account_id
+                            WHERE v.period_id = $1 AND a.is_active ORDER BY a.account_number`, [prior.id]);
+    assert.deepEqual(pp.balances, want, 'its adjusted balances, whole cents as text, by account uid');
+    if (made) assert.equal(pp.balances.find((b) => b.accountUid === acct.sync_uid)?.bookDebit, '123456');
+    const dir = await unzipper.Open.buffer(archive);
+    const periods = JSON.parse((await dir.files.find((f) => f.path === 'tables/periods.json').buffer()).toString('utf8'));
+    const ref = periods.find((p) => p.sync_uid === prior.sync_uid);
+    assert.ok(ref, 'the prior period row is in the archive');
+    assert.equal(ref.is_reference, true, 'as a reference period');
+    const tb = JSON.parse((await dir.files.find((f) => f.path === 'tables/trial_balance.json').buffer()).toString('utf8'));
+    assert.ok(tb.every((r) => r.period_id === m.periodId), 'and none of its rows');
+    // A variance note made on the desktop against it comes back, pointing at the server's prior period.
+    const sent = await rewriteArchive(archive, async (t) => {
+      const accountId = t.trial_balance.find((r) => !(t.variance_notes ?? []).some((n) => n.account_id === r.account_id && n.compare_period_id === ref.id)).account_id;
+      const id = Math.max(0, ...(t.variance_notes ?? []).map((n) => n.id)) + 1;
+      t.variance_notes = [...(t.variance_notes ?? []), { id, period_id: m.periodId, account_id: accountId, compare_period_id: ref.id, note: 'Example note against the prior year' }];
+    });
+    const r = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, sent), checkoutId: pull.json.data.checkoutId } });
+    const j = await waitJob(d.token, r.json.data.jobId);
+    assert.equal(j.state, 'done', JSON.stringify(j.error));
+    const note = await one(`SELECT compare_period_id FROM variance_notes WHERE period_id = $1 AND note = 'Example note against the prior year'`, [s3.period.id]);
+    assert.equal(note?.compare_period_id, prior.id);
+    assert.equal((await one(`SELECT is_reference FROM periods WHERE id = $1`, [prior.id])).is_reference, false, 'the prior period stays a real period here');
+    await sql(`DELETE FROM variance_notes WHERE period_id = $1 AND note = 'Example note against the prior year'`, [s3.period.id]);
+    if (made) assert.equal((await api(`/api/v1/periods/${made}`, { method: 'DELETE', token: admin })).status, 200);
   });
 
   await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and sync responses after 15 s, and nothing was cut', async () => {

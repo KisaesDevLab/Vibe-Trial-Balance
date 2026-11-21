@@ -509,7 +509,10 @@ All planned phases complete. App is feature-complete.
   "keep only the last version" — that is B2-native, not settable over S3.
 - **Client ↔ folder linking with sentinels** (`client_folder_links` + `lib/clientFolders.ts`).
   Linking is **explicit**: no auto-create, and an upload for an unlinked client is refused with
-  `CLIENT_NOT_LINKED`. Identity lives in `<folder>/_Vibe/client.json`, **not the path**, which is what
+  `CLIENT_NOT_LINKED`. **One exception (desktop sync Q123, owner 2026-11-21):** a desktop send-back that
+  brings attachment files, and a new client sent from a desktop, link the client a folder by the
+  configured pattern (`ensureSyncFolder` in `lib/sync/mergePeriod.ts` → `createClientFolder`, audited),
+  and the job result names it (`folder: { path, created }`). Identity lives in `<folder>/_Vibe/client.json`, **not the path**, which is what
   lets a folder renamed in the B2 console be re-bound by Verify instead of orphaning every key
   (`clients.name` has no unique index, so the sentinel is also what tells two same-named clients
   apart). `install_id` replaces the reference's `firm_id` — this app is single-tenant. `client_id`
@@ -796,7 +799,9 @@ All planned phases complete. App is feature-complete.
   every desktop (UTC) send-back to a server west of UTC was refused. The stamp's `dateText` reads old ISO text by
   its date part, which is what Postgres stores from it. A sent-back sign-off is matched WITHOUT its signer (the
   desktop's user ids are its own) and keeps the server's; a new client's sign-offs become the sender's. A used
-  upload names its `jobId` on every refusal, and `DELETE /sync/uploads/:id` cancels an unsent one.
+  upload names its `jobId` on every refusal, and `DELETE /sync/uploads/:id` cancels an unsent one. A pull also
+  carries the client's prior period (`priorYearRange`) as a reference period, with its adjusted balances in
+  `manifest.sync.priorPeriod` (`lib/sync/priorPeriod.ts`, Q122), never as trial balance rows.
 - Variance notes (per account per period, TB Report inline editing)
 - **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
   trusts cascades; five references shipped with none (bank_transactions, document_imports,

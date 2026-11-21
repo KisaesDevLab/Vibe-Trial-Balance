@@ -30,6 +30,7 @@ import {
 } from '../lib/sync/deviceTokens';
 import { syncAuthMiddleware, type SyncRequest } from '../lib/sync/syncAuth';
 import { revokeDevice } from '../lib/sync/deviceRevoke';
+import { priorPeriodManifest } from '../lib/sync/priorPeriod';
 import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
@@ -42,7 +43,7 @@ import { stampPeriod } from '../lib/sync/periodStampLoad';
 import { SYNC_JOB_DIR, SyncJobError, assertDiskRoom, startJob } from '../lib/sync/jobs';
 import { checkoutApi, checkoutWarnDays, daysOut, isoDate } from '../lib/sync/checkouts';
 import { MAX_UPLOAD_BYTES, UploadError, cancelUpload, claimUpload, joinState, openUpload, partBytes, putPart, receivedParts, startCompleteUpload, startUpload, unclaimUpload } from '../lib/sync/uploads';
-import { asSyncError, dropReplacedDocuments, mergePeriod, periodTotals, readBaseline, readSendBack, removeDocuments, stageAttachmentFiles, type PullBaseline } from '../lib/sync/mergePeriod';
+import { asSyncError, dropReplacedDocuments, ensureSyncFolder, mergePeriod, type SyncFolder, periodTotals, readBaseline, readSendBack, removeDocuments, stageAttachmentFiles, type PullBaseline } from '../lib/sync/mergePeriod';
 import { confineNewClient } from '../lib/sync/newClient';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -422,6 +423,7 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
             includeFiles: true,
             outDir: dir,
             recordHistory: false,
+            withPriorPeriod: true,
             manifestExtra: async (trx) => {
               pulledAt = new Date((await trx.raw('SELECT now() AS t')).rows[0].t);
               stamp = await stampPeriod(trx, period.id);
@@ -429,7 +431,9 @@ syncRouter.post('/periods/:uid/pull', async (req: SyncRequest, res: Response): P
               baseline = await readBaseline(trx, period.client_id);
               // totals: a pulled archive sent back as it came is a valid send-back.
               totals = await periodTotals(trx, period.id);
-              return { sync: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, pulledAt: pulledAt.toISOString(), deviceId: device.id, totals } };
+              // The prior period (a reference row in the archive) and its balances (Q122).
+              const priorPeriod = await priorPeriodManifest(trx, period.id);
+              return { sync: { periodUid: uid, clientUid: period.client_uid, stamp, checkoutId, pulledAt: pulledAt.toISOString(), deviceId: device.id, totals, priorPeriod } };
             },
           }, req.user!.userId);
           // Read inside the archive's snapshot: what the desktop now has, and when.
@@ -697,7 +701,8 @@ syncRouter.post('/periods/:uid/push', async (req: SyncRequest, res: Response): P
           throw asSyncError(err);
         }
         await dropReplacedDocuments(outcome.replacedDocs);
-        return { result: outcome.result as unknown as Record<string, unknown> };
+        // The client's folder when files were stored (Q123), else null.
+        return { result: { ...(outcome.result as unknown as Record<string, unknown>), folder: staged.folder } };
       },
     );
     res.status(202).json({ data: { jobId }, error: null });
@@ -772,7 +777,7 @@ syncRouter.post('/clients/:uid/periods/push', async (req: SyncRequest, res: Resp
             return mergePeriod(trx, target, tables, manifest, docMap);
           });
           await dropReplacedDocuments(outcome.replacedDocs);
-          return { result: { periodUid: sync.periodUid, ...(outcome.result as unknown as Record<string, unknown>) } };
+          return { result: { periodUid: sync.periodUid, ...(outcome.result as unknown as Record<string, unknown>), folder: staged.folder } };
         } catch (err) {
           if (staged) await removeDocuments(staged.created);
           if (!existing) await db('periods').where({ id: periodId }).delete().catch(() => undefined);
@@ -859,10 +864,18 @@ syncRouter.post('/clients/push', async (req: SyncRequest, res: Response): Promis
           return { ...r, signoffsReassigned: confined.signoffsReassigned };
         });
         const files = Array.isArray(manifest.files) ? manifest.files.length : 0;
-        // No `folder`: linking a client to a storage folder is explicit on this
-        // server (never made on its own), so a new client arrives unlinked and its
-        // document files stay on the desktop until an admin links one (Q109).
-        return { result: { clientUid: clientRow.sync_uid, clientId: out.newClientId, filesNotPlaced: files, folder: null, signoffsReassigned: out.signoffsReassigned } };
+        // Its workpaper folder is linked now (Q123, owner 2026-11-21), so its
+        // periods' files can follow when they are sent back. The client is in
+        // already: a folder that cannot be made is reported, not a refusal.
+        let folder: SyncFolder | null = null;
+        let folderProblem: string | null = null;
+        try {
+          folder = await ensureSyncFolder(out.newClientId, userId, device.name);
+        } catch (err: unknown) {
+          folderProblem = err instanceof Error ? err.message : 'The folder could not be made.';
+          console.error('[sync] new client folder', folderProblem);
+        }
+        return { result: { clientUid: clientRow.sync_uid, clientId: out.newClientId, filesNotPlaced: files, folder, folderProblem, signoffsReassigned: out.signoffsReassigned } };
       },
     );
     res.status(202).json({ data: { jobId }, error: null });

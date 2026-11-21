@@ -161,11 +161,18 @@ To fix (all done 2026-11-21 on `feat/sync-s5-hardening`, below):
 | Q104 dates and time zones | Archives write DATE columns as `YYYY-MM-DD`. The period stamp reads an older archive's ISO text by its date part, which is what Postgres stores from it, so a UTC desktop's archive is taken by a server in any zone (`sync-e2e` passes under America/Chicago, UTC and Asia/Tokyo). |
 | Q106 (1) `add_variance_note` | PR #36 merged into this branch: a note with no comparison period is kept against the period itself. |
 | Q106 (2) "Admin > Settings" | The provider-not-configured errors no longer name a menu. |
-| Q109 (1) the new client's folder | The result says `folder: null`: linking a storage folder stays an explicit admin step on this server, never made on its own. |
+| Q109 (1) the new client's folder | Superseded by Q123: the new client gets a folder linked, named in `folder`. |
 | Q109 (2) totals in the pull result | As item 1 above. |
 | Q108 | Desktop side (`portableClient.ts`); nothing here. Q110 and compat item 3 (a re-pull's baseline) are desktop side. |
 
 **For the fork's next sync:** `lib/sync/mergePeriod.ts`, `lib/sync/newClient.ts`, `lib/sync/periodStamp.ts` and `lib/sync/uploads.ts` changed, so the byte-equal check against the fork will differ until it merges; `routes/backup.ts` (plain dates) and `routes/sync.ts` changed too. No migration was added, so the schema version is unchanged. The desktop's `export-period` should write DATE columns as `YYYY-MM-DD` as well (the engine's `createBackup` does once merged). The desktop's Rust side reads only `clients` and `chart_of_accounts` from an archive, so plain dates break nothing there; its `appliance_compare` test diffs whole tables, and after the merge a desktop archive's dates (`2025-12-31`) will differ in form from a v0.1.56 appliance's (`2025-12-31T06:00:00.000Z`): compare DATE columns by their date part.
+
+## Q122 and Q123 (owner 2026-11-21)
+
+| Item | What the server does |
+| --- | --- |
+| Q123 folder on send-back | A period send-back that stores attachment files for a client with no workpaper folder links one, as Settings › Storage › Create would (the configured folder pattern, a free name, its sentinel), audited, instead of refusing with `CLIENT_NOT_LINKED`. The job result carries `folder: { path, created }` (`created` true when this send-back linked it), or `folder: null` when no files were stored. A new client sent from a desktop gets a folder the same way; if it cannot be made the client still arrives, with `folder: null` and `folderProblem` saying why. The refusal remains only when no folder can be made (e.g. storage misconfigured). |
+| Q122 prior period in the pull | Every pull carries the client's prior period, the non-reference period ending the day before the pulled one starts (`priorYearRange`, as statements and the QuickBooks import use), as a reference row in `tables/periods.json` (`is_reference: true`, no rows of its own), whether or not a note names it. Its adjusted balances are in `manifest.sync.priorPeriod = { periodUid, periodName, startDate, endDate, balances: [{ accountUid, bookDebit, bookCredit, taxDebit, taxCredit }] }`, whole cents as text, one entry per active account with a trial balance row in that period, by `chart_of_accounts.sync_uid`; `null` when there is no prior period. A variance note made on the desktop with `compare_period_id` = that reference row's archive id comes back pointing at the server's period (matched by `sync_uid`). The balances are not sent back and the stamp is unchanged. Keeping reference periods out of the desktop's own period lists is desktop side; on this server they are already left out of `GET /clients/:id/periods`. |
 
 ## Code review of the branch (2026-11-21), fixed
 

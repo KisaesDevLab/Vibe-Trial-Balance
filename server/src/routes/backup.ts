@@ -34,6 +34,7 @@ import {
 import { sendServerError } from '../lib/safeError';
 import { assertClientNotCheckedOut } from '../lib/periodGuard';
 import { calendarDate } from '../lib/sync/periodStamp';
+import { priorPeriodOf } from '../lib/sync/priorPeriod';
 import {
   BackupRefusal,
   FORMAT_VERSION,
@@ -127,6 +128,11 @@ interface BackupOptions {
    * rows in the archive).
    */
   manifestExtra?: (trx: Knex.Transaction) => Promise<Record<string, unknown>>;
+  /**
+   * Period level (desktop sync pull, Q122): also carry the client's prior
+   * period as a reference period, whether or not a row names it.
+   */
+  withPriorPeriod?: boolean;
 }
 
 interface BackupHistoryRow {
@@ -396,9 +402,11 @@ export async function createBackup(
         const refTxns = cId && refTxnIds.length > 0
           ? await trx('bank_transactions').where('client_id', cId).whereIn('id', refTxnIds).select('*')
           : [];
+        const prior = options.withPriorPeriod ? await priorPeriodOf(trx, periodId) : null;
         const refPeriodIds = [...new Set([
           ...varianceRows.map((v: { compare_period_id: number | null }) => v.compare_period_id),
           ...refTxns.map((t: { period_id: number | null }) => t.period_id),
+          prior?.id ?? null,
         ].filter((id): id is number => id != null && id !== periodId))];
         const refPeriods = cId && refPeriodIds.length > 0
           ? await trx('periods').where('client_id', cId).whereIn('id', refPeriodIds).select('*')
