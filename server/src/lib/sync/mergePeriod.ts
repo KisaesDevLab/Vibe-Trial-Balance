@@ -154,6 +154,13 @@ async function totals(q: Knex | Knex.Transaction, periodId: number): Promise<Tot
   return { bookDebit: String(r?.d ?? 0), bookCredit: String(r?.c ?? 0) };
 }
 
+/**
+ * The period's adjusted book totals, in whole cents as text: what a period
+ * archive carries as `manifest.sync.totals` and what a send-back is checked
+ * against after the merge.
+ */
+export const periodTotals = totals;
+
 async function columnsOf(trx: Knex.Transaction, table: string): Promise<Set<string>> {
   return new Set(Object.keys(await trx(table).columnInfo()));
 }
@@ -439,6 +446,22 @@ export async function mergePeriod(
     }
     return allowedCache.get(k)!;
   };
+  // A note the server already has (same text, written at the same moment)
+  // keeps the server's author, and its resolver while it was resolved at the
+  // same moment (Q102): the desktop's user ids are its own, so they would
+  // otherwise be blanked here. Only what the server already says is restored.
+  const serverNotes = new Map<string, Row>();
+  for (const n of (await trx('lead_sheet_notes').where({ period_id: P })) as Row[]) serverNotes.set(`${iso(n.created_at)}|${String(n.body)}`, n);
+  for (const r of rowsOf(tables, 'lead_sheet_notes')) {
+    const was = serverNotes.get(`${iso(r.created_at)}|${String(r.body)}`);
+    if (!was) continue;
+    r.author_id = was.author_id;
+    r.author_name = was.author_name;
+    if (was.resolved_at != null && iso(r.resolved_at) === iso(was.resolved_at)) {
+      r.resolved_by = was.resolved_by;
+      r.resolved_by_name = was.resolved_by_name;
+    }
+  }
   for (const t of [...REPLACED.filter((x) => x !== 'lead_sheet_signoffs'), 'journal_entries', 'bank_transactions', 'bank_reconciliations', 'lead_sheet_attachments', 'fs_reports']) {
     const cols = USER_FK_COLUMNS[t] ?? [];
     for (const r of rowsOf(tables, t)) {
@@ -671,12 +694,17 @@ export async function mergePeriod(
     result.counts[t] = rows.length;
   }
 
-  // ── Sign-offs (security review): one the server has, exactly, stays as the
-  // server has it (it may be invalidated since); any other is the sender's,
-  // with the balance stamp the server computes now. Nobody signs for another.
+  // ── Sign-offs (security review): one the server has stays signed by whoever
+  // the server says signed it (it may be invalidated since); any other is the
+  // sender's, with the balance stamp the server computes now. Nobody signs for
+  // another. The match leaves the signer OUT (Q102): a desktop's user ids are
+  // its own, so keying on them gave a reviewer's sign-off to the preparer who
+  // sent the period back. Only a row the server already has can match, and
+  // it takes the server's signer, so leaving the signer out of the key lets
+  // nobody claim a signature.
   const signCols = await columnsOf(trx, 'lead_sheet_signoffs');
   const serverSigns = (await trx('lead_sheet_signoffs').where({ period_id: P })) as Row[];
-  const signKey = (r: Row) => [r.lead_sheet_id, r.role, iso(r.signed_at), num(r.user_id), r.user_name ?? null, r.balance_stamp].map((x) => String(x)).join('|');
+  const signKey = (r: Row) => [r.lead_sheet_id, r.role, iso(r.signed_at), r.balance_stamp].map((x) => String(x)).join('|');
   const serverByKey = new Map(serverSigns.map((r) => [signKey(r), r]));
   await trx('lead_sheet_signoffs').where({ period_id: P }).delete();
   let signs = 0;
@@ -686,7 +714,12 @@ export async function mergePeriod(
     const invalidatedBy = num(a.invalidated_by);
     const keptInvalidator = invalidatedBy === null || invalidatedBy === target.userId || invalidatedBy === num(was?.invalidated_by) ? invalidatedBy : null;
     if (was) {
-      a.invalidated_by = keptInvalidator;
+      a.user_id = was.user_id;
+      a.user_name = was.user_name;
+      // Unsigned on the server at the same moment: by whoever the server says.
+      a.invalidated_by = was.invalidated_at != null && iso(a.invalidated_at) === iso(was.invalidated_at) ? was.invalidated_by : keptInvalidator;
+      // Matched once: a second archive row with the same key is a new signature.
+      serverByKey.delete(signKey({ ...a, lead_sheet_id: lsId }));
     } else {
       a.user_id = target.userId;
       a.user_name = pusherName;

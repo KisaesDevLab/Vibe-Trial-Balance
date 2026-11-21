@@ -790,6 +790,12 @@ All planned phases complete. App is feature-complete.
   stamp is unchanged and `sync.totals` tie; the server log names the differing tables. **A new foreign key
   into a period table** must be classified in the `sync-e2e` FK step and handled in the merge. What a
   desktop's archive must be is in `desktop-sync-addendum.md`.
+  **Archives write DATE columns as plain `YYYY-MM-DD`** (`dateColumns`/`withCalendarDates` in `routes/backup.ts`);
+  a node-pg Date is local midnight, so the old ISO text fell on the day before for a reader in another zone and
+  every desktop (UTC) send-back to a server west of UTC was refused. The stamp's `dateText` reads old ISO text by
+  its date part, which is what Postgres stores from it. A sent-back sign-off is matched WITHOUT its signer (the
+  desktop's user ids are its own) and keeps the server's; a new client's sign-offs become the sender's. A used
+  upload names its `jobId` on every refusal, and `DELETE /sync/uploads/:id` cancels an unsent one.
 - Variance notes (per account per period, TB Report inline editing)
 - **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
   trusts cascades; five references shipped with none (bank_transactions, document_imports,

@@ -1552,6 +1552,155 @@ async function main() {
     await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
   });
 
+  // ── What the desktop (ClientLedger TB) asked of this server, 2026-11-21.
+  let asked;
+  await step('Desktop requests Q102/Q109/Q104: the pull carries its totals in the manifest and the result, DATE columns as plain dates, and comes back as it went', async () => {
+    const d = s4.desk;
+    const P = s3.period.id;
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    const job = await waitJob(d.token, pull.json.data.jobId);
+    assert.equal(job.state, 'done', JSON.stringify(job.error));
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    const m = await manifestOf(archive);
+    assert.match(m.sync.totals?.bookDebit ?? '', /^-?\d+$/, 'totals in whole cents as text');
+    assert.deepEqual(job.result.totals, m.sync.totals, 'the job result carries the same totals (Q109)');
+    const dir = await unzipper.Open.buffer(archive);
+    const table = async (t) => JSON.parse((await dir.files.find((f) => f.path === `tables/${t}.json`).buffer()).toString('utf8'));
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    for (const p of await table('periods')) { assert.match(p.start_date, dateRe); assert.match(p.end_date, dateRe); }
+    const jes = await table('journal_entries');
+    assert.ok(jes.length > 0);
+    for (const j of jes) assert.match(j.entry_date, dateRe, 'entry dates are calendar dates (Q104)');
+    for (const b of await table('bank_transactions')) assert.match(b.transaction_date, dateRe);
+    const datesBefore = await sql(`SELECT entry_type, entry_number, entry_date::text AS d FROM journal_entries WHERE period_id = $1 ORDER BY 1, 2`, [P]);
+    // Sent back as it came, nothing rewritten: taken (Q102 (1)).
+    const uploadId = await uploadBuf(d.token, archive);
+    const push = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId, checkoutId: pull.json.data.checkoutId } });
+    assert.equal(push.status, 202, push.text);
+    const pj = await waitJob(d.token, push.json.data.jobId);
+    assert.equal(pj.state, 'done', `an archive sent back as it came: ${JSON.stringify(pj.error)}`);
+    assert.deepEqual(pj.result.differences, []);
+    asked = { uploadId, jobId: push.json.data.jobId };
+    // An older desktop's archive: DATEs as UTC-midnight ISO text (a desktop runs on UTC),
+    // read by this server in whatever zone it runs (Q104).
+    const p2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    await waitJob(d.token, p2.json.data.jobId);
+    const a2 = (await api(`/api/v1/sync/jobs/${p2.json.data.jobId}/archive`, { token: d.token })).buf;
+    const legacy = await rewriteArchive(a2, async (t) => {
+      const iso = (v) => (typeof v === 'string' && dateRe.test(v) ? `${v}T00:00:00.000Z` : v);
+      for (const p of t.periods ?? []) { p.start_date = iso(p.start_date); p.end_date = iso(p.end_date); }
+      for (const j of t.journal_entries ?? []) j.entry_date = iso(j.entry_date);
+      for (const b of t.bank_transactions ?? []) b.transaction_date = iso(b.transaction_date);
+      for (const r of t.bank_reconciliations ?? []) r.statement_date = iso(r.statement_date);
+    });
+    const r2 = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, legacy), checkoutId: p2.json.data.checkoutId } });
+    const j2 = await waitJob(d.token, r2.json.data.jobId);
+    assert.equal(j2.state, 'done', `a UTC desktop's ISO dates, on a server in ${process.env.TZ ?? 'this machine\'s zone'}: ${JSON.stringify(j2.error)}`);
+    assert.deepEqual(await sql(`SELECT entry_type, entry_number, entry_date::text AS d FROM journal_entries WHERE period_id = $1 ORDER BY 1, 2`, [P]), datesBefore, 'no date moved');
+  });
+
+  await step('Desktop requests Q98/Q101: a used upload names its job, even past its day; an unsent one can be cancelled and stops counting', async () => {
+    const d = s4.desk;
+    const st = await api(`/api/v1/sync/uploads/${asked.uploadId}`, { token: d.token });
+    assert.equal(st.status, 409, st.text);
+    assert.equal(st.json.error.code, 'SYNC_UPLOAD_USED');
+    assert.equal(st.json.error.jobId, asked.jobId, 'the job the upload became (Q98)');
+    const del = await api(`/api/v1/sync/uploads/${asked.uploadId}`, { method: 'DELETE', token: d.token });
+    assert.equal(del.status, 409);
+    assert.equal(del.json.error.jobId, asked.jobId, 'a sent upload is not cancelled');
+    await sql(`UPDATE sync_uploads SET expires_at = now() - interval '2 days' WHERE id = $1`, [asked.uploadId]);
+    const late = await api(`/api/v1/sync/uploads/${asked.uploadId}`, { token: d.token });
+    assert.equal(late.json.error.code, 'SYNC_UPLOAD_USED', '"used" before "expired" (Q101)');
+    assert.equal(late.json.error.jobId, asked.jobId);
+    // Open uploads: three at most; cancelling one frees its place.
+    const u = await pairWith(admin, 'Cancel desktop');
+    const other = await pairWith(admin, 'Not mine desktop');
+    const start = () => api('/api/v1/sync/uploads', { method: 'POST', token: u.token, json: { size: 10, sha256: 'a'.repeat(64) } });
+    const ids = [];
+    for (let i = 0; i < 3; i++) { const s = await start(); assert.equal(s.status, 201, s.text); ids.push(s.json.data.uploadId); }
+    assert.equal((await start()).json.error.code, 'SYNC_BUSY');
+    assert.equal((await api(`/api/v1/sync/uploads/${ids[0]}`, { method: 'DELETE', token: other.token })).status, 404, "another computer's upload is not found");
+    const c = await api(`/api/v1/sync/uploads/${ids[0]}`, { method: 'DELETE', token: u.token });
+    assert.equal(c.status, 200, c.text);
+    assert.equal(c.json.data.cancelled, true);
+    assert.equal((await api(`/api/v1/sync/uploads/${ids[0]}`, { token: u.token })).status, 404, 'gone');
+    assert.equal((await start()).status, 201, 'its place is free again');
+    // Two pushes of one upload at once (a desktop asking again before the first answer came): one job.
+    const twice = await uploadBuf(d.token, randomBytes(64));
+    const both = await Promise.all([0, 1].map(() => api('/api/v1/sync/clients/push', { method: 'POST', token: d.token, json: { uploadId: twice } })));
+    const okOnes = both.filter((r) => r.status === 202);
+    assert.equal(okOnes.length, 1, both.map((r) => r.text).join(' | '));
+    const refused = both.find((r) => r.status !== 202);
+    assert.equal(refused.json.error.code, 'SYNC_UPLOAD_USED');
+    assert.equal(refused.json.error.jobId, okOnes[0].json.data.jobId, 'the refusal names the one job');
+    await waitJob(d.token, okOnes[0].json.data.jobId);
+  });
+
+  await step('Desktop requests Q102: a sign-off and a note the server has keep their signer and author when a desktop sends them back under its own user ids', async () => {
+    const d = s4.desk;
+    const P = s3.period.id;
+    const other = (await one(`SELECT id FROM app_users WHERE username = 'example.reviewer'`)).id;
+    const ls = await one(`SELECT l.id FROM lead_sheets l WHERE l.client_id = $1 AND NOT EXISTS (
+                            SELECT 1 FROM lead_sheet_signoffs s WHERE s.lead_sheet_id = l.id AND s.period_id = $2 AND s.role = 'reviewer' AND s.invalidated_at IS NULL)
+                          ORDER BY l.id LIMIT 1`, [s3.client.id, P]);
+    assert.ok(ls, 'a lead sheet with no reviewer sign-off');
+    await sql(`INSERT INTO lead_sheet_signoffs (period_id, lead_sheet_id, role, user_id, user_name, balance_stamp) VALUES ($1, $2, 'reviewer', $3, 'Example Reviewer', $4)`, [P, ls.id, other, 'e'.repeat(64)]);
+    await sql(`INSERT INTO lead_sheet_notes (client_id, period_id, lead_sheet_id, body, author_id, author_name, resolved_at, resolved_by, resolved_by_name)
+               VALUES ($1, $2, $3, 'Example reviewer query', $4, 'Example Reviewer', now(), $4, 'Example Reviewer')`, [s3.client.id, P, ls.id, other]);
+    const pull = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/pull`, { method: 'POST', token: d.token, json: { checkout: true } });
+    assert.equal(pull.status, 202, pull.text);
+    await waitJob(d.token, pull.json.data.jobId);
+    const archive = (await api(`/api/v1/sync/jobs/${pull.json.data.jobId}/archive`, { token: d.token })).buf;
+    // As the desktop writes them back: its own user ids, names blanked.
+    const sent = await rewriteArchive(archive, async (t) => {
+      for (const s of t.lead_sheet_signoffs ?? []) { s.user_id = 1; s.user_name = null; }
+      for (const n of t.lead_sheet_notes ?? []) {
+        n.author_id = 1; n.author_name = null;
+        if (n.resolved_by != null) { n.resolved_by = 1; n.resolved_by_name = null; }
+      }
+    });
+    const r = await api(`/api/v1/sync/periods/${s3.period.sync_uid}/push`, { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, sent), checkoutId: pull.json.data.checkoutId } });
+    const j = await waitJob(d.token, r.json.data.jobId);
+    assert.equal(j.state, 'done', JSON.stringify(j.error));
+    const s = await one(`SELECT user_id, user_name, balance_stamp FROM lead_sheet_signoffs WHERE period_id = $1 AND lead_sheet_id = $2 AND role = 'reviewer' AND invalidated_at IS NULL`, [P, ls.id]);
+    assert.deepEqual([s.user_id, s.user_name, s.balance_stamp], [other, 'Example Reviewer', 'e'.repeat(64)], "the reviewer's sign-off is still the reviewer's");
+    const n = await one(`SELECT author_id, author_name, resolved_by, resolved_by_name FROM lead_sheet_notes WHERE period_id = $1 AND body = 'Example reviewer query'`, [P]);
+    assert.deepEqual([n.author_id, n.author_name, n.resolved_by, n.resolved_by_name], [other, 'Example Reviewer', other, 'Example Reviewer'], "and the reviewer's note");
+  });
+
+  await step("Desktop requests Q102: a new client signed off on the desktop arrives, every sign-off the sender's; no folder is made", async () => {
+    const d = s4.desk;
+    const me = (await api('/api/v1/sync/me', { token: d.token })).json.data.user.id;
+    const b = await api(`/api/v1/backup/client/${s3.client.id}`, { method: 'POST', token: admin, json: {} });
+    assert.ok(b.status === 200 || b.status === 201, b.text);
+    const backupId = b.json.data.id ?? b.json.data.backup?.id;
+    const clientArchive = (await api(`/api/v1/backup/${backupId}/download`, { token: admin })).buf;
+    const clientUid = randomUUID();
+    let signs = 0;
+    const fresh = await rewriteArchive(clientArchive, async (t) => {
+      t.clients[0].sync_uid = clientUid;
+      t.clients[0].name = 'Example desktop client';
+      t.fs_report_versions = [];
+      for (const r of t.fs_reports ?? []) { r.current_version_id = null; r.status = 'draft'; }
+      for (const tb of ['periods', 'chart_of_accounts', 'bank_transactions', 'fs_client_layouts']) for (const r of t[tb] ?? []) r.sync_uid = randomUUID();
+      t.lead_sheet_attachments = [];
+      // Signed on the desktop, by the desktop's own user.
+      for (const s of t.lead_sheet_signoffs ?? []) { s.user_id = 1; s.user_name = 'Desktop user'; s.invalidated_by = null; }
+      signs = (t.lead_sheet_signoffs ?? []).length;
+    });
+    assert.ok(signs > 0, 'the archive has sign-offs');
+    const r = await api('/api/v1/sync/clients/push', { method: 'POST', token: d.token, json: { uploadId: await uploadBuf(d.token, fresh) } });
+    assert.equal(r.status, 202, r.text);
+    const j = await waitJob(d.token, r.json.data.jobId);
+    assert.equal(j.state, 'done', `a new client with sign-offs: ${JSON.stringify(j.error)}`);
+    assert.equal(j.result.signoffsReassigned, signs);
+    assert.equal(j.result.folder, null, 'linking a folder stays an explicit step');
+    const rows = await sql(`SELECT DISTINCT s.user_id FROM lead_sheet_signoffs s JOIN periods p ON p.id = s.period_id JOIN clients c ON c.id = p.client_id WHERE c.sync_uid = $1`, [clientUid]);
+    assert.deepEqual(rows.map((x) => x.user_id), [me]);
+    await api(`/api/v1/backup/${backupId}`, { method: 'DELETE', token: admin });
+  });
+
   await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and sync responses after 15 s, and nothing was cut', async () => {
     assert.equal(proxyCuts, 0);
     // The proxy does cut: a body over the cap is refused before the server sees it.

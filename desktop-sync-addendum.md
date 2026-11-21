@@ -136,3 +136,33 @@ Two-way record merge. The server never calls the desktop. No change to the exist
 | S3 | 4–5 days | 1 day |
 | S4 | 9–12 days | 2–3 days (merge rules, tie-out, attachments) |
 | S5 | 2 days | half a day |
+
+## Compatibility check against the desktop (2026-11-19, read of both trees, nothing run)
+
+Compared: this branch at `60c1cb90` with ClientLedger-Trial-Balance `feat/p12-sync` (`bdf90f3` plus uncommitted work) and its engine `feat/p12-sync-engine` (`94a3a7a`, upstream merged at `7248f42`).
+
+Agree: the migration list (schema version), `FORMAT_VERSION` 2, `lib/sync/*` including `periodStamp` and `mergePeriod` (byte-equal in the fork), every route path, method and request body the desktop's `cltb-sync` sends, and the answers it reads (pair, me, capabilities, clients, periods, pull, jobs, uploads, push, release).
+
+To fix (all done 2026-11-21 on `feat/sync-s5-hardening`, below):
+
+1. **`sync.totals` is required here and nobody writes it.** Done: the pull writes `totals` in its manifest and its job result; a pulled archive sent back unchanged is accepted (`sync-e2e`).
+2. **Totals are integer cents as text** (`"12000"`). Done: `docs/desktop-sync.md`. The desktop's own comment (`"100.00"`) is its side to correct.
+3. The fork is behind this branch. Merge at the next sync, with the changes below.
+
+## The desktop's requests of 2026-11-21 (ClientLedger TB `docs/upstream-requests-2026-11-21.md`)
+
+| Request | Done here |
+|---|---|
+| Q98 a push answer lost | A used upload answers `409 SYNC_UPLOAD_USED` with `error.jobId` on `GET`/`DELETE /sync/uploads/:id` and on a second push. A push claims its upload (the job's id is written) before the job starts, so two pushes of one upload at once start one job; the other is refused with that job's id. |
+| Q101 uploads left open | `DELETE /sync/uploads/:id` cancels an unsent upload; "used" is checked before "expired"; a sent upload's row is kept 30 days past its day (its files still go at the day). A join's state stays in memory: after a restart, `POST …/complete` again (documented). |
+| Q102 (1) pull totals | As item 1 above. |
+| Q102 (2) a new client with sign-offs | Every sign-off is given to the sender (was refused); the job result counts them as `signoffsReassigned`. |
+| Q102 (3) sign-offs re-attributed | A sent-back sign-off matches the server's by lead sheet, role, signing time and balance stamp, without the signer, and keeps the server's signer (and its unsigner when unsigned at the same moment). Only rows the server has can match, so nobody signs for another. Notes likewise: same text and creation time keep the server's author and resolver. |
+| Q104 dates and time zones | Archives write DATE columns as `YYYY-MM-DD`. The period stamp reads an older archive's ISO text by its date part, which is what Postgres stores from it, so a UTC desktop's archive is taken by a server in any zone (`sync-e2e` passes under America/Chicago, UTC and Asia/Tokyo). |
+| Q106 (1) `add_variance_note` | PR #36 merged into this branch: a note with no comparison period is kept against the period itself. |
+| Q106 (2) "Admin > Settings" | The provider-not-configured errors no longer name a menu. |
+| Q109 (1) the new client's folder | The result says `folder: null`: linking a storage folder stays an explicit admin step on this server, never made on its own. |
+| Q109 (2) totals in the pull result | As item 1 above. |
+| Q108 | Desktop side (`portableClient.ts`); nothing here. Q110 and compat item 3 (a re-pull's baseline) are desktop side. |
+
+**For the fork's next sync:** `lib/sync/mergePeriod.ts`, `lib/sync/newClient.ts`, `lib/sync/periodStamp.ts` and `lib/sync/uploads.ts` changed, so the byte-equal check against the fork will differ until it merges; `routes/backup.ts` (plain dates) and `routes/sync.ts` changed too. No migration was added, so the schema version is unchanged. The desktop's `export-period` should write DATE columns as `YYYY-MM-DD` as well (the engine's `createBackup` does once merged).

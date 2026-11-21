@@ -20,6 +20,13 @@ export const UPLOAD_DIR = path.join(SYNC_JOB_DIR, 'uploads');
 /** The largest archive taken (as a restore's 2 GiB uncompressed cap). */
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 export const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long a USED upload's row is kept after its day (its files go at the
+ * day): a desktop whose push answer was lost can still ask, weeks later,
+ * which job its upload became, rather than reading "expired" or "no such
+ * upload" and not knowing whether it went through (Q98, Q101).
+ */
+export const USED_UPLOAD_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 /** Uploads open at once per device (not sent yet, not expired). */
 export const MAX_OPEN_UPLOADS_PER_DEVICE = 3;
 
@@ -42,7 +49,8 @@ export interface UploadRow {
 }
 
 export class UploadError extends Error {
-  constructor(public status: number, public code: string, message: string) {
+  /** `jobId`: on SYNC_UPLOAD_USED, the job the upload became (Q98). */
+  constructor(public status: number, public code: string, message: string, public jobId: string | null = null) {
     super(message);
   }
 }
@@ -77,8 +85,10 @@ export async function startUpload(deviceId: number, userId: number, size: number
 export async function openUpload(id: string, deviceId: number, completedOk = false): Promise<UploadRow> {
   const row = (await db('sync_uploads').where({ id, device_id: deviceId }).first()) as UploadRow | undefined;
   if (!row) throw new UploadError(404, 'NOT_FOUND', 'No such upload from this computer.');
+  // "Used" before "expired" (Q101): an upload that was sent says so, with its
+  // job, for as long as its row is kept, never "start it again".
+  if (row.job_id) throw new UploadError(409, 'SYNC_UPLOAD_USED', 'This upload has been sent already.', row.job_id);
   if (new Date(row.expires_at).getTime() < Date.now()) throw new UploadError(410, 'SYNC_UPLOAD_EXPIRED', 'This upload is more than a day old. Start it again.');
-  if (row.job_id) throw new UploadError(409, 'SYNC_UPLOAD_USED', 'This upload has been sent already.');
   if (row.completed_at && !completedOk) throw new UploadError(409, 'SYNC_UPLOAD_COMPLETE', 'This upload is complete; send it back with it.');
   return row;
 }
@@ -137,7 +147,49 @@ export async function putPart(row: UploadRow, n: number, body: Readable): Promis
   return receivedParts(row);
 }
 
-/** Uploads being joined now, and the last join error of each (this process only). */
+/**
+ * Marks an upload as sent, at once and only once (Q98): the job it will
+ * become gets its id here, before the job starts, so two pushes of one
+ * upload (a desktop asking again while its first push is still being
+ * answered) can never both start a job. The second is refused with the
+ * first one's job. `unclaimUpload` undoes it when the job could not start.
+ */
+export async function claimUpload(id: string, deviceId: number): Promise<string> {
+  const jobId = crypto.randomUUID();
+  const n = await db('sync_uploads').where({ id, device_id: deviceId }).whereNull('job_id').update({ job_id: jobId });
+  if (n === 0) {
+    const now = (await db('sync_uploads').where({ id }).first('job_id')) as { job_id: string | null } | undefined;
+    throw new UploadError(409, 'SYNC_UPLOAD_USED', 'This upload has been sent already.', now?.job_id ?? null);
+  }
+  return jobId;
+}
+
+export async function unclaimUpload(id: string, jobId: string): Promise<void> {
+  await db('sync_uploads').where({ id, job_id: jobId }).update({ job_id: null });
+}
+
+/**
+ * Cancels an upload this device has not sent (Q101): its row and its files
+ * go, and it no longer counts against the open uploads. A sent one is
+ * refused with its job; one being joined right now waits for the join.
+ */
+export async function cancelUpload(id: string, deviceId: number): Promise<void> {
+  const row = (await db('sync_uploads').where({ id, device_id: deviceId }).first()) as UploadRow | undefined;
+  if (!row) throw new UploadError(404, 'NOT_FOUND', 'No such upload from this computer.');
+  if (row.job_id) throw new UploadError(409, 'SYNC_UPLOAD_USED', 'This upload has been sent already; it cannot be cancelled.', row.job_id);
+  if (joining.has(id)) throw new UploadError(409, 'SYNC_UPLOAD_JOINING', 'The server is joining the parts of this upload. Ask again in a moment.');
+  // Only while still unsent: a push that took it meanwhile wins.
+  const n = await db('sync_uploads').where({ id, device_id: deviceId }).whereNull('job_id').delete();
+  if (n === 0) {
+    const now = (await db('sync_uploads').where({ id }).first('job_id')) as { job_id: string | null } | undefined;
+    throw new UploadError(409, 'SYNC_UPLOAD_USED', 'This upload has been sent already; it cannot be cancelled.', now?.job_id ?? null);
+  }
+  joinErrors.delete(id);
+  fs.rmSync(dirOf(id), { recursive: true, force: true });
+}
+
+/**
+ * Uploads being joined now, and the last join error of each (this process only). */
 const joining = new Set<string>();
 const joinErrors = new Map<string, UploadError>();
 
@@ -209,11 +261,17 @@ export async function completeUpload(row: UploadRow): Promise<{ size: number; sh
   return { size, sha256: got };
 }
 
-/** Deletes uploads past their day (parts and joined files). */
+/**
+ * Past its day an upload's files go. An unsent upload's row goes with them;
+ * a sent one's row stays `USED_UPLOAD_KEEP_MS` longer, so it can still name
+ * its job (Q101).
+ */
 export async function pruneUploads(now = Date.now()): Promise<void> {
-  const old = (await db('sync_uploads').where('expires_at', '<', new Date(now)).select('id')) as Array<{ id: string }>;
+  const old = (await db('sync_uploads').where('expires_at', '<', new Date(now)).select('id', 'job_id', 'expires_at')) as Array<{ id: string; job_id: string | null; expires_at: Date }>;
   for (const u of old) {
     fs.rmSync(dirOf(u.id), { recursive: true, force: true });
-    await db('sync_uploads').where({ id: u.id }).delete();
+    if (!u.job_id || new Date(u.expires_at).getTime() + USED_UPLOAD_KEEP_MS < now) {
+      await db('sync_uploads').where({ id: u.id }).delete();
+    }
   }
 }
