@@ -551,7 +551,9 @@ All planned phases complete. App is feature-complete.
   **Tickmark stamps are BURNED INTO the stored PDF**, not applied at download, because the bucket is
   browsable and an archive whose marks live only in the app is not an archive. The accepted
   consequence is that a stamp **cannot be removed** — the viewer confirms before placing and offers no
-  delete. Only the NEW mark is drawn each time (re-drawing would double-ink). **pdf-lib's
+  delete. Only the NEW mark is drawn each time (re-drawing would double-ink). **Placement is on the page as shown** (Q125): click fractions are
+  of the CropBox turned by `/Rotate` (what pdf.js and the desktop's PDFium draw), so `burnAnnotation` lays out in that frame
+  (`shownFrame`) and maps it onto the page with one `cm`; the MediaBox, unrotated, put stamps away from the click on rotated scans. **pdf-lib's
   StandardFonts cannot encode the seeded `✓` (U+2713) and throw**, so a real TTF is embedded via
   `@pdf-lib/fontkit`, reusing the `ROBOTO_MEDIUM` buffer exported from `PdfTemplateService` — there is
   a test pinning that StandardFonts genuinely throws on `✓` but not on `†`.

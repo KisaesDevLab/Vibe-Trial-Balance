@@ -12,9 +12,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { inflateSync } from 'node:zlib';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
-import { burnAnnotation, imageToPdf, isConvertibleImage, pdfPageCount, wrapText, MAX_NOTE_TEXT } from '../leadSheetPdf';
+import { burnAnnotation, imageToPdf, isConvertibleImage, normalizeRotation, pdfPageCount, shownFrame, wrapText, MAX_NOTE_TEXT } from '../leadSheetPdf';
 import { ROBOTO_MEDIUM } from '../../pdf/PdfTemplateService';
 
 /** The first tickmark this app seeds. */
@@ -289,3 +289,76 @@ test('wrapText keeps explicit newlines, including blank lines', () => {
   assert.deepEqual(wrapText('a\n\nb', byLength, 10), ['a', '', 'b']);
   assert.deepEqual(wrapText('a\r\nb', byLength, 10), ['a', 'b']);
 });
+
+// ── Q125: stamps land where the viewer was clicked, on a rotated or cropped page ──
+
+/** Where a point of the page as shown (fractions from its top left) lands in PDF space. */
+function shownToPdf(frame: ReturnType<typeof shownFrame>, u: number, v: number): [number, number] {
+  const [a, b, c, d, e, f] = frame.matrix;
+  const dx = u * frame.width;
+  const dy = frame.height - v * frame.height;
+  return [a * dx + c * dy + e, b * dx + d * dy + f];
+}
+
+test('normalizeRotation keeps a quarter turn whatever the stored angle', () => {
+  assert.equal(normalizeRotation(0), 0);
+  assert.equal(normalizeRotation(90), 90);
+  assert.equal(normalizeRotation(-90), 270);
+  assert.equal(normalizeRotation(450), 90);
+  assert.equal(normalizeRotation(Number.NaN), 0);
+});
+
+test('the shown page maps its corners onto the right corners of the page, for every rotation and a crop', () => {
+  // A cropped box, so the offset matters too.
+  const box = { x: 36, y: 50, width: 500, height: 700 };
+  const { x, y, width: w, height: h } = box;
+  // The page's own corners: bl, br, tl, tr.
+  const bl = [x, y], br = [x + w, y], tl = [x, y + h], tr = [x + w, y + h];
+  // Which corner a viewer shows at its top left and top right, turned clockwise by /Rotate.
+  const cases: Array<[number, number[], number[], number, number]> = [
+    [0, tl, tr, w, h],
+    [90, bl, tl, h, w],
+    [180, br, bl, w, h],
+    [270, tr, br, h, w],
+  ];
+  for (const [rot, topLeft, topRight, sw, sh] of cases) {
+    const frame = shownFrame(box, rot);
+    assert.equal(frame.width, sw, `width at ${rot}`);
+    assert.equal(frame.height, sh, `height at ${rot}`);
+    assert.deepEqual(shownToPdf(frame, 0, 0), topLeft, `top left at ${rot}`);
+    assert.deepEqual(shownToPdf(frame, 1, 0), topRight, `top right at ${rot}`);
+  }
+  // Unrotated and uncropped is the old placement exactly.
+  const plain = shownFrame({ x: 0, y: 0, width: 612, height: 792 }, 0);
+  assert.deepEqual(shownToPdf(plain, 0.25, 0.25), [0.25 * 612, 792 - 0.25 * 792]);
+});
+
+test('a stamp on a rotated, cropped page is drawn through the frame of that page', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  page.setRotation(degrees(90));
+  page.setCropBox(36, 50, 500, 700);
+  const out = await burnAnnotation(Buffer.from(await doc.save()), {
+    id: 'l1', kind: 'line', page: 1, xPct: 0.1, yPct: 0.2, x2Pct: 0.9, y2Pct: 0.2, strokeWidth: 2, color: 'red',
+  });
+  const streams = inflatedStreams(out);
+  assert.ok(streams.some((s) => /\b0 1 -1 0 536 50 cm\b/.test(s)), 'the rotate-90 frame of the crop box is applied');
+  const again = await PDFDocument.load(out);
+  assert.equal(again.getPage(0).getRotation().angle, 90, 'the page keeps its rotation');
+});
+
+test('a stamp on a plain page applies the identity frame', async () => {
+  const out = await burnAnnotation(await blankPdf(), annotation());
+  assert.ok(inflatedStreams(out).some((s) => /\b1 0 0 1 0 0 cm\b/.test(s)));
+});
+
+/** Every stream of a saved PDF, inflated where it is compressed. */
+function inflatedStreams(pdf: Buffer): string[] {
+  const out: string[] = [];
+  for (const m of pdf.toString('latin1').matchAll(/stream\r?\n/g)) {
+    const start = (m.index as number) + m[0].length;
+    const raw = pdf.subarray(start, pdf.indexOf('endstream', start));
+    try { out.push(inflateSync(raw).toString('latin1')); } catch { out.push(raw.toString('latin1')); }
+  }
+  return out;
+}

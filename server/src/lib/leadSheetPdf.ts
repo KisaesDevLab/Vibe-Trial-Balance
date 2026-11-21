@@ -30,7 +30,10 @@
  *     and is one of the 14 standard PDF fonts, so nothing extra is embedded.
  */
 
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage } from 'pdf-lib';
+import {
+  PDFDocument, StandardFonts, concatTransformationMatrix, popGraphicsState, pushGraphicsState, rgb,
+  type PDFFont, type PDFImage,
+} from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { ROBOTO_MEDIUM } from '../pdf/PdfTemplateService';
 
@@ -102,6 +105,35 @@ const STAMP_COLORS: Record<string, [number, number, number]> = {
 };
 
 const clamp01 = (n: number): number => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
+
+/** A page's `/Rotate` as 0, 90, 180 or 270 (PDF: a multiple of 90, clockwise as shown). */
+export function normalizeRotation(angle: number): 0 | 90 | 180 | 270 {
+  const q = Number.isFinite(angle) ? Math.round(angle / 90) : 0;
+  return ((((q % 4) + 4) % 4) * 90) as 0 | 90 | 180 | 270;
+}
+
+/**
+ * The page as a viewer shows it (Q125): its CropBox, turned by its `/Rotate`.
+ * `width`/`height` are the shown size, and `matrix` (a PDF `cm`) maps a point
+ * of that shown page, origin bottom-left, onto the page's own space.
+ *
+ * Both viewers place a click as a fraction of the page as they draw it: pdf.js
+ * on the web and PDFium on the desktop honour the CropBox and the rotation.
+ * The burner used the MediaBox, unrotated, so on a scan saved with
+ * `/Rotate 90`, or a cropped page, a stamp landed away from the click.
+ * Drawing in the shown frame also keeps a note's text upright on screen.
+ */
+export function shownFrame(box: { x: number; y: number; width: number; height: number }, rotation: number): {
+  width: number; height: number; matrix: [number, number, number, number, number, number];
+} {
+  const { x, y, width: w, height: h } = box;
+  switch (normalizeRotation(rotation)) {
+    case 90: return { width: h, height: w, matrix: [0, 1, -1, 0, x + w, y] };
+    case 180: return { width: w, height: h, matrix: [-1, 0, 0, -1, x + w, y + h] };
+    case 270: return { width: h, height: w, matrix: [0, -1, 1, 0, x, y + h] };
+    default: return { width: w, height: h, matrix: [1, 0, 0, 1, x, y] };
+  }
+}
 
 /**
  * Can ZapfDingbats encode this symbol?
@@ -176,7 +208,11 @@ export async function burnAnnotation(pdfBytes: Buffer, ann: StampAnnotation): Pr
   const pages = doc.getPages();
   const pageIndex = Math.min(Math.max(1, Math.round(ann.page)), pages.length) - 1;
   const page = pages[pageIndex];
-  const { width, height } = page.getSize();
+  // Everything below is laid out on the page as shown (Q125); one transform
+  // maps it onto the page's own space.
+  const frame = shownFrame(page.getCropBox(), page.getRotation().angle);
+  const { width, height } = frame;
+  page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...frame.matrix));
 
   const x = clamp01(ann.xPct) * width;
   // Screen coordinates run down from the top; PDF space runs up from the bottom.
@@ -253,6 +289,8 @@ export async function burnAnnotation(pdfBytes: Buffer, ann: StampAnnotation): Pr
       page.drawText(substitute(tm.note.slice(0, 80)), { x, y: y - 26, size: 8, font, color: colour });
     }
   }
+
+  page.pushOperators(popGraphicsState());
 
   // Re-saving a vector PDF through pdf-lib is lossless — it is not a raster
   // re-encode — so repeated stamping does not degrade page content.
