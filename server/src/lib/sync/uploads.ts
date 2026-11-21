@@ -141,6 +141,18 @@ export async function putPart(row: UploadRow, n: number, body: Readable): Promis
   return receivedParts(row);
 }
 
+const CANNOT_CANCEL = '; it cannot be cancelled';
+
+/** The refusal for an upload already sent, naming the job it became (Q98). */
+function usedError(jobId: string | null, suffix = ''): UploadError {
+  return new UploadError(409, 'SYNC_UPLOAD_USED', `This upload has been sent already${suffix}.`, jobId);
+}
+
+async function jobOf(id: string): Promise<string | null> {
+  const row = (await db('sync_uploads').where({ id }).first('job_id')) as { job_id: string | null } | undefined;
+  return row?.job_id ?? null;
+}
+
 /**
  * Marks an upload as sent, at once and only once (Q98): the job it will
  * become gets its id here, before the job starts, so two pushes of one
@@ -151,10 +163,7 @@ export async function putPart(row: UploadRow, n: number, body: Readable): Promis
 export async function claimUpload(id: string, deviceId: number): Promise<string> {
   const jobId = crypto.randomUUID();
   const n = await db('sync_uploads').where({ id, device_id: deviceId }).whereNull('job_id').update({ job_id: jobId });
-  if (n === 0) {
-    const now = (await db('sync_uploads').where({ id }).first('job_id')) as { job_id: string | null } | undefined;
-    throw new UploadError(409, 'SYNC_UPLOAD_USED', 'This upload has been sent already.', now?.job_id ?? null);
-  }
+  if (n === 0) throw usedError(await jobOf(id));
   return jobId;
 }
 
@@ -170,14 +179,11 @@ export async function unclaimUpload(id: string, jobId: string): Promise<void> {
 export async function cancelUpload(id: string, deviceId: number): Promise<void> {
   const row = (await db('sync_uploads').where({ id, device_id: deviceId }).first()) as UploadRow | undefined;
   if (!row) throw new UploadError(404, 'NOT_FOUND', 'No such upload from this computer.');
-  if (row.job_id) throw new UploadError(409, 'SYNC_UPLOAD_USED', 'This upload has been sent already; it cannot be cancelled.', row.job_id);
+  if (row.job_id) throw usedError(row.job_id, CANNOT_CANCEL);
   if (joining.has(id)) throw new UploadError(409, 'SYNC_UPLOAD_JOINING', 'The server is joining the parts of this upload. Ask again in a moment.');
   // Only while still unsent: a push that took it meanwhile wins.
   const n = await db('sync_uploads').where({ id, device_id: deviceId }).whereNull('job_id').delete();
-  if (n === 0) {
-    const now = (await db('sync_uploads').where({ id }).first('job_id')) as { job_id: string | null } | undefined;
-    throw new UploadError(409, 'SYNC_UPLOAD_USED', 'This upload has been sent already; it cannot be cancelled.', now?.job_id ?? null);
-  }
+  if (n === 0) throw usedError(await jobOf(id), CANNOT_CANCEL);
   joinErrors.delete(id);
   fs.rmSync(dirOf(id), { recursive: true, force: true });
 }

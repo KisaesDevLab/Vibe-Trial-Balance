@@ -50,6 +50,25 @@ export async function releaseDeviceHolds(
 }
 
 /**
+ * Revokes one device, releases its holds and audits it, in one transaction
+ * (code review): a revoked device can no longer give its holds back, so it is
+ * never revoked with them left behind. False when it was revoked already.
+ */
+export async function revokeDevice(
+  device: { id: number; userId: number },
+  by: number | null,
+  why: { release: string; audit: string },
+): Promise<boolean> {
+  return db.transaction(async (trx) => {
+    const n = await trx('sync_devices').where({ id: device.id }).whereNull('revoked_at').update({ revoked_at: trx.fn.now(), revoked_by: by });
+    if (n === 0) return false;
+    await releaseDeviceHolds(trx, [device.id], by, why.release);
+    await logAudit({ userId: by ?? device.userId, periodId: null, entityType: 'sync_device', entityId: device.id, action: 'revoke', description: why.audit }, trx);
+    return true;
+  });
+}
+
+/**
  * Revokes every live device the user paired and deletes their unused pairing
  * codes; writes one audit row when any device was revoked. `by` is the admin
  * who caused it, or null. `reset: true` (a password reset) also stamps

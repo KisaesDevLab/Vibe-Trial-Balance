@@ -69,6 +69,11 @@ export function checkedOutError(out: PeriodCheckoutHolder): Error {
   );
 }
 
+/** Distinct real period ids in ascending order: the one order every lock path takes them in. */
+function periodIdList(periodIds: Iterable<number | string | null | undefined>): number[] {
+  return [...new Set([...periodIds].map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+}
+
 /**
  * Desktop sync S3: refuses a write into any of these periods that a desktop
  * holds, for writes the lock does not cover (lock behaviour is unchanged).
@@ -81,7 +86,7 @@ export async function assertNotCheckedOut(
   periodIds: Iterable<number | string | null | undefined>,
   opts: { syncCheckoutId?: number } = {},
 ): Promise<void> {
-  const ids = [...new Set([...periodIds].map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+  const ids = periodIdList(periodIds);
   for (const id of ids) {
     const row = await trx('periods').where({ id }).forUpdate().first('id', 'is_reference');
     // A reference period (desktop sync) holds no data here: no write of any kind.
@@ -106,30 +111,30 @@ export async function periodsReachedByDelete(
 ): Promise<number[]> {
   const periodIds = what.periodIds ?? [];
   const out = new Set<number>();
-  const txIds = [...(what.transactionIds ?? [])];
-  const jeIds = [...(what.journalEntryIds ?? [])];
+  const add = (ids: unknown[]) => { for (const id of ids) out.add(Number(id)); };
+  // Periods whose reconciliations clear these transactions, and periods whose
+  // bank lines point at these entries. Each takes ids or a subquery.
+  type Ids = number[] | Knex.QueryBuilder;
+  const clearing = (txIds: Ids) => trx('reconciliation_items as i').join('bank_reconciliations as r', 'r.id', 'i.reconciliation_id')
+    .whereIn('i.transaction_id', txIds).distinct().pluck('r.period_id');
+  const linking = (jeIds: Ids) => trx('bank_transactions').whereIn('journal_entry_id', jeIds).whereNotNull('period_id')
+    .distinct().pluck('period_id');
   if (periodIds.length) {
-    txIds.push(...((await trx('bank_transactions').whereIn('period_id', periodIds).pluck('id')) as number[]));
-    jeIds.push(...((await trx('journal_entries').whereIn('period_id', periodIds).pluck('id')) as number[]));
-    for (const id of (await trx('variance_notes').whereIn('compare_period_id', periodIds).distinct().pluck('period_id')) as number[]) out.add(Number(id));
+    add(await clearing(trx('bank_transactions').select('id').whereIn('period_id', periodIds)));
+    add(await linking(trx('journal_entries').select('id').whereIn('period_id', periodIds)));
+    add(await trx('variance_notes').whereIn('compare_period_id', periodIds).distinct().pluck('period_id'));
   }
-  for (let k = 0; k < txIds.length; k += 1000) {
-    const rows = (await trx('reconciliation_items as i').join('bank_reconciliations as r', 'r.id', 'i.reconciliation_id')
-      .whereIn('i.transaction_id', txIds.slice(k, k + 1000)).distinct().pluck('r.period_id')) as number[];
-    for (const id of rows) out.add(Number(id));
-  }
-  for (let k = 0; k < jeIds.length; k += 1000) {
-    const rows = (await trx('bank_transactions').whereIn('journal_entry_id', jeIds.slice(k, k + 1000)).whereNotNull('period_id')
-      .distinct().pluck('period_id')) as number[];
-    for (const id of rows) out.add(Number(id));
-  }
+  const txIds = what.transactionIds ?? [];
+  const jeIds = what.journalEntryIds ?? [];
+  for (let k = 0; k < txIds.length; k += 1000) add(await clearing(txIds.slice(k, k + 1000)));
+  for (let k = 0; k < jeIds.length; k += 1000) add(await linking(jeIds.slice(k, k + 1000)));
   for (const id of periodIds) out.delete(id);
   return [...out].sort((a, b) => a - b);
 }
 
 /** Takes these period rows FOR UPDATE in one statement, in id order. */
 export async function lockPeriodsInOrder(trx: Knex.Transaction, periodIds: Iterable<number | string | null | undefined>): Promise<void> {
-  const ids = [...new Set([...periodIds].map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+  const ids = periodIdList(periodIds);
   if (ids.length) await trx('periods').whereIn('id', ids).orderBy('id').forUpdate().select('id');
 }
 
@@ -149,11 +154,11 @@ export async function assertDeleteSparesHeldPeriods(
   // sorted separately could deadlock two deletes against each other). The
   // guards that follow lock rows this transaction already holds.
   await lockPeriodsInOrder(trx, [...ownPeriodIds, ...(what.periodIds ?? []), ...reached]);
-  if (reached.length === 0) return;
-  const held = new Set(await lockAndListHeld(trx, reached));
+  // Rows already locked above, so one read of their holders. A reference
+  // period has none.
+  const holders = await checkedOutByMany(trx, reached);
   for (const id of reached) {
-    if (!held.has(id)) continue;
-    const out = await checkedOutBy(trx, id);
+    const out = holders.get(id);
     if (out) throw checkedOutError(out);
   }
 }
@@ -172,7 +177,7 @@ export function referenceError(): Error {
  * returns the ids a desktop holds.
  */
 export async function lockAndListHeld(trx: Knex.Transaction, periodIds: Iterable<number | string | null | undefined>): Promise<Set<number>> {
-  const ids = [...new Set([...periodIds].map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+  const ids = periodIdList(periodIds);
   const refs: number[] = [];
   for (const id of ids) {
     const row = await trx('periods').where({ id }).forUpdate().first('id', 'is_reference');
@@ -218,14 +223,7 @@ export interface PeriodCheckoutHolder {
 
 /** The live check-out of a period, if any (desktop sync S3). */
 export async function checkedOutBy(q: Knex | Knex.Transaction, periodId: number): Promise<PeriodCheckoutHolder | null> {
-  const row = await q('period_checkouts as c')
-    .join('sync_devices as d', 'd.id', 'c.device_id')
-    .join('app_users as u', 'u.id', 'c.user_id')
-    .where('c.period_id', periodId)
-    .whereNull('c.released_at')
-    .first('c.id', 'c.created_at', 'd.id as device_id', 'd.name as device', 'u.display_name', 'u.username');
-  if (!row) return null;
-  return { id: row.id, user: row.display_name ?? row.username, device: row.device, deviceId: row.device_id, since: new Date(row.created_at) };
+  return (await checkedOutByMany(q, [periodId])).get(periodId) ?? null;
 }
 
 /** The live check-outs of many periods in one query (code review: one query per period before). */

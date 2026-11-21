@@ -148,18 +148,16 @@ const fail = (code: string, message: string): SyncJobError => new SyncJobError(c
 const rowsOf = (tables: Record<string, unknown[]>, t: string): Row[] => ((tables[t] ?? []) as Row[]);
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
-async function totals(q: Knex | Knex.Transaction, periodId: number): Promise<Totals> {
-  const r = await q('v_adjusted_trial_balance').where({ period_id: periodId })
-    .sum({ d: 'book_adjusted_debit', c: 'book_adjusted_credit' }).first();
-  return { bookDebit: String(r?.d ?? 0), bookCredit: String(r?.c ?? 0) };
-}
-
 /**
  * The period's adjusted book totals, in whole cents as text: what a period
  * archive carries as `manifest.sync.totals` and what a send-back is checked
  * against after the merge.
  */
-export const periodTotals = totals;
+export async function periodTotals(q: Knex | Knex.Transaction, periodId: number): Promise<Totals> {
+  const r = await q('v_adjusted_trial_balance').where({ period_id: periodId })
+    .sum({ d: 'book_adjusted_debit', c: 'book_adjusted_credit' }).first();
+  return { bookDebit: String(r?.d ?? 0), bookCredit: String(r?.c ?? 0) };
+}
 
 async function columnsOf(trx: Knex.Transaction, table: string): Promise<Set<string>> {
   return new Set(Object.keys(await trx(table).columnInfo()));
@@ -398,7 +396,7 @@ export async function mergePeriod(
   const otherPeriods = (await trx('periods').where({ client_id: C, is_reference: false }).whereNot({ id: P }).pluck('id')) as number[];
   const othersBefore = new Map<number, string | null>();
   for (const id of otherPeriods) othersBefore.set(id, await stampOf(trx, id));
-  const totalsBefore = await totals(trx, P);
+  const totalsBefore = await periodTotals(trx, P);
   const sanitize = await makeUserFkSanitizer(trx, true);
   // jsonb columns go in as JSON text (knex would write a JS array as a
   // Postgres array literal).
@@ -866,7 +864,7 @@ export async function mergePeriod(
     }
   }
   result.stamp = stamp!;
-  result.totalsAfter = await totals(trx, P);
+  result.totalsAfter = await periodTotals(trx, P);
   const wanted = (manifest.sync as Row | undefined)?.totals as Totals | undefined;
   if (!wanted) throw fail('SYNC_ARCHIVE_INVALID', "The archive must carry the period's adjusted trial balance totals (sync.totals).");
   if (wanted && (String(wanted.bookDebit) !== result.totalsAfter.bookDebit || String(wanted.bookCredit) !== result.totalsAfter.bookCredit)) {

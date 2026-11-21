@@ -33,6 +33,7 @@ import {
 } from '../lib/fs/fsBackup';
 import { sendServerError } from '../lib/safeError';
 import { assertClientNotCheckedOut } from '../lib/periodGuard';
+import { calendarDate } from '../lib/sync/periodStamp';
 import {
   BackupRefusal,
   FORMAT_VERSION,
@@ -195,8 +196,7 @@ export function withCalendarDates(row: Record<string, unknown>, cols: string[]):
     const v = row[c];
     if (!(v instanceof Date) || Number.isNaN(v.getTime())) continue;
     out ??= { ...row };
-    const p = (n: number) => String(n).padStart(2, '0');
-    out[c] = `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`;
+    out[c] = calendarDate(v);
   }
   return out ?? row;
 }

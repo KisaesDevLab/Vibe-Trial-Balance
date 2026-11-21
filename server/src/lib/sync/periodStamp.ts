@@ -126,7 +126,8 @@ export interface PeriodStampInput {
   rows: Partial<Record<StampTable, Row[]>>;
 }
 
-function calendarDate(d: Date): string {
+/** A node-pg DATE (a Date at local midnight) as YYYY-MM-DD. Archives and stamps both use this one. */
+export function calendarDate(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }

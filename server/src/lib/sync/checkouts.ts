@@ -8,6 +8,7 @@
  */
 import { db } from '../../db';
 import type { PeriodCheckoutHolder } from '../periodGuard';
+import { calendarDate } from './periodStamp';
 
 export const CHECKOUT_WARN_DAYS_DEFAULT = 14;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -41,11 +42,6 @@ export function checkoutApi(h: PeriodCheckoutHolder, warnDays: number, viewerDev
 export function isoDate(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   if (typeof v === 'string') return v.slice(0, 10);
-  if (v instanceof Date) {
-    const y = v.getFullYear();
-    const m = String(v.getMonth() + 1).padStart(2, '0');
-    const d = String(v.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
+  if (v instanceof Date) return calendarDate(v);
   return null;
 }
