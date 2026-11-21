@@ -453,8 +453,11 @@ export async function mergePeriod(
   const serverNotes = new Map<string, Row>();
   for (const n of (await trx('lead_sheet_notes').where({ period_id: P })) as Row[]) serverNotes.set(`${iso(n.created_at)}|${String(n.body)}`, n);
   for (const r of rowsOf(tables, 'lead_sheet_notes')) {
-    const was = serverNotes.get(`${iso(r.created_at)}|${String(r.body)}`);
+    const key = `${iso(r.created_at)}|${String(r.body)}`;
+    const was = serverNotes.get(key);
     if (!was) continue;
+    // Matched once: a copy of it in the archive is not the server's note.
+    serverNotes.delete(key);
     r.author_id = was.author_id;
     r.author_name = was.author_name;
     if (was.resolved_at != null && iso(r.resolved_at) === iso(was.resolved_at)) {
