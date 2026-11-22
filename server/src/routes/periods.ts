@@ -9,6 +9,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertDeleteSparesHeldPeriods, assertNotCheckedOut, checkedOutBy, checkedOutByMany, logAudit } from '../lib/periodGuard';
 import { checkoutApi, checkoutWarnDays } from '../lib/sync/checkouts';
 import { sendServerError } from '../lib/safeError';
+import { assertNoPeriodOverlap } from '../lib/periodOverlap';
 import { isForeignKeyViolation, foreignKeyBlockMessage, isRaisedException } from '../lib/pgErrors';
 
 export const periodCollectionRouter = Router({ mergeParams: true });
@@ -69,6 +70,8 @@ periodCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promis
 
   try {
     await db.transaction(async (trx) => {
+      // Q127: a client's periods do not overlap.
+      await assertNoPeriodOverlap(trx, clientId, { start: startDate, end: endDate });
       if (isCurrent) {
         await trx('periods').where({ client_id: clientId }).update({ is_current: false });
       }
@@ -117,6 +120,15 @@ periodItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<
       // period is made current) stays open.
       if (d.periodName !== undefined || d.folderYear !== undefined || d.startDate !== undefined || d.endDate !== undefined) {
         await assertNotCheckedOut(trx, [id]);
+      }
+      // Q127: new dates may not overlap another period of the client.
+      if (d.startDate !== undefined || d.endDate !== undefined) {
+        const was = await trx('periods').where({ id }).first('client_id', 'start_date', 'end_date');
+        if (was) {
+          await assertNoPeriodOverlap(trx, Number(was.client_id),
+            { start: d.startDate !== undefined ? d.startDate : was.start_date, end: d.endDate !== undefined ? d.endDate : was.end_date },
+            { id, start: was.start_date, end: was.end_date });
+        }
       }
       const updates: Record<string, unknown> = {};
       if (d.periodName !== undefined) updates.period_name = d.periodName;

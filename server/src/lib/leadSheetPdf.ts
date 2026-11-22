@@ -228,9 +228,15 @@ export async function burnAnnotation(pdfBytes: Buffer, ann: StampAnnotation): Pr
   const canDraw = (text: string): boolean =>
     [...text].every((ch) => covered.has(ch.codePointAt(0) as number));
   // Prose stays in Roboto and only the characters it lacks are replaced —
-  // one odd character shouldn't cost the preparer the whole note.
-  const substitute = (text: string): string =>
-    [...text].map((ch) => (canDraw(ch) ? ch : '?')).join('');
+  // one odd character shouldn't cost the preparer the whole note. A line
+  // break is not a character to draw: a note keeps it (wrapText breaks there;
+  // a note typed on several lines, or a pasted adding-machine tape, printed on
+  // one line with '?' between them), a one-line caption makes it a space.
+  const substitute = (text: string, breaks: 'keep' | 'space' = 'keep'): string =>
+    [...text.replace(/\r\n?/g, '\n')].map((ch) => {
+      if (ch === '\n') return breaks === 'keep' ? ch : ' ';
+      return canDraw(ch) ? ch : '?';
+    }).join('');
 
   const kind = ann.kind ?? 'tickmark';
 
@@ -286,7 +292,7 @@ export async function burnAnnotation(pdfBytes: Buffer, ann: StampAnnotation): Pr
     }
     page.drawText(symbol, { x, y: y - 16, size: 16, font: symbolFont, color: colour });
     if (tm.note) {
-      page.drawText(substitute(tm.note.slice(0, 80)), { x, y: y - 26, size: 8, font, color: colour });
+      page.drawText(substitute(tm.note.slice(0, 80), 'space'), { x, y: y - 26, size: 8, font, color: colour });
     }
   }
 

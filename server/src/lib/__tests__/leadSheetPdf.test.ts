@@ -237,6 +237,35 @@ test('a note containing the check glyph and newlines renders', async () => {
   assert.equal(out.subarray(0, 5).toString('latin1'), '%PDF-');
 });
 
+test('a note keeps its line breaks: one line drawn per line typed', async () => {
+  // A line break is not a character the font draws; it must not become '?'
+  // (which joined the lines into one paragraph).
+  const shows = async (text: string) => {
+    const out = await burnAnnotation(await blankPdf(), {
+      id: 'n4', kind: 'note', page: 1, xPct: 0.1, yPct: 0.1, color: 'gray', text,
+    });
+    let n = 0;
+    for (const m of out.toString('latin1').matchAll(/stream\r?\n/g)) {
+      const start = (m.index as number) + m[0].length;
+      const raw = out.subarray(start, out.indexOf('endstream', start));
+      let body: string;
+      try { body = inflateSync(raw).toString('latin1'); } catch { body = raw.toString('latin1'); }
+      n += [...body.matchAll(/\bTj\b/g)].length;
+    }
+    return n;
+  };
+  assert.equal(await shows('1.00 +'), 1);
+  assert.equal(await shows('TAPE\n1.00 +\n2.00 +\r\n3.00 T'), 4);
+});
+
+test("a tickmark's one-line caption turns a line break into a space", async () => {
+  const shows = async (note: string) => {
+    const out = await burnAnnotation(await blankPdf(), annotation({ symbol: DAGGER, note }));
+    return inflatedStreams(out).reduce((n, st) => n + [...st.matchAll(/\bTj\b/g)].length, 0);
+  };
+  assert.equal(await shows('Traced\nto GL'), await shows('Traced to GL'), 'drawn as the same one line');
+});
+
 test('a line annotation is burned in', async () => {
   const original = await blankPdf();
   const out = await burnAnnotation(original, {

@@ -10,6 +10,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { sendServerError } from '../lib/safeError';
+import { assertNoPeriodOverlap } from '../lib/periodOverlap';
 
 export const rollForwardRouter = Router({ mergeParams: true });
 rollForwardRouter.use(authMiddleware);
@@ -72,6 +73,10 @@ rollForwardRouter.post('/', async (req: AuthRequest, res: Response): Promise<voi
           return { kind: 'unbalanced', diff: (Number(diffCents) / 100).toFixed(2) };
         }
       }
+
+      // Q127: the new period may not overlap another of the client (rolling the
+      // same year forward twice). A locked source stays allowed (owner).
+      await assertNoPeriodOverlap(trx, Number(sourcePeriod.client_id), { start: startDate, end: endDate });
 
       // Clear current flag if needed
       if (isCurrent) {

@@ -805,6 +805,11 @@ All planned phases complete. App is feature-complete.
   carries the client's prior period (`priorYearRange`) as a reference period, with its adjusted balances in
   `manifest.sync.priorPeriod` (`lib/sync/priorPeriod.ts`, Q122), never as trial balance rows.
 - Variance notes (per account per period, TB Report inline editing)
+- **A client's periods do not overlap** (Q127, owner 2026-11-21): create (`POST /clients/:id/periods`), roll-forward and a
+  date PATCH call `assertNoPeriodOverlap` (`lib/periodOverlap.ts`) inside their transaction, under a per-client advisory
+  lock (class 45), and refuse `409 PERIOD_OVERLAPS` naming the period. Reference periods don't count; a period missing a date
+  can't overlap; an overlap from before the rule may be narrowed, not widened onto another period. A locked source may still be
+  rolled forward. A new route that writes period dates calls the same helper.
 - **Every FK into `periods` must carry a delete action.** `DELETE /periods/:id` is a bare delete that
   trusts cascades; five references shipped with none (bank_transactions, document_imports,
   variance_notes ×2, bank_reconciliations, and the `rolled_forward_from` self-pointer), so deleting

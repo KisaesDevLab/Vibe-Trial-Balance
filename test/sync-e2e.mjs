@@ -1987,6 +1987,49 @@ async function main() {
     if (made) assert.equal((await api(`/api/v1/periods/${made}`, { method: 'DELETE', token: admin })).status, 200);
   });
 
+  await step('Desktop requests Q127: periods of a client do not overlap (create, roll forward, re-date); a reference period does not count', async () => {
+    const C = s3.client.id;
+    const own = await one(`SELECT start_date::text AS s, end_date::text AS e, period_name FROM periods WHERE id = $1`, [s3.period.id]);
+    const overlaps = (r, what) => {
+      assert.equal(r.status, 409, `${what}: ${r.text}`);
+      assert.equal(r.json.error.code, 'PERIOD_OVERLAPS', what);
+      assert.match(r.json.error.message, /overlap/);
+    };
+    // A new period over an existing one: refused, naming it.
+    const clash = await api(`/api/v1/clients/${C}/periods`, { method: 'POST', token: admin, json: { periodName: 'Example clash', startDate: own.s, endDate: own.e } });
+    overlaps(clash, 'a new period on the same dates');
+    assert.ok(clash.json.error.message.includes(own.period_name), clash.json.error.message);
+    // Free dates: made.
+    const made = await api(`/api/v1/clients/${C}/periods`, { method: 'POST', token: admin, json: { periodName: 'Example FY 2050', startDate: '2050-01-01', endDate: '2050-12-31' } });
+    assert.equal(made.status, 201, made.text);
+    const P50 = made.json.data.id;
+    // Rolled forward twice to the same year: the second is refused (a locked source would still be allowed).
+    const rf = (name) => api(`/api/v1/periods/${P50}/roll-forward`, { method: 'POST', token: admin, json: { periodName: name, startDate: '2051-01-01', endDate: '2051-12-31' } });
+    const first = await rf('Example FY 2051');
+    assert.equal(first.status, 201, first.text);
+    overlaps(await rf('Example FY 2051 again'), 'the same year rolled forward twice');
+    const P51 = first.json.data.period.id;
+    // Re-dated onto another: refused; a date edit that clashes with nothing is fine.
+    overlaps(await api(`/api/v1/periods/${P51}`, { method: 'PATCH', token: admin, json: { startDate: '2050-06-01' } }), 'a start moved into the year before');
+    assert.equal((await api(`/api/v1/periods/${P51}`, { method: 'PATCH', token: admin, json: { endDate: '2051-12-30' } })).status, 200);
+    // An overlap from before the rule: narrowing it is allowed, widening onto a new period is not.
+    await sql(`UPDATE periods SET end_date = '2051-03-31' WHERE id = $1`, [P50]);
+    assert.equal((await api(`/api/v1/periods/${P50}`, { method: 'PATCH', token: admin, json: { endDate: '2051-01-31' } })).status, 200, 'narrowing an old overlap');
+    // A reference period (desktop sync) does not count.
+    const ref = await one(`INSERT INTO periods (client_id, period_name, start_date, end_date, is_reference) VALUES ($1, 'Example reference', '2052-01-01', '2052-12-31', true) RETURNING id`, [C]);
+    const over = await api(`/api/v1/clients/${C}/periods`, { method: 'POST', token: admin, json: { periodName: 'Example FY 2052', startDate: '2052-01-01', endDate: '2052-12-31' } });
+    assert.equal(over.status, 201, `a reference period is not one of the client's periods: ${over.text}`);
+    // Two at once: one wins.
+    const both = await Promise.all([0, 1].map((i) => api(`/api/v1/clients/${C}/periods`, { method: 'POST', token: admin, json: { periodName: `Example FY 2053 #${i}`, startDate: '2053-01-01', endDate: '2053-12-31' } })));
+    assert.deepEqual(both.map((r) => r.status).sort(), [201, 409], both.map((r) => r.text).join(' | '));
+    const ids = [P50, P51, over.json.data.id, ...both.filter((r) => r.status === 201).map((r) => r.json.data.id)];
+    await sql(`DELETE FROM periods WHERE id = $1`, [ref.id]);
+    for (const id of ids) {
+      const del = await api(`/api/v1/periods/${id}`, { method: 'DELETE', token: admin });
+      assert.equal(del.status, 200, del.text);
+    }
+  });
+
   await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and sync responses after 15 s, and nothing was cut', async () => {
     assert.equal(proxyCuts, 0);
     // The proxy does cut: a body over the cap is refused before the server sees it.
