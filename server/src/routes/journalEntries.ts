@@ -113,7 +113,10 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
   }
 
   try {
-    await db.transaction(async (trx) => {
+    // Answered after the commit, not inside the transaction (Q136): a caller
+    // acting at once (an MCP agent) read a 201 for rows not yet visible, and
+    // a failed COMMIT would have left a 201 for nothing.
+    const created = await db.transaction(async (trx) => {
       await assertPeriodUnlocked(periodId, trx);
 
       // Lock the period row as a serialization point so concurrent JE creation
@@ -152,8 +155,9 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
       await ensureTrialBalanceRows(trx, periodId, lines.map((l) => l.accountId));
 
       await logAudit({ userId: req.user!.userId, periodId, entityType: 'journal_entry', entityId: entry.id, action: 'create', description: `Created ${entryType} AJE #${entryNumber}${description ? ': ' + description : ''}` }, trx);
-      res.status(201).json({ data: { ...entry, lines }, error: null });
+      return { ...entry, lines };
     });
+    res.status(201).json({ data: created, error: null });
   } catch (err: unknown) {
     const e = err as { code?: string; status?: number; message?: string };
     if (e.code === 'PERIOD_LOCKED') {

@@ -69,13 +69,14 @@ periodCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promis
   const { periodName, startDate, endDate, isCurrent, folderYear } = result.data;
 
   try {
-    await db.transaction(async (trx) => {
+    // Answered after the commit (Q136), not inside the transaction.
+    const period = await db.transaction(async (trx) => {
       // Q127: a client's periods do not overlap.
       await assertNoPeriodOverlap(trx, clientId, { start: startDate, end: endDate });
       if (isCurrent) {
         await trx('periods').where({ client_id: clientId }).update({ is_current: false });
       }
-      const [period] = await trx('periods')
+      const [row] = await trx('periods')
         .insert({
           client_id: clientId,
           period_name: periodName,
@@ -85,9 +86,10 @@ periodCollectionRouter.post('/', async (req: AuthRequest, res: Response): Promis
           is_current: isCurrent ?? false,
         })
         .returning('*');
-      await logAudit({ userId: req.user!.userId, periodId: period.id, entityType: 'period', entityId: period.id, action: 'create', description: `Created period "${periodName}"` }, trx);
-      res.status(201).json({ data: period, error: null });
+      await logAudit({ userId: req.user!.userId, periodId: row.id, entityType: 'period', entityId: row.id, action: 'create', description: `Created period "${periodName}"` }, trx);
+      return row;
     });
+    res.status(201).json({ data: period, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'periods');
   }
@@ -108,7 +110,8 @@ periodItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<
   const d = result.data;
 
   try {
-    await db.transaction(async (trx) => {
+    // Answered after the commit (Q136); null when there is no such period.
+    const updated = await db.transaction(async (trx) => {
       if (d.isCurrent === true) {
         const period = await trx('periods').where({ id }).first('client_id');
         if (period) {
@@ -137,14 +140,16 @@ periodItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<
       if (d.endDate !== undefined) updates.end_date = d.endDate;
       if (d.isCurrent !== undefined) updates.is_current = d.isCurrent;
 
-      const [updated] = await trx('periods').where({ id }).update(updates).returning('*');
-      if (!updated) {
-        res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
-        return;
-      }
-      await logAudit({ userId: req.user!.userId, periodId: id, entityType: 'period', entityId: id, action: 'update', description: `Updated period "${updated.period_name}" — ${Object.keys(updates).join(', ')}` }, trx);
-      res.json({ data: updated, error: null });
+      const [row] = await trx('periods').where({ id }).update(updates).returning('*');
+      if (!row) return null;
+      await logAudit({ userId: req.user!.userId, periodId: id, entityType: 'period', entityId: id, action: 'update', description: `Updated period "${row.period_name}" — ${Object.keys(updates).join(', ')}` }, trx);
+      return row;
     });
+    if (!updated) {
+      res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } });
+      return;
+    }
+    res.json({ data: updated, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'periods');
   }

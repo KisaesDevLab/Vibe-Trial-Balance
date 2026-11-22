@@ -63,6 +63,9 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
   per-account COA flag the user can set independently of category, so signing by it inverts contra
   accounts and any account whose flag disagrees with its category.
 - API routes return: { data, error, meta }
+- **Answer after the commit** (Q136): a route replies once `await db.transaction(...)` has resolved, never from inside the
+  callback (that sent a 201 before COMMIT: an MCP agent acting at once read nothing). The callback returns what the reply
+  needs. `answerAfterCommit.test.ts` reads every source file and fails on a `res.*` inside a transaction callback.
 - Named exports, PascalCase components, camelCase utilities, snake_case DB columns
 
 ## Key Architecture Decisions
