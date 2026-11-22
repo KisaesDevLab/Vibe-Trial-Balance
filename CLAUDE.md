@@ -310,6 +310,10 @@ All planned phases complete. App is feature-complete.
   truth and the upload is the bookkeeper's opening balance, so the entry's sign is **rolled − uploaded**
   — the OPPOSITE of the Variance column (uploaded − rolled). `AjePanel` preview and
   `POST .../py-comparison/create-aje` both do this and must stay mirrored. It shipped reversed once.
+  **Earlier true-ups count** (Q139–Q141, owner 2026-11-22): each account posts rolled − uploaded − what the period's
+  tagged entries already did to it (`planTrueUp` in `lib/pyTieOut.ts`, = −Remaining), nothing left anywhere is a 400;
+  the offset line is left out when it would be 0.00 (the JE routes refuse such a line); the entry is dated on the
+  period's `end_date`, today only without one. AjePanel's preview applies the same two rules.
   **An account absent from the upload is uploaded ZERO, not "no data".** That is how the comparison
   GET computes its variance (`pyMap.get(id) ?? {dr:0,cr:0}`), and it is the commonest reason to need a
   true-up — the bookkeeper's file just omits the account. `create-aje` iterated the

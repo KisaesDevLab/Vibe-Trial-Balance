@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { netDebit, reconcilePyTieOut, splitNet, sumTrueUpLines, type PyAccountBalances } from '../pyTieOut';
+import { netDebit, planTrueUp, reconcilePyTieOut, splitNet, sumTrueUpLines, type PyAccountBalances } from '../pyTieOut';
 
 const acct = (
   accountId: number,
@@ -103,4 +103,33 @@ test('no tagged entries: adjusted equals uploaded and the summary reports the up
   assert.equal(summary.trueUpEntries, 0);
   assert.equal(summary.uploadedNetCents, 1000);
   assert.equal(summary.adjustedNetCents, 1000);
+});
+
+const OFFSET = 99;
+test('planTrueUp: a first true-up posts rolled − uploaded with a balancing offset', () => {
+  assert.deepEqual(planTrueUp([{ accountId: 1, rolledNet: 500, uploadedNet: 200, earlierNet: 0 }], OFFSET), [
+    { accountId: 1, debit: 300, credit: 0 },
+    { accountId: OFFSET, debit: 0, credit: 300 },
+  ]);
+});
+test('planTrueUp: a second true-up posts only what earlier ones left (Q139)', () => {
+  assert.deepEqual(planTrueUp([{ accountId: 1, rolledNet: 500, uploadedNet: 200, earlierNet: 250 }], OFFSET), [
+    { accountId: 1, debit: 50, credit: 0 },
+    { accountId: OFFSET, debit: 0, credit: 50 },
+  ]);
+  assert.deepEqual(planTrueUp([{ accountId: 1, rolledNet: 500, uploadedNet: 200, earlierNet: 300 }], OFFSET), [], 'nothing left');
+});
+test('planTrueUp: variances that net to nothing get no 0.00 offset line (Q141)', () => {
+  const lines = planTrueUp([
+    { accountId: 1, rolledNet: 100, uploadedNet: 0, earlierNet: 0 },
+    { accountId: 2, rolledNet: -100, uploadedNet: 0, earlierNet: 0 },
+  ], OFFSET);
+  assert.deepEqual(lines, [{ accountId: 1, debit: 100, credit: 0 }, { accountId: 2, debit: 0, credit: 100 }]);
+});
+test('planTrueUp: reverse swaps the finished entry; duplicates count once', () => {
+  const t = { accountId: 1, rolledNet: 0, uploadedNet: 70, earlierNet: 0 };
+  assert.deepEqual(planTrueUp([t, t], OFFSET, true), [
+    { accountId: 1, debit: 70, credit: 0 },
+    { accountId: OFFSET, debit: 0, credit: 70 },
+  ]);
 });

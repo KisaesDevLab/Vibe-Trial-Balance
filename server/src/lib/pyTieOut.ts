@@ -165,3 +165,38 @@ export function reconcilePyTieOut(
 
   return { rows, summary };
 }
+
+/** One account the preparer ticked, in net-debit cents. */
+export interface TrueUpTarget {
+  accountId: number;
+  /** This app's final prior year (the truth). */
+  rolledNet: number;
+  /** The bookkeeper's uploaded opening (0 when the file left the account out). */
+  uploadedNet: number;
+  /** What earlier tagged true-ups already did to this account. */
+  earlierNet: number;
+}
+
+/**
+ * The lines of a new true-up: each ticked account moves by what is still left,
+ * rolled − uploaded − earlier, so a second true-up posts only the remainder
+ * (Q139; that is −remaining as the comparison screen shows it). Accounts with
+ * nothing left are skipped; the offset absorbs the net and is left out when it
+ * would be zero (Q141: a 0.00 line the journal entry routes refuse). `reverse`
+ * swaps the finished entry, offset included. Mirrored by AjePanel's preview.
+ */
+export function planTrueUp(targets: readonly TrueUpTarget[], offsetAccountId: number, reverse = false): TrueUpLine[] {
+  const lines: TrueUpLine[] = [];
+  const seen = new Set<number>();
+  let net = 0;
+  for (const t of targets) {
+    if (seen.has(t.accountId)) continue;
+    seen.add(t.accountId);
+    const amount = t.rolledNet - t.uploadedNet - t.earlierNet;
+    if (amount === 0) continue;
+    lines.push({ accountId: t.accountId, ...splitNet(amount) });
+    net += amount;
+  }
+  if (lines.length > 0 && net !== 0) lines.push({ accountId: offsetAccountId, ...splitNet(-net) });
+  return reverse ? lines.map((l) => ({ accountId: l.accountId, debit: l.credit, credit: l.debit })) : lines;
+}

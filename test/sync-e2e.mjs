@@ -2087,6 +2087,49 @@ async function main() {
     for (const c of [A, B]) assert.equal((await api(`/api/v1/clients/${c}`, { method: 'DELETE', token: admin })).status, 200);
   });
 
+  await step('Desktop requests Q139-Q141: a PY true-up posts only what earlier ones left, on the period end date, with no 0.00 offset', async () => {
+    const cr = await api('/api/v1/clients', { method: 'POST', token: admin, json: { name: `Example Q139 ${Date.now()}`, entityType: '1065', activityType: 'business' } });
+    assert.equal(cr.status, 201, cr.text);
+    const C = cr.json.data.id;
+    const pr = await api(`/api/v1/clients/${C}/periods`, { method: 'POST', token: admin, json: { periodName: 'Example FY 2060', startDate: '2060-01-01', endDate: '2060-12-31' } });
+    assert.equal(pr.status, 201, pr.text);
+    const P = pr.json.data.id;
+    const acct = async (n, category, nb) => (await one(`INSERT INTO chart_of_accounts (client_id, account_number, account_name, category, normal_balance)
+                                                      VALUES ($1, $2, $3, $4, $5) RETURNING id`, [C, n, `Example ${n}`, category, nb])).id;
+    const cash = await acct('1000', 'assets', 'debit');
+    const a1 = await acct('1100', 'assets', 'debit');
+    const a2 = await acct('1200', 'assets', 'debit');
+    const eq = await acct('3000', 'equity', 'credit');
+    // Rolled (this app's prior year) vs uploaded (the bookkeeper's file).
+    for (const [id, dr, cr2] of [[cash, 50000, 0], [a1, 10000, 0], [a2, 0, 0], [eq, 0, 60000]]) {
+      await sql(`INSERT INTO trial_balance (period_id, account_id, prior_year_debit, prior_year_credit) VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (period_id, account_id) DO UPDATE SET prior_year_debit = EXCLUDED.prior_year_debit, prior_year_credit = EXCLUDED.prior_year_credit`, [P, id, dr, cr2]);
+    }
+    for (const [id, dr] of [[cash, 20000], [a2, 10000]]) {
+      await sql(`INSERT INTO py_comparison_data (period_id, account_id, py_debit, py_credit, source) VALUES ($1, $2, $3, 0, 'manual')`, [P, id, dr]);
+    }
+    const aje = (accountIds) => api(`/api/v1/periods/${P}/py-comparison/create-aje`, { method: 'POST', token: admin, json: { entryType: 'book', offsetAccountId: eq, accountIds } });
+    const first = await aje([cash]);
+    assert.equal(first.status, 201, first.text);
+    assert.deepEqual(first.json.data.lines, [{ accountId: cash, debit: 30000, credit: 0 }, { accountId: eq, debit: 0, credit: 30000 }]);
+    assert.equal((await one(`SELECT entry_date::text AS d FROM journal_entries WHERE id = $1`, [first.json.data.id])).d, '2060-12-31', 'Q140: on the period end date');
+    // Q139: a second true-up on the same account has nothing left to post.
+    const again = await aje([cash]);
+    assert.equal(again.status, 400, again.text);
+    // A partial earlier true-up: only the remainder is posted.
+    await sql(`UPDATE journal_entry_lines SET debit = CASE WHEN debit > 0 THEN 25000 ELSE 0 END, credit = CASE WHEN credit > 0 THEN 25000 ELSE 0 END WHERE journal_entry_id = $1`, [first.json.data.id]);
+    const rest = await aje([cash]);
+    assert.equal(rest.status, 201, rest.text);
+    assert.deepEqual(rest.json.data.lines, [{ accountId: cash, debit: 5000, credit: 0 }, { accountId: eq, debit: 0, credit: 5000 }]);
+    // Q141: variances that net to nothing get no offset line, and the entry saves again as it is.
+    const netZero = await aje([a1, a2]);
+    assert.equal(netZero.status, 201, netZero.text);
+    assert.deepEqual(netZero.json.data.lines, [{ accountId: a1, debit: 10000, credit: 0 }, { accountId: a2, debit: 0, credit: 10000 }]);
+    const resave = await api(`/api/v1/journal-entries/${netZero.json.data.id}`, { method: 'PATCH', token: admin, json: { lines: netZero.json.data.lines } });
+    assert.equal(resave.status, 200, resave.text);
+    assert.equal((await api(`/api/v1/clients/${C}`, { method: 'DELETE', token: admin })).status, 200);
+  });
+
   await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and sync responses after 15 s, and nothing was cut', async () => {
     assert.equal(proxyCuts, 0);
     // The proxy does cut: a body over the cap is refused before the server sees it.

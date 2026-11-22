@@ -60,8 +60,9 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
       // truth; the uploaded file is the bookkeeper's opening. The entry moves
       // the bookkeeper's balance TO the rolled one, so its sign is
       // rolled − uploaded — the opposite of the variance column, which reads
-      // uploaded − rolled. Mirrors the server's create-aje.
-      const netVariance = -(a.varianceDebit - a.varianceCredit);
+      // uploaded − rolled. Earlier true-ups count (Q139): only what they left
+      // is posted. Mirrors planTrueUp in the server's lib/pyTieOut.ts.
+      const netVariance = -(a.varianceDebit - a.varianceCredit) - ((a.trueUpDebit ?? 0) - (a.trueUpCredit ?? 0));
       if (netVariance === 0) continue;
       const debit = netVariance > 0 ? netVariance : 0;
       const credit = netVariance < 0 ? Math.abs(netVariance) : 0;
@@ -74,7 +75,8 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
     const offsetAcct = offsetAccountId !== '' ? accounts.find((a) => a.id === offsetAccountId) : null;
     const offsetDebit = totalCredit > totalDebit ? totalCredit - totalDebit : 0;
     const offsetCredit = totalDebit > totalCredit ? totalDebit - totalCredit : 0;
-    if (offsetAcct) {
+    // No 0.00 offset line when the variances net to nothing (Q141).
+    if (offsetAcct && offsetDebit + offsetCredit > 0) {
       lines.push({
         accountId: offsetAcct.id,
         accountNumber: offsetAcct.account_number,
@@ -90,7 +92,8 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
     // with everything else and the totals simply trade places.
     const finalLines = reverse ? lines.map((l) => ({ ...l, debit: l.credit, credit: l.debit })) : lines;
     const [finalDebit, finalCredit] = reverse ? [totalCredit, totalDebit] : [totalDebit, totalCredit];
-    return { lines: finalLines, totalDebit: finalDebit, totalCredit: finalCredit, balanced: finalDebit === finalCredit && finalDebit > 0 };
+    const hasOffset = !!offsetAcct && offsetDebit + offsetCredit > 0;
+    return { lines: finalLines, hasOffset, totalDebit: finalDebit, totalCredit: finalCredit, balanced: finalDebit === finalCredit && finalDebit > 0 };
   }, [selectedAccounts, offsetAccountId, accounts, reverse]);
 
   const mutation = useMutation({
@@ -174,7 +177,7 @@ export function AjePanel({ periodId, clientId, selectedAccounts, onAjeCreated }:
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
             {jePreview.lines.map((l, i) => (
-              <tr key={i} className={i === jePreview.lines.length - 1 && offsetAccountId !== '' ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}>
+              <tr key={i} className={i === jePreview.lines.length - 1 && jePreview.hasOffset ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}>
                 <td className="px-2 py-1 text-gray-700 dark:text-gray-300">
                   <span className="font-mono font-medium">{l.accountNumber}</span>
                   <span className="ml-1 text-gray-500 dark:text-gray-400">— {l.accountName}</span>

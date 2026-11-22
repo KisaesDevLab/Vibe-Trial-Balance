@@ -9,11 +9,22 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertNotCheckedOut, assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
 import { sendServerError } from '../lib/safeError';
-import { reconcilePyTieOut, sumTrueUpLines, type TrueUpLine } from '../lib/pyTieOut';
+import { planTrueUp, reconcilePyTieOut, sumTrueUpLines, type TrueUpLine } from '../lib/pyTieOut';
+import { calendarDate, dateText } from '../lib/sync/periodStamp';
+import type { Knex } from 'knex';
 import { parseAliases, applyAliasClaims, type AliasClaim } from '../lib/importAliases';
 
 /** `journal_entries.source_tag` for an entry this screen created. */
 export const PY_TIEOUT_TAG = 'py_tieout';
+
+/** The period's tagged true-up entries and their lines. */
+async function loadTrueUps(q: Knex | Knex.Transaction, periodId: number): Promise<{ entries: number; lines: TrueUpLine[] }> {
+  const ids = ((await q('journal_entries').where({ period_id: periodId, source_tag: PY_TIEOUT_TAG }).select('id')) as Array<{ id: number }>).map((t) => t.id);
+  if (ids.length === 0) return { entries: 0, lines: [] };
+  const rows = (await q('journal_entry_lines').whereIn('journal_entry_id', ids)
+    .select('account_id', 'debit', 'credit')) as Array<{ account_id: number; debit: string | number; credit: string | number }>;
+  return { entries: ids.length, lines: rows.map((l) => ({ accountId: l.account_id, debit: Number(l.debit), credit: Number(l.credit) })) };
+}
 
 export const pyComparisonRouter = Router({ mergeParams: true });
 pyComparisonRouter.use(authMiddleware);
@@ -179,15 +190,8 @@ pyComparisonRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
     // Tagged PY true-ups. They are posted in the CURRENT year — the prior year
     // is closed — so the only way to answer "would my adjustments make the
     // prior year tie?" is to apply their lines to the uploaded balances here.
-    const tagged = (await db('journal_entries')
-      .where({ period_id: periodId, source_tag: PY_TIEOUT_TAG })
-      .select('id')) as Array<{ id: number }>;
-    const taggedLines: TrueUpLine[] = tagged.length === 0 ? [] : ((await db('journal_entry_lines')
-      .whereIn('journal_entry_id', tagged.map((t) => t.id))
-      .select('account_id', 'debit', 'credit')) as Array<{ account_id: number; debit: string | number; credit: string | number }>)
-      .map((l) => ({ accountId: l.account_id, debit: Number(l.debit), credit: Number(l.credit) }));
-
-    const tieOut = reconcilePyTieOut(accounts, sumTrueUpLines(taggedLines), tagged.length);
+    const trueUps = await loadTrueUps(db, periodId);
+    const tieOut = reconcilePyTieOut(accounts, sumTrueUpLines(trueUps.lines), trueUps.entries);
     // An account only a true-up touched (an offset that carried no variance of
     // its own) has no comparison row yet; give it one so the plug is visible.
     for (const [accountId, row] of tieOut.rows) {
@@ -706,52 +710,24 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
         r.account_id, { pyDr: Number(r.prior_year_debit), pyCr: Number(r.prior_year_credit) },
       ]));
 
-      // Build JE lines from variances
-      type JELine = { accountId: number; debit: number; credit: number };
-      const lines: JELine[] = [];
-      let totalDebit = 0;
-      let totalCredit = 0;
-
-      // Deduped: one line per account however the selection arrived.
-      for (const accountId of Array.from(new Set(accountIds))) {
+      // Earlier true-ups count (Q139): the GET's Remaining applies them, and a
+      // second entry that ignored them posted the whole variance again.
+      const earlier = sumTrueUpLines((await loadTrueUps(trx, periodId)).lines);
+      const lines = planTrueUp(Array.from(new Set(accountIds), (accountId) => {
         const rolled = tbMap.get(accountId) ?? { pyDr: 0, pyCr: 0 };
         const uploaded = pyMap.get(accountId) ?? { dr: 0, cr: 0 };
         // Direction: the rolled PY (this app's final prior year, AJEs
         // included) is the truth and the upload is the bookkeeper's opening
-        // balance. The entry brings the bookkeeper's balance TO the rolled
-        // one, so a positive value here (rolled more debit than uploaded) is
-        // a DEBIT. This is rolled − uploaded — the opposite sign of the
-        // variance column, which reads uploaded − rolled. Mirrors AjePanel.
-        const netVariance = (rolled.pyDr - uploaded.dr) - (rolled.pyCr - uploaded.cr);
-
-        if (netVariance === 0) continue;
-
-        if (netVariance > 0) {
-          lines.push({ accountId, debit: netVariance, credit: 0 });
-          totalDebit += netVariance;
-        } else {
-          lines.push({ accountId, debit: 0, credit: Math.abs(netVariance) });
-          totalCredit += Math.abs(netVariance);
-        }
-      }
+        // balance, so the entry is rolled − uploaded — the opposite sign of
+        // the variance column (uploaded − rolled). Mirrors AjePanel.
+        return { accountId, rolledNet: rolled.pyDr - rolled.pyCr, uploadedNet: uploaded.dr - uploaded.cr, earlierNet: earlier.get(accountId) ?? 0 };
+      }), offsetAccountId, reverse);
 
       if (lines.length === 0) {
-        throw Object.assign(new Error('All selected accounts have zero variance'), { code: 'VALIDATION_ERROR', status: 400 });
+        throw Object.assign(new Error('Nothing is left to true up on the selected accounts'), { code: 'VALIDATION_ERROR', status: 400 });
       }
-
-      // Offset line absorbs the net
-      const offsetDebit = totalCredit > totalDebit ? totalCredit - totalDebit : 0;
-      const offsetCredit = totalDebit > totalCredit ? totalDebit - totalCredit : 0;
-      lines.push({ accountId: offsetAccountId, debit: offsetDebit, credit: offsetCredit });
-      totalDebit += offsetDebit;
-      totalCredit += offsetCredit;
-
-      // Reversal is applied to the finished, balanced entry — offset included —
-      // so the swap can never unbalance it. Mirrors AjePanel's preview.
-      if (reverse) {
-        for (const l of lines) { const d = l.debit; l.debit = l.credit; l.credit = d; }
-        [totalDebit, totalCredit] = [totalCredit, totalDebit];
-      }
+      const totalDebit = lines.reduce((s, l) => s + l.debit, 0);
+      const totalCredit = lines.reduce((s, l) => s + l.credit, 0);
 
       if (totalDebit !== totalCredit) {
         throw Object.assign(new Error('Internal error: AJE does not balance'), { code: 'VALIDATION_ERROR', status: 400 });
@@ -765,7 +741,10 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
         .first();
       const entryNumber = (lastEntry?.max ?? 0) + 1;
 
-      const entryDate = new Date().toISOString().slice(0, 10);
+      // On the period's last day (Q140), not today's UTC date, which is often
+      // outside the period; today only for a period with no end date.
+      const period = await trx('periods').where({ id: periodId }).first('end_date');
+      const entryDate = period?.end_date ? String(dateText(period.end_date)) : calendarDate(new Date());
       const [je] = await trx('journal_entries')
         .insert({
           period_id: periodId,
@@ -800,7 +779,7 @@ pyComparisonRouter.post('/create-aje', async (req: AuthRequest, res: Response): 
         entityType: 'journal_entry',
         entityId: je.id,
         action: 'create',
-        description: `PY tie-out ${entryType} AJE #${entryNumber} — ${lines.length - 1} variance accounts + offset`,
+        description: `PY tie-out ${entryType} AJE #${entryNumber} — ${lines.length} lines`,
       }, trx);
 
       return { ...je, lines };
