@@ -2030,6 +2030,63 @@ async function main() {
     }
   });
 
+  await step("Desktop requests Q134: the COA import touches only the fields given; tax codes resolve on the client's own return; a refused clone is an error", async () => {
+    const mk = async (name, entityType) => {
+      const r = await api('/api/v1/clients', { method: 'POST', token: admin, json: { name, entityType, activityType: 'business' } });
+      assert.equal(r.status, 201, r.text);
+      return r.json.data.id;
+    };
+    const A = await mk(`Example Q134 partnership ${Date.now()}`, '1065');
+    const B = await mk(`Example Q134 corporation ${Date.now()}`, '1120');
+    // A code text both returns have, as different codes, and one only the 1120 has.
+    const shared = await one(`SELECT a.tax_code, a.id AS a_id, b.id AS b_id FROM tax_codes a JOIN tax_codes b ON b.tax_code = a.tax_code
+                              WHERE a.return_form = '1065' AND a.activity_type = 'business' AND b.return_form = '1120' AND b.activity_type = 'business'
+                                AND a.is_active AND b.is_active ORDER BY a.tax_code LIMIT 1`);
+    assert.ok(shared, 'the seed has a code text on both returns');
+    const only1120 = await one(`SELECT tax_code FROM tax_codes t WHERE return_form = '1120' AND activity_type = 'business' AND is_active
+                                AND NOT EXISTS (SELECT 1 FROM tax_codes x WHERE x.tax_code = t.tax_code AND x.is_active
+                                                AND ((x.return_form = '1065' AND x.activity_type = 'business') OR (x.return_form = 'common' AND x.activity_type = 'common')))
+                                ORDER BY tax_code LIMIT 1`);
+    assert.ok(only1120, 'the seed has a code only the 1120 has');
+    const imp = (clientId, rows) => api(`/api/v1/clients/${clientId}/chart-of-accounts/import`, { method: 'POST', token: admin, json: { rows } });
+    const base = { accountNumber: '6100', accountName: 'Example rent', category: 'expenses', normalBalance: 'debit' };
+    // (2) The shared text lands on A's own return's code; the 1120-only one is not found.
+    let r = await imp(A, [{ ...base, subcategory: 'Example occupancy', unit: 'Example unit', workpaperRef: 'W-1', taxLine: shared.tax_code },
+                          { accountNumber: '6200', accountName: 'Example other', category: 'expenses', normalBalance: 'debit', taxLine: only1120.tax_code }]);
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.json.data.taxCodesNotFound, [only1120.tax_code]);
+    const acct = () => one(`SELECT subcategory, unit, workpaper_ref, tax_code_id, tax_line FROM chart_of_accounts WHERE client_id = $1 AND account_number = '6100'`, [A]);
+    assert.equal((await acct()).tax_code_id, shared.a_id, "the partnership's own code, not the corporation's");
+    assert.equal((await one(`SELECT tax_code_id FROM chart_of_accounts WHERE client_id = $1 AND account_number = '6200'`, [A])).tax_code_id, null);
+    // (1) A short row changes only what it carries; an empty field clears.
+    r = await imp(A, [{ ...base, accountName: 'Example rent renamed' }]);
+    assert.equal(r.status, 200, r.text);
+    const kept = await acct();
+    assert.deepEqual([kept.subcategory, kept.unit, kept.workpaper_ref, kept.tax_code_id], ['Example occupancy', 'Example unit', 'W-1', shared.a_id], 'fields the row leaves out are kept');
+    r = await imp(A, [{ ...base, subcategory: '' }]);
+    assert.equal((await acct()).subcategory, null, 'an empty field clears');
+    // (3) Copied to the corporation: re-matched on its return.
+    r = await api(`/api/v1/clients/${B}/chart-of-accounts/copy-from/${A}?overwrite=false`, { method: 'POST', token: admin });
+    assert.equal(r.status, 200, r.text);
+    assert.equal((await one(`SELECT tax_code_id FROM chart_of_accounts WHERE client_id = $1 AND account_number = '6100'`, [B])).tax_code_id, shared.b_id, "the corporation's own code for that text");
+    // (4) A clone onto a number in use: 409 with the preview; a dry run is 200.
+    const id6100 = (await one(`SELECT id FROM chart_of_accounts WHERE client_id = $1 AND account_number = '6100'`, [A])).id;
+    const id6200 = (await one(`SELECT id FROM chart_of_accounts WHERE client_id = $1 AND account_number = '6200'`, [A])).id;
+    const clone = (dryRun, ids = [id6100, id6200]) => api(`/api/v1/clients/${A}/units/clone-selected`, { method: 'POST', token: admin, json: { accountIds: ids, newUnit: 'Example copy', strategy: 'same', strategyValue: '', dryRun } });
+    const dry = await clone(true);
+    assert.equal(dry.status, 200, dry.text);
+    assert.equal(dry.json.data.duplicateCount, 2);
+    assert.ok(dry.json.data.preview.every((p) => typeof p.sourceId === 'number'), 'the preview names each source account');
+    const refused = await clone(false);
+    assert.equal(refused.status, 409, refused.text);
+    assert.equal(refused.json.error.code, 'ACCOUNT_NUMBER_EXISTS');
+    assert.deepEqual(refused.json.error.duplicates.sort(), ['6100', '6200']);
+    assert.equal((await one(`SELECT count(*)::int AS n FROM chart_of_accounts WHERE client_id = $1 AND unit = 'Example copy'`, [A])).n, 0, 'nothing made');
+    const ok = await api(`/api/v1/clients/${A}/units/clone-selected`, { method: 'POST', token: admin, json: { accountIds: [id6100], newUnit: 'Example copy', strategy: 'suffix', strategyValue: '-9', dryRun: false } });
+    assert.equal(ok.status, 201, ok.text);
+    for (const c of [A, B]) assert.equal((await api(`/api/v1/clients/${c}`, { method: 'DELETE', token: admin })).status, 200);
+  });
+
   await step('S5: everything above went through a proxy that cuts bodies over 1.5 MB and sync responses after 15 s, and nothing was cut', async () => {
     assert.equal(proxyCuts, 0);
     // The proxy does cut: a body over the cap is refused before the server sees it.

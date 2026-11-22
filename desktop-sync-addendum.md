@@ -181,6 +181,15 @@ To fix (all done 2026-11-21 on `feat/sync-s5-hardening`, below):
 | Q127 overlapping periods | Creating a period, rolling one forward and re-dating one refuse dates that overlap another period of the client with `409 PERIOD_OVERLAPS`, whose message names that period and its dates (and `error` carries nothing else the desktop needs). Reference periods do not count; a period without both dates cannot overlap; an overlap from before the rule may be narrowed but not widened onto another period. Rolling forward from a locked period stays allowed. |
 | Note line breaks | A burned note keeps its line breaks (they were drawn as `?` and the lines ran together); a tickmark's one-line caption turns one into a space. Same fix as the engine fork's `3968321`. |
 
+## Q134 chart of accounts (owner 2026-11-21)
+
+| Item | What the server does |
+| --- | --- |
+| (1) import | On an account of the same number, only the fields the row carries change; a field left out is kept, one sent empty (`""` or `null`) clears. Reactivating a retired account of that number stays. |
+| (2) tax code text | Looked up in the client's own catalog (its return and activity, plus common; its own wins). A text it has no code for leaves the account unmapped and is listed in `data.taxCodesNotFound`. |
+| (3) copy from a client | Each tax code is re-matched by its text in the target client's catalog; misses are unmapped and listed in `data.taxCodesNotMatched`. With `overwrite=true` an account of the same number still takes the source's whole account (the source carries every field). |
+| (4) unit clones | `units/clone` and `units/clone-selected` refuse a copy onto a number in use (retired accounts too) with `409 ACCOUNT_NUMBER_EXISTS`; `error` carries `duplicates`, `preview`, `duplicateCount`, `wouldInsert`. A dry run still answers 200 with the preview, whose rows now carry `sourceId`. |
+
 ## Code review of the branch (2026-11-21), fixed
 
 A pull that cannot start (job cap, full disk) no longer leaves its check-out behind, and a send-back under a check-out with no `stamp_at_pull` is refused (`SYNC_NOT_PULLED`). Deletes that cascade into a held period (a transaction its reconciliation clears, an entry its bank line names, a period its variance notes compare with) are refused (`periodsReachedByDelete` / `assertDeleteSparesHeldPeriods` in `lib/periodGuard.ts`). A part upload whose connection drops ends and removes its partial file (`stream.pipeline`). The hourly prune keeps a sent upload's archive while its job is queued or running. Removing a device, and ending an idle one, revoke + release + audit in one transaction. The desktop's period list reads every hold in one query and stamps four periods at a time. A statement set renamed on the desktop is matched through an issued version. All in `sync-e2e` ("Code review:" steps).

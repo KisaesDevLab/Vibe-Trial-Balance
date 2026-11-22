@@ -363,6 +363,15 @@ All planned phases complete. App is feature-complete.
   API says `Bank Service Charges:Overdraft Fees`. Same guards as the name pass (unique, unclaimed,
   not bound elsewhere, no category contradiction), badged **by QB name** (yellow), `writeQboId`.
   The QBO import writes `qbo_account_name` too, so a later name match sees QBO's current wording.
+- **COA import, copy and unit clones (Q134, owner 2026-11-21).** `POST /clients/:id/chart-of-accounts/import` changes
+  only the fields a row carries on an existing account (a field left out is kept; one sent empty clears) — it used to
+  blank subcategory, tax code, unit and W/P ref on every short re-import. Tax code text is resolved in the client's OWN
+  catalog (`lib/clientTaxCatalog.ts`: its return + activity, plus common; own wins), since `tax_codes` is unique per
+  return and the same text is another return's code; misses come back as `taxCodesNotFound`. `copy-from/:source`
+  re-matches each tax code by its text in the TARGET's catalog (`taxCodesNotMatched`); auto-assign uses the same
+  catalog. `units/clone` and `clone-selected` answer a copy onto a number in use (retired accounts included) with
+  `409 ACCOUNT_NUMBER_EXISTS` + the preview, never the 200 preview a dry run gets; preview rows carry `sourceId`, and the
+  Units page creates only the non-duplicates, as its preview promised.
 - **COA bulk edit** — `POST /clients/:id/chart-of-accounts/bulk-update` (`bulkUpdateColumns()` in
   `routes/chartOfAccounts.ts`, tested). Checkbox column + shift-click range on ChartOfAccountsPage,
   `BulkEditModal` with an opt-in tick per field (category, normal balance, subcategory, unit, tax

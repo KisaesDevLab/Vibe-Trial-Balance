@@ -699,7 +699,15 @@ function ImportModal({ clientId, onClose, onSuccess }: ImportModalProps) {
 
   const importMutation = useMutation({
     mutationFn: (validRows: AccountInput[]) => importAccounts(clientId, validRows),
-    onSuccess: (res) => { if (!res.error) onSuccess(); },
+    onSuccess: (res) => {
+      if (res.error) return;
+      // Tax codes this client's return has no code for arrive unmapped (Q134).
+      const missed = res.data?.taxCodesNotFound ?? [];
+      if (missed.length > 0) {
+        pushToast(`${missed.length} tax code${missed.length === 1 ? '' : 's'} in the file ${missed.length === 1 ? 'is' : 'are'} not on this client's return (${missed.slice(0, 5).join(', ')}${missed.length > 5 ? ', …' : ''}); those accounts were left unmapped.`, 'info');
+      }
+      onSuccess();
+    },
   });
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -992,6 +1000,11 @@ function CopyFromClientModal({ clientId, onClose, onSuccess }: CopyModalProps) {
               Copy complete: <strong>{result.data.inserted}</strong> inserted,{' '}
               <strong>{result.data.updated}</strong> updated,{' '}
               <strong>{result.data.skipped}</strong> skipped.
+              {(result.data.taxCodesNotMatched?.length ?? 0) > 0 && (
+                <div className="mt-1 text-amber-700 dark:text-amber-400">
+                  Tax codes not on this client&apos;s return, left unmapped: {result.data.taxCodesNotMatched!.join(', ')}.
+                </div>
+              )}
             </div>
             <div className="flex justify-end">
               <button onClick={onClose} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>

@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import { catalogFor, clientTaxScope } from '../lib/clientTaxCatalog';
 import { Router, Response } from 'express';
 import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
@@ -19,12 +20,6 @@ taxLineAssignmentRouter.use(authMiddleware);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const ENTITY_TO_RETURN_FORM: Record<string, string> = {
-  '1040_C': '1040',
-  '1065': '1065',
-  '1120': '1120',
-  '1120S': '1120S',
-};
 
 interface AccountRow {
   id: number;
@@ -177,7 +172,7 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
 
     const entityType: string = client.entity_type ?? '1065';
     const activityType: string = client.activity_type ?? 'business';
-    const resolvedReturnForm = ENTITY_TO_RETURN_FORM[entityType] ?? 'common';
+    const scope = clientTaxScope(client);
 
     // Load accounts to process
     let accountQuery = db('chart_of_accounts')
@@ -201,17 +196,7 @@ taxLineAssignmentRouter.post('/auto-assign', async (req: AuthRequest, res: Respo
     }
 
     // Load available tax codes for this entity (plus any common/common codes)
-    const taxCodes: TaxCodeRow[] = await db('tax_codes')
-      .where('is_active', true)
-      .where(function () {
-        this.where(function () {
-          this.where('return_form', resolvedReturnForm).where('activity_type', activityType);
-        }).orWhere(function () {
-          this.where('return_form', 'common').where('activity_type', 'common');
-        });
-      })
-      .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'tax_code', order: 'asc' }])
-      .select('id', 'tax_code', 'description', 'return_form', 'activity_type', 'sort_order');
+    const taxCodes = (await catalogFor(db, scope)) as TaxCodeRow[];
 
     const taxCodeMap = new Map<string, TaxCodeRow>();
     for (const tc of taxCodes) {

@@ -170,6 +170,71 @@ unitsRouter.post('/bulk-assign', async (req: AuthRequest, res: Response): Promis
 
 // ─── POST /api/v1/clients/:clientId/units/clone ──────────────────────────────
 // Create a new unit by copying accounts from an existing unit.
+
+/**
+ * The answer of a unit clone (whole unit, or selected accounts): a dry run
+ * shows the preview (200); a real one with a new number already used is
+ * refused, 409 ACCOUNT_NUMBER_EXISTS with the preview (Q134, owner
+ * 2026-11-21: it answered 200 with the preview, which a caller read as done
+ * while nothing was made); otherwise the accounts are made (201). Retired
+ * accounts count as used: their numbers still hold the unique index.
+ */
+async function answerClone(
+  res: Response,
+  clientId: number,
+  sourceAccounts: Record<string, unknown>[],
+  opts: { newUnit: string; strategy: 'prefix' | 'suffix' | 'same'; strategyValue: string; dryRun: boolean },
+): Promise<void> {
+  const preview = sourceAccounts.map((a) => ({
+    sourceId: a.id as number,
+    sourceNumber: a.account_number as string,
+    newNumber: applyStrategy(a.account_number as string, opts.strategy, opts.strategyValue),
+    accountName: a.account_name as string,
+    category: a.category as string,
+  }));
+  const existingRows = await db('chart_of_accounts')
+    .where({ client_id: clientId })
+    .whereIn('account_number', preview.map((p) => p.newNumber))
+    .select('account_number');
+  const duplicates = (existingRows as { account_number: string }[]).map((r) => r.account_number);
+  const shown = {
+    preview: preview.map((p) => ({ ...p, duplicate: duplicates.includes(p.newNumber) })),
+    duplicateCount: duplicates.length,
+    wouldInsert: sourceAccounts.length - duplicates.length,
+  };
+  if (opts.dryRun) {
+    res.json({ data: shown, error: null });
+    return;
+  }
+  if (duplicates.length > 0) {
+    res.status(409).json({
+      data: null,
+      error: {
+        code: 'ACCOUNT_NUMBER_EXISTS',
+        message: `${duplicates.length} of the new account numbers ${duplicates.length === 1 ? 'is' : 'are'} already used by this client (${duplicates.slice(0, 10).join(', ')}${duplicates.length > 10 ? ', …' : ''}). Nothing was created. Leave those accounts out, or choose another prefix or suffix.`,
+        duplicates,
+        ...shown,
+      },
+    });
+    return;
+  }
+  const inserts = sourceAccounts.map((a) => ({
+    client_id: clientId,
+    account_number: applyStrategy(a.account_number as string, opts.strategy, opts.strategyValue),
+    account_name: a.account_name,
+    category: a.category,
+    subcategory: a.subcategory,
+    normal_balance: a.normal_balance,
+    tax_line: a.tax_line,
+    tax_code_id: a.tax_code_id,
+    workpaper_ref: a.workpaper_ref,
+    unit: opts.newUnit,
+    is_active: true,
+  }));
+  await db('chart_of_accounts').insert(inserts);
+  res.status(201).json({ data: { inserted: inserts.length }, error: null });
+}
+
 // Returns a preview (dry run) when dryRun=true.
 
 unitsRouter.post('/clone', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -200,52 +265,7 @@ unitsRouter.post('/clone', async (req: AuthRequest, res: Response): Promise<void
       return;
     }
 
-    // Build preview rows
-    const preview = (sourceAccounts as Record<string, unknown>[]).map((a) => ({
-      sourceNumber: a.account_number as string,
-      newNumber: applyStrategy(a.account_number as string, strategy, strategyValue),
-      accountName: a.account_name as string,
-      category: a.category as string,
-    }));
-
-    // Check for duplicate account numbers
-    const newNumbers = preview.map((p) => p.newNumber);
-    const existingRows = await db('chart_of_accounts')
-      .where({ client_id: clientId, is_active: true })
-      .whereIn('account_number', newNumbers)
-      .select('account_number');
-    const duplicates = (existingRows as { account_number: string }[]).map((r) => r.account_number);
-
-    if (dryRun || duplicates.length > 0) {
-      res.json({
-        data: {
-          preview: preview.map((p) => ({ ...p, duplicate: duplicates.includes(p.newNumber) })),
-          duplicateCount: duplicates.length,
-          wouldInsert: sourceAccounts.length - duplicates.length,
-        },
-        error: null,
-      });
-      return;
-    }
-
-    // Insert new accounts
-    const inserts = (sourceAccounts as Record<string, unknown>[]).map((a) => ({
-      client_id: clientId,
-      account_number: applyStrategy(a.account_number as string, strategy, strategyValue),
-      account_name: a.account_name,
-      category: a.category,
-      subcategory: a.subcategory,
-      normal_balance: a.normal_balance,
-      tax_line: a.tax_line,
-      tax_code_id: a.tax_code_id,
-      workpaper_ref: a.workpaper_ref,
-      unit: newUnit,
-      is_active: true,
-    }));
-
-    await db('chart_of_accounts').insert(inserts);
-
-    res.status(201).json({ data: { inserted: inserts.length }, error: null });
+    await answerClone(res, clientId, sourceAccounts, { newUnit, strategy, strategyValue, dryRun });
   } catch (err: unknown) {
     sendServerError(res, err, 'units');
   }
@@ -283,49 +303,7 @@ unitsRouter.post('/clone-selected', async (req: AuthRequest, res: Response): Pro
       return;
     }
 
-    const preview = (sourceAccounts as Record<string, unknown>[]).map((a) => ({
-      sourceNumber: a.account_number as string,
-      newNumber: applyStrategy(a.account_number as string, strategy, strategyValue),
-      accountName: a.account_name as string,
-      category: a.category as string,
-    }));
-
-    const newNumbers = preview.map((p) => p.newNumber);
-    const existingRows = await db('chart_of_accounts')
-      .where({ client_id: clientId, is_active: true })
-      .whereIn('account_number', newNumbers)
-      .select('account_number');
-    const duplicates = (existingRows as { account_number: string }[]).map((r) => r.account_number);
-
-    if (dryRun || duplicates.length > 0) {
-      res.json({
-        data: {
-          preview: preview.map((p) => ({ ...p, duplicate: duplicates.includes(p.newNumber) })),
-          duplicateCount: duplicates.length,
-          wouldInsert: sourceAccounts.length - duplicates.length,
-        },
-        error: null,
-      });
-      return;
-    }
-
-    const inserts = (sourceAccounts as Record<string, unknown>[]).map((a) => ({
-      client_id: clientId,
-      account_number: applyStrategy(a.account_number as string, strategy, strategyValue),
-      account_name: a.account_name,
-      category: a.category,
-      subcategory: a.subcategory,
-      normal_balance: a.normal_balance,
-      tax_line: a.tax_line,
-      tax_code_id: a.tax_code_id,
-      workpaper_ref: a.workpaper_ref,
-      unit: newUnit,
-      is_active: true,
-    }));
-
-    await db('chart_of_accounts').insert(inserts);
-
-    res.status(201).json({ data: { inserted: inserts.length }, error: null });
+    await answerClone(res, clientId, sourceAccounts, { newUnit, strategy, strategyValue, dryRun });
   } catch (err: unknown) {
     sendServerError(res, err, 'units');
   }

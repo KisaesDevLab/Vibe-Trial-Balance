@@ -330,12 +330,22 @@ function CreateUnitModal({
     },
   });
 
+  // The preview promises duplicates "will skip", so Create sends only the rest;
+  // the server refuses a copy onto a number in use (Q134) and says so.
+  const [createError, setCreateError] = useState<string | null>(null);
+  const toCreate = (): number[] => {
+    const dup = new Set(previewRows.filter((r) => r.duplicate && r.sourceId !== undefined).map((r) => r.sourceId as number));
+    return [...selected].filter((id) => !dup.has(id));
+  };
   const createMut = useMutation({
-    mutationFn: () =>
-      selected.size > 0
-        ? cloneSelected(clientId, [...selected], newUnit.trim(), strategy, strategyValue, false)
-        : Promise.resolve({ data: { inserted: 0 }, error: null }),
+    mutationFn: () => {
+      const ids = toCreate();
+      return ids.length > 0
+        ? cloneSelected(clientId, ids, newUnit.trim(), strategy, strategyValue, false)
+        : Promise.resolve({ data: { inserted: 0 }, error: null });
+    },
     onSuccess: (r) => {
+      setCreateError(r.error ? r.error.message : null);
       if (!r.error) {
         qc.invalidateQueries({ queryKey: ['units', clientId] });
         qc.invalidateQueries({ queryKey: ['unit-accounts'] });
@@ -548,6 +558,9 @@ function CreateUnitModal({
                 <span className="bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-400 text-xs px-2 py-0.5 rounded font-medium">
                   {previewStats.wouldInsert} accounts to create
                 </span>
+              )}
+              {createError && (
+                <span role="alert" className="w-full text-xs text-red-700 dark:text-red-400">{createError}</span>
               )}
             </div>
 

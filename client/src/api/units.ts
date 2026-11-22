@@ -16,6 +16,8 @@ export interface UnitSummary {
 }
 
 export interface ClonePreviewRow {
+  /** The account copied (absent from servers before Q134). */
+  sourceId?: number;
   sourceNumber: string;
   newNumber: string;
   accountName: string;

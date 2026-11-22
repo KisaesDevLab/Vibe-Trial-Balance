@@ -9,6 +9,7 @@ import { db } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../lib/periodGuard';
 import { sendServerError } from '../lib/safeError';
+import { clientTaxCatalog, codeLookup } from '../lib/clientTaxCatalog';
 import { parseAliases, normalizeAlias, applyAliasClaims, type AliasClaim } from '../lib/importAliases';
 
 // Mounted at /api/v1/clients/:clientId/chart-of-accounts
@@ -183,13 +184,15 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
   const { rows } = parsed.data;
   let inserted = 0;
   let updated = 0;
+  // Tax codes a row named that this client's return has no code for (Q134).
+  const taxCodesNotFound = new Set<string>();
   // Old names of accounts this import renames — claimed after the rows land.
   const coaRenameClaims: AliasClaim[] = [];
 
   try {
-    // Pre-build a tax_code string → id lookup for the import batch
-    const allTaxCodes = await db('tax_codes').select('id', 'tax_code');
-    const taxCodeLookup = new Map<string, number>(allTaxCodes.map((tc: { id: number; tax_code: string }) => [tc.tax_code, tc.id]));
+    // A tax code's text resolved in THIS client's catalog (Q134): the same text
+    // is another code on another return, and the lookup took any of them.
+    const taxCodeLookup = codeLookup(await clientTaxCatalog(db, clientId));
 
     // Case-insensitive code -> id for this client only. An unknown code imports
     // as "no lead sheet" rather than failing the row.
@@ -206,6 +209,7 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
       for (const r of rows) {
         // Resolve tax_line string to tax_code_id if possible
         const resolvedTaxCodeId = r.taxLine ? (taxCodeLookup.get(r.taxLine) ?? null) : null;
+        if (r.taxLine && resolvedTaxCodeId === null) taxCodesNotFound.add(r.taxLine);
         const resolvedTaxLine = r.taxLine ?? null;
         const resolvedLeadSheetId = resolveLeadSheet(r.leadSheetCode);
 
@@ -220,15 +224,19 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
           if (normalizeAlias(String(existing.account_name)) !== normalizeAlias(r.accountName)) {
             coaRenameClaims.push({ accountId: existing.id as number, name: String(existing.account_name) });
           }
+          // Q134 (owner 2026-11-21): only the fields the row carries change. A
+          // field it leaves out keeps its value (this blanked subcategory, tax
+          // code, unit and W/P ref on every re-import of a short file); one it
+          // carries empty clears. Same rule the lead sheet already had.
+          const given = (v: string | null | undefined): string | null => (v === '' ? null : v ?? null);
           await trx('chart_of_accounts').where({ id: existing.id }).update({
             account_name: r.accountName,
             category: r.category,
-            subcategory: r.subcategory ?? null,
             normal_balance: r.normalBalance,
-            tax_line: resolvedTaxLine,
-            tax_code_id: resolvedTaxCodeId,
-            workpaper_ref: r.workpaperRef ?? null,
-            unit: r.unit ?? null,
+            ...(r.subcategory !== undefined ? { subcategory: given(r.subcategory) } : {}),
+            ...(r.taxLine !== undefined ? { tax_line: given(resolvedTaxLine), tax_code_id: resolvedTaxCodeId } : {}),
+            ...(r.workpaperRef !== undefined ? { workpaper_ref: given(r.workpaperRef) } : {}),
+            ...(r.unit !== undefined ? { unit: given(r.unit) } : {}),
             // Only overwrite the lead sheet when the import actually supplied
             // one — a file with no such column must not unassign every account.
             ...(r.leadSheetCode !== undefined
@@ -260,7 +268,7 @@ coaCollectionRouter.post('/import', async (req: AuthRequest, res: Response): Pro
       await applyAliasClaims(trx, clientId, coaRenameClaims);
     });
     await logAudit({ userId: req.user!.userId, periodId: null, entityType: 'chart_of_accounts', action: 'import', description: `COA import — ${inserted} created, ${updated} updated (${rows.length} total)` });
-    res.json({ data: { inserted, updated, total: rows.length }, error: null });
+    res.json({ data: { inserted, updated, total: rows.length, taxCodesNotFound: [...taxCodesNotFound] }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'coa');
   }
@@ -444,6 +452,23 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
       const code = codeById.get(sourceId);
       return code ? (idByCode.get(code) ?? null) : null;
     };
+    // Tax codes likewise by their text, in the TARGET's catalog (Q134): the
+    // source's id is a code of the source's return, which may not be the
+    // target's. One with no counterpart arrives unmapped (its text kept in
+    // tax_line, the legacy field) and is counted.
+    const sourceCodeIds = [...new Set((sourceAccounts as Array<{ tax_code_id: number | null }>).map((a) => a.tax_code_id).filter((v): v is number => v != null))];
+    const codeTextById = new Map<number, string>(sourceCodeIds.length
+      ? ((await db('tax_codes').whereIn('id', sourceCodeIds).select('id', 'tax_code')) as Array<{ id: number; tax_code: string }>).map((t) => [t.id, t.tax_code])
+      : []);
+    const targetCodes = codeLookup(await clientTaxCatalog(db, clientId));
+    const taxCodesNotMatched = new Set<string>();
+    const remapTaxCode = (sourceId: number | null): number | null => {
+      if (sourceId == null) return null;
+      const text = codeTextById.get(sourceId);
+      const id = text !== undefined ? targetCodes.get(text) : undefined;
+      if (id === undefined && text !== undefined) taxCodesNotMatched.add(text);
+      return id ?? null;
+    };
 
     await db.transaction(async (trx) => {
       for (const acct of sourceAccounts) {
@@ -459,7 +484,7 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
               subcategory: acct.subcategory,
               normal_balance: acct.normal_balance,
               tax_line: acct.tax_line,
-              tax_code_id: acct.tax_code_id,
+              tax_code_id: remapTaxCode(acct.tax_code_id ?? null),
               workpaper_ref: acct.workpaper_ref,
               unit: acct.unit ?? null,
               lead_sheet_id: remapLeadSheet(acct.lead_sheet_id ?? null),
@@ -479,7 +504,7 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
             subcategory: acct.subcategory,
             normal_balance: acct.normal_balance,
             tax_line: acct.tax_line,
-            tax_code_id: acct.tax_code_id,
+            tax_code_id: remapTaxCode(acct.tax_code_id ?? null),
             workpaper_ref: acct.workpaper_ref,
             unit: acct.unit ?? null,
             lead_sheet_id: remapLeadSheet(acct.lead_sheet_id ?? null),
@@ -491,7 +516,7 @@ coaCollectionRouter.post('/copy-from/:sourceClientId', async (req: AuthRequest, 
       }
     });
 
-    res.json({ data: { inserted, updated, skipped, total: sourceAccounts.length }, error: null });
+    res.json({ data: { inserted, updated, skipped, total: sourceAccounts.length, taxCodesNotMatched: [...taxCodesNotMatched] }, error: null });
   } catch (err: unknown) {
     sendServerError(res, err, 'coa');
   }
