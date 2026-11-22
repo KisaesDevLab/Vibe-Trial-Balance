@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import { MANUAL_ENTRY_TYPES, type ManualEntryType } from '../lib/journalEntryTypes';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   ListResourcesRequestSchema,
@@ -233,19 +234,19 @@ export function createMcpServer(rateLimitKey = 'default'): Server {
           type: 'object',
           properties: {
             periodId: { type: 'number', description: 'The period ID' },
-            type: { type: 'string', description: 'Optional: filter by type (book, tax, trans)' },
+            type: { type: 'string', description: 'Optional: filter by type (book, tax, reclass, trans)' },
           },
           required: ['periodId'],
         },
       },
       {
         name: 'create_journal_entry',
-        description: 'Create a new journal entry (book or tax AJE)',
+        description: 'Create a new journal entry: a book or tax AJE, or a reclassifying entry (reclass, RJE: in book and tax adjusted balances but not an adjustment proposed to the client)',
         inputSchema: {
           type: 'object',
           properties: {
             periodId: { type: 'number', description: 'The period ID' },
-            entryType: { type: 'string', enum: ['book', 'tax'], description: 'Entry type' },
+            entryType: { type: 'string', enum: [...MANUAL_ENTRY_TYPES], description: 'Entry type: book, tax or reclass' },
             entryDate: { type: 'string', description: 'Entry date in YYYY-MM-DD format' },
             description: { type: 'string', description: 'Optional description' },
             lines: {
@@ -487,7 +488,10 @@ export function createMcpServer(rateLimitKey = 'default'): Server {
         case 'create_journal_entry': {
           const a = args as Record<string, unknown>;
           const periodId = Number(a.periodId);
-          const entryType = a.entryType as 'book' | 'tax';
+          const entryType = a.entryType as ManualEntryType;
+          if (!(MANUAL_ENTRY_TYPES as readonly unknown[]).includes(entryType)) {
+            return { content: [{ type: 'text', text: `entryType must be one of ${MANUAL_ENTRY_TYPES.join(', ')}` }], isError: true };
+          }
           const entryDate = a.entryDate as string;
           const description = typeof a.description === 'string' ? a.description : undefined;
           const lines = a.lines as Array<{ accountId: number; debit: number; credit: number }>;

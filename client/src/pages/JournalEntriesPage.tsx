@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import type { EntryType } from '../utils/entryTypes';
 import { useState } from 'react';
 import { evalAndFormatAmount } from '../utils/evalAmountExpr';
 import { validateJeLines } from '../utils/jeLines';
@@ -425,7 +426,7 @@ export function JournalEntriesPage() {
   // collapsed tracks which entries are folded; default = all expanded
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [formError, setFormError] = useState<string | null>(null);
-  const [typeFilter, setTypeFilter] = useState<'all' | 'book' | 'tax' | 'trans'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | EntryType>('all');
 
   const { data: periodsData } = useQuery({
     queryKey: ['periods', selectedClientId],
@@ -499,6 +500,7 @@ export function JournalEntriesPage() {
   const bookCount = entries.filter((e) => e.entry_type === 'book').length;
   const taxCount = entries.filter((e) => e.entry_type === 'tax').length;
   const transCount = entries.filter((e) => e.entry_type === 'trans').length;
+  const reclassCount = entries.filter((e) => e.entry_type === 'reclass').length;
 
   return (
     <div className="p-6">
@@ -506,7 +508,7 @@ export function JournalEntriesPage() {
         <div>
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Journal Entries<RefreshButton /></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-            {bookCount} book · {taxCount} tax · {transCount} trans
+            {bookCount} book · {taxCount} tax{reclassCount > 0 ? ` · ${reclassCount} reclass` : ''} · {transCount} trans
           </p>
           <CheckoutBanner className="mt-2" />
         </div>
@@ -519,6 +521,7 @@ export function JournalEntriesPage() {
             <option value="all">All types</option>
             <option value="book">Book AJE</option>
             <option value="tax">Tax AJE</option>
+            <option value="reclass">Reclass (RJE)</option>
             <option value="trans">Trans</option>
           </select>
           <button
@@ -553,9 +556,10 @@ export function JournalEntriesPage() {
                   <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold mr-3 ${
                     entry.entry_type === 'book' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400'
                     : entry.entry_type === 'tax' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400'
+                    : entry.entry_type === 'reclass' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400'
                     : 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
                   }`}>
-                    {entry.entry_type === 'book' ? 'BOOK' : entry.entry_type === 'tax' ? 'TAX' : 'TRANS'} #{entry.entry_number}
+                    {entry.entry_type === 'reclass' ? `RJE-${entry.entry_number}` : `${entry.entry_type === 'book' ? 'BOOK' : entry.entry_type === 'tax' ? 'TAX' : 'TRANS'} #${entry.entry_number}`}
                   </span>
                   {entry.source_tag === 'py_tieout' && (
                     <span

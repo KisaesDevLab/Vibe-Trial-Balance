@@ -37,6 +37,7 @@ export async function loadStampRows(
       'vtb.trans_adj_debit', 'vtb.trans_adj_credit',
       'vtb.book_adj_debit', 'vtb.book_adj_credit',
       'vtb.tax_adj_debit', 'vtb.tax_adj_credit',
+      'vtb.reclass_adj_debit', 'vtb.reclass_adj_credit',
     ) as Promise<StampRow[]>;
 }
 

@@ -22,6 +22,7 @@ function parseBigInts(row: Record<string, unknown>): Record<string, unknown> {
     'post_trans_debit', 'post_trans_credit',
     'book_adj_debit', 'book_adj_credit',
     'tax_adj_debit', 'tax_adj_credit',
+    'reclass_adj_debit', 'reclass_adj_credit',
     'book_adjusted_debit', 'book_adjusted_credit',
     'tax_adjusted_debit', 'tax_adjusted_credit',
   ];

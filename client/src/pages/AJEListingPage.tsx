@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import type { EntryType } from '../utils/entryTypes';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listJournalEntries, type JournalEntry } from '../api/journalEntries';
@@ -26,6 +27,7 @@ function fmtDate(d: string): string {
 const TYPE_BADGE: Record<string, { label: string; cls: string }> = {
   book:  { label: 'Book AJE',    cls: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400' },
   tax:   { label: 'Tax AJE',     cls: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400' },
+  reclass: { label: 'Reclass (RJE)', cls: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400' },
   trans: { label: 'Transaction', cls: 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-400' },
 };
 
@@ -82,7 +84,7 @@ export function AJEListingPage() {
   const { selectedPeriodId } = useUIStore();
   const engagementFile = useEngagementFilename();
   const token = useAuthStore((s) => s.token);
-  const [typeFilter, setTypeFilter] = useState<'all' | 'book' | 'tax' | 'trans'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | EntryType>('all');
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
@@ -127,6 +129,7 @@ export function AJEListingPage() {
   const bookCount  = entries.filter((e) => e.entry_type === 'book').length;
   const taxCount   = entries.filter((e) => e.entry_type === 'tax').length;
   const transCount = entries.filter((e) => e.entry_type === 'trans').length;
+  const reclassCount = entries.filter((e) => e.entry_type === 'reclass').length;
 
   const totalDebit  = entries.reduce((s, e) => s + e.lines.reduce((ls, l) => ls + l.debit, 0), 0);
   const totalCredit = entries.reduce((s, e) => s + e.lines.reduce((ls, l) => ls + l.credit, 0), 0);
@@ -169,7 +172,7 @@ export function AJEListingPage() {
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Journal Entry Listing<RefreshButton /></h2>
           {!isLoading && (
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-              {bookCount} book · {taxCount} tax · {transCount} trans
+              {bookCount} book · {taxCount} tax{reclassCount > 0 ? ` · ${reclassCount} reclass` : ''} · {transCount} trans
             </p>
           )}
         </div>
@@ -182,6 +185,7 @@ export function AJEListingPage() {
             <option value="all">All Entries</option>
             <option value="book">Book AJE</option>
             <option value="tax">Tax AJE</option>
+            <option value="reclass">Reclass (RJE)</option>
             <option value="trans">Transactions</option>
           </select>
           <button onClick={handleExport} disabled={!entries.length} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 dark:text-gray-300 disabled:opacity-40">Export Excel</button>

@@ -70,6 +70,7 @@ Period locked: ${period.locked_at ? 'Yes' : 'No'}
 Journal Entries:
 - Book AJEs: ${jeCountMap['book'] ?? 0}
 - Tax AJEs: ${jeCountMap['tax'] ?? 0}
+- Reclassifying entries (RJEs; in book adjusted, not adjustments proposed to the client): ${jeCountMap['reclass'] ?? 0}
 - Trans JEs: ${jeCountMap['trans'] ?? 0}
 Unclassified bank transactions: ${Number((unclassifiedCount as Record<string, unknown>)?.n ?? 0)}
 

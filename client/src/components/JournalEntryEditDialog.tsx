@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import { ENTRY_TYPE_LABEL, type ManualEntryType } from '../utils/entryTypes';
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -49,11 +50,11 @@ interface Props {
   onSaved: () => void;
 }
 
-const TYPE_LABEL: Record<string, string> = { book: 'Book AJE', tax: 'Tax AJE', trans: 'Transaction' };
+const TYPE_LABEL: Record<string, string> = ENTRY_TYPE_LABEL;
 
 export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSaved }: Props) {
   const qc = useQueryClient();
-  const [entryType, setEntryType] = useState<'book' | 'tax'>('book');
+  const [entryType, setEntryType] = useState<ManualEntryType>('book');
   const [entryDate, setEntryDate] = useState('');
   const [description, setDescription] = useState('');
   const [workpaperRef, setWorkpaperRef] = useState('');
@@ -219,12 +220,13 @@ export function JournalEntryEditDialog({ journalEntryId, clientId, onClose, onSa
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
-                  {isTrans ? (
-                    <div className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Transaction</div>
+                  {isTrans || jeData?.entry_type === 'reclass' ? (
+                    // An RJE numbers on its own, so it never changes type (the server refuses it).
+                    <div className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400">{isTrans ? 'Transaction' : ENTRY_TYPE_LABEL.reclass}</div>
                   ) : (
                     <select
                       value={entryType}
-                      onChange={(e) => setEntryType(e.target.value as 'book' | 'tax')}
+                      onChange={(e) => setEntryType(e.target.value as ManualEntryType)}
                       className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
                     >
                       <option value="book">Book AJE</option>

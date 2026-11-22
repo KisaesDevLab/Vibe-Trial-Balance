@@ -9,6 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   DEFAULT_LEAD_SHEETS,
   suggestLeadSheet,
@@ -221,4 +222,22 @@ test('signoffStatus reports unsigned, signed and stale', () => {
   assert.equal(signoffStatus(undefined, stamp), 'unsigned');
   assert.equal(signoffStatus({ balance_stamp: stamp }, stamp), 'signed');
   assert.equal(signoffStatus({ balance_stamp: stamp }, moved), 'stale');
+});
+
+test('a stamp without reclassifying entries is the one stored before RJEs existed', () => {
+  // The v1 serialization as it was: ten raw amounts per account. Every stored
+  // sign-off was hashed this way, so a zero reclass must not change it.
+  const r = { ...row(1, 100), book_adj_debit: 5 };
+  const old = createHash('sha256').update('v1\n1|100|0|0|0|0|0|5|0|0|0').digest('hex');
+  assert.equal(leadSheetBalanceStamp([r]), old);
+  assert.equal(leadSheetBalanceStamp([{ ...r, reclass_adj_debit: 0, reclass_adj_credit: '0' }]), old);
+});
+
+test('the stamp moves when a reclassifying entry lands on a member account', () => {
+  const base = leadSheetBalanceStamp([row(1, 100)]);
+  assert.notEqual(leadSheetBalanceStamp([{ ...row(1, 100), reclass_adj_debit: 250 }]), base);
+  assert.notEqual(
+    leadSheetBalanceStamp([{ ...row(1, 100), reclass_adj_debit: 250 }]),
+    leadSheetBalanceStamp([{ ...row(1, 100), reclass_adj_credit: 250 }]),
+  );
 });

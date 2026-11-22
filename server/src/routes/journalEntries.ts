@@ -5,6 +5,7 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
+import { ENTRY_TYPE_LABEL, MANUAL_ENTRY_TYPES, typeChangeRefusal } from '../lib/journalEntryTypes';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertDeleteSparesHeldPeriods, assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
@@ -27,7 +28,7 @@ const lineSchema = z.object({
 });
 
 const jeSchema = z.object({
-  entryType: z.enum(['book', 'tax']),
+  entryType: z.enum(MANUAL_ENTRY_TYPES),
   entryDate: z.string(),
   description: z.string().optional(),
   /** Workpaper supporting this entry — printed on the AJE listing. */
@@ -136,7 +137,8 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
           entry_date: entryDate,
           description: description ?? null,
           workpaper_ref: workpaperRef?.trim() || null,
-          is_recurring: isRecurring ?? false,
+          // Roll forward copies recurring book/tax entries only, so an RJE is never recurring.
+          is_recurring: entryType === 'reclass' ? false : isRecurring ?? false,
           created_by: req.user!.userId,
         })
         .returning('*');
@@ -154,7 +156,7 @@ jeItemRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> =>
       // v_adjusted_trial_balance view can pick up the JE aggregates
       await ensureTrialBalanceRows(trx, periodId, lines.map((l) => l.accountId));
 
-      await logAudit({ userId: req.user!.userId, periodId, entityType: 'journal_entry', entityId: entry.id, action: 'create', description: `Created ${entryType} AJE #${entryNumber}${description ? ': ' + description : ''}` }, trx);
+      await logAudit({ userId: req.user!.userId, periodId, entityType: 'journal_entry', entityId: entry.id, action: 'create', description: `Created ${ENTRY_TYPE_LABEL[entryType]} #${entryNumber}${description ? ': ' + description : ''}` }, trx);
       return { ...entry, lines };
     });
     res.status(201).json({ data: created, error: null });
@@ -280,7 +282,7 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
     return;
   }
   const patchSchema = z.object({
-    entryType: z.enum(['book', 'tax']).optional(),
+    entryType: z.enum(MANUAL_ENTRY_TYPES).optional(),
     entryDate: z.string().optional(),
     description: z.string().nullable().optional(),
     workpaperRef: z.string().max(20).nullable().optional(),
@@ -292,6 +294,11 @@ jeItemRouter.patch('/:id', async (req: AuthRequest, res: Response): Promise<void
     return;
   }
   const { entryType, entryDate, description, workpaperRef, lines } = result.data;
+  const typeRefusal = existing.entry_type === 'trans' ? null : typeChangeRefusal(existing.entry_type, entryType);
+  if (typeRefusal) {
+    res.status(409).json({ data: null, error: { code: 'ENTRY_TYPE_CHANGE_REFUSED', message: typeRefusal } });
+    return;
+  }
 
   if (lines) {
     const totalDebit = lines.reduce((s, l) => s + l.debit, 0);

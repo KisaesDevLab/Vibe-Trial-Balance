@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import type { ManualEntryType } from '../utils/entryTypes';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createJournalEntry, type JEInput } from '../api/journalEntries';
@@ -45,7 +46,7 @@ interface Props {
 
 export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose, onSuccess }: Props) {
   const qc = useQueryClient();
-  const [entryType, setEntryType] = useState<'book' | 'tax'>('book');
+  const [entryType, setEntryType] = useState<ManualEntryType>('book');
   // Default to local "today" — `new Date().toISOString().slice(0,10)` returns
   // UTC-midnight's date, which after ~7pm US/Pacific has already rolled over
   // to tomorrow. That silently filed JEs into the wrong period.
@@ -155,11 +156,12 @@ export function JournalEntryDialog({ periodId, clientId, periodEndDate, onClose,
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
                 <select
                   value={entryType}
-                  onChange={(e) => setEntryType(e.target.value as 'book' | 'tax')}
+                  onChange={(e) => setEntryType(e.target.value as ManualEntryType)}
                   className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
                 >
                   <option value="book">Book AJE</option>
                   <option value="tax">Tax AJE</option>
+                  <option value="reclass">Reclass (RJE)</option>
                 </select>
               </div>
               <div>

@@ -234,6 +234,9 @@ export interface StampRow {
   book_adj_credit: number | string | null;
   tax_adj_debit: number | string | null;
   tax_adj_credit: number | string | null;
+  /** Reclassifying entries (RJEs). Optional: a row without them hashes as before. */
+  reclass_adj_debit?: number | string | null;
+  reclass_adj_credit?: number | string | null;
 }
 
 const STAMP_FIELDS = [
@@ -267,6 +270,12 @@ export function leadSheetBalanceStamp(rows: StampRow[]): string {
     .sort((x, y) => x.account_id - y.account_id)
     .map((r) => {
       const parts = STAMP_FIELDS.map((f) => String(Number(r[f] ?? 0)));
+      // Reclass amounts are appended only when there are any, so every stamp
+      // stored before RJEs existed still matches (no sign-off went STALE on
+      // upgrade) while an RJE on a member account still moves the stamp.
+      const rd = Number(r.reclass_adj_debit ?? 0);
+      const rc = Number(r.reclass_adj_credit ?? 0);
+      if (rd !== 0 || rc !== 0) parts.push(`r${rd}`, `r${rc}`);
       return `${r.account_id}|${parts.join('|')}`;
     });
   return crypto.createHash('sha256').update(`v1\n${lines.join('\n')}`).digest('hex');

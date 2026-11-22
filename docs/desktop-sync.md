@@ -83,7 +83,7 @@ A send-back is a format 2 period `.tbak` whose `manifest.json` has a `sync` bloc
 | `periodUid`, `clientUid` | the `sync_uid` of the period and its client |
 | `checkoutId` | the check-out it was pulled under, or `null` |
 | `stampAtPull` | the period's stamp when it was pulled; required when `checkoutId` is `null` |
-| `totals` | `{ "bookDebit": "…", "bookCredit": "…" }`: the period's adjusted book totals from `v_adjusted_trial_balance`, **in whole cents as text** (`"12000"` is 120.00). Required; the merge is rolled back unless the server's totals equal these afterwards |
+| `totals` | `{ "bookDebit": "…", "bookCredit": "…" }`: the period's adjusted book totals from `v_adjusted_trial_balance` (unadjusted + trans + book + reclass entries), **in whole cents as text** (`"12000"` is 120.00). Required; the merge is rolled back unless the server's totals equal these afterwards |
 
 An archive this server hands out on a pull carries the same block, so one sent back unchanged is accepted. The pull
 job's result carries `totals` too.

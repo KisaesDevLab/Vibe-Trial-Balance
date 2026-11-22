@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import { hasReclass } from '../utils/entryTypes';
 import { lazy, Suspense, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -735,7 +736,7 @@ export function LeadSheetsPage() {
                           <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Account</th>
                           <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Prior Year</th>
                           <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Unadjusted</th>
-                          <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Book Adj</th>
+                          <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">{activeDetail.rows.some(hasReclass) ? 'Book Adj & RJE' : 'Book Adj'}</th>
                           <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Book Bal</th>
                           <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Tax Bal</th>
                           <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Marks</th>
@@ -756,7 +757,7 @@ export function LeadSheetsPage() {
                               {fmt(net(r.unadjusted_debit, r.unadjusted_credit))}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">
-                              {fmt(net(r.book_adj_debit, r.book_adj_credit))}
+                              {fmt(net(r.book_adj_debit, r.book_adj_credit) + net(r.reclass_adj_debit ?? 0, r.reclass_adj_credit ?? 0))}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums font-medium text-gray-900 dark:text-white">
                               {fmt(net(r.book_adjusted_debit, r.book_adjusted_credit))}

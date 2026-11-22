@@ -23,10 +23,11 @@ function fmtDate(d: string): string {
   return `${m}/${day}/${y}`;
 }
 
-const TYPE_LABEL: Record<string, string> = { book: 'Book AJE', tax: 'Tax AJE', trans: 'Trans' };
+const TYPE_LABEL: Record<string, string> = { book: 'Book AJE', tax: 'Tax AJE', reclass: 'RJE', trans: 'Trans' };
 const TYPE_CLASS: Record<string, string> = {
   book: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400',
   tax: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400',
+  reclass: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400',
   trans: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400',
 };
 
@@ -50,6 +51,7 @@ const CLOSING_LABEL: Record<string, string> = {
   trans: 'Balance (unadjusted + transaction entries only)',
   book: 'Balance (unadjusted + book AJEs only)',
   tax: 'Balance (unadjusted + tax AJEs only)',
+  reclass: 'Balance (unadjusted + reclassifying entries only)',
 };
 
 function AccountSection({ acct, typeFilter, onClickLine }: { acct: GLAccount; typeFilter: string; onClickLine: (jeId: number) => void }) {
@@ -229,6 +231,7 @@ export function GeneralLedgerPage() {
             <option value="all">All entry types</option>
             <option value="book">Book AJE</option>
             <option value="tax">Tax AJE</option>
+            <option value="reclass">Reclass (RJE)</option>
             <option value="trans">Trans</option>
           </select>
           <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">

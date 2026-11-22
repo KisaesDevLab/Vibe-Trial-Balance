@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import { bookAjeHeading, hasReclass } from '../utils/entryTypes';
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { evalAmountExpr } from '../utils/evalAmountExpr';
 import { CsvImportDialog } from '../components/CsvImportDialog';
@@ -1232,6 +1233,8 @@ export function TrialBalancePage() {
   }
 
   const isEmpty = !data || data.length === 0;
+  // RJEs sit in the AJE column (folded in by getTrialBalance); say so when there are any.
+  const ajeHeading = (data ?? []).some(hasReclass) ? bookAjeHeading(true) : 'AJE';
   const showSyncButton = isEmpty || !syncedUpToDate;
 
   const uncodedTaxLines = isTaxEntity
@@ -1476,7 +1479,7 @@ export function TrialBalancePage() {
                   <th className="px-2 py-1 text-xs text-center text-gray-600 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Unadjusted</th>
                   {hasTrans && <th className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold border-r border-gray-300 dark:border-gray-600">Trans JEs</th>}
                   {hasTrans && <th className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-teal-50 dark:bg-teal-900/20 border-r border-gray-300 dark:border-gray-600">Post-Trans</th>}
-                  <th className="px-2 py-1 text-xs text-center text-blue-600 dark:text-blue-400 font-semibold border-r border-gray-300 dark:border-gray-600">AJE</th>
+                  <th className="px-2 py-1 text-xs text-center text-blue-600 dark:text-blue-400 font-semibold border-r border-gray-300 dark:border-gray-600">{ajeHeading}</th>
                   <th className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600">Adjusted</th>
                   {showTax && <th className="px-2 py-1 text-xs text-center text-purple-600 dark:text-purple-400 font-semibold border-r border-gray-300 dark:border-gray-600">Tax Adj.</th>}
                   {showTax && <th className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-purple-50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600">Tax Adjusted</th>}
@@ -1491,7 +1494,7 @@ export function TrialBalancePage() {
                   {showPY && <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-500 dark:text-gray-400 font-semibold bg-gray-100 dark:bg-gray-600/20 border-r border-gray-300 dark:border-gray-600">Prior Year</th>}
                   <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-600 dark:text-gray-400 font-semibold border-r border-gray-300 dark:border-gray-600">Unadjusted</th>
                   {hasTrans && <th colSpan={2} className="px-2 py-1 text-xs text-center text-teal-600 dark:text-teal-400 font-semibold bg-teal-50 dark:bg-teal-900/20 border-r border-gray-300 dark:border-gray-600">Trans JEs</th>}
-                  <th colSpan={2} className="px-2 py-1 text-xs text-center text-blue-600 dark:text-blue-400 font-semibold border-r border-gray-300 dark:border-gray-600">AJE</th>
+                  <th colSpan={2} className="px-2 py-1 text-xs text-center text-blue-600 dark:text-blue-400 font-semibold border-r border-gray-300 dark:border-gray-600">{ajeHeading}</th>
                   <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-blue-50 dark:bg-blue-900/20 border-r border-gray-300 dark:border-gray-600">Adjusted</th>
                   {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-purple-600 dark:text-purple-400 font-semibold border-r border-gray-300 dark:border-gray-600">Tax Adj.</th>}
                   {showTax && <th colSpan={2} className="px-2 py-1 text-xs text-center text-gray-700 dark:text-gray-300 font-semibold bg-purple-50 dark:bg-purple-900/20 border-r border-gray-300 dark:border-gray-600">Tax Adjusted</th>}

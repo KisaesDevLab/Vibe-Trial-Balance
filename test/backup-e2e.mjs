@@ -220,8 +220,8 @@ async function enrichFixture() {
     await sql(`INSERT INTO tb_tickmarks (period_id, account_id, tickmark_id, created_by) VALUES ($1,$2,$3,$4)`, [period, await acct(n), tm[symbol], fx.adminId]);
   }
 
-  // A book and a tax AJE in FY 2025.
-  for (const [num, type, desc, dr, cr, amt] of [[1, 'book', 'Accrue December rent', '6100', '2100', 450000], [2, 'tax', 'Meals 50% limitation', '6800', '6800', 0]]) {
+  // A book and a tax AJE, and a reclassifying entry (RJE, numbered on its own), in FY 2025.
+  for (const [num, type, desc, dr, cr, amt] of [[1, 'book', 'Accrue December rent', '6100', '2100', 450000], [2, 'tax', 'Meals 50% limitation', '6800', '6800', 0], [1, 'reclass', 'Reclassify accrued rent', '2100', '1000', 30000]]) {
     const je = await one(
       `INSERT INTO journal_entries (period_id, entry_number, entry_type, entry_date, description, created_by, workpaper_ref) VALUES ($1,$2,$3,'2025-12-31',$4,$5,$6) RETURNING id`,
       [fx.p25, num, type, desc, fx.adminId, `W-${num}`],
@@ -826,7 +826,7 @@ async function main() {
     const types = new Map(t('journal_entries').map((j) => [j.id, j.entry_type]));
     let d = 0n, c = 0n;
     for (const r of tb) { d += BigInt(r.unadjusted_debit ?? 0); c += BigInt(r.unadjusted_credit ?? 0); }
-    for (const l of t('journal_entry_lines')) if (['book', 'trans'].includes(types.get(l.journal_entry_id)) && tbAcc.has(l.account_id)) { d += BigInt(l.debit ?? 0); c += BigInt(l.credit ?? 0); }
+    for (const l of t('journal_entry_lines')) if (['book', 'trans', 'reclass'].includes(types.get(l.journal_entry_id)) && tbAcc.has(l.account_id)) { d += BigInt(l.debit ?? 0); c += BigInt(l.credit ?? 0); }
     manifest.sync.totals = { bookDebit: String(d), bookCredit: String(c) };
     const sent = await new Promise((resolve, reject) => {
       const chunks = [];

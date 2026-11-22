@@ -1,16 +1,17 @@
 # Journal Entries
 
 ## Entry Types
-There are three types of journal entries:
-- **Book AJEs** (`entry_type = 'book'`): Adjusting journal entries that affect the book-adjusted trial balance. Used for GAAP or accrual adjustments.
+There are four types of journal entries:
+- **Book AJEs** (`entry_type = 'book'`): Adjusting journal entries proposed to the client. They affect the book-adjusted trial balance. Used for GAAP or accrual adjustments, and they are the entries on the bookkeeper letter.
 - **Tax AJEs** (`entry_type = 'tax'`): Tax-only adjusting entries for M-1 differences. These affect the tax-adjusted balances but not book balances.
-- **Trans JEs** (`entry_type = 'trans'`): Reclassification or transactional entries.
+- **Reclassifying entries (RJEs)** (`entry_type = 'reclass'`): Entries that move amounts between accounts for presentation, for example a credit balance in cash shown as a liability. They are part of the book-adjusted and tax-adjusted balances, the financial statements and the tax exports, but they are **not** adjustments proposed to the client: they never appear on the bookkeeper letter and are not counted as the client's AJEs. They are numbered on their own (RJE-1, RJE-2…), are listed in their own "Reclassifying entries" section of the AJE listing, and show in the book AJE column of the trial balance, whose heading then reads "Book AJEs & reclasses". They are not copied by roll forward. An entry cannot be changed to or from a reclass; delete it and enter it again as the other type.
+- **Transaction JEs** (`entry_type = 'trans'`): Made automatically when a bank transaction is classified. They are not typed by hand.
 
 ## Creating a Journal Entry
 You can create journal entries from multiple places:
 1. **Trial Balance > AJE Listing** or **Bookkeeping > Journal Entries** — click **New Entry**
 2. **Trial Balance grid** — click the **New JE** button in the toolbar
-3. Select entry type (Book AJE or Tax AJE)
+3. Select entry type (Book AJE, Tax AJE or Reclass)
 4. Enter a description, date, and debit/credit line items
 5. Each line has an **account search dropdown** — type to search by number or name
 6. If the account you need doesn't exist, click **+ New Account** at the bottom of the dropdown to create it on the fly (enter account number, name, category, and normal balance — the account is created immediately and selected on that line)

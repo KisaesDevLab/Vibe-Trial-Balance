@@ -24,7 +24,7 @@ export async function getClient(id: number): Promise<Client | undefined> {
 export interface ClientDashboard {
   period: Record<string, unknown>;
   stats: {
-    je: { book: number; tax: number; trans: number };
+    je: { book: number; tax: number; reclass: number; trans: number };
     bank_transactions: { unclassified: number; classified: number; confirmed: number; manual: number };
     trial_balance: { total_debit: number; total_credit: number; is_balanced: boolean; total_debit_dollars: string; total_credit_dollars: string };
   };
@@ -78,7 +78,7 @@ export async function getClientDashboard(periodId: number): Promise<ClientDashbo
   return {
     period: period as Record<string, unknown>,
     stats: {
-      je: { book: jeByType['book'] ?? 0, tax: jeByType['tax'] ?? 0, trans: jeByType['trans'] ?? 0 },
+      je: { book: jeByType['book'] ?? 0, tax: jeByType['tax'] ?? 0, reclass: jeByType['reclass'] ?? 0, trans: jeByType['trans'] ?? 0 },
       bank_transactions: {
         unclassified: btByStatus['unclassified'] ?? 0,
         classified: btByStatus['classified'] ?? 0,

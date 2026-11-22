@@ -50,6 +50,9 @@ export interface FsTbRow {
   book_adj_credit: number | string | null;
   tax_adj_debit: number | string | null;
   tax_adj_credit: number | string | null;
+  /** Reclassifying entries; already inside book_adjusted_*, read here only for dormancy. */
+  reclass_adj_debit?: number | string | null;
+  reclass_adj_credit?: number | string | null;
   book_adjusted_debit: number | string | null;
   book_adjusted_credit: number | string | null;
   tax_adjusted_debit: number | string | null;
@@ -254,6 +257,7 @@ export async function loadFsTbRows(q: Knex | Knex.Transaction, periodId: number)
       'vtb.trans_adj_debit', 'vtb.trans_adj_credit',
       'vtb.book_adj_debit', 'vtb.book_adj_credit',
       'vtb.tax_adj_debit', 'vtb.tax_adj_credit',
+      'vtb.reclass_adj_debit', 'vtb.reclass_adj_credit',
       'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
       'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
     ) as Promise<FsTbRow[]>;

@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import { ENTRY_TYPE_LABEL, type ManualEntryType } from '../../lib/journalEntryTypes';
 import { db } from '../../db';
 import { assertPeriodUnlocked, logAudit } from '../../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../../lib/ensureTrialBalanceRows';
@@ -14,7 +15,7 @@ export interface JELine {
 
 export interface CreateJEInput {
   periodId: number;
-  entryType: 'book' | 'tax';
+  entryType: ManualEntryType;
   entryDate: string;
   description?: string;
   lines: JELine[];
@@ -111,7 +112,7 @@ export async function createJournalEntry(data: CreateJEInput, userId: number): P
         entityType: 'journal_entry',
         entityId: entry.id,
         action: 'create',
-        description: `Created ${data.entryType} AJE #${entryNumber} via MCP${data.description ? ': ' + data.description : ''}`,
+        description: `Created ${ENTRY_TYPE_LABEL[data.entryType]} #${entryNumber} via MCP${data.description ? ': ' + data.description : ''}`,
       }, trx);
 
       result = { ...entry, lines: data.lines.map((l) => ({ account_id: l.accountId, account_number: '', account_name: '', debit: l.debit, credit: l.credit })) } as JournalEntry;

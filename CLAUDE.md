@@ -49,7 +49,7 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
 - Knex.js for all DB queries and migrations (JS migration files for Windows compat)
 - TanStack Query for server state in React, Zustand only for UI state
 - Adjusted balances are NEVER stored, always computed via DB view
-  (authoritative `v_adjusted_trial_balance` definition: `migrations/20260828000002_tb_view_lead_sheet.js` —
+  (authoritative `v_adjusted_trial_balance` definition: `migrations/20261122000001_tb_view_reclass.js` —
   a migration adding a column must copy THAT SQL, and must LEFT JOIN or it drops unassigned accounts)
 - **Dormant accounts are hidden on reports:** an account with no beginning balance (`prior_year_*`),
   no activity (`unadjusted_*`, `trans_adj_*`, `book_adj_*`, `tax_adj_*` all zero) and therefore no
@@ -820,6 +820,17 @@ All planned phases complete. App is feature-complete.
   upload names its `jobId` on every refusal, and `DELETE /sync/uploads/:id` cancels an unsent one. A pull also
   carries the client's prior period (`priorYearRange`) as a reference period, with its adjusted balances in
   `manifest.sync.priorPeriod` (`lib/sync/priorPeriod.ts`, Q122), never as trial balance rows.
+- **Reclassifying entries (RJEs, owner 2026-11-22, desktop request).** `entry_type = 'reclass'`, numbered on its own
+  (RJE-n). In book adjusted (and so tax adjusted), statements and tax exports, but NOT an adjustment proposed to the
+  client: never on the bookkeeper letter, never counted as the client's AJEs. The view keeps `book_adj_*` book-only and
+  adds a `reclass_adj_*` layer (migration `20261122000001`); `book_adjusted` = unadjusted + trans + book + reclass.
+  Types and labels live in `lib/journalEntryTypes.ts` (client mirror `utils/entryTypes.ts`). Reports fold RJEs into the
+  book AJE column, headed "Book AJEs & reclasses" (TB PDF `Bk AJE+RJE`, Working TB `BookAdjRjeDR`, lead sheets `AJE & RJE`)
+  only when the period has any; the web client folds them in `getTrialBalance` (`foldReclass`), so `book_adj_*` on a
+  client `TBRow` means both. The AJE listing gets a "Reclassifying entries" section when there are any. A PATCH to or
+  from `reclass` is `409 ENTRY_TYPE_CHANGE_REFUSED`; an RJE is never recurring; roll forward and the PY true-up stay
+  book/tax. The lead sheet stamp appends reclass amounts only when nonzero, so no stored sign-off went STALE on upgrade.
+  `sync.totals` (sum of book adjusted) now counts reclass lines.
 - Variance notes (per account per period, TB Report inline editing)
 - **A client's periods do not overlap** (Q127, owner 2026-11-21): create (`POST /clients/:id/periods`), roll-forward and a
   date PATCH call `assertNoPeriodOverlap` (`lib/periodOverlap.ts`) inside their transaction, under a per-client advisory

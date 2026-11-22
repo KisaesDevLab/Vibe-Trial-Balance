@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import { bookAjeHeading, hasReclass } from '../utils/entryTypes';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getTrialBalance, type TBRow } from '../api/trialBalance';
@@ -174,12 +175,14 @@ export function TrialBalanceReportPage() {
   // Dormant accounts (no beginning balance, no activity, no ending balance)
   // are left off reports — see utils/tbActivity.ts.
   const rows = filterReportableRows((data ?? []).filter((r) => r.is_active));
+  // RJEs are in the book AJE columns (folded in by getTrialBalance); the heading says so when there are any.
+  const ajeHeading = rows.some(hasReclass) ? bookAjeHeading(true) : 'Book AJE';
 
   const handleExport = () => {
     const header: string[] = ['Account #', 'Account Name', 'Category', 'Tax Line', 'Lead Sheet', 'Workpaper Ref'];
     if (show('priorYear'))    { header.push('PY Dr', 'PY Cr'); }
     if (show('unadjusted'))   { header.push('Unadj Dr', 'Unadj Cr'); }
-    if (show('bookAje'))      { header.push('Book AJE Dr', 'Book AJE Cr'); }
+    if (show('bookAje'))      { header.push(`${ajeHeading} Dr`, `${ajeHeading} Cr`); }
     if (show('bookAdjusted')) { header.push('Book Adj Dr', 'Book Adj Cr'); }
     if (show('taxAje'))       { header.push('Tax AJE Dr', 'Tax AJE Cr'); }
     if (show('taxAdjusted'))  { header.push('Tax Adj Dr', 'Tax Adj Cr'); }
@@ -293,7 +296,7 @@ export function TrialBalanceReportPage() {
                 <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 w-16 border-r border-gray-200 dark:border-gray-700">WP Ref</th>
                 {show('priorYear') && <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-500 dark:text-gray-400 border-r border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/60">Prior Year</th>}
                 {show('unadjusted') && <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 border-r border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800">Unadjusted</th>}
-                {show('bookAje') && <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-blue-700 dark:text-blue-400 border-r border-gray-300 dark:border-gray-600 bg-blue-50 dark:bg-blue-900/20">Book AJE</th>}
+                {show('bookAje') && <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-blue-700 dark:text-blue-400 border-r border-gray-300 dark:border-gray-600 bg-blue-50 dark:bg-blue-900/20">{ajeHeading}</th>}
                 {show('bookAdjusted') && <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-blue-900 dark:text-blue-300 border-r border-gray-300 dark:border-gray-600 bg-blue-100 dark:bg-blue-900/40">Book Adjusted</th>}
                 {show('taxAje') && <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-purple-700 dark:text-purple-400 border-r border-gray-300 dark:border-gray-600 bg-purple-50 dark:bg-purple-900/20">Tax AJE</th>}
                 {show('taxAdjusted') && <th colSpan={2} className="px-2 py-1 text-center text-xs font-semibold text-purple-900 dark:text-purple-300 border-r border-gray-300 dark:border-gray-600 bg-purple-100 dark:bg-purple-900/40">Tax Adjusted</th>}

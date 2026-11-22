@@ -15,6 +15,7 @@ import { TB_BASIS_LABEL, TB_BASIS_COLUMN, parseTbBasis, tbBasisColumns, type TbB
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
 import { whereHasActivity } from '../lib/tbActivity';
 import { currentStampsForClient } from '../lib/leadSheetStamp';
+import { entryRef, hasReclass } from '../lib/journalEntryTypes';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared DB helpers
@@ -134,7 +135,10 @@ export async function generateTrialBalancePdf(
   const widths: (number | string)[] = [acctNumWidth, '*'];
   if (showGroup('priorYear'))    { cols.push('PY DR', 'PY CR'); widths.push(numColWidth, numColWidth); }
   if (showGroup('unadjusted'))   { cols.push('Unadj DR', 'Unadj CR'); widths.push(numColWidth, numColWidth); }
-  if (showGroup('bookAje'))      { cols.push('Book Adj DR', 'Book Adj CR'); widths.push(numColWidth, numColWidth); }
+  // Reclassifying entries (RJEs) print in the book AJE column, which says so
+  // when the period has any (owner 2026-11-22, as the desktop does).
+  const tbHasReclass = (rows as Record<string, unknown>[]).some(hasReclass);
+  if (showGroup('bookAje'))      { cols.push(...(tbHasReclass ? ['Bk AJE+RJE DR', 'Bk AJE+RJE CR'] : ['Book Adj DR', 'Book Adj CR'])); widths.push(numColWidth, numColWidth); }
   if (showGroup('bookAdjusted')) { cols.push('Book DR', 'Book CR'); widths.push(numColWidth, numColWidth); }
   if (showGroup('taxAje'))       { cols.push('Tax Adj DR', 'Tax Adj CR'); widths.push(numColWidth, numColWidth); }
   if (showGroup('taxAdjusted'))  { cols.push('Tax DR', 'Tax CR'); widths.push(numColWidth, numColWidth); }
@@ -179,8 +183,8 @@ export async function generateTrialBalancePdf(
       const pyCr = Number(r.prior_year_credit ?? 0);
       const uDr = Number(r.unadjusted_debit ?? 0);
       const uCr = Number(r.unadjusted_credit ?? 0);
-      const baDr = Number(r.book_adj_debit ?? 0);
-      const baCr = Number(r.book_adj_credit ?? 0);
+      const baDr = Number(r.book_adj_debit ?? 0) + Number(r.reclass_adj_debit ?? 0);
+      const baCr = Number(r.book_adj_credit ?? 0) + Number(r.reclass_adj_credit ?? 0);
       const taDr = Number(r.tax_adj_debit ?? 0);
       const taCr = Number(r.tax_adj_credit ?? 0);
       // Adjusted balances are presented NETTED per account (only the winning
@@ -382,7 +386,7 @@ export async function generateJournalEntryListingPdf(
 
       tableBody.push(svc.dataRow([
         firstLine ? String(entry.entry_number ?? '') : '',
-        firstLine ? String(entry.entry_type   ?? '') : '',
+        firstLine ? (entry.entry_type === 'reclass' ? 'RJE' : String(entry.entry_type ?? '')) : '',
         firstLine ? fmtDate(entry.entry_date as string) : '',
         firstLine ? (entry.workpaper_ref as string ?? '') : '',
         firstLine ? (entry.description as string ?? '') : '',
@@ -404,7 +408,7 @@ export async function generateJournalEntryListingPdf(
   ));
 
   const typeLabel = typeFilter && typeFilter !== 'all'
-    ? ` (${typeFilter.toUpperCase()} only)`
+    ? (typeFilter === 'reclass' ? ' (Reclassifying entries only)' : ` (${typeFilter.toUpperCase()} only)`)
     : '';
 
   const content: Content[] = [{
@@ -437,7 +441,7 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
 
   const entries = await db('journal_entries')
     .where({ period_id: periodId })
-    .whereIn('entry_type', ['book', 'tax'])
+    .whereIn('entry_type', ['book', 'tax', 'reclass'])
     .orderBy('entry_type')
     .orderBy('entry_number');
 
@@ -462,13 +466,13 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
     linesByEntry.get(eid)!.push(l);
   }
 
-  const cols = ['AJE #', 'Date', 'W/P Ref', 'Description', 'Acct #', 'Account Name', 'Debit', 'Credit'];
   const widths = [35, 60, 45, '*', 45, '*', 60, 60];
 
   const buildSection = (type: string): Content => {
     const sectionEntries = (entries as Record<string, unknown>[]).filter(
       (e) => e.entry_type === type,
     );
+    const cols = [type === 'reclass' ? 'RJE #' : 'AJE #', 'Date', 'W/P Ref', 'Description', 'Acct #', 'Account Name', 'Debit', 'Credit'];
     const tableBody: TableCell[][] = [svc.headerRow(cols)];
     // Debits and credits are footed independently — printing the debit total
     // in both columns would mask an out-of-balance entry.
@@ -508,7 +512,7 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
     ));
 
     return [
-      { text: `${type.toUpperCase()} Adjusting Journal Entries`, fontSize: 9, bold: true, margin: [0, 8, 0, 4] as [number, number, number, number] },
+      { text: type === 'reclass' ? 'Reclassifying entries' : `${type.toUpperCase()} Adjusting Journal Entries`, fontSize: 9, bold: true, margin: [0, 8, 0, 4] as [number, number, number, number] },
       {
         table: { headerRows: 1, widths, body: tableBody },
         layout: { hLineWidth: (i: number) => (i <= 1) ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' },
@@ -516,7 +520,10 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
     ] as Content;
   };
 
-  const content: Content[] = [buildSection('book'), buildSection('tax')];
+  // RJEs are the firm's own presentation entries, listed after the AJEs; the
+  // section appears only when the period has any.
+  const hasRje = (entries as Record<string, unknown>[]).some((e) => e.entry_type === 'reclass');
+  const content: Content[] = [buildSection('book'), buildSection('tax'), ...(hasRje ? [buildSection('reclass')] : [])];
 
   return svc.generateBuffer(svc.buildDocument({
     title:      'AJE Listing',
@@ -637,7 +644,7 @@ export async function generateGeneralLedgerPdf(
 
       tableBody.push(svc.dataRow([
         fmtDate(line.entry_date as string),
-        `${String(line.entry_type ?? '').toUpperCase()}-${String(line.entry_number ?? '')}`,
+        entryRef(String(line.entry_type ?? ''), String(line.entry_number ?? '')),
         line.entry_type as string,
         line.description as string ?? '',
         dr, cr, balance,
@@ -645,7 +652,7 @@ export async function generateGeneralLedgerPdf(
       rowIdx++;
     }
 
-    // Ending balance — includes trans + book + tax entries, i.e. the
+    // Ending balance — includes trans + book + reclass + tax entries, i.e. the
     // tax-adjusted figure; label it so users don't tie it to book balances.
     tableBody.push(svc.dataRow(
       ['', '', '', 'Ending Balance (all entries — tax adjusted)', null, null, balance],
@@ -1361,6 +1368,7 @@ export async function generateLeadSheetsPdf(
       'vtb.prior_year_debit', 'vtb.prior_year_credit',
       'vtb.unadjusted_debit', 'vtb.unadjusted_credit',
       'vtb.book_adj_debit', 'vtb.book_adj_credit',
+      'vtb.reclass_adj_debit', 'vtb.reclass_adj_credit',
       'vtb.book_adjusted_debit', 'vtb.book_adjusted_credit',
       'vtb.tax_adjusted_debit', 'vtb.tax_adjusted_credit',
     )
@@ -1477,7 +1485,9 @@ export async function generateLeadSheetsPdf(
     return 0;
   });
 
-  const cols   = ['Acct #', 'Account Name', 'Prior Year', 'Unadjusted', 'Book AJE', 'Book Bal', 'Tax Bal', 'Marks', 'Files'];
+  // Reclassifying entries print in the AJE column, which says so when there are any.
+  const lsHasReclass = rows.some(hasReclass);
+  const cols   = ['Acct #', 'Account Name', 'Prior Year', 'Unadjusted', lsHasReclass ? 'AJE & RJE' : 'Book AJE', 'Book Bal', 'Tax Bal', 'Marks', 'Files'];
   const widths = [45, '*', 62, 62, 62, 62, 62, 40, 45];
   const tableLayout = { hLineWidth: (i: number) => i <= 1 ? 1 : 0, vLineWidth: () => 0, hLineColor: () => '#cccccc' };
 
@@ -1500,7 +1510,7 @@ export async function generateLeadSheetsPdf(
       const r = g.rows[ri];
       const vPy   = net(r, 'prior_year_debit', 'prior_year_credit');
       const vUn   = net(r, 'unadjusted_debit', 'unadjusted_credit');
-      const vAje  = net(r, 'book_adj_debit', 'book_adj_credit');
+      const vAje  = net(r, 'book_adj_debit', 'book_adj_credit') + net(r, 'reclass_adj_debit', 'reclass_adj_credit');
       const vBook = net(r, 'book_adjusted_debit', 'book_adjusted_credit');
       const vTax  = net(r, 'tax_adjusted_debit', 'tax_adjusted_credit');
       py += vPy; un += vUn; aje += vAje; book += vBook; tax += vTax;

@@ -28,6 +28,7 @@ const ACTIVITY_FIELDS = [
   'trans_adj_debit', 'trans_adj_credit',       // transaction JEs
   'book_adj_debit', 'book_adj_credit',         // book AJEs
   'tax_adj_debit', 'tax_adj_credit',           // tax AJEs
+  'reclass_adj_debit', 'reclass_adj_credit',   // reclassifying entries (RJEs)
 ] as const;
 
 /**

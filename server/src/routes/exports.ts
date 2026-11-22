@@ -13,6 +13,7 @@
  * GET /api/v1/periods/:periodId/exports/bookkeeper-letter -> PDF
  * GET /api/v1/periods/:periodId/exports/validate     -> JSON
  */
+import { hasReclass } from '../lib/journalEntryTypes';
 import { Router, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { db } from '../db';
@@ -164,6 +165,8 @@ async function getTbRows(periodId: number, software?: string) {
       'tb.unadjusted_credit',
       'tb.book_adj_debit',
       'tb.book_adj_credit',
+      'tb.reclass_adj_debit',
+      'tb.reclass_adj_credit',
       'tb.tax_adj_debit',
       'tb.tax_adj_credit',
       'tb.book_adjusted_debit',
@@ -785,7 +788,8 @@ exportsRouter.get('/working-tb', async (req: AuthRequest, res: Response): Promis
     const headerRow = ws.addRow([
       'AccountNumber', 'AccountName', 'Category',
       'UnadjDR', 'UnadjCR',
-      'BookAdjDR', 'BookAdjCR',
+      // Reclassifying entries are in the book AJE columns, which say so when there are any.
+      ...(rows.some(hasReclass) ? ['BookAdjRjeDR', 'BookAdjRjeCR'] : ['BookAdjDR', 'BookAdjCR']),
       'TaxAdjDR', 'TaxAdjCR',
       'BookAdjBalance', 'TaxAdjBalance',
     ]);
@@ -811,8 +815,8 @@ exportsRouter.get('/working-tb', async (req: AuthRequest, res: Response): Promis
         sanitizeCell(r.category),
         Number(r.unadjusted_debit   ?? 0) / 100,
         Number(r.unadjusted_credit  ?? 0) / 100,
-        Number(r.book_adj_debit     ?? 0) / 100,
-        Number(r.book_adj_credit    ?? 0) / 100,
+        (Number(r.book_adj_debit ?? 0) + Number(r.reclass_adj_debit ?? 0)) / 100,
+        (Number(r.book_adj_credit ?? 0) + Number(r.reclass_adj_credit ?? 0)) / 100,
         Number(r.tax_adj_debit      ?? 0) / 100,
         Number(r.tax_adj_credit     ?? 0) / 100,
         bookBal,
@@ -851,7 +855,9 @@ exportsRouter.get('/bookkeeper-letter', async (req: AuthRequest, res: Response):
     const info = await getPeriodInfo(periodId);
     if (!info) { res.status(404).json({ data: null, error: { code: 'NOT_FOUND', message: 'Period not found' } }); return; }
 
-    // Fetch book AJEs only
+    // Book AJEs only: a reclassifying entry (RJE) is the firm's presentation
+    // entry, never an adjustment proposed to the client, and tax AJEs are not
+    // the bookkeeper's either. Pinned by test/sync-e2e.mjs (RJE step).
     const entries = await db('journal_entries')
       .where({ period_id: periodId, entry_type: 'book' })
       .orderBy('entry_number');

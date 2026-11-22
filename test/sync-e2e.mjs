@@ -265,7 +265,8 @@ function totalsOf(t) {
   let d = 0n, c = 0n;
   for (const r of t.trial_balance) { d += BigInt(r.unadjusted_debit ?? 0); c += BigInt(r.unadjusted_credit ?? 0); }
   for (const l of t.journal_entry_lines) {
-    if (!['book', 'trans'].includes(types.get(l.journal_entry_id)) || !tbAccounts.has(l.account_id)) continue;
+    // Reclassifying entries (RJEs) are in book adjusted too.
+    if (!['book', 'trans', 'reclass'].includes(types.get(l.journal_entry_id)) || !tbAccounts.has(l.account_id)) continue;
     d += BigInt(l.debit ?? 0); c += BigInt(l.credit ?? 0);
   }
   return { bookDebit: String(d), bookCredit: String(c) };
@@ -1110,6 +1111,12 @@ async function main() {
         { ...t.journal_entry_lines[0], id: lineId, journal_entry_id: jeId, account_id: maxId + 1, debit: '500', credit: '0' },
         { ...t.journal_entry_lines[0], id: lineId + 1, journal_entry_id: jeId, account_id: base.id, debit: '0', credit: '500' },
       );
+      // ...and a reclassifying entry (RJE-1), keyed by type#number like any other entry.
+      t.journal_entries.push({ ...(t.journal_entries[0] ?? {}), id: jeId + 1, period_id: m.periodId, entry_type: 'reclass', entry_number: 1, entry_date: '2025-12-31', description: 'Example desktop RJE', is_recurring: false, source_tag: null });
+      t.journal_entry_lines.push(
+        { ...t.journal_entry_lines[0], id: lineId + 2, journal_entry_id: jeId + 1, account_id: maxId + 1, debit: '0', credit: '200' },
+        { ...t.journal_entry_lines[0], id: lineId + 3, journal_entry_id: jeId + 1, account_id: base.id, debit: '200', credit: '0' },
+      );
       t.trial_balance.push({ ...t.trial_balance[0], id: 900000, account_id: maxId + 1, unadjusted_debit: '0', unadjusted_credit: '0' });
       // 4. A tickmark, new to the library, placed on the changed account.
       const tmId = Math.max(0, ...(t.tickmark_library ?? []).map((x) => x.id)) + 1;
@@ -1137,6 +1144,8 @@ async function main() {
     assert.equal(Number(tbNow.unadjusted_debit), tbBefore + 12345);
     const aje = await one(`SELECT je.id FROM journal_entries je WHERE je.period_id = $1 AND je.description = 'Example desktop AJE'`, [P]);
     assert.ok(aje, 'the AJE arrived');
+    const rje = await one(`SELECT entry_number FROM journal_entries WHERE period_id = $1 AND entry_type = 'reclass' AND description = 'Example desktop RJE'`, [P]);
+    assert.equal(rje?.entry_number, 1, 'the RJE arrived as RJE-1');
     assert.equal((await one(`SELECT count(*)::int AS n FROM journal_entry_lines l JOIN chart_of_accounts a ON a.id = l.account_id WHERE l.journal_entry_id = $1 AND a.account_number = $2`, [aje.id, newAccountNumber])).n, 1, 'its line names the new account');
     assert.ok(await one(`SELECT 1 FROM tb_tickmarks tt JOIN tickmark_library tl ON tl.id = tt.tickmark_id WHERE tt.period_id = $1 AND tl.symbol = 'DX'`, [P]));
     assert.ok(await one(`SELECT 1 FROM engagement_tasks WHERE period_id = $1 AND title = 'Example desktop task'`, [P]));
@@ -2127,6 +2136,63 @@ async function main() {
     assert.deepEqual(netZero.json.data.lines, [{ accountId: a1, debit: 10000, credit: 0 }, { accountId: a2, debit: 0, credit: 10000 }]);
     const resave = await api(`/api/v1/journal-entries/${netZero.json.data.id}`, { method: 'PATCH', token: admin, json: { lines: netZero.json.data.lines } });
     assert.equal(resave.status, 200, resave.text);
+    assert.equal((await api(`/api/v1/clients/${C}`, { method: 'DELETE', token: admin })).status, 200);
+  });
+
+  await step('Desktop requests RJEs: a reclass is in book and tax adjusted, numbered on its own, never on the bookkeeper letter, listed in its own section', async () => {
+    const pdfParse = require('pdf-parse');
+    const cr = await api('/api/v1/clients', { method: 'POST', token: admin, json: { name: `Example RJE ${Date.now()}`, entityType: '1065', activityType: 'business' } });
+    assert.equal(cr.status, 201, cr.text);
+    const C = cr.json.data.id;
+    const pr = await api(`/api/v1/clients/${C}/periods`, { method: 'POST', token: admin, json: { periodName: 'Example FY 2061', startDate: '2061-01-01', endDate: '2061-12-31' } });
+    assert.equal(pr.status, 201, pr.text);
+    const P = pr.json.data.id;
+    const acct = async (n, category, nb) => (await one(`INSERT INTO chart_of_accounts (client_id, account_number, account_name, category, normal_balance)
+                                                      VALUES ($1, $2, $3, $4, $5) RETURNING id`, [C, n, `Example ${n}`, category, nb])).id;
+    const cash = await acct('1000', 'assets', 'debit');
+    const ap = await acct('2000', 'liabilities', 'credit');
+    const je = (entryType, description, dr, crAcct, amt) => api('/api/v1/journal-entries', { method: 'POST', token: admin, json: {
+      periodId: P, entryType, entryDate: '2061-12-31', description, lines: [{ accountId: dr, debit: amt, credit: 0 }, { accountId: crAcct, debit: 0, credit: amt }] } });
+    const book = await je('book', 'Example book adjustment', cash, ap, 10000);
+    assert.equal(book.status, 201, book.text);
+    const r1 = await je('reclass', 'Example overdraft reclass', ap, cash, 2500);
+    assert.equal(r1.status, 201, r1.text);
+    const r2 = await je('reclass', 'Example second reclass', ap, cash, 100);
+    assert.deepEqual([r1.json.data.entry_number, r2.json.data.entry_number], [1, 2], 'RJEs number on their own');
+    // The view: reclass is in book and tax adjusted, not in book_adj.
+    const v = await one(`SELECT book_adj_debit, book_adj_credit, reclass_adj_debit, reclass_adj_credit, book_adjusted_debit, book_adjusted_credit, tax_adjusted_debit, tax_adjusted_credit
+                         FROM v_adjusted_trial_balance WHERE period_id = $1 AND account_id = $2`, [P, cash]);
+    assert.deepEqual([v.book_adj_debit, v.book_adj_credit, v.reclass_adj_debit, v.reclass_adj_credit].map(Number), [10000, 0, 0, 2600]);
+    assert.deepEqual([v.book_adjusted_debit, v.book_adjusted_credit, v.tax_adjusted_debit, v.tax_adjusted_credit].map(Number), [10000, 2600, 10000, 2600]);
+    // The ?type= filter.
+    const listed = await api(`/api/v1/periods/${P}/journal-entries?type=reclass`, { token: admin });
+    assert.deepEqual(listed.json.data.map((e) => e.description), ['Example overdraft reclass', 'Example second reclass']);
+    // An entry never changes to or from reclass; book <-> tax is unchanged.
+    for (const [id, to] of [[r1.json.data.id, 'book'], [book.json.data.id, 'reclass']]) {
+      const ch = await api(`/api/v1/journal-entries/${id}`, { method: 'PATCH', token: admin, json: { entryType: to } });
+      assert.equal(ch.status, 409, ch.text);
+      assert.equal(ch.json.error.code, 'ENTRY_TYPE_CHANGE_REFUSED');
+    }
+    assert.equal((await api(`/api/v1/journal-entries/${r1.json.data.id}`, { method: 'PATCH', token: admin, json: { entryType: 'reclass', description: 'Example overdraft reclass' } })).status, 200, 'naming its own type is no change');
+    // An RJE is never recurring (roll forward copies recurring book/tax only).
+    const rec = await api('/api/v1/journal-entries', { method: 'POST', token: admin, json: { periodId: P, entryType: 'reclass', entryDate: '2061-12-31', isRecurring: true, lines: [{ accountId: ap, debit: 1, credit: 0 }, { accountId: cash, debit: 0, credit: 1 }] } });
+    assert.equal(rec.json.data.is_recurring, false);
+    // The bookkeeper letter: book AJEs only, never an RJE.
+    const letter = await api(`/api/v1/periods/${P}/exports/bookkeeper-letter`, { token: admin });
+    assert.equal(letter.status, 200, letter.text);
+    const letterText = (await pdfParse(letter.buf)).text;
+    assert.match(letterText, /Example book adjustment/);
+    assert.doesNotMatch(letterText, /reclass/i, 'no RJE on the letter');
+    // The AJE listing: its own section, after book and tax.
+    const listing = await api(`/api/v1/reports/periods/${P}/aje-listing`, { token: admin });
+    assert.equal(listing.status, 200, listing.text);
+    const listingText = (await pdfParse(listing.buf)).text;
+    assert.ok(listingText.indexOf('Reclassifying entries') > listingText.indexOf('TAX Adjusting Journal Entries'), 'the RJE section follows the tax one');
+    assert.match(listingText, /Example overdraft reclass/);
+    // The TB PDF's book AJE column carries the reclass and says so.
+    const tbPdf = await api(`/api/v1/reports/periods/${P}/trial-balance`, { token: admin });
+    assert.equal(tbPdf.status, 200, tbPdf.text);
+    assert.match((await pdfParse(tbPdf.buf)).text, /Bk AJE\+RJE/);
     assert.equal((await api(`/api/v1/clients/${C}`, { method: 'DELETE', token: admin })).status, 200);
   });
 

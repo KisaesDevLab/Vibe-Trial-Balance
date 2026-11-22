@@ -4,6 +4,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { listJournalEntries } from '../api/journalEntries';
+import { entryRef } from '../utils/entryTypes';
 
 type EntryType = 'trans' | 'book' | 'tax';
 
@@ -28,7 +29,12 @@ const fmt = (cents: number) => (cents / 100).toLocaleString('en-US', { minimumFr
 export function TransJEZoomModal({ periodId, accountId, accountNumber, accountName, entryType, onClose, onEditJE }: Props) {
   const { data, isLoading, error } = useQuery({
     queryKey: ['journal-entries-zoom', periodId, accountId, entryType],
-    queryFn: () => listJournalEntries(periodId, entryType, accountId),
+    // The book AJE column holds reclassifying entries too, so its zoom lists both.
+    queryFn: async () => {
+      if (entryType !== 'book') return listJournalEntries(periodId, entryType, accountId);
+      const [book, reclass] = await Promise.all([listJournalEntries(periodId, 'book', accountId), listJournalEntries(periodId, 'reclass', accountId)]);
+      return book.error ? book : reclass.error ? reclass : { ...book, data: [...(book.data ?? []), ...(reclass.data ?? [])] };
+    },
   });
 
   const { title, color } = LABELS[entryType];
@@ -97,7 +103,7 @@ export function TransJEZoomModal({ periodId, accountId, accountNumber, accountNa
                       {je.entry_date ? je.entry_date.slice(0, 10) : '—'}
                     </td>
                     <td className="px-4 py-1.5 text-gray-500 dark:text-gray-400 text-xs font-mono">
-                      {je.entry_number}
+                      {je.entry_type === 'reclass' ? entryRef('reclass', je.entry_number) : je.entry_number}
                     </td>
                     <td className="px-4 py-1.5 text-gray-800 dark:text-gray-200 truncate max-w-xs">
                       {je.description ?? <span className="text-gray-300 dark:text-gray-600">—</span>}

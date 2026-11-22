@@ -2,6 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
+import type { EntryType, ManualEntryType } from '../utils/entryTypes';
 import { apiFetch } from './client';
 
 export interface JELine {
@@ -18,7 +19,7 @@ export interface JournalEntry {
   id: number;
   period_id: number;
   entry_number: number;
-  entry_type: 'book' | 'tax' | 'trans';
+  entry_type: EntryType;
   entry_date: string;
   description: string | null;
   /** Workpaper supporting this entry — printed on the AJE listing. */
@@ -39,7 +40,7 @@ export interface JournalEntry {
 
 export interface JEInput {
   periodId: number;
-  entryType: 'book' | 'tax';
+  entryType: ManualEntryType;
   entryDate: string;
   description?: string;
   workpaperRef?: string;
@@ -47,7 +48,7 @@ export interface JEInput {
   lines: { accountId: number; debit: number; credit: number }[];
 }
 
-export const listJournalEntries = (periodId: number, type?: 'book' | 'tax' | 'trans', accountId?: number) => {
+export const listJournalEntries = (periodId: number, type?: EntryType, accountId?: number) => {
   const params = new URLSearchParams();
   if (type) params.set('type', type);
   if (accountId !== undefined) params.set('accountId', String(accountId));
@@ -76,7 +77,7 @@ export const updateJELines = (
 export const updateJournalEntry = (
   id: number,
   data: {
-    entryType?: 'book' | 'tax';
+    entryType?: ManualEntryType;
     entryDate?: string;
     description?: string | null;
     workpaperRef?: string | null;

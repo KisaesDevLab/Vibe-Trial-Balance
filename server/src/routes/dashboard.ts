@@ -89,6 +89,7 @@ dashboardRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> 
           je: {
             book: jeByType['book'] ?? 0,
             tax: jeByType['tax'] ?? 0,
+            reclass: jeByType['reclass'] ?? 0,
             trans: jeByType['trans'] ?? 0,
           },
           bank_transactions: {
