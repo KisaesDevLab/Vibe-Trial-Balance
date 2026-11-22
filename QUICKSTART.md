@@ -2,6 +2,9 @@
 
 ## First Time Setup
 
+Developer setup: the source repo is private, so cloning needs your GitHub access. To run the app
+without the source, see https://github.com/KisaesDevLab/vibe-tb-releases.
+
 ### Linux / macOS / Git Bash
 ```bash
 git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git && cd Vibe-Trial-Balance && bash setup.sh

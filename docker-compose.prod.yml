@@ -1,6 +1,7 @@
 # Production compose — pulls prebuilt images from GitHub Container Registry.
 #
-#   curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/docker-compose.prod.yml
+#   curl -LO https://raw.githubusercontent.com/KisaesDevLab/vibe-tb-releases/main/docker-compose.prod.yml
+#   curl -LO https://raw.githubusercontent.com/KisaesDevLab/vibe-tb-releases/main/.env.example
 #   cp .env.example .env       # fill in required vars
 #   docker compose -f docker-compose.prod.yml up -d
 #

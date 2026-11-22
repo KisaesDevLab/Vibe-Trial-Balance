@@ -41,7 +41,11 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
 - Frontend: React 18 + TypeScript + Vite + TanStack Table + TanStack Query + Tailwind
 - Backend: Node.js 20 + Express + TypeScript + Knex.js + PostgreSQL 16
 - AI: Anthropic SDK for bank classification, diagnostics, tax assignment
-- Hosting: Raspberry Pi 5 (8GB), Nginx, PM2
+- Hosting: Vibe Appliance / Docker (GHCR images `vibe-tb-server` + `vibe-tb-client`, **amd64 only** and PUBLIC
+  packages; the source repo is private, owner 2026-11-22: `docs/PRIVATE-REPO-CUTOVER.md`). The images must never carry
+  source maps, tests or `src/` (`.dockerignore`, `tsc --sourceMap false` in `Dockerfile.server`). Pi 5 + PM2 is a
+  source install for developers with access. Install files for users live in the public `vibe-tb-releases` repo
+  (`scripts/publish-release-files.ps1`).
 
 ## Technical Standards
 - TypeScript strict mode everywhere

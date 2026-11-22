@@ -43,7 +43,7 @@ if not errorlevel 1 (
     exit /b 1
 )
 
-:: ── Start the containers (building on first run) ───────────────────────────
+:: ── Start the containers (pulling the images on first run) ──────────────────
 docker compose -f docker-compose.prod.yml ps --format "{{.Name}}" 2>nul | findstr /i "vibetb" >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] Containers are already running
@@ -51,9 +51,9 @@ if not errorlevel 1 (
 )
 
 echo   Starting containers...
-echo   ^(First run builds the images locally and can take 5-10 minutes on a fresh machine.
+echo   ^(First run downloads the images and can take a few minutes on a fresh machine.
 echo    Subsequent starts are fast.^)
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml up -d
 if errorlevel 1 (
     echo.
     echo   [ERROR] Failed to start containers.

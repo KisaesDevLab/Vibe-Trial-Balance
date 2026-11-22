@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Vibe Trial Balance — One-line installer
 #
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/setup.sh | bash
-#
-# Or after cloning:
+# Developer environment setup. The source repo is private, so run this from a
+# clone made with your own GitHub access:
 #   bash setup.sh
+# To RUN the app instead, use the public images:
+#   https://github.com/KisaesDevLab/vibe-tb-releases
 #
 # Prerequisites: git, node 20+, npm, docker (for PostgreSQL)
 

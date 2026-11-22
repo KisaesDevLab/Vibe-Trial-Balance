@@ -83,11 +83,15 @@ Create a `.env` file in `server/` (or set these as system environment variables)
 
 ## Development Setup
 
+> The source repository is private. These steps are for developers with access to it; to run the
+> app, use the public images ([prebuilt images](#deployment-docker--prebuilt-images), or
+> [vibe-tb-releases](https://github.com/KisaesDevLab/vibe-tb-releases) for the compose file).
+
 ### One-line install (Linux / macOS / Git Bash)
 ```bash
 git clone https://github.com/KisaesDevLab/Vibe-Trial-Balance.git && cd Vibe-Trial-Balance && bash setup.sh
 ```
-Clones the repo, installs all dependencies, starts PostgreSQL via Docker, runs migrations, and seeds demo data.
+Clones the repo (needs your GitHub access), installs all dependencies, starts PostgreSQL via Docker, runs migrations, and seeds demo data.
 
 ### Quick start (Windows PowerShell)
 ```powershell
@@ -122,7 +126,7 @@ See [QUICKSTART.md](QUICKSTART.md) for detailed commands and troubleshooting.
 
 ## Deployment: Docker — Prebuilt Images
 
-The fastest path to a running installation. Multi-arch images (`linux/amd64` and `linux/arm64`, so the same images run on a Pi) are published to GitHub Container Registry by the `Build and Publish Docker Images` workflow on every push to `main` and every `v*` tag.
+The fastest path to a running installation. `linux/amd64` images are published to GitHub Container Registry by the `Build and Publish Docker Images` workflow on every push to `main` and every `v*` tag.
 
 | Image | Pull command |
 |-------|--------------|
@@ -140,8 +144,8 @@ Available tags:
 # Pick an install directory on the host
 mkdir -p /opt/vibe-tb && cd /opt/vibe-tb
 
-curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/docker-compose.prod.yml
-curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/.env.example
+curl -LO https://raw.githubusercontent.com/KisaesDevLab/vibe-tb-releases/main/docker-compose.prod.yml
+curl -LO https://raw.githubusercontent.com/KisaesDevLab/vibe-tb-releases/main/.env.example
 cp .env.example .env
 ```
 
@@ -198,7 +202,7 @@ Back these up at the host level (e.g., `docker run --rm -v pgdata:/src alpine ta
 
 ### Raspberry Pi note
 
-The published images include `linux/arm64`, so the same `docker-compose.prod.yml` runs on a Pi 5 without any changes. Follow the steps above on the Pi — no compile step needed.
+The published images are `linux/amd64` only after v0.1.58 (arm64 builds were dropped when the source repo went private). Images up to and including v0.1.58 also carry `linux/arm64` and still pull on a Pi; newer releases do not.
 
 ### Single-app vs multi-app
 
@@ -227,7 +231,7 @@ The image names changed from `vibe-tb-api`/`vibe-tb-web` to `vibe-tb-server`/`vi
 
 ```bash
 docker compose -f docker-compose.prod.yml down                                    # stop the old stack
-curl -LO https://raw.githubusercontent.com/KisaesDevLab/Vibe-Trial-Balance/main/docker-compose.prod.yml
+curl -LO https://raw.githubusercontent.com/KisaesDevLab/vibe-tb-releases/main/docker-compose.prod.yml
 docker compose -f docker-compose.prod.yml up -d                                    # pulls vibe-tb-server / vibe-tb-client
 ```
 
@@ -260,6 +264,8 @@ Emergency-access mode (`http://<lan-ip>:5172`) requires `ALLOWED_ORIGIN` to incl
 ---
 
 ## Deployment: Raspberry Pi
+
+> Source install from the private repo: developers with access only. No newer arm64 images are published.
 
 The primary production target. Runs directly on the OS with Nginx as a reverse proxy and PM2 for process management.
 
@@ -349,7 +355,7 @@ ollama pull qwq:32b                         # Reasoning model for support chat
 
 ## Deployment: Docker (Build from Source)
 
-Use this path only when you need a local modification baked in. Otherwise the [prebuilt images](#deployment-docker--prebuilt-images) path above is faster and produces identical containers.
+Use this path only when you need a local modification baked in; it needs access to the private source repo and a `read:packages` token for `@kisaesdevlab/vibe-auth`. Otherwise the [prebuilt images](#deployment-docker--prebuilt-images) path above is faster and produces identical containers.
 
 ### 1. Clone and prepare the environment
 

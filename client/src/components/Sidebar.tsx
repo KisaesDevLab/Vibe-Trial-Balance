@@ -282,12 +282,12 @@ export function Sidebar() {
           <p className="text-[9px] text-gray-600 leading-tight">
             PolyForm Small Business 1.0.0 &middot;{' '}
             <a
-              href="https://github.com/KisaesDevLab/Vibe-Trial-Balance"
+              href="https://github.com/KisaesDevLab/vibe-tb-releases"
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-500 hover:text-gray-300 underline underline-offset-2"
             >
-              Source Code
+              Releases
             </a>
           </p>
         </div>

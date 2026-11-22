@@ -16,9 +16,10 @@ RUN --mount=type=secret,id=NODE_AUTH_TOKEN,required=true \
  && cd server && npm ci \
  && rm -f /root/.npmrc
 
-# Build TypeScript to dist/
+# Build TypeScript to dist/. No source maps: the image is public, and a map
+# names every src/ path (local dev builds keep them via tsconfig).
 COPY server/ server/
-RUN cd server && npx tsc
+RUN cd server && npx tsc --sourceMap false
 
 # Strip dev deps so only production runtime is copied into the final image.
 RUN cd server && npm prune --omit=dev

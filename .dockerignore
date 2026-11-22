@@ -1,0 +1,41 @@
+# Docker build context for Dockerfile.server and Dockerfile.client.
+# The images are PUBLIC (ghcr.io/kisaesdevlab/vibe-tb-*): anything that reaches
+# a final stage is readable by anyone. The final stages copy only named build
+# output, and this list keeps the rest out of the context altogether.
+# Both Dockerfiles need: server/** (minus the below), client/**, deploy/.
+
+.git
+.github
+.claude
+.appliance
+**/node_modules
+**/.env
+**/.env.*
+!.env.example
+**/*.map
+
+# Build output and runtime data from a local checkout
+client/dist
+server/dist
+server/uploads
+server/backups
+
+# Tests (server tests would otherwise compile into dist/)
+**/__tests__
+test
+specs
+
+# Docs, plans and project notes
+docs
+installer
+scripts
+shared
+# root-level only (a bare pattern matches the context root; server/knowledge/*.md is needed)
+*.md
+PHASES.md
+STATE.md
+QUESTIONS.md
+docker-compose*.yml
+setup.sh
+setup.ps1
+start.ps1

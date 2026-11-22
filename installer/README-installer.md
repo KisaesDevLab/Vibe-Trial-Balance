@@ -3,7 +3,8 @@
 ## Prerequisites
 
 1. **Inno Setup 6+** — Download free from https://jrsoftware.org/isdl.php
-2. The full Vibe Trial Balance source code (this repository)
+2. A checkout of this repository (the installer packs `docker-compose.prod.yml`, the batch
+   scripts, LICENSE and NOTICE; no application source)
 
 ## Building the Installer
 
@@ -17,7 +18,8 @@
 1. Shows a welcome screen and the PolyForm Small Business 1.0.0 license agreement
 2. Checks for Docker Desktop — if not installed, opens the download page
 3. Lets the user choose an install directory (default: `C:\VibeTB`)
-4. Copies all app source files, Docker configs, and batch scripts
+4. Copies `docker-compose.prod.yml` and the batch scripts; the app runs from the public images
+   `ghcr.io/kisaesdevlab/vibe-tb-server` and `vibe-tb-client` (amd64), pulled on first launch
 5. Generates unique random secrets for JWT, encryption, and database password
 6. Creates Start Menu and Desktop shortcuts
 7. Optionally launches the app after installation
@@ -26,7 +28,7 @@
 
 - **Windows 10/11** (64-bit)
 - **Docker Desktop** — the installer prompts to download if missing
-- **Internet connection** for first launch (Docker pulls base images)
+- **Internet connection** for first launch and updates (Docker pulls the app images)
 - ~2 GB free disk space (Docker images + database)
 
 ## Shortcuts Created
@@ -35,13 +37,12 @@
 |----------|--------|
 | Vibe Trial Balance | Starts the app and opens the browser |
 | Stop Vibe TB | Stops all containers (preserves data) |
-| Update Vibe TB | Rebuilds containers with latest changes |
+| Update Vibe TB | Downloads the latest images and restarts |
 
 ## Updating the App
 
-To update after source code changes:
-1. Replace the source files in the install directory
-2. Run "Update Vibe TB" from the Start Menu (or `update.bat`)
+Run "Update Vibe TB" from the Start Menu (or `update.bat`). It pulls the tag set by `IMAGE_TAG`
+in `.env` (default `latest`) and recreates the containers; data is kept.
 
 ## Uninstalling
 

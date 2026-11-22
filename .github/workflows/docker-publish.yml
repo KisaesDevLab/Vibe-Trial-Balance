@@ -1,9 +1,13 @@
 name: Build and Publish Docker Images
 
-# Native per-arch runners avoid QEMU emulation for arm64 — a cross-compiled
-# `npm ci` under emulation takes hours and blows the runner timeout. Each
-# platform builds on its own host and produces a digest-only push; a final
-# merge job assembles the multi-arch manifest under the human-readable tags.
+# amd64 only (owner 2026-11-22): Vibe Appliance is amd64, and the source repo
+# going private makes Actions minutes metered, so the arm64 jobs were dropped.
+# The build/merge split is kept: each matrix entry pushes by digest and the
+# merge job puts the human-readable tags (`latest`, version) on the manifest.
+# The `source` label links each package to this repo, which is what lets
+# GITHUB_TOKEN keep pushing after the repo is private. The packages themselves
+# are PUBLIC (flipped by hand, docs/PRIVATE-REPO-CUTOVER.md); a new image name
+# starts private and needs the same flip.
 
 on:
   push:
@@ -43,21 +47,11 @@ jobs:
             dockerfile: Dockerfile.server
             platform: linux/amd64
             runner: ubuntu-latest
-          - name: api
-            image: vibe-tb-server
-            dockerfile: Dockerfile.server
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
           - name: web
             image: vibe-tb-client
             dockerfile: Dockerfile.client
             platform: linux/amd64
             runner: ubuntu-latest
-          - name: web
-            image: vibe-tb-client
-            dockerfile: Dockerfile.client
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
 
     steps:
       - name: Normalize platform pair
@@ -90,7 +84,7 @@ jobs:
             org.opencontainers.image.vendor=Kisaes LLC
             org.opencontainers.image.licenses=LicenseRef-PolyForm-Small-Business-1.0.0
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}#deployment-docker--prebuilt-images
+            org.opencontainers.image.documentation=https://github.com/KisaesDevLab/vibe-tb-releases#readme
 
       - name: Build and push by digest
         id: push

@@ -1,0 +1,10 @@
+# Allowlist: this public repo holds install files only, never source.
+# Anything not named below cannot be committed by accident.
+*
+!.gitignore
+!README.md
+!LICENSE
+!NOTICE
+!docker-compose.prod.yml
+!docker-compose.grouped.yml
+!.env.example

@@ -2,6 +2,10 @@
 
 A complete guide to installing, configuring, and using the Vibe Trial Balance application. This covers system requirements, three deployment methods (Windows development, Raspberry Pi, Docker), first-run configuration, and day-to-day usage.
 
+> **The source repository is private** (owner 2026-11-22). Every `git clone` below needs access to it.
+> To run the app without the source, use the public images and the install files in
+> [vibe-tb-releases](https://github.com/KisaesDevLab/vibe-tb-releases). Published images are amd64 only after v0.1.58.
+
 ---
 
 ## Table of Contents

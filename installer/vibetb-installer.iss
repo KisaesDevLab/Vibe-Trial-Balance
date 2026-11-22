@@ -7,7 +7,7 @@
 #define MyAppName "Vibe Trial Balance"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Kisaes LLC"
-#define MyAppURL "https://github.com/KisaesDevLab/Vibe-Trial-Balance"
+#define MyAppURL "https://github.com/KisaesDevLab/vibe-tb-releases"
 
 ; Source root is one level up from this .iss file
 #define SourceRoot ".."
@@ -45,11 +45,9 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Name: "launchafter"; Description: "Launch {#MyAppName} after installation"; GroupDescription: "Post-install:"
 
 [Files]
-; Docker configs
+; Docker config. The app itself is the public GHCR images (vibe-tb-server,
+; vibe-tb-client), pulled on first launch: no application source ships here.
 Source: "{#SourceRoot}\docker-compose.prod.yml"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceRoot}\Dockerfile.server"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceRoot}\Dockerfile.client"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceRoot}\deploy\nginx-docker.conf"; DestDir: "{app}\deploy"; Flags: ignoreversion
 
 ; Batch scripts
 Source: "launch.bat"; DestDir: "{app}"; Flags: ignoreversion
@@ -66,31 +64,10 @@ Source: "vibetb.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 
-; ── Server source (needed for Docker build) ──
-Source: "{#SourceRoot}\server\package.json"; DestDir: "{app}\server"; Flags: ignoreversion
-Source: "{#SourceRoot}\server\package-lock.json"; DestDir: "{app}\server"; Flags: ignoreversion
-Source: "{#SourceRoot}\server\tsconfig.json"; DestDir: "{app}\server"; Flags: ignoreversion
-Source: "{#SourceRoot}\server\knexfile.js"; DestDir: "{app}\server"; Flags: ignoreversion
-Source: "{#SourceRoot}\server\src\*"; DestDir: "{app}\server\src"; Flags: ignoreversion recursesubdirs
-Source: "{#SourceRoot}\server\migrations\*"; DestDir: "{app}\server\migrations"; Flags: ignoreversion recursesubdirs
-Source: "{#SourceRoot}\server\seeds\*"; DestDir: "{app}\server\seeds"; Flags: ignoreversion recursesubdirs
-Source: "{#SourceRoot}\server\knowledge\*"; DestDir: "{app}\server\knowledge"; Flags: ignoreversion recursesubdirs
-
-; ── Client source (needed for Docker build) ──
-Source: "{#SourceRoot}\client\package.json"; DestDir: "{app}\client"; Flags: ignoreversion
-Source: "{#SourceRoot}\client\package-lock.json"; DestDir: "{app}\client"; Flags: ignoreversion
-Source: "{#SourceRoot}\client\tsconfig.json"; DestDir: "{app}\client"; Flags: ignoreversion
-Source: "{#SourceRoot}\client\tsconfig.node.json"; DestDir: "{app}\client"; Flags: ignoreversion
-Source: "{#SourceRoot}\client\vite.config.ts"; DestDir: "{app}\client"; Flags: ignoreversion
-Source: "{#SourceRoot}\client\postcss.config.js"; DestDir: "{app}\client"; Flags: ignoreversion
-Source: "{#SourceRoot}\client\tailwind.config.js"; DestDir: "{app}\client"; Flags: ignoreversion
-Source: "{#SourceRoot}\client\index.html"; DestDir: "{app}\client"; Flags: ignoreversion
-Source: "{#SourceRoot}\client\src\*"; DestDir: "{app}\client\src"; Flags: ignoreversion recursesubdirs
-
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\launch.bat"; IconFilename: "{app}\vibetb.ico"; Comment: "Start Vibe Trial Balance"
 Name: "{group}\Stop Vibe TB"; Filename: "{app}\stop.bat"; IconFilename: "{app}\vibetb.ico"; Comment: "Stop all containers"
-Name: "{group}\Update Vibe TB"; Filename: "{app}\update.bat"; IconFilename: "{app}\vibetb.ico"; Comment: "Rebuild containers with latest changes"
+Name: "{group}\Update Vibe TB"; Filename: "{app}\update.bat"; IconFilename: "{app}\vibetb.ico"; Comment: "Download the latest images and restart"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\launch.bat"; IconFilename: "{app}\vibetb.ico"; Tasks: desktopicon
 
