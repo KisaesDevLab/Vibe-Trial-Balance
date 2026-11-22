@@ -15,14 +15,16 @@ pulling the images anonymously. The repo-side work is done (owner 2026-11-22):
   public repo, `KisaesDevLab/vibe-tb-releases`, through `scripts/publish-release-files.ps1`.
 - **Links:** the docs and the Sidebar link point there.
 
-The images are `vibe-tb-server` and `vibe-tb-client`. The compose file's optional `ai` profile
-also pulls `ghcr.io/kisaesdevlab/vibe-glm-ocr`. If that package is private, flip it public as
-well, or the OCR profile will need a token.
+The images are `vibe-tb-server` and `vibe-tb-client`; the compose file's optional `ai` profile also
+pulls `ghcr.io/kisaesdevlab/vibe-glm-ocr`. **All three already pull anonymously** (checked 2026-11-22: an
+anonymous GHCR token gets `200` on `:latest` for each), so step 3 is already done; re-check it rather
+than assume, since a new image name starts private.
 
 ## Steps (owner)
 
-1. **Check the images before making anything public** (visibility is one-way). After the next
-   `main` build:
+1. **Check the images.** They are ALREADY public, so this is a check of what is out there, not a gate. Images
+   up to v0.1.58 carry `dist/**/*.js.map` and the compiled `__tests__`; builds from 0d808985 on do not.
+   After the next `main` build, `latest` should come back clean:
    ```bash
    for i in vibe-tb-server vibe-tb-client; do
      docker run --rm --entrypoint sh ghcr.io/kisaesdevlab/$i:latest \
@@ -35,8 +37,8 @@ well, or the OCR profile will need a token.
 2. **Org settings:** Settings → Packages → Package creation must allow Public. This is done once
    for `KisaesDevLab`.
 3. **Make both packages public:** org → Packages → `vibe-tb-server` → Package settings → Danger
-   Zone → Change visibility → Public. Repeat for `vibe-tb-client` (and `vibe-glm-ocr` if it is
-   used).
+   Zone → Change visibility → Public. Repeat for `vibe-tb-client` and `vibe-glm-ocr`.
+   (Already public as of 2026-11-22.)
 4. **Create the release repo:**
    - Create `KisaesDevLab/vibe-tb-releases` on GitHub, public and empty.
    - Decide whether its Issues are open. The Inno installer's support URL is `<repo>/issues`.
@@ -48,10 +50,8 @@ well, or the OCR profile will need a token.
      git -C C:\Projects\vibe-tb-releases push -u origin main
      ```
    - Re-run the script (with `-Push`) whenever the compose files or `.env.example` change.
-5. **Licence wording (still open, owner's call):** `NOTICE` says "Source code:
-   https://github.com/KisaesDevLab/Vibe-Trial-Balance". `COMMERCIAL_LICENSE.md` and
-   `docs/LICENSING_FAQ.md` link there too. Once the repo is private, decide what licensees are
-   told about getting the source. Keep the `Required Notice` line unchanged.
+5. **Licence wording:** done (owner 2026-11-22). The "Source code" / "GitHub" lines were dropped from `NOTICE`,
+   `COMMERCIAL_LICENSE.md` and `docs/LICENSING_FAQ.md`; the `Required Notice` line is unchanged.
 6. **Old releases:** the repo has two releases, `v0.1.0-polyform` and `v0.1.0-elv2`. Neither has
    any assets, so they can be deleted or left; nothing public depends on them.
 7. **Make the source repo private:** Settings → General → Danger Zone → Change repository

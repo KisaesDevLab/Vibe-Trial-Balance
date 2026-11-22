@@ -140,7 +140,6 @@ FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
 For commercial licensing inquiries:
 
 **Email:** licensing@kisaes.com
-**GitHub:** https://github.com/KisaesDevLab/Vibe-Trial-Balance
 
 ---
 

@@ -90,4 +90,3 @@ template is in [COMMERCIAL_LICENSE.md](../COMMERCIAL_LICENSE.md).
 ## Who do I contact for commercial licensing?
 
 **Email:** licensing@kisaes.com
-**GitHub:** https://github.com/KisaesDevLab/Vibe-Trial-Balance
