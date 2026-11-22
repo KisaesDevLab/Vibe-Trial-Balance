@@ -15,7 +15,7 @@ import { TB_BASIS_LABEL, TB_BASIS_COLUMN, parseTbBasis, tbBasisColumns, type TbB
 import { categoryNet, netIncomeContribution } from '../lib/accounting';
 import { whereHasActivity } from '../lib/tbActivity';
 import { currentStampsForClient } from '../lib/leadSheetStamp';
-import { entryRef, hasReclass } from '../lib/journalEntryTypes';
+import { ENTRY_TYPE_ORDER_SQL, entryRef, hasReclass } from '../lib/journalEntryTypes';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared DB helpers
@@ -341,7 +341,7 @@ export async function generateJournalEntryListingPdf(
 
   let q = db('journal_entries').where({ period_id: periodId });
   if (typeFilter && typeFilter !== 'all') q = q.where({ entry_type: typeFilter });
-  const entries = await q.orderBy('entry_type').orderBy('entry_number');
+  const entries = await q.orderByRaw(ENTRY_TYPE_ORDER_SQL).orderBy('entry_number');
 
   const entryIds = entries.map((e: Record<string, unknown>) => e.id as number);
   const lines = entryIds.length > 0
@@ -442,7 +442,7 @@ export async function generateAjeListingPdf(db: Knex, periodId: number): Promise
   const entries = await db('journal_entries')
     .where({ period_id: periodId })
     .whereIn('entry_type', ['book', 'tax', 'reclass'])
-    .orderBy('entry_type')
+    .orderByRaw(ENTRY_TYPE_ORDER_SQL)
     .orderBy('entry_number');
 
   const entryIds = entries.map((e: Record<string, unknown>) => e.id as number);

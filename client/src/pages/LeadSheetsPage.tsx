@@ -841,7 +841,7 @@ export function LeadSheetsPage() {
                             {fmt(activeDetail.rows.reduce((s, r) => s + net(r.unadjusted_debit, r.unadjusted_credit), 0))}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">
-                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r.book_adj_debit, r.book_adj_credit), 0))}
+                            {fmt(activeDetail.rows.reduce((s, r) => s + net(r.book_adj_debit, r.book_adj_credit) + net(r.reclass_adj_debit ?? 0, r.reclass_adj_credit ?? 0), 0))}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">
                             {fmt(activeDetail.rows.reduce((s, r) => s + net(r.book_adjusted_debit, r.book_adjusted_credit), 0))}

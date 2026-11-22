@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Small Business License 1.0.0.
 // Use is limited to qualifying small businesses. See LICENSE for terms.
 
-import { ENTRY_TYPE_LABEL, type ManualEntryType } from '../../lib/journalEntryTypes';
+import { ENTRY_TYPE_LABEL, ENTRY_TYPE_ORDER_SQL, type ManualEntryType } from '../../lib/journalEntryTypes';
 import { db } from '../../db';
 import { assertPeriodUnlocked, logAudit } from '../../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../../lib/ensureTrialBalanceRows';
@@ -36,7 +36,7 @@ export interface JournalEntry {
 export async function getJournalEntries(periodId: number, type?: string): Promise<JournalEntry[]> {
   let q = db('journal_entries').where({ period_id: periodId });
   if (type) q = q.where({ entry_type: type });
-  const entries = await q.orderBy('entry_type').orderBy('entry_number');
+  const entries = await q.orderByRaw(ENTRY_TYPE_ORDER_SQL).orderBy('entry_number');
 
   const entryIds = entries.map((e: { id: number }) => e.id);
   const lines = entryIds.length > 0

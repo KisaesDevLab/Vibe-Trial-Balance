@@ -65,3 +65,6 @@ export function hasReclass(row: Record<string, unknown>): boolean {
 export function bookAjeHeading(withReclass: boolean): string {
   return withReclass ? 'Book AJEs & reclasses' : 'Book AJEs';
 }
+
+/** Listing order: book, tax, reclass, trans (alphabetical would put RJEs between the AJEs). */
+export const ENTRY_TYPE_ORDER_SQL = "CASE entry_type WHEN 'book' THEN 0 WHEN 'tax' THEN 1 WHEN 'reclass' THEN 2 ELSE 3 END";

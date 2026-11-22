@@ -5,7 +5,7 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db';
-import { ENTRY_TYPE_LABEL, MANUAL_ENTRY_TYPES, typeChangeRefusal } from '../lib/journalEntryTypes';
+import { ENTRY_TYPE_LABEL, ENTRY_TYPE_ORDER_SQL, MANUAL_ENTRY_TYPES, typeChangeRefusal } from '../lib/journalEntryTypes';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { assertDeleteSparesHeldPeriods, assertPeriodUnlocked, logAudit } from '../lib/periodGuard';
 import { ensureTrialBalanceRows } from '../lib/ensureTrialBalanceRows';
@@ -61,7 +61,7 @@ jeCollectionRouter.get('/', async (req: AuthRequest, res: Response): Promise<voi
     if (accountIdFilter && !isNaN(accountIdFilter)) {
       q = q.whereIn('id', db('journal_entry_lines').where('account_id', accountIdFilter).select('journal_entry_id'));
     }
-    const entries = await q.orderBy('entry_type').orderBy('entry_number');
+    const entries = await q.orderByRaw(ENTRY_TYPE_ORDER_SQL).orderBy('entry_number');
 
     const entryIds = entries.map((e: { id: number }) => e.id);
     const lines = entryIds.length > 0

@@ -52,7 +52,7 @@ This project is licensed under the **PolyForm Small Business License 1.0.0**. En
   (authoritative `v_adjusted_trial_balance` definition: `migrations/20261122000001_tb_view_reclass.js` —
   a migration adding a column must copy THAT SQL, and must LEFT JOIN or it drops unassigned accounts)
 - **Dormant accounts are hidden on reports:** an account with no beginning balance (`prior_year_*`),
-  no activity (`unadjusted_*`, `trans_adj_*`, `book_adj_*`, `tax_adj_*` all zero) and therefore no
+  no activity (`unadjusted_*`, `trans_adj_*`, `book_adj_*`, `reclass_adj_*`, `tax_adj_*` all zero) and therefore no
   ending balance is dropped from every report view, PDF and export. Shared predicate:
   `server/src/lib/tbActivity.ts` (`whereHasActivity` knex modifier + `hasReportableActivity`) and
   `client/src/utils/tbActivity.ts` (`hasReportableActivity` / `filterReportableRows`) — keep the two
